@@ -3,6 +3,7 @@ pub mod budget;
 pub mod context;
 pub mod lifecycle;
 pub mod attempts;
+pub mod step;
 
 use rusqlite::Connection;
 use uuid::Uuid;
