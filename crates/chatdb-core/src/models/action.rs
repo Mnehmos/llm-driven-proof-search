@@ -1,8 +1,43 @@
 use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 use super::episode::{EpisodeOutcome, TerminationReason, TruncationReason};
 use super::reward::RewardComponent;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TypedAction {
+    Decompose { sub_lemmas: Vec<String> },
+    Solve { proof_term: String },
+    ExternalResponseRejected { reason: String, raw_response: String },
+    GiveUp,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionRequest {
+    pub id: Uuid,
+    pub episode_id: Uuid,
+    pub target_obligation_id: Uuid,
+    pub role: ActionRole,
+    pub prompt_hash: String,
+    pub context_manifest_hash: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionAttempt {
+    pub id: Uuid,
+    pub action_request_id: Uuid,
+    pub model_config_hash: Option<String>,
+    pub status: AttemptStatus,
+    pub action_json: Option<TypedAction>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionRole {
     Prover,
@@ -10,7 +45,7 @@ pub enum ActionRole {
     Human,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AttemptStatus {
     Pending,
@@ -22,7 +57,7 @@ pub enum AttemptStatus {
     Expired,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StepDisposition {
     Accepted,
@@ -31,7 +66,7 @@ pub enum StepDisposition {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StepResult {
     pub disposition: StepDisposition,
     pub counts_as_environment_step: bool,

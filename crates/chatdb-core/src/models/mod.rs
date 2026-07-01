@@ -6,6 +6,7 @@ pub mod episode;
 pub mod reward;
 pub mod action;
 pub mod dataset;
+pub mod string_i128;
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

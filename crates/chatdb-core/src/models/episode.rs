@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -9,35 +10,30 @@ pub enum EpisodeState {
     Truncated,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EpisodeOutcome {
-    Certified,
-    Refuted,
-    GaveUp,
-    Timeout,
-    BudgetExhausted,
-    ModelError,
-    InfrastructureError,
+    Terminated,
+    Truncated,
+    Crashed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminationReason {
-    ProofComplete,
-    CounterexampleFound,
-    ExplicitGiveUp,
+    RootProved,
+    RootRefuted,
+    ModelGaveUp,
+    HumanCancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TruncationReason {
-    WallClockTimeout,
-    CpuTimeout,
-    TokenBudgetExhausted,
-    CostBudgetExhausted,
-    TooManyInvalidResponses,
-    InternalError,
+    BudgetExhausted,
+    Timeout,
+    InvalidActionsExceeded,
+    ConsecutiveErrorsExceeded,
 }
 
 impl ToString for EpisodeState {

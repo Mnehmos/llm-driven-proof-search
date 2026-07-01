@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RewardComponentId {
     StepPenalty,
@@ -12,21 +13,31 @@ pub enum RewardComponentId {
     TruncationPenalty,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RewardComponent {
     pub id: RewardComponentId,
+    #[schemars(with = "String")]
+    #[serde(with = "crate::models::string_i128")]
     pub value_scaled: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewardPolicy {
+    #[serde(with = "crate::models::string_i128")]
     pub scale_factor: i128,
+    #[serde(with = "crate::models::string_i128")]
     pub step_penalty: i128,
+    #[serde(with = "crate::models::string_i128")]
     pub kernel_pass: i128,
+    #[serde(with = "crate::models::string_i128")]
     pub kernel_fail: i128,
+    #[serde(with = "crate::models::string_i128")]
     pub invalid_response: i128,
+    #[serde(with = "crate::models::string_i128")]
     pub terminal_success: i128,
+    #[serde(with = "crate::models::string_i128")]
     pub terminal_refutation: i128,
+    #[serde(with = "crate::models::string_i128")]
     pub truncation_penalty: i128,
 }
 
