@@ -1,9 +1,11 @@
-[package]
-name = "chatdb_proof_core"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = [
+    "crates/chatdb-core",
+    "crates/chatdb-mcp"
+]
 
-[dependencies]
+[workspace.dependencies]
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
