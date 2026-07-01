@@ -19,11 +19,11 @@ pub enum TypedAction {
 pub struct ActionRequest {
     pub id: Uuid,
     pub episode_id: Uuid,
-    pub target_obligation_id: Uuid,
+    pub revision: i64,
     pub role: ActionRole,
-    pub prompt_hash: String,
-    pub context_manifest_hash: String,
+    pub state_hash: String,
     pub status: String,
+    pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
 }
 
