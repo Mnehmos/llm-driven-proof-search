@@ -14,3 +14,4 @@ chrono = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 schemars = { workspace = true }
+tempfile = "3.27.0"

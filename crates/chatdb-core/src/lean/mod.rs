@@ -69,13 +69,9 @@ impl LeanGateway for RealLeanGateway {
             problem_namespace
         );
 
-        // 4. Write to a file in the Lean project
-        let verified_dir = self.lean_project_path.join("LeanChecker").join("Verified");
-        if !verified_dir.exists() {
-            fs::create_dir_all(&verified_dir).map_err(|e| e.to_string())?;
-        }
-
-        let file_path = verified_dir.join(format!("{}.lean", theorem_name));
+        // 4. Write to a file in a temporary directory
+        let temp_dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let file_path = temp_dir.path().join(format!("{}.lean", theorem_name));
         fs::write(&file_path, &file_content).map_err(|e| e.to_string())?;
 
         // 5. Run lake env lean --json File.lean
@@ -85,13 +81,65 @@ impl LeanGateway for RealLeanGateway {
         cmd.arg("env")
             .arg("lean")
             .arg("--json")
-            .arg(format!("LeanChecker/Verified/{}.lean", theorem_name))
+            .arg(&file_path)
             .current_dir(&self.lean_project_path)
-            .env("ELAN_HOME", &self.elan_bin_path);
+            .env("ELAN_HOME", &self.elan_bin_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
 
-        let output = cmd.output().map_err(|e| e.to_string())?;
+        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+        
+        // Timeout management
+        let (tx, rx) = std::sync::mpsc::channel();
+        let pid = child.id();
+        
+        std::thread::spawn(move || {
+            let res = child.wait_with_output();
+            let _ = tx.send(res);
+        });
+
+        let output = match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => return Err(format!("Process error: {}", e)),
+            Err(_) => {
+                // Timeout occurred
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = Command::new("taskkill")
+                        .arg("/F").arg("/T").arg("/PID").arg(pid.to_string())
+                        .status();
+                }
+                
+                return Ok(LeanVerificationResult {
+                    outcome: LeanVerificationOutcome::KernelFail,
+                    attempt_id: Uuid::new_v4(),
+                    obligation_id: obligation.id,
+                    theorem_name,
+                    expected_statement_hash: obligation.statement_hash.clone(),
+                    elaborated_statement_hash: None,
+                    environment_hash: environment.to_string(),
+                    proof_source_hash: "".to_string(),
+                    compiled_artifact_hash: None,
+                    proof_term_hash: None,
+                    diagnostic: Some(LeanDiagnostic {
+                        category: LeanDiagnosticCategory::TacticFailure,
+                        primary_message: "Lean verification timed out after 60 seconds".to_string(),
+                        source_span: None,
+                        goal: None,
+                        local_context: vec![],
+                        unsolved_goals: vec![],
+                        used_dependencies: vec![],
+                        error_code: None,
+                        canonical_goal_hash: None,
+                    }),
+                    dependency_use_report: None,
+                    wall_time_ms: start_time.elapsed().as_millis() as u64,
+                    lean_cpu_time_ms: start_time.elapsed().as_millis() as u64,
+                });
+            }
+        };
+
         let stdout_str = String::from_utf8_lossy(&output.stdout);
-        let _stderr_str = String::from_utf8_lossy(&output.stderr);
 
         // Parse diagnostics
         let mut parse_error = false;
@@ -151,8 +199,15 @@ impl LeanGateway for RealLeanGateway {
             LeanVerificationOutcome::KernelFail
         };
 
-        // If successful, compile the module using `lake build` so it's ready for imports
+        // If successful, copy to main project and compile using `lake build` so it's ready for imports
         if success {
+            let verified_dir = self.lean_project_path.join("LeanChecker").join("Verified");
+            if !verified_dir.exists() {
+                let _ = fs::create_dir_all(&verified_dir);
+            }
+            let dest_path = verified_dir.join(format!("{}.lean", theorem_name));
+            let _ = fs::copy(&file_path, &dest_path);
+
             let mut build_cmd = Command::new(&lake_path);
             build_cmd.arg("build")
                 .arg(format!("LeanChecker.Verified.{}", theorem_name))
@@ -160,10 +215,9 @@ impl LeanGateway for RealLeanGateway {
                 .env("ELAN_HOME", &self.elan_bin_path);
             
             let _ = build_cmd.output();
-        } else {
-            // Delete the failed file
-            let _ = fs::remove_file(&file_path);
         }
+
+        // temp_dir will be dropped and cleaned up automatically
 
         let wall_time_ms = start_time.elapsed().as_millis() as u64;
 
