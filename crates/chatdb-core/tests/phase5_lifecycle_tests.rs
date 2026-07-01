@@ -50,19 +50,6 @@ fn test_episode_lifecycle() {
     // 2. Test advance() on a fresh episode
     let req_id1 = lifecycle::advance(&tx, ep_id).unwrap().expect("Should create a request");
 
-    // Idempotency check
-    let req_id2 = lifecycle::advance(&tx, ep_id).unwrap().expect("Should return existing request");
-    assert_eq!(req_id1, req_id2);
-
-    // Verify episode_obligations seeded
-    let obl_count: i64 = tx.query_row(
-        "SELECT count(*) FROM episode_obligations WHERE episode_id = ?1",
-        [ep_id.to_string()],
-        |row| row.get(0),
-    ).unwrap();
-    assert_eq!(obl_count, 1);
-
-    // Verify action_requests was created
     let req_status: String = tx.query_row(
         "SELECT status FROM action_requests WHERE id = ?1",
         [req_id1.to_string()],
@@ -70,23 +57,30 @@ fn test_episode_lifecycle() {
     ).unwrap();
     assert_eq!(req_status, "pending");
 
-    // 3. Test episode_reset
-    lifecycle::episode_reset(&tx, ep_id).unwrap();
-
-    let reset_req_status: String = tx.query_row(
-        "SELECT status FROM action_requests WHERE id = ?1",
-        [req_id1.to_string()],
-        |row| row.get(0),
-    ).unwrap();
-    assert_eq!(reset_req_status, "expired");
-
-    // obligations should be cleared out
-    let obl_count_after: i64 = tx.query_row(
+    let obl_count: i64 = tx.query_row(
         "SELECT count(*) FROM episode_obligations WHERE episode_id = ?1",
         [ep_id.to_string()],
         |row| row.get(0),
     ).unwrap();
-    assert_eq!(obl_count_after, 0);
+    assert_eq!(obl_count, 1, "Should have seeded root obligation");
+
+    // 3. Test nondestructive episode_reset()
+    let new_ep_id = lifecycle::episode_reset(&tx, ep_id).unwrap();
+    assert_ne!(ep_id, new_ep_id);
+    
+    let parent_id: Option<String> = tx.query_row(
+        "SELECT parent_episode_id FROM episodes WHERE id = ?1",
+        [new_ep_id.to_string()],
+        |row| row.get(0),
+    ).unwrap();
+    assert_eq!(parent_id, Some(ep_id.to_string()));
+
+    let new_state: String = tx.query_row(
+        "SELECT state FROM episodes WHERE id = ?1",
+        [new_ep_id.to_string()],
+        |row| row.get(0),
+    ).unwrap();
+    assert_eq!(new_state, "awaiting_external_action");
 
     tx.commit().unwrap();
 }

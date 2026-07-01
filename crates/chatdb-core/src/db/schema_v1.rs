@@ -80,11 +80,34 @@ CREATE TABLE IF NOT EXISTS approved_formalizations (
 CREATE TABLE IF NOT EXISTS episodes (
     id TEXT PRIMARY KEY,
     problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    task_id TEXT,
+    task_revision INTEGER,
+    environment_version TEXT,
+    protocol_version TEXT,
+    observation_schema_version TEXT,
+    action_schema_version TEXT,
+    reward_policy_version TEXT,
+    verifier_version TEXT,
+    lean_toolchain_version TEXT,
+    seed INTEGER,
     state TEXT NOT NULL,
+    current_revision INTEGER NOT NULL DEFAULT 0,
+    initial_state_hash TEXT,
+    current_state_hash TEXT,
+    step_count INTEGER NOT NULL DEFAULT 0,
+    max_steps INTEGER,
+    token_budget INTEGER,
+    cost_budget_micros INTEGER,
+    wall_clock_deadline TEXT,
+    invalid_action_count INTEGER NOT NULL DEFAULT 0,
+    invalid_action_limit INTEGER,
     outcome TEXT,
     termination_reason TEXT,
     truncation_reason TEXT,
+    run_id TEXT,
+    parent_episode_id TEXT REFERENCES episodes(id),
     created_at TEXT NOT NULL,
+    updated_at TEXT,
     completed_at TEXT,
     CHECK(state IN ('awaiting_external_action', 'executing_action', 'terminated', 'truncated')),
     CHECK(outcome IN ('certified', 'refuted', 'gave_up', 'timeout', 'budget_exhausted', 'model_error', 'infrastructure_error') OR outcome IS NULL),
@@ -293,28 +316,61 @@ CREATE TABLE IF NOT EXISTS episode_fidelity_reviews (
 CREATE TABLE IF NOT EXISTS action_requests (
     id TEXT PRIMARY KEY,
     episode_id TEXT NOT NULL REFERENCES episodes(id),
-    revision INTEGER NOT NULL,
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    episode_revision INTEGER NOT NULL,
+    request_sequence_number INTEGER NOT NULL,
     role TEXT NOT NULL,
-    state_hash TEXT NOT NULL,
+    action_schema_id TEXT,
+    action_schema_version TEXT,
+    environment_version TEXT,
+    observation_json TEXT,
+    observation_hash TEXT,
+    state_hash_before TEXT,
+    expected_response_type TEXT,
+    allowed_action_variants_json TEXT,
     status TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    CHECK(status IN ('pending', 'claimed', 'expired', 'completed'))
+    expiration_at TEXT,
+    claimed_at TEXT,
+    fulfilled_at TEXT,
+    fulfilled_attempt_id TEXT,
+    superseding_request_id TEXT,
+    cancellation_reason TEXT,
+    CHECK(status IN ('pending', 'claimed', 'fulfilled', 'expired', 'cancelled'))
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_active_request_per_revision
+ON action_requests(episode_id, episode_revision)
+WHERE status IN ('pending', 'claimed');
 
 CREATE TABLE IF NOT EXISTS action_attempts (
     id TEXT PRIMARY KEY,
     episode_id TEXT NOT NULL REFERENCES episodes(id),
     action_request_id TEXT NOT NULL REFERENCES action_requests(id),
-    status TEXT NOT NULL,
-    external_runner_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    expected_revision INTEGER NOT NULL,
+    claim_token TEXT NOT NULL,
+    submitted_action_json TEXT,
     raw_external_response BLOB,
-    response_content_type TEXT,
-    response_hash TEXT,
-    created_at TEXT NOT NULL,
-    completed_at TEXT,
-    CHECK(status IN ('pending', 'claimed', 'executing', 'verified', 'completed', 'failed', 'expired'))
+    raw_external_response_content_type TEXT,
+    raw_external_response_encoding TEXT,
+    raw_external_response_byte_length INTEGER,
+    raw_external_response_sha256 TEXT,
+    status TEXT NOT NULL,
+    claimed_at TEXT NOT NULL,
+    claim_expiration TEXT,
+    execution_started_at TEXT,
+    execution_completed_at TEXT,
+    preflight_result_json TEXT,
+    lean_invocation_id TEXT,
+    lean_result_json TEXT,
+    commit_result_json TEXT,
+    failure_reason TEXT,
+    CHECK(status IN ('claimed', 'preflight_rejected', 'executing', 'verified', 'rejected', 'committed', 'abandoned', 'expired', 'infrastructure_failed'))
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_attempt_idempotency
+ON action_attempts(episode_id, idempotency_key);
 
 -- Partial index for active attempts
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_attempt_per_request

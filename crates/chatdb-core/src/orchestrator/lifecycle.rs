@@ -33,59 +33,32 @@ pub fn episode_create(
 }
 
 /// Nondestructively reset an episode
-pub fn episode_reset(tx: &Transaction, episode_id: Uuid) -> Result<()> {
+pub fn episode_reset(tx: &Transaction, episode_id: Uuid) -> Result<Uuid> {
     let now = Utc::now().to_rfc3339();
-    
-    // 1. Mark any active action_attempts as cancelled
+    let new_episode_id = Uuid::new_v4();
+
+    // 1. Copy config from old episode and create new episode
     tx.execute(
-        "UPDATE action_attempts 
-         SET status = 'failed'
-         WHERE action_request_id IN (SELECT id FROM action_requests WHERE episode_id = ?1)
-         AND status IN ('claimed', 'executing')",
-        [episode_id.to_string()],
-    )?;
-    
-    // 2. Mark any pending action_requests as expired
-    tx.execute(
-        "UPDATE action_requests 
-         SET status = 'expired'
-         WHERE episode_id = ?1 AND status = 'pending'",
-        [episode_id.to_string()],
-    )?;
-    
-    // 3. Mark the episode state back to AwaitingExternalAction and clear outcome
-    tx.execute(
-        "UPDATE episodes 
-         SET state = 'awaiting_external_action',
-             outcome = NULL,
-             termination_reason = NULL,
-             truncation_reason = NULL
-         WHERE id = ?1",
-        [episode_id.to_string()],
-    )?;
-    
-    // 4. "Soft delete" or ignore old episode obligations? 
-    // In a true reset, we'd delete the episode_obligations for this episode to start fresh, 
-    // but the spec says "nondestructive reset". We should probably just wipe the episode-local mutable state
-    // so it can start over. Wait, if it's episode-local, resetting it means clearing out the graph so the agent can retry.
-    tx.execute(
-        "DELETE FROM episode_obligations WHERE episode_id = ?1",
-        [episode_id.to_string()],
-    )?;
-    
-    tx.execute(
-        "DELETE FROM trajectory_events WHERE episode_id = ?1",
-        [episode_id.to_string()],
-    )?;
-    
-    tx.execute(
-        "DELETE FROM episode_budget_ledger WHERE episode_id = ?1",
-        [episode_id.to_string()],
+        "INSERT INTO episodes (
+            id, problem_version_id, task_id, task_revision, environment_version, protocol_version,
+            observation_schema_version, action_schema_version, reward_policy_version,
+            verifier_version, lean_toolchain_version, seed, state, current_revision,
+            step_count, max_steps, token_budget, cost_budget_micros, wall_clock_deadline,
+            invalid_action_count, invalid_action_limit, parent_episode_id, created_at, updated_at
+        )
+        SELECT 
+            ?1, problem_version_id, task_id, task_revision, environment_version, protocol_version,
+            observation_schema_version, action_schema_version, reward_policy_version,
+            verifier_version, lean_toolchain_version, seed, 'awaiting_external_action', 0,
+            0, max_steps, token_budget, cost_budget_micros, wall_clock_deadline,
+            0, invalid_action_limit, ?2, ?3, ?3
+        FROM episodes WHERE id = ?2",
+        (new_episode_id.to_string(), episode_id.to_string(), now),
     )?;
 
-    // We can leave action_requests and action_attempts for history, but if we delete obligations 
-    // they might dangle. The prompt says "Reset is nondestructive". "Wait, the episode mutable proof state lives in episode_obligations... reset should clear it".
-    Ok(())
+    // Trajectory append with EpisodeCreated event would go here (Phase 9)
+
+    Ok(new_episode_id)
 }
 
 /// Advances the episode by creating or returning a pending ActionRequest
@@ -160,15 +133,30 @@ pub fn advance(tx: &Transaction, episode_id: Uuid) -> Result<Option<Uuid>> {
 
     if let Some(_target_obl_id) = next_obligation_id {
         let req_id = Uuid::new_v4();
+        
+        let pv_id: String = tx.query_row(
+            "SELECT problem_version_id FROM episodes WHERE id = ?1",
+            [episode_id.to_string()],
+            |row| row.get(0),
+        )?;
+        
+        let seq: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(request_sequence_number), 0) + 1 FROM action_requests WHERE episode_id = ?1",
+            [episode_id.to_string()],
+            |row| row.get(0),
+        )?;
+
         tx.execute(
             "INSERT INTO action_requests (
-                id, episode_id, revision, role, 
-                state_hash, status, expires_at, created_at
-            ) VALUES (?1, ?2, ?3, 'prover', 'dummy_hash', 'pending', ?4, ?5)",
+                id, episode_id, problem_version_id, episode_revision, request_sequence_number, role, 
+                state_hash_before, status, expiration_at, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'prover', 'dummy_hash', 'pending', ?6, ?7)",
             (
                 req_id.to_string(),
                 episode_id.to_string(),
+                pv_id,
                 1_i64, // revision
+                seq,
                 Utc::now().to_rfc3339(), // expires_at
                 now, // created_at
             ),

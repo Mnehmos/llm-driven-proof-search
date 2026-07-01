@@ -2,6 +2,7 @@ pub mod scheduler;
 pub mod budget;
 pub mod context;
 pub mod lifecycle;
+pub mod attempts;
 
 use rusqlite::Connection;
 use uuid::Uuid;
