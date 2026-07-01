@@ -1,0 +1,359 @@
+use rusqlite::Connection;
+
+pub const V1_SCHEMA: &str = r#"
+-- Canonical Tables
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS problem_versions (
+    id TEXT PRIMARY KEY,
+    source_problem_text TEXT NOT NULL,
+    source_problem_hash TEXT NOT NULL,
+    source_metadata_json TEXT NOT NULL,
+    root_formal_statement TEXT NOT NULL,
+    root_statement_hash TEXT NOT NULL,
+    normalized_root_rendering TEXT NOT NULL,
+    environment_hash TEXT NOT NULL,
+    fidelity_status TEXT NOT NULL,
+    fidelity_method TEXT NOT NULL,
+    fidelity_approval_id TEXT,
+    root_obligation_id TEXT,
+    state TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK(state NOT IN ('PROVING', 'ROOT_PROVED_COVERAGE_PENDING', 'COMPLETE', 'ROOT_PROVED_COVERAGE_UNCONVERGED') OR fidelity_status = 'approved'),
+    CHECK(fidelity_status IN ('pending', 'approved', 'revoked'))
+);
+
+CREATE TABLE IF NOT EXISTS canonical_verified_lemmas (
+    id TEXT PRIMARY KEY,
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    obligation_id TEXT NOT NULL,
+    polarity TEXT NOT NULL,
+    theorem_name TEXT NOT NULL,
+    statement_hash TEXT NOT NULL,
+    proof_source_artifact_hash TEXT NOT NULL,
+    compiled_artifact_hash TEXT NOT NULL,
+    proof_term_hash TEXT NOT NULL,
+    environment_hash TEXT NOT NULL,
+    actual_dependency_ids_json TEXT NOT NULL,
+    kernel_result_hash TEXT NOT NULL,
+    verified_at TEXT NOT NULL,
+    CHECK(polarity IN ('positive', 'negative'))
+);
+
+CREATE TABLE IF NOT EXISTS canonical_certificates (
+    id TEXT PRIMARY KEY,
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    root_obligation_id TEXT NOT NULL,
+    root_verified_lemma_id TEXT NOT NULL REFERENCES canonical_verified_lemmas(id),
+    root_statement_hash TEXT NOT NULL,
+    root_proof_artifact_hash TEXT NOT NULL,
+    proof_dependency_manifest_hash TEXT NOT NULL,
+    active_sketch_snapshot_hash TEXT NOT NULL,
+    toolchain_manifest_hash TEXT NOT NULL,
+    kernel_result_hash TEXT NOT NULL,
+    coverage_state TEXT NOT NULL,
+    convergence_record_hash TEXT,
+    kernel_verified_at TEXT NOT NULL,
+    completed_at TEXT,
+    CHECK(coverage_state IN ('pending', 'converged', 'unconverged', 'integrity_blocked'))
+);
+
+CREATE TABLE IF NOT EXISTS approved_formalizations (
+    id TEXT PRIMARY KEY,
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    lean_statement TEXT NOT NULL,
+    statement_hash TEXT NOT NULL,
+    normalized_rendering TEXT NOT NULL,
+    quantifiers_json TEXT NOT NULL,
+    hypotheses_json TEXT NOT NULL,
+    domain_restrictions_json TEXT NOT NULL,
+    origin_type TEXT NOT NULL,
+    origin_config_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(problem_version_id, statement_hash)
+);
+
+-- Episode-Local Tables
+CREATE TABLE IF NOT EXISTS episodes (
+    id TEXT PRIMARY KEY,
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    state TEXT NOT NULL,
+    outcome TEXT,
+    termination_reason TEXT,
+    truncation_reason TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    CHECK(state IN ('awaiting_external_action', 'executing_action', 'terminated', 'truncated')),
+    CHECK(outcome IN ('certified', 'refuted', 'gave_up', 'timeout', 'budget_exhausted', 'model_error', 'infrastructure_error') OR outcome IS NULL),
+    CHECK((state = 'terminated' AND outcome IS NOT NULL AND termination_reason IS NOT NULL) OR state <> 'terminated'),
+    CHECK((state = 'truncated' AND outcome IS NOT NULL AND truncation_reason IS NOT NULL) OR state <> 'truncated'),
+    CHECK(NOT (state = 'terminated' AND truncation_reason IS NOT NULL)),
+    CHECK(NOT (state = 'truncated' AND termination_reason IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS episode_obligations (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    kind TEXT NOT NULL,
+    theorem_name TEXT NOT NULL,
+    lean_statement TEXT NOT NULL,
+    statement_hash TEXT NOT NULL,
+    natural_description TEXT NOT NULL,
+    status TEXT NOT NULL,
+    depth_from_root INTEGER NOT NULL,
+    created_by TEXT NOT NULL,
+    created_by_epoch_id TEXT,
+    superseded_by_id TEXT REFERENCES episode_obligations(id),
+    proved_lemma_id TEXT REFERENCES episode_verified_lemmas(id),
+    refutation_lemma_id TEXT REFERENCES episode_verified_lemmas(id),
+    failure_lesson TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    closed_at TEXT,
+    UNIQUE(episode_id, theorem_name),
+    CHECK(status IN ('open', 'in_progress', 'proved', 'refuted', 'superseded', 'abandoned', 'blocked_needs_human')),
+    CHECK(kind IN ('root', 'proof', 'coverage', 'counterexample')),
+    CHECK(created_by IN ('initial_sketch', 'decomposition', 'reviewer', 'human')),
+    CHECK(
+      (status = 'proved' AND proved_lemma_id IS NOT NULL AND refutation_lemma_id IS NULL) OR
+      (status = 'refuted' AND refutation_lemma_id IS NOT NULL AND proved_lemma_id IS NULL) OR
+      (status NOT IN ('proved', 'refuted') AND proved_lemma_id IS NULL AND refutation_lemma_id IS NULL)
+    )
+);
+
+CREATE TABLE IF NOT EXISTS episode_obligation_edges (
+    parent_obligation_id TEXT NOT NULL REFERENCES episode_obligations(id),
+    dependency_obligation_id TEXT NOT NULL REFERENCES episode_obligations(id),
+    edge_kind TEXT NOT NULL,
+    case_group TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(parent_obligation_id, dependency_obligation_id),
+    CHECK(parent_obligation_id <> dependency_obligation_id),
+    CHECK(edge_kind IN ('lemma', 'case_branch', 'witness', 'reduction'))
+);
+
+CREATE TABLE IF NOT EXISTS episode_proposal_attempts (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    obligation_id TEXT NOT NULL REFERENCES episode_obligations(id),
+    role TEXT NOT NULL,
+    model_config_hash TEXT,
+    prompt_hash TEXT NOT NULL,
+    context_manifest_hash TEXT NOT NULL,
+    candidate_source_artifact_hash TEXT,
+    diagnostic_json TEXT,
+    outcome TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cost_usd_micros INTEGER NOT NULL,
+    wall_time_ms INTEGER NOT NULL,
+    lean_cpu_time_ms INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK(outcome IN ('kernel_pass', 'kernel_fail', 'preflight_reject', 'model_invalid_output', 'infrastructure_error', 'budget_denied', 'timeout', 'cancelled'))
+);
+
+CREATE TABLE IF NOT EXISTS episode_verified_lemmas (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    obligation_id TEXT NOT NULL REFERENCES episode_obligations(id),
+    polarity TEXT NOT NULL,
+    theorem_name TEXT NOT NULL,
+    statement_hash TEXT NOT NULL,
+    proof_source_artifact_hash TEXT NOT NULL,
+    compiled_artifact_hash TEXT NOT NULL,
+    proof_term_hash TEXT NOT NULL,
+    environment_hash TEXT NOT NULL,
+    actual_dependency_ids_json TEXT NOT NULL,
+    kernel_result_hash TEXT NOT NULL,
+    verified_at TEXT NOT NULL,
+    UNIQUE(obligation_id, polarity),
+    CHECK(polarity IN ('positive', 'negative'))
+);
+
+CREATE TABLE IF NOT EXISTS episode_budget_ledger (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    obligation_id TEXT REFERENCES episode_obligations(id),
+    call_kind TEXT NOT NULL,
+    reservation_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    reserved_input_tokens INTEGER NOT NULL,
+    reserved_output_tokens INTEGER NOT NULL,
+    actual_input_tokens INTEGER,
+    actual_output_tokens INTEGER,
+    reserved_cost_usd_micros INTEGER NOT NULL,
+    actual_cost_usd_micros INTEGER,
+    reserved_wall_time_ms INTEGER NOT NULL,
+    actual_wall_time_ms INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS episode_review_epochs (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    epoch_number INTEGER NOT NULL,
+    trigger TEXT NOT NULL,
+    eligible BOOLEAN NOT NULL,
+    reviewer_count INTEGER NOT NULL,
+    diverse_family_count INTEGER NOT NULL,
+    lens_count INTEGER NOT NULL,
+    admitted_count INTEGER NOT NULL,
+    surviving_count INTEGER,
+    surviving_rate REAL,
+    ema_rate REAL,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE(episode_id, epoch_number)
+);
+
+CREATE TABLE IF NOT EXISTS episode_review_proposals (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    epoch_id TEXT NOT NULL REFERENCES episode_review_epochs(id),
+    reviewer_config_hash TEXT NOT NULL,
+    lens TEXT NOT NULL,
+    natural_description TEXT NOT NULL,
+    proposed_lean_statement TEXT NOT NULL,
+    proposed_statement_hash TEXT NOT NULL,
+    proposed_dependencies_json TEXT NOT NULL,
+    proposal_kind TEXT NOT NULL,
+    admission_outcome TEXT,
+    admitted_obligation_id TEXT REFERENCES episode_obligations(id),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS episode_certificate_candidates (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    root_obligation_id TEXT NOT NULL REFERENCES episode_obligations(id),
+    root_verified_lemma_id TEXT NOT NULL REFERENCES episode_verified_lemmas(id),
+    root_statement_hash TEXT NOT NULL,
+    root_proof_artifact_hash TEXT NOT NULL,
+    proof_dependency_manifest_hash TEXT NOT NULL,
+    active_sketch_snapshot_hash TEXT NOT NULL,
+    toolchain_manifest_hash TEXT NOT NULL,
+    kernel_result_hash TEXT NOT NULL,
+    coverage_state TEXT NOT NULL,
+    convergence_record_hash TEXT,
+    kernel_verified_at TEXT NOT NULL,
+    completed_at TEXT,
+    CHECK(coverage_state IN ('pending', 'converged', 'unconverged', 'integrity_blocked'))
+);
+
+CREATE TABLE IF NOT EXISTS episode_drafts (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    model_config_hash TEXT NOT NULL,
+    prompt_template_hash TEXT NOT NULL,
+    content_artifact_hash TEXT NOT NULL,
+    extracted_moves_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS episode_formalization_candidates (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    lean_statement TEXT NOT NULL,
+    statement_hash TEXT NOT NULL,
+    normalized_rendering TEXT NOT NULL,
+    quantifiers_json TEXT NOT NULL,
+    hypotheses_json TEXT NOT NULL,
+    domain_restrictions_json TEXT NOT NULL,
+    origin_type TEXT NOT NULL,
+    origin_config_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(episode_id, statement_hash)
+);
+
+CREATE TABLE IF NOT EXISTS episode_fidelity_reviews (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    source_problem_hash TEXT NOT NULL,
+    root_statement_hash TEXT NOT NULL,
+    environment_hash TEXT NOT NULL,
+    rendering_hash TEXT NOT NULL,
+    approval_method TEXT NOT NULL,
+    approver_id TEXT NOT NULL,
+    signature TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS action_requests (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    revision INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    state_hash TEXT NOT NULL,
+    status TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK(status IN ('pending', 'claimed', 'expired', 'completed'))
+);
+
+CREATE TABLE IF NOT EXISTS action_attempts (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    action_request_id TEXT NOT NULL REFERENCES action_requests(id),
+    status TEXT NOT NULL,
+    external_runner_id TEXT NOT NULL,
+    raw_external_response BLOB,
+    response_content_type TEXT,
+    response_hash TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    CHECK(status IN ('pending', 'claimed', 'executing', 'verified', 'completed', 'failed', 'expired'))
+);
+
+-- Partial index for active attempts
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_attempt_per_request
+ON action_attempts(action_request_id)
+WHERE status IN ('claimed', 'executing', 'verified');
+
+CREATE TABLE IF NOT EXISTS model_call_leases (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    action_attempt_id TEXT NOT NULL REFERENCES action_attempts(id),
+    model_descriptor_json TEXT NOT NULL,
+    reserved_cost_micros INTEGER NOT NULL,
+    actual_cost_micros INTEGER,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    settled_at TEXT,
+    CHECK(status IN ('reserved', 'settled', 'voided'))
+);
+
+CREATE TABLE IF NOT EXISTS trajectory_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    event_sequence_number INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    event_hash TEXT NOT NULL,
+    previous_event_hash TEXT NOT NULL,
+    state_hash_before TEXT NOT NULL,
+    state_hash_after TEXT NOT NULL,
+    lean_environment_hash TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(episode_id, event_sequence_number),
+    UNIQUE(episode_id, event_hash)
+);
+"#;
+
+pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute("PRAGMA foreign_keys = ON;", [])?;
+    conn.execute_batch(V1_SCHEMA)?;
+    Ok(())
+}

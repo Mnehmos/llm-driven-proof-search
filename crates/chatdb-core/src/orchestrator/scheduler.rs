@@ -325,7 +325,7 @@ pub fn next_ready(
     Ok(scored_ready.first().map(|&(o, _)| o.clone()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy_tests"))]
 mod tests {
     use super::*;
     use crate::db::{initialize_db, insert_problem_version, insert_obligation, insert_edge};

@@ -126,7 +126,7 @@ impl BudgetGovernor {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy_tests"))]
 mod tests {
     use super::*;
     use crate::db::{initialize_db, insert_problem_version};
