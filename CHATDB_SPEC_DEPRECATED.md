@@ -1,8 +1,11 @@
-# ChatDB Proof Core Rebuild Specification
+# DEPRECATED: ChatDB Proof Core Rebuild Specification (Legacy Non-MCP Spec)
 
-**Document:** `CHATDB_SPEC.md`  
-**Status:** Implementation specification, revised for MCP-only external model execution and headless RL environment  
-**Scope:** Ground-up rebuild of the ChatDB proof core  
+> [!WARNING]
+> This specification is deprecated. It has been replaced by the revised MCP-only specification in [CHATDB_SPEC.md](file:///f:/Github/mnehmos.llm-driven-proof-search.environment/CHATDB_SPEC.md).
+
+**Document:** `CHATDB_SPEC_DEPRECATED.md`  
+**Status:** DEPRECATED / LEGACY  
+**Scope:** Ground-up rebuild of the ChatDB proof core (Legacy Self-Driving Loop)  
 **Primary input:** `CHATDB_REVIEW.md`  
 **Normative language:** `MUST`, `MUST NOT`, `SHOULD`, `SHOULD NOT`, and `MAY` are requirements terms.
 
@@ -28,19 +31,15 @@ The prior audit is authoritative for the redesign. Audit references in this spec
 
 The rebuilt ChatDB proof core SHALL accept an immutable natural-language problem, bind it to an approved Lean root theorem, discover and discharge a dynamically growing obligation graph, produce a kernel-checked proof of the root theorem, and stop only when a deterministic coverage-convergence policy is satisfied.
 
-The proof core itself SHALL NOT call an LLM provider. All model inference occurs in an external agent host that connects to ChatDB through MCP. ChatDB emits bounded role requests and observations; the external host selects and invokes a model; the resulting typed action is submitted back through MCP for deterministic validation and state transition.
-
-The smallest correct proof system has seven required capabilities, and the complete ChatDB product has two additional execution capabilities:
+The smallest correct system has seven required capabilities:
 
 1. Immutable problem versioning with a mandatory formal root theorem.
 2. A Draft artifact for informal planning.
 3. A single authoritative Sketch graph of formal obligations and dependency edges.
-4. A versioned MCP role-and-action contract through which external models submit Drafts, formalizations, decompositions, proof proposals, repairs, and review proposals.
+4. A model adapter that proposes Lean proofs for one obligation at a time.
 5. A supervised Lean service that is the sole authority for proof discharge.
 6. Reviewer epochs that can add formal coverage obligations but cannot establish truth.
 7. A hard budget governor and append-only event history.
-8. A versioned headless environment protocol that exposes reproducible proof episodes through reset, observe, step, terminate, truncate, replay, and export operations.
-9. An MCP server and external runner contract that allow independently hosted models to operate the environment and generate verifier-backed synthetic training trajectories without placing provider code or credentials inside ChatDB.
 
 A run is successful only when both conditions hold:
 
@@ -57,22 +56,16 @@ Kernel success and coverage success MUST remain separate fields. The interface M
 The rebuilt core SHALL:
 
 - Preserve an immutable source problem and formal root theorem per problem version.
-- Emit a typed Draft request through MCP when informal planning is required and accept the external agent's Draft as an untrusted proposal artifact.
-- Emit typed formalization and decomposition requests through MCP and admit only outputs that pass deterministic schema, graph, fidelity, and Lean checks.
+- Generate an informal Draft using a capability-gated frontier reasoning model.
+- Compile the Draft into a Sketch whose nodes are Lean propositions.
 - Treat proof-structuring moves as graph topology, not as theorem facts.
 - Discharge every proved obligation with an exact Lean theorem artifact.
 - Verify that non-leaf obligations compose verified dependencies.
-- Use structured Lean diagnostics to drive externally generated repair proposals.
-- Allow the obligation graph to grow during diverse reviewer epochs using reviewer proposals submitted through MCP.
-- Enforce internal Lean, tool, action, and wall-time budgets before every ChatDB-controlled operation.
-- Issue model-call budget leases through MCP for trusted external runners without owning provider credentials or invoking provider APIs.
+- Use structured Lean diagnostics to repair or decompose failed obligations.
+- Allow the obligation graph to grow during diverse reviewer epochs.
+- Enforce token, monetary, call-count, and wall-time budgets before every call.
 - Expose a stable core API that the existing Tauri UI can consume.
 - Persist enough information to reproduce and audit every proof-state transition.
-- Expose the same proof-state machine through a headless environment service that does not require Tauri, a browser, or a human operator.
-- Allow MCP-capable agent hosts to discover the environment, create isolated episodes, observe bounded proof state, submit typed actions, and receive structured Lean diagnostics.
-- Produce append-only, replayable trajectories suitable for evaluation, supervised fine-tuning, preference construction, and reinforcement learning.
-- Keep reward calculation, termination, and proof status under deterministic environment and Lean authority rather than model self-report.
-- Remain fully functional as a deterministic verifier and state machine when no model host is connected; the run waits in an explicit `awaiting_external_action` state rather than making an internal model call.
 
 ## 1.3 Explicit non-goals
 
@@ -101,18 +94,6 @@ These are direct cuts required by `[Audit T-01]`, `[Audit T-02]`, `[Audit T-03]`
 
 These are direct cuts required by `[Audit §2.2]` and `[Audit §8.1]`.
 
-### No internal model execution
-
-- No provider SDK in the ChatDB proof-core process.
-- No OpenAI, Anthropic, Google, local-model, or other LLM API credentials stored by ChatDB.
-- No internal `LlmClient`, `ModelGateway`, proposer client, reviewer client, or provider retry loop.
-- No background model invocation by the orchestrator.
-- No direct model call from Tauri, Rust core, Lean service, database layer, or export subsystem.
-- No hidden fallback model when an external agent is unavailable.
-- No proof-state transition caused by the absence, timeout, or failure of an external model host.
-
-Models are external policy actors. They interact with ChatDB only through the versioned MCP observation and action contract.
-
 ### Removed hot-path agent roles
 
 - No satisfaction reviewer.
@@ -132,7 +113,7 @@ The following MAY exist as optional adapters or offline jobs, but the proof tran
 - Research search.
 - Theorem retrieval.
 - Pattern mining.
-- Training-pair extraction inside the trusted proof transaction. Synthetic-data derivation belongs to the headless environment and offline export subsystem defined in Section 13.
+- Training-pair extraction.
 - Corpus embeddings.
 - After-action reports.
 - Analytics dashboards.
@@ -153,14 +134,11 @@ A component belongs in the core only if removing it would violate a hard invaria
 | Draft artifact | Draft-Sketch separation and capability-gated planning | Required |
 | Obligation and edge tables | Invariants 5 and 10 | Required |
 | Scheduler | Deterministic progress and cost control | Required |
-| MCP role-and-action contract | External candidate generation without internal model calls | Required product boundary |
+| Proposer/prover adapter | Candidate generation | Required |
 | Lean service | Invariants 1 through 5 | Required |
 | Reviewer epochs | Coverage discovery and convergence | Required |
 | Budget governor | Invariant 9 | Required |
 | Event log | Reproducibility and audit | Required |
-| Headless environment service | Reproducible model interaction, evaluation, and trajectory generation | Required product layer |
-| MCP adapter | Model-callable execution surface over the headless environment | Required product adapter |
-| External MCP runner contract and trajectory exporter | Synthetic RL data generation without provider code in ChatDB | Required product boundary |
 | SymPy/Pint preflight | Faster rejection only | Optional |
 | Search/retrieval | Bounded hint source | Optional |
 | Pattern library | Future optimization | Offline or optional |
@@ -174,7 +152,7 @@ A component belongs in the core only if removing it would violate a hard invaria
 
 ### Purpose
 
-The Draft is an external policy model’s informal mathematical reasoning and plan, submitted through MCP. It exists to capture the high-capability reasoning that is difficult to replace with a cheaper prover model, especially for olympiad-level or research-style problems.
+The Draft is the frontier model’s informal mathematical reasoning and plan. It exists to capture the high-capability reasoning that is difficult to replace with a cheaper prover model, especially for olympiad-level or research-style problems.
 
 The Draft MAY contain:
 
@@ -197,8 +175,7 @@ Draft
 - id: UUID
 - problem_version_id: UUID
 - source_problem_hash: Hash
-- external_agent_config_hash: Hash
-- declared_model_config_hash: Optional<Hash>
+- model_config_hash: Hash
 - prompt_template_hash: Hash
 - content_artifact_hash: Hash
 - natural_plan: Text
@@ -612,20 +589,15 @@ The context MUST NOT contain:
 
 **Contract**
 
-Every ChatDB-controlled Lean, tool, action, retrieval, and sandbox operation must acquire a budget reservation before execution. External model inference must obtain a model-call lease through MCP when the runner participates in ChatDB cost accounting.
+Every model and tool call must acquire a budget reservation before execution. `max_total_cost` is a runtime-enforced limit.
 
 **Structural enforcement**
 
-- ChatDB contains no provider client and cannot directly make an LLM call.
-- Internal tool and Lean operations are reachable only through budgeted gateways.
-- Before a trusted external runner invokes a model, it requests a lease containing the role, model declaration, maximum input tokens, maximum output tokens, and worst-case cost.
-- If the lease would exceed a hard budget, ChatDB denies it and no compliant runner makes the external call.
-- The runner settles the lease with actual usage when it submits the action. If usage is unavailable, the reserved worst-case amount is charged.
-- An expired or missing lease may cause the submitted action to be rejected or marked unaccounted according to run policy, but it can never create proof authority.
-- ChatDB cannot prevent an untrusted external process from making out-of-band provider calls or lying about usage. Strict monetary enforcement therefore requires a trusted MCP runner, provider proxy, or attested usage source.
+- Provider clients, Lean, CAS, reviewers, retrieval, and external tools are reachable only through budgeted gateways.
+- A reservation uses worst-case output tokens and configured tool cost.
+- If the reservation would exceed any hard budget, the call is not made.
+- Unknown provider usage is charged at the reserved amount.
 - Budget exhaustion produces an explicit terminal or paused state, never a proof result.
-
-Proof correctness never depends on cost telemetry. Cost accounting and kernel truth remain separate.
 
 **Audit closure:** `[Audit §3.4]`.
 
@@ -646,24 +618,7 @@ The active proof graph is exactly the `obligations` table plus the `obligation_e
 
 **Audit closure:** `[Audit §2.2]`.
 
-## 3.11 Invariant 11: Models are external MCP actors
-
-**Contract**
-
-The ChatDB proof core SHALL NOT invoke an LLM. Every model-produced artifact enters through a versioned MCP action submitted by an external agent host.
-
-**Structural enforcement**
-
-- No provider SDK or provider credential is linked into the trusted proof-core runtime.
-- The orchestrator emits typed `ActionRequest` records and waits in `awaiting_external_action`.
-- The external MCP client chooses the model, performs inference, and submits a typed action with an action-request ID.
-- All model roles use the same boundary: Draft, formalization, decomposition, proving, repair, review, and optional hint generation.
-- Disconnect, provider failure, or missing external agents leaves proof state unchanged except for explicit lease expiry or truncation events.
-- Replay never invokes a model. It replays recorded typed actions.
-
-**Audit closure:** product architecture invariant added by the MCP-only execution revision.
-
-## 3.12 Required invariant tests
+## 3.11 Required invariant tests
 
 The implementation MUST include integration tests that prove the following operations are impossible:
 
@@ -673,13 +628,10 @@ The implementation MUST include integration tests that prove the following opera
 4. Mark the root complete with proved lemmas but no root composition proof.
 5. Mark a universal claim proved from finite samples.
 6. Start proof search with `fidelity_status != approved`.
-7. Complete after one reviewer submission is missing or ineligible.
-8. Build a prover observation containing raw failed proof text.
-9. Execute a ChatDB-controlled Lean or tool call after its hard budget is exhausted.
+7. Complete after one reviewer call fails.
+8. Build a prover prompt containing raw failed proof text.
+9. Make a provider call after `max_total_cost` is exhausted.
 10. Create a second parent/dependency authority outside `obligation_edges`.
-11. Instantiate a provider client, read a provider API key, or initiate model inference inside the ChatDB process.
-12. Advance a proof state merely because an external model host disconnected or failed.
-13. Replay an episode by invoking an LLM rather than replaying recorded actions.
 
 ---
 
@@ -706,49 +658,48 @@ BUDGET_EXHAUSTED
 CANCELLED
 INTEGRITY_BLOCKED
 ROOT_PROVED_COVERAGE_UNCONVERGED
-AWAITING_EXTERNAL_ACTION
 ```
 
 Transitions are deterministic. A model cannot directly request any transition.
 
-## 4.2 Reactive orchestrator pseudocode
-
-ChatDB does not run a push loop that calls a proposer. It advances deterministically until either an internal transition is complete or an external model action is required.
+## 4.2 Control loop pseudocode
 
 ```text
-function advance(problem_version_id):
+function run(problem_version_id):
     problem = load_problem_version(problem_version_id)
 
     require problem.fidelity_status == APPROVED
     require problem.root_formal_statement is not null
     require environment_hash_matches(problem)
 
+    ensure_initial_draft_exists(problem)
+    ensure_initial_sketch_exists(problem)
+    ensure_initial_coverage_epoch_completed(problem)
+
     loop:
         if cancelled(problem):
             transition(CANCELLED)
-            return terminal_status()
+            return
 
         if integrity_issue_open(problem):
             transition(INTEGRITY_BLOCKED)
-            return terminal_status()
+            return
 
-        if internal_budget.hard_limit_reached(problem):
-            transition(budget_terminal_state(problem))
-            return terminal_status()
+        if budget.hard_limit_reached(problem):
+            if root_kernel_verified(problem):
+                transition(ROOT_PROVED_COVERAGE_UNCONVERGED)
+            else:
+                transition(BUDGET_EXHAUSTED)
+            return
 
-        admit_deterministically_valid_submitted_review_proposals(problem)
+        admit_deterministically_valid_review_proposals(problem)
 
         if root_kernel_verified(problem):
             ensure_certificate_exists(problem)
 
             if review_epoch_due(problem):
-                request = create_external_action_request(
-                    role=COVERAGE_REVIEW,
-                    observation=review_context(problem),
-                    required_count=review_policy.required_reviewers
-                )
-                transition(AWAITING_EXTERNAL_ACTION)
-                return request
+                run_review_epoch_through_budget_gateway(problem)
+                continue
 
             convergence = convergence_monitor.evaluate(problem)
             persist_convergence_snapshot(convergence)
@@ -756,19 +707,7 @@ function advance(problem_version_id):
             if convergence.complete:
                 finalize_certificate(problem, convergence)
                 transition(COMPLETE)
-                return terminal_status()
-
-        if initial_draft_missing(problem):
-            return create_external_action_request(
-                role=DRAFT,
-                observation=draft_context(problem)
-            )
-
-        if initial_sketch_missing(problem):
-            return create_external_action_request(
-                role=SKETCH_FORMALIZATION,
-                observation=sketch_context(problem)
-            )
+                return
 
         obligation = scheduler.next_ready(problem)
 
@@ -778,84 +717,108 @@ function advance(problem_version_id):
                 continue
 
             if review_epoch_due_or_no_frontier(problem):
-                return create_external_action_request(
-                    role=COVERAGE_REVIEW,
-                    observation=review_context(problem)
-                )
+                epoch = run_review_epoch_through_budget_gateway(problem)
+                if epoch.ineligible:
+                    transition(STALLED_NEEDS_HUMAN)
+                    return
+                if epoch.admitted_count > 0:
+                    continue
 
             if open_obligations_exist_but_none_ready(problem):
-                transition(INTEGRITY_BLOCKED)
-            elif root_kernel_verified(problem):
+                transition(INTEGRITY_BLOCKED)  // cycle or invalid dependency state
+                return
+
+            if root_kernel_verified(problem):
                 transition(ROOT_PROVED_COVERAGE_UNCONVERGED)
             else:
                 transition(STALLED_NEEDS_HUMAN)
-            return terminal_status()
+            return
 
         if decomposition_policy.must_decompose(obligation):
-            return create_external_action_request(
-                role=DECOMPOSITION,
-                observation=compact_decomposition_context(obligation)
-            )
+            result = decompose_obligation(problem, obligation)
+            persist_decomposition_result(result)
+            if result.no_valid_decomposition:
+                mark_blocked_needs_human(obligation)
+            continue
 
         context = compact_context_builder.build(obligation)
         if context.mandatory_tokens > policy.max_context_tokens:
             mark_needs_decomposition(obligation, reason=CONTEXT_TOO_LARGE)
             continue
 
-        role = REPAIR if obligation.has_retry_diagnostic else PROVE
-        request = create_external_action_request(
-            role=role,
+        reservation = budget.reserve(
+            call_kind=PROVER_ATTEMPT,
             obligation_id=obligation.id,
-            observation=context,
-            allowed_actions=typed_actions_for(role)
+            model=role_config.prover_model,
+            max_input_tokens=context.token_count,
+            max_output_tokens=policy.max_attempt_output_tokens
         )
-        transition(AWAITING_EXTERNAL_ACTION)
-        return request
+
+        if reservation.denied:
+            transition(BUDGET_EXHAUSTED)
+            return
+
+        optional_preflight = preflight.run_falsifiers(context)
+        if optional_preflight.falsified:
+            attempt = persist_preflight_rejection(optional_preflight)
+            update_failure_lesson(obligation, attempt)
+            budget.commit(reservation, actual_usage=preflight_usage)
+            continue
+
+        proposal = prover.propose_exact_theorem(context, reservation)
+        guarded_proposal = response_repetition_guard.finish_or_abort(proposal)
+
+        if guarded_proposal.invalid_or_aborted:
+            persist_attempt(outcome=MODEL_INVALID_OUTPUT)
+            budget.commit(reservation, actual_usage)
+            update_failure_lesson(obligation)
+            continue
+
+        lean_result = lean_gateway.verify_exact(
+            obligation=obligation,
+            candidate_source=guarded_proposal.source,
+            approved_dependency_ids=direct_dependencies(obligation),
+            environment=problem.environment
+        )
+
+        budget.commit(reservation, actual_usage + lean_usage)
+        persist_attempt_and_diagnostic(lean_result)
+
+        if lean_result.outcome == KERNEL_PASS:
+            transaction:
+                lemma = store_content_addressed_verified_lemma(lean_result)
+                commit_kernel_pass(obligation, lemma)
+                append_event(OBLIGATION_PROVED)
+            continue
+
+        if lean_result.outcome in {KERNEL_FAIL, TIMEOUT}:
+            update_failure_lesson_from_structured_diagnostic(obligation, lean_result)
+            update_difficulty_and_cost_statistics(obligation, lean_result)
+            continue
+
+        // Infrastructure and parser failures never change theorem state.
+        continue
 ```
 
-The external agent host performs inference outside ChatDB:
+## 4.3 Worker policy
 
-```text
-request = mcp.episode_observe(episode_id)
-lease = mcp.model_call_reserve(request.id, declared_model, token_limits)
-model_output = external_provider_or_local_model.generate(request.observation)
-result = mcp.episode_step(
-    episode_id,
-    expected_revision,
-    idempotency_key,
-    action_request_id=request.id,
-    model_call_lease_id=lease.id,
-    typed_action=parse_external_output(model_output),
-    declared_usage=provider_usage
-)
-```
+The default core SHALL allocate one worker to one ready obligation.
 
-`episode_step` validates the action, runs preflight and Lean when required, commits or rejects the transition, settles the lease, calculates reward, records the trajectory event, and calls `advance` until the next external action or terminal state.
+Optional portfolio mode MAY submit multiple candidates for the same obligation only when:
 
-No branch in this loop invokes an LLM internally.
-
-## 4.3 External action lease and concurrency policy
-
-The core MAY have multiple outstanding external action requests only when concurrency is enabled explicitly.
+- `portfolio_mode=true` in run configuration.
+- Each candidate has a separate budget reservation.
+- The number of candidates is capped.
+- The first kernel pass cancels remaining calls when the provider supports cancellation.
+- Portfolio mode does not change any acceptance rule.
 
 Default values:
 
 ```text
 max_concurrent_obligations = 2
-max_outstanding_action_requests_per_obligation = 1
+max_candidates_per_obligation = 1
 portfolio_mode = false
 ```
-
-Optional portfolio mode MAY issue multiple action requests for the same obligation only when:
-
-- `portfolio_mode=true` in run configuration.
-- Each request has a distinct action-request ID and model-call lease.
-- The number of requests is capped.
-- The first committed kernel pass invalidates remaining outstanding requests for that obligation.
-- Late submissions are rejected deterministically as superseded.
-- Portfolio mode does not change any acceptance rule.
-
-ChatDB coordinates leases and commits. The external runner owns provider concurrency and cancellation.
 
 ## 4.4 Transaction boundaries
 
@@ -866,8 +829,8 @@ The following operations MUST be atomic:
 - Admit a decomposition plus all child obligations and edges.
 - Create a certificate from a proved root.
 - Finalize a certificate plus transition problem to `COMPLETE`.
-- Reserve budget before a ChatDB-controlled call or issue a model-call lease before a compliant external inference.
-- Commit, release, expire, or settle the reservation or lease after the corresponding operation.
+- Reserve budget before a call.
+- Commit or release the budget reservation after a call.
 
 A crash between proof verification and database commit MUST leave the obligation open. The same proof artifact can be reattached later by hash after rechecking its environment and kernel result.
 
@@ -998,7 +961,7 @@ This requirement makes graph composition observable and prevents the system from
 
 A leaf obligation has no generated dependency imports. It may use only the approved base theorem environment.
 
-A deterministic tactic portfolio MAY run before ChatDB emits an external prove action request:
+A deterministic tactic portfolio MAY run before a model call:
 
 ```text
 rfl
@@ -1127,19 +1090,17 @@ ProblemVersion
 
 `root_formal_statement` is mandatory. A placeholder or optional null is forbidden.
 
-## 6.3 Formalization candidate submission
+## 6.3 Formalization candidate generation
 
 Default policy requires two independent formalization candidates before human approval.
 
-ChatDB does not generate candidates internally. It emits independent formalization action requests through MCP. External agents submit candidate statements under distinct action-request IDs.
-
 Independence means:
 
-- Different externally declared model configurations, or
-- Different provider or model families with trusted runner attestation, or
-- A human-authored theorem plus one externally generated candidate.
+- Different model configurations, or
+- Different provider families, or
+- A human-authored theorem plus one model-generated candidate.
 
-The second formalizer MUST NOT receive the first candidate through the ChatDB observation. The external runner is responsible for honoring the independence policy and declaring the model identity used. Unattested identity may be accepted as a proposal but cannot satisfy a strict diversity policy.
+The second formalizer MUST NOT receive the first candidate.
 
 Each candidate contains:
 
@@ -1153,9 +1114,7 @@ FormalizationCandidate
 - explicit_quantifiers[]
 - explicit_hypotheses[]
 - domain_restrictions[]
-- external_agent_config_hash or human_actor_id
-- declared_model_config_hash: Optional<Hash>
-- action_request_id
+- model_config_hash or human_actor_id
 - created_at
 ```
 
@@ -1405,64 +1364,56 @@ If no valid decomposition is produced within the decomposition budget, the oblig
 
 There is one decomposition operation. There is no separate “re-decomposer” subsystem.
 
-## 7.7 External MCP role contracts
+## 7.7 Proposer and prover roles
 
-ChatDB defines roles as typed action contracts, not as internal model clients.
+### Frontier Draft model
 
-### Draft role
-
-Requested for:
+Required for:
 
 - Initial informal Draft on hard problems.
 - Replanning after a mathematically substantive stall.
-- Decomposition planning for hard obligations after repeated semantic failure.
+- Decomposition of hard obligations after repeated semantic failure.
 
-The observation includes only the approved Draft inputs. The external agent host chooses a model with the required informal-mathematics capability.
+This role is capability-gated and SHOULD use the strongest configured mathematical reasoning model. The system MUST NOT silently substitute a cheap model merely to reduce cost when the run policy requires frontier capability.
 
-### Sketch formalization role
+### Sketch formalizer
 
-Requested for:
+Used for:
 
 - Converting Draft propositions into Lean theorem statements.
-- Creating an initial obligation DAG proposal.
+- Creating an initial obligation DAG.
 - Formalizing reviewer-proposed obligations.
 
-The external output is always a proposal and is parsed, audited, and admitted deterministically.
+This role MAY use a specialized formalization or code model. Its output is always parsed and audited.
 
-### Prove role
+### Prover model
 
-Requested for:
+Used for:
 
 - Producing a proof body for one exact obligation.
+- Repairing a failed proof from structured compiler feedback.
 
-### Repair role
+This role SHOULD use a Lean-specialized prover model when available and MAY be cheaper than the frontier Draft model.
 
-Requested for:
+### Reviewer pool
 
-- Repairing a failed proof using the exact theorem signature and structured Lean diagnostics.
+Used only to propose new coverage, counterexample, or fidelity obligations. Reviewer calls are discussed in Section 8.
 
-### Review roles
-
-Requested only to propose new coverage, counterexample, or fidelity obligations. Reviewer submissions never establish truth or completion.
-
-### External role binding
+### Swappable configuration
 
 ```text
-ExternalRoleBinding
-- role: DRAFT | SKETCH_FORMALIZATION | PROVE | REPAIR |
-        DECOMPOSITION | COVERAGE_REVIEW | FIDELITY_REVIEW
-- required_capabilities: CapabilityTag[]
-- maximum_input_tokens
-- maximum_output_tokens
-- allowed_action_kinds: ActionKind[]
-- diversity_lens: Optional<String>
-- model_identity_requirement: none | declared | attested
-- prompt_template_hash
+RoleConfig
+- draft_model: ModelRef with capability INFORMAL_MATH_FRONTIER
+- sketch_model: ModelRef with capability LEAN_FORMALIZATION
+- prover_model: ModelRef with capability LEAN_PROVING
+- repair_model: Optional<ModelRef>, defaults to prover_model
+- reviewer_pool: ReviewerConfig[]
+- max_output_tokens by role
+- temperature by role
+- provider-specific reasoning settings
 ```
 
-The ChatDB repository stores role requirements and action schemas. The external MCP host stores provider routing, API credentials, sampling settings, reasoning settings, retries, and model-specific transport code.
-
-Model names are external-runner configuration, not proof-core logic.
+Model names are configuration, not core logic.
 
 ## 7.8 Compiler-feedback retry
 
@@ -1585,9 +1536,9 @@ The trigger counters are deterministic and configurable.
 
 ## 8.3 Diversity requirement
 
-An eligible review epoch requires at least three reviewer submissions received through distinct MCP action requests with:
+An eligible review epoch requires at least three reviewer results with:
 
-- At least two distinct model families or providers, declared by the external runner and attested when strict completion assurance is required.
+- At least two distinct model families or providers.
 - Three distinct fixed lenses.
 - No duplicate `(provider, model, prompt_template_hash, lens)` tuple.
 
@@ -1609,7 +1560,7 @@ Required lenses:
 
 At least one reviewer SHOULD be a frontier reasoning model. At least one SHOULD be a Lean-capable model. The third MAY be a cheaper model with a distinct prompt and family.
 
-If diversity requirements are not met or required identity attestation is absent, the epoch is `ineligible`. An ineligible epoch cannot advance convergence. A human reviewer may satisfy a missing lens with a recorded formal proposal set.
+If diversity requirements are not met, the epoch is `ineligible`. An ineligible epoch cannot advance convergence. A human reviewer may satisfy a missing lens with a recorded formal proposal set.
 
 ## 8.4 Reviewer input
 
@@ -2100,40 +2051,21 @@ per_call_timeout_seconds = 180
 
 The operator may choose different values before a run. Limits are immutable during a run except through an explicit signed budget-amendment event.
 
-## 10.2 Reservation and external model-call lease protocol
+## 10.2 Reservation protocol
 
-ChatDB uses two related mechanisms.
-
-### Internal operation reservation
-
-Every Lean, retrieval, CAS, sandbox, or other ChatDB-controlled operation follows:
+Every call follows:
 
 ```text
 estimate worst_case_cost
 reservation = budget_manager.reserve(scope, worst_case_cost)
 if reservation denied:
-    do not execute
-result = internal_operation()
-budget_manager.commit_or_release(reservation, actual_usage)
-```
-
-### External model-call lease
-
-A trusted external MCP runner follows:
-
-```text
-request = observe_next_action()
-lease = model_call_reserve(
-    action_request_id,
-    declared_model_identity,
-    maximum_input_tokens,
-    maximum_output_tokens,
-    worst_case_cost
-)
-if lease denied:
-    do not invoke the model
-model_result, usage = external_model_call()
-episode_step(action_request_id, lease_id, typed_action, usage)
+    do not call
+    return budget_denied
+result = call()
+usage = read actual usage
+if usage unavailable:
+    usage = reserved worst case
+budget_manager.commit(reservation, usage)
 ```
 
 The budget manager SHALL check all applicable scopes:
@@ -2142,11 +2074,8 @@ The budget manager SHALL check all applicable scopes:
 - Obligation total.
 - Review epoch total.
 - Call-kind total.
-- Episode and dataset-run total where applicable.
 
-There is no provider client, provider credential, or model transport inside ChatDB.
-
-A lease is accounting authority, not proof authority. An untrusted external runner can spend money outside ChatDB or misreport usage; strict monetary guarantees require a trusted runner, provider proxy, or attested billing record.
+There is no unwrapped provider client available to orchestration code.
 
 ## 10.3 Token context budget
 
@@ -2198,38 +2127,33 @@ A model MAY request a verified proof body by theorem ID through a budgeted retri
 - Replaces the optional hint segment.
 - Is never automatically appended to future attempts.
 
-## 10.5 External role capability allocation
+## 10.5 Model tier allocation
 
-| Role | Required external capability | Recommended tier | Why |
+| Role | Required capability | Default tier | Why |
 |---|---|---|---|
 | Draft | Strong informal mathematical reasoning | Frontier | Hard reasoning is capability-gated |
 | Hard decomposition | Strong informal reasoning plus formal awareness | Frontier | Determines useful subgoal structure |
 | Root formalization | Lean autoformalization | Frontier or specialized formalizer | Fidelity-critical, human-approved |
 | Sketch formalization | Lean statement generation | Specialized or mid-tier | Output is parsed and audited |
-| Standalone proof | Lean proof generation | Specialized prover | Repeated low-context actions |
+| Standalone proof | Lean proof generation | Specialized prover | Repeated low-context calls |
 | Compiler repair | Lean proof repair | Prover or cheaper repair model | Structured diagnostic narrows task |
-| Review coverage | Diverse reasoning lenses | Mixed external pool | Diversity matters, no truth authority |
-| Failure lesson | Diagnostic summarization | Deterministic first, optional external cheap model | No need for frontier model |
+| Review coverage | Diverse reasoning lenses | Mixed pool | Diversity matters, no truth authority |
+| Failure lesson | Diagnostic summarization | Deterministic first, cheap optional | No need for frontier model |
 | Pattern mining | None in runtime | Offline | Removed from proof transaction |
 
-These are requirements communicated to the external MCP runner. ChatDB does not resolve provider names or invoke any of these models.
+## 10.6 Call-cost attribution
 
-## 10.6 External call-cost attribution
+Every attempt and review proposal records:
 
-Every externally submitted model action SHOULD record:
-
-- External runner identity and configuration hash.
-- Declared provider and model configuration hash.
-- Action-request ID and model-call lease ID.
+- Provider and model configuration hash.
 - Input and output tokens.
 - Monetary cost.
 - Wall time.
-- Provider request identifier when safely available.
-- Attestation level: unverified declaration, trusted runner, provider proxy, or billing-attested.
-- Lean CPU time and ChatDB-controlled tool costs.
+- Lean CPU time.
+- Tool calls.
 - Outcome.
 
-The scheduler may consume trusted or policy-approved statistics for retry cost and difficulty updates. Unattested cost data MUST NOT influence proof truth and MAY be excluded from strict cost reports.
+The scheduler consumes these actual statistics for `K(o)` and difficulty updates.
 
 ## 10.7 Budget terminal behavior
 
@@ -2257,9 +2181,9 @@ COMPLETE
 
 | Existing capability | Reuse decision | New interface |
 |---|---|---|
-| Existing provider-specific `LlmClient` adapters | Do not place in proof core | Move to an external MCP runner package or separate repository |
-| Existing streaming authentication and provider transport | Do not place in proof core | External runner concern; may be reused there with usage reporting |
-| Response repetition detector | Split | External runner guards model streams; ChatDB independently rejects duplicate canonical submissions |
+| Provider-specific `LlmClient` adapters | Reuse | Hidden behind `BudgetedModelGateway` |
+| Streaming authentication and transport | Reuse | Must emit usage and typed failures |
+| Response repetition detector | Reuse | Applied to every model stream, with byte and wall-time caps |
 | Lean executable discovery | Reuse | Part of one supervised Lean service |
 | Persistent Lean process supervision | Reuse | Single primary execution path, recovery fallback only |
 | Lean JSON diagnostic parsing | Reuse | Populate `LeanDiagnostic` schema |
@@ -2283,7 +2207,7 @@ COMPLETE
 | Retry context | Existing context replays too much history `[Audit C-03]` |
 | Completion policy | Existing done decision is an LLM review `[Audit S-02]` |
 | Reviewer system | Existing reviewers participate in closure |
-| Cost governor | Rebuild for internal reservations plus external MCP model-call leases |
+| Cost governor | Existing `max_total_cost` has no runtime consumer |
 | Persistence | Existing graph and proof representations are duplicated |
 
 ## 11.3 Delete or quarantine
@@ -2306,7 +2230,6 @@ The following SHALL NOT be ported into the new proof core:
 - Unused stale-obligation expiry function.
 - Substring known-answer acceptance gate.
 - Duplicate Lean primary execution paths.
-- Any provider SDK, provider credential reader, internal `LlmClient`, or background model invocation in the ChatDB process.
 - Existing `verified` values as trusted facts.
 
 ## 11.4 Tauri client boundary
@@ -2391,9 +2314,9 @@ The system must record which method was used.
 
 This is required before unattended benchmark-scale operation.
 
-## 12.4 External role bindings
+## 12.4 Default model assignments
 
-**Decision needed:** Which external runner configurations satisfy these capability tags?
+**Decision needed:** Which configured models satisfy these capability tags?
 
 ```text
 INFORMAL_MATH_FRONTIER
@@ -2403,13 +2326,11 @@ LEAN_REPAIR
 COVERAGE_REVIEW
 ```
 
-The proof core stores capability requirements, prompt hashes, action schemas, and attestation requirements. Provider names, model names, credentials, sampling controls, and fallback routing live exclusively in the external MCP runner.
-
-The first implementation needs tested external role bindings and a declared fallback policy, but no provider package may be added to ChatDB.
+Model names must remain configuration, but the first implementation needs tested defaults and fallback policy.
 
 ## 12.5 Reviewer diversity fallback
 
-**Decision needed:** If the external MCP runner can supply only one provider family, should the run:
+**Decision needed:** If only one provider is configured, should the run:
 
 - Require a human reviewer for the missing family, or
 - Permit same-provider distinct models and prompts but mark convergence lower-assurance?
@@ -2459,7 +2380,7 @@ Recommended choice: read-only legacy viewer plus explicit re-verification import
 
 ## 12.11 Parallelism
 
-**Decision needed:** Default outstanding MCP action-request concurrency by ChatDB hardware limits and external-runner capacity.
+**Decision needed:** Default concurrency by hardware and provider rate limits.
 
 Recommended first release:
 
@@ -2500,750 +2421,6 @@ Labels must keep kernel truth, fidelity, and coverage confidence distinct.
 
 ---
 
-# 13. Headless proof environment, MCP, and synthetic RL data
-
-## 13.1 Purpose and trust boundary
-
-ChatDB SHALL expose the proof core as a reproducible, machine-controlled environment in which an external MCP agent can observe proof state, submit typed actions, receive deterministic Lean-backed feedback, and continue until the task terminates or is truncated.
-
-ChatDB SHALL NOT contain or invoke an LLM proposal client. The external agent host is both the MCP client and the model-inference owner. It may call a remote provider, a local model, a human, or a scripted policy. ChatDB does not know or care how the proposal was produced beyond the declared and optionally attested metadata required by policy.
-
-The environment is a first-class product subsystem, but it is not a second proof engine. It wraps the same authoritative database, scheduler, budget governor, orchestrator, and Lean gateway defined in Sections 3 through 10. It MUST NOT duplicate obligation state, verification logic, theorem status, dependency composition, or budget accounting.
-
-The trust boundary is:
-
-```text
-External LLM provider, local model, human, or scripted policy
-        ^
-        | provider-specific API owned outside ChatDB
-        v
-External agent host / synthetic-data runner
-        |  MCP client
-        v
-ChatDB MCP server
-        |
-        v
-Headless Episode Service
-        |
-        v
-Authoritative ChatDB Orchestrator and Database
-        |
-        v
-Supervised Lean Service
-        |
-        v
-Lean kernel result and structured diagnostics
-```
-
-Only the Lean kernel may establish that an obligation is proved. Only the authoritative proof core may commit a verified lemma, transition an obligation to `proved`, or issue a root certificate. The external agent may propose actions. The environment may expose, score, and record committed events. Neither may manufacture proof truth.
-
-The environment serves four distinct use cases:
-
-1. Interactive tool use by external MCP-capable LLM agent hosts.
-2. Reproducible model evaluation on formal reasoning tasks.
-3. Bulk generation of verifier-backed synthetic trajectories by an external runner.
-4. Reinforcement-learning interaction using deterministic proof-state transitions and Lean-derived rewards.
-
-## 13.2 Environment authority model
-
-The authoritative state transition function SHALL be implemented in the Rust core. Tauri and the MCP server call that function. Optional HTTP or Gym compatibility layers SHALL be MCP clients or thin adapters to the same service and MUST NOT contain provider clients or proof rules.
-
-The canonical transition is conceptually:
-
-```text
-step(current_episode_revision, action_request_id, typed_action)
-    -> accepted_or_rejected
-    -> proof_core_transition
-    -> Lean_result_when_required
-    -> next_observation_or_action_request
-    -> reward_components
-    -> terminated
-    -> truncated
-    -> structured_diagnostics
-    -> next_episode_revision
-```
-
-A transport adapter or external agent MUST NOT:
-
-- Write directly to obligation, edge, proposal, lemma, certificate, or budget tables.
-- Mark a theorem proved.
-- Set its own reward from model output.
-- Hide a Lean failure by converting it into a successful tool response.
-- Maintain a second episode-specific copy of the proof graph as an authority.
-- Bypass the reserve, lease, commit, release, and settlement protocol.
-
-The ChatDB process MUST NOT:
-
-- Import provider SDKs.
-- Read provider API keys.
-- Select a provider or model.
-- Invoke model inference.
-- Retry provider transport.
-- Parse provider-specific streaming formats.
-- Continue a model-dependent transition when no external action has been submitted.
-
-## 13.3 Environment manifest
-
-Every environment release SHALL publish a versioned manifest containing at least:
-
-```text
-EnvironmentManifest
-- environment_id: String
-- environment_version: SemVer
-- protocol_version: SemVer
-- database_schema_version: SemVer
-- reward_policy_version: SemVer
-- observation_schema_version: SemVer
-- action_schema_version: SemVer
-- trajectory_schema_version: SemVer
-- lean_version: String
-- lake_environment_hash: Hash
-- base_theorem_environment_hash: Hash
-- deterministic: Boolean
-- supports_seed: Boolean
-- supports_snapshot: Boolean
-- supports_replay: Boolean
-- supported_task_kinds: TaskKind[]
-- supported_termination_reasons: Enum[]
-- supported_truncation_reasons: Enum[]
-- maximum_action_bytes: Integer
-```
-
-Environment versions are independent from the desktop application version. A trajectory MUST record every manifest version required to replay or interpret it.
-
-## 13.4 Task definitions
-
-Training and evaluation begin from immutable, versioned task definitions. A task is not merely a prompt. It binds a visible objective to hidden evaluator state and a pinned proof environment.
-
-```text
-EnvironmentTask
-- id: UUID
-- task_family_id: String
-- task_revision: SemVer
-- kind: obligation_proof | compiler_repair | decomposition | formalization |
-        coverage_discovery | dependency_selection | root_completion
-- problem_version_id: UUID
-- initial_obligation_id: Optional<UUID>
-- visible_instructions: Text
-- hidden_evaluator_config: ArtifactRef
-- allowed_action_kinds: ActionKind[]
-- reward_policy_id: String
-- completion_policy_id: String
-- maximum_steps: Integer
-- maximum_tokens: Integer
-- maximum_cost_micro_usd: Integer
-- wall_time_limit_ms: Integer
-- seed_policy: fixed | parameterized
-- source_provenance: Provenance
-- license: String
-- split: train | validation | test | private_eval
-- content_hash: Hash
-```
-
-The task compiler SHALL produce two separate views:
-
-- **Agent view:** only information the policy model is allowed to observe.
-- **Evaluator view:** hidden expected properties, private test obligations, anti-leakage checks, and policy configuration.
-
-Hidden evaluator data MUST NOT appear in observations, MCP resources, model prompts, public trajectories, or logs returned to the model.
-
-### Initial task scope
-
-The first environment release SHOULD prioritize the task kinds already supported by the rebuilt core:
-
-1. Prove one ready obligation.
-2. Repair a failed Lean proposal from structured diagnostics.
-3. Decompose a blocked obligation into formal child statements.
-4. Select a useful verified dependency from an approved local lemma set.
-5. Complete the root proof from an existing verified dependency closure.
-
-Formalization and coverage-discovery tasks SHOULD remain later milestones because they require stronger fidelity and admission policies.
-
-## 13.5 Episode lifecycle
-
-An episode is an isolated interaction with one immutable task definition.
-
-```text
-Episode
-- id: UUID
-- task_id: UUID
-- task_revision: SemVer
-- problem_version_id: UUID
-- environment_version: SemVer
-- protocol_version: SemVer
-- reward_policy_version: SemVer
-- seed: Integer
-- status: active | awaiting_external_action | terminated | truncated | failed | archived
-- current_step: Integer
-- current_revision: Integer
-- initial_state_hash: Hash
-- current_state_hash: Hash
-- budget_account_id: UUID
-- started_at: Timestamp
-- last_active_at: Timestamp
-- completed_at: Optional<Timestamp>
-- termination_reason: Optional<Enum>
-- truncation_reason: Optional<Enum>
-```
-
-Required lifecycle operations:
-
-```text
-create_episode(task_id, seed, policy_options)
-reset_episode(episode_id, seed)
-observe_episode(episode_id)
-step_episode(episode_id, expected_revision, idempotency_key, action)
-snapshot_episode(episode_id)
-restore_episode(snapshot_id)
-status_episode(episode_id)
-close_episode(episode_id)
-replay_episode(trajectory_id)
-export_trajectory(episode_id, format)
-```
-
-Resetting the same task under the same environment version, Lean environment hash, task revision, and seed MUST produce the same initial semantic state hash.
-
-Episodes MUST be isolated. No obligation, proposal, diagnostic, hidden evaluator field, model response, or budget state from one episode may contaminate another.
-
-## 13.6 Observation contract
-
-An observation is the bounded proof state shown to the policy model. It is not a dump of the database or the complete problem history.
-
-```text
-Observation
-- episode_id: UUID
-- episode_revision: Integer
-- step_index: Integer
-- task_kind: TaskKind
-- requested_role: ExternalRole
-- action_request_id: UUID
-- visible_objective: Text
-- root_theorem_signature: Text
-- selected_obligation: ObligationObservation
-- approved_dependencies: LemmaSummary[]
-- compact_context: Text
-- latest_lean_diagnostics: LeanDiagnostic[]
-- distilled_failure_lessons: Text[]
-- allowed_actions: ActionDescriptor[]
-- remaining_budget: BudgetObservation
-- model_call_lease_policy: ModelCallLeasePolicy
-- proof_progress: ProofProgressObservation
-- state_hash: Hash
-```
-
-The observation policy SHALL follow the context evacuation rules in Section 10.4. It SHOULD contain only the target obligation, approved dependencies, compact diagnostics, and bounded failure lessons required for the next action.
-
-By default, observations MUST NOT expose:
-
-- Hidden evaluator state.
-- Future task variants or private evaluation cases.
-- A completed proof for the target obligation.
-- Unapproved generated lemmas.
-- Raw Draft text unless the task explicitly evaluates Draft-to-Sketch behavior.
-- Other episodes or model trajectories.
-- Database credentials, provider secrets, provider routing, filesystem paths, or sandbox controls.
-
-## 13.7 Typed action contract
-
-The model SHALL act through a versioned, bounded action union. Free-form text may be included as payload, but the environment transition itself MUST be typed.
-
-Initial actions:
-
-```text
-Action
-- submit_draft
-- submit_formalization_candidate
-- submit_sketch_proposal
-- submit_lean_proposal
-- submit_repair_proposal
-- propose_decomposition
-- submit_review_proposals
-- select_dependency
-- request_compact_hint
-- declare_blocked
-- abandon_attempt
-```
-
-Representative action shapes:
-
-```text
-SubmitLeanProposal
-- action_request_id: UUID
-- model_call_lease_id: Optional<UUID>
-- obligation_id: UUID
-- candidate_source: Text
-- declared_dependency_ids: UUID[]
-- external_agent_metadata: ExternalAgentMetadata
-- declared_usage: Optional<ModelUsage>
-```
-
-```text
-ProposeDecomposition
-- parent_obligation_id: UUID
-- child_statements: LeanStatementProposal[]
-- proposed_edges: EdgeProposal[]
-- natural_rationale: Optional<Text>
-```
-
-```text
-RequestCompactHint
-- obligation_id: UUID
-- hint_kind: dependency_summary | diagnostic_explanation | statement_normalization
-```
-
-The environment MUST reject unknown fields, oversized payloads, stale episode revisions, invalid obligation references, undeclared dependency imports, and unsupported action kinds.
-
-The external agent MUST NOT directly submit:
-
-- A new obligation status.
-- A verified lemma record.
-- A reward.
-- A certificate.
-- A budget commit.
-- A reviewer acceptance decision.
-- A state hash or revision override.
-
-## 13.8 External action request, lease, and step semantics
-
-ChatDB advances internally until it requires a model-produced artifact. It then persists an immutable `ActionRequest`, transitions the episode to `awaiting_external_action`, and returns the bounded observation through MCP.
-
-A compliant external runner performs these stages:
-
-1. Call `episode_observe` and receive the active `ActionRequest`.
-2. Optionally call `model_call_reserve` before inference when the run uses ChatDB cost accounting.
-3. Invoke the selected provider or local model outside ChatDB.
-4. Parse the model output into the allowed typed action.
-5. Call `episode_step` with the action-request ID, expected revision, idempotency key, optional lease ID, typed action, and usage metadata.
-
-Every submitted step SHALL execute in this order:
-
-1. Validate protocol version, episode status, expected revision, action-request ID, idempotency key, and action schema.
-2. Confirm that the action request is still active and that the submitted action is allowed for its role.
-3. Validate or settle the external model-call lease when one is required.
-4. Reserve the maximum possible ChatDB-controlled validation and Lean cost.
-5. Apply repetitive-response, prohibited-construct, size, dependency, and preflight guards.
-6. Stage the action against the authoritative proof state.
-7. Invoke deterministic validation and the Lean gateway when required.
-8. Commit or reject proof-state changes transactionally.
-9. Commit or release internal reservations and settle, expire, or reject the external lease.
-10. Calculate reward components from committed evidence.
-11. Evaluate termination and truncation policies.
-12. Append one immutable trajectory event containing the external action metadata.
-13. Advance deterministically until the next external action request or terminal state.
-14. Return the next observation, action request, reward, and structured diagnostics.
-
-A rejected action MUST leave the semantic proof state unchanged. It still produces a trajectory event and may consume budget already spent on validation or Lean execution.
-
-A duplicate idempotency key MUST return the original step result or a deterministic duplicate response. It MUST NOT apply the action twice.
-
-No step implementation may invoke an LLM.
-
-## 13.9 Reward model
-
-Rewards SHALL be calculated by a versioned deterministic policy from proof-core and Lean evidence. The model may observe reward, but it may not propose, edit, or certify it.
-
-The raw reward vector is authoritative. A scalar aggregation is a replaceable training policy.
-
-Recommended initial reward components:
-
-```text
-RewardComponents
-- action_schema_valid
-- proposal_parsed
-- proposal_elaborated
-- target_statement_exact_match
-- unsolved_goal_reduction
-- diagnostic_novelty
-- duplicate_response_penalty
-- invalid_dependency_penalty
-- obligation_kernel_proved
-- dependency_composition_proved
-- centrality_weighted_closure
-- root_certificate_proved
-- step_efficiency
-- token_efficiency
-- cost_efficiency
-- budget_violation_penalty
-- sandbox_violation_penalty
-```
-
-Hard reward rules:
-
-1. `obligation_kernel_proved` is positive only when the exact stored theorem statement is accepted in the pinned Lean environment and the verified lemma commit succeeds.
-2. `dependency_composition_proved` is positive only when the composition checks in Section 5.5 pass.
-3. `root_certificate_proved` is positive only when the exact root theorem is kernel-checked and the certificate transaction commits.
-4. LLM reviewers, natural-language critics, sampling, CAS checks, or model self-assessment MUST NOT generate proof rewards.
-5. Parser success, elaboration progress, or reduced unsolved goals MAY provide bounded shaping rewards, but they MUST remain visibly distinct from theorem discharge.
-6. Unrecognized constraints, missing diagnostics, tool failures, and verifier errors MUST fail closed and MUST NOT receive the corresponding positive reward.
-7. Reward weights MUST be recorded by policy version. Changing weights MUST NOT rewrite historical raw evidence.
-
-### Reward-hacking defenses
-
-The environment SHALL test and guard against:
-
-- Repeated syntactically different but semantically identical failed proposals.
-- Empty proofs, placeholders, `sorry`, unsafe axioms, or disallowed imports.
-- Artificial diagnostic churn that does not improve the proof state.
-- Dependency declaration inflation.
-- Excessive hint requests.
-- Claiming completion without a committed certificate.
-- Triggering infrastructure errors to avoid negative reward.
-
-## 13.10 Termination and truncation
-
-Termination and truncation MUST remain separate.
-
-### Natural termination
-
-An episode terminates when its task-defined objective is deterministically complete, for example:
-
-- the target obligation is kernel proved
-- the required repair is kernel proved
-- an admitted decomposition is committed
-- the root certificate is committed
-- the model correctly declares a task blocked under a task policy that treats this as a terminal outcome
-
-### External truncation
-
-An episode is truncated when stopped by an external limit or infrastructure condition:
-
-- maximum steps
-- token budget
-- monetary budget
-- wall-time limit
-- invalid-action limit
-- Lean timeout threshold
-- external-agent lease timeout or runner-unavailable threshold
-- sandbox failure
-- operator cancellation
-- process crash recovery boundary
-
-A truncated episode MUST NOT be reported as successful proof completion.
-
-## 13.11 MCP-only model execution surface
-
-MCP SHALL be the canonical and only model-facing execution surface. The external agent host is the MCP client. ChatDB is the MCP server.
-
-The first MCP server SHOULD expose a small tool surface:
-
-```text
-environment_describe
-task_list
-task_describe
-episode_create
-episode_observe
-model_call_reserve
-model_call_release
-episode_step
-episode_status
-episode_snapshot
-episode_restore
-episode_close
-trajectory_export
-```
-
-`episode_observe` returns the current bounded observation and active `ActionRequest`. It never triggers inference.
-
-`model_call_reserve` issues an optional budget lease to a trusted external runner before that runner calls its model. It never calls the model.
-
-`episode_step` accepts the typed result after external inference and routes it through the authoritative transition function.
-
-The environment SHOULD use one typed `episode_step` tool rather than one MCP tool for every proof operation. This limits tool explosion and ensures all model artifacts pass through the same action union and transition pipeline.
-
-Suggested MCP resources:
-
-```text
-chatdb://environment/manifest
-chatdb://environment/action-schema
-chatdb://environment/observation-schema
-chatdb://environment/role-contracts
-chatdb://tasks/{task_id}
-chatdb://episodes/{episode_id}/observation
-chatdb://episodes/{episode_id}/action-request
-chatdb://episodes/{episode_id}/diagnostics/latest
-chatdb://episodes/{episode_id}/trajectory
-```
-
-MCP responses MUST preserve structured diagnostics and protocol versions. They MUST NOT collapse a Lean error into a prose-only failure.
-
-The first deployment SHOULD bind to local stdio or localhost. Remote MCP exposure requires scoped authentication, authorization, rate limits, audit logging, and explicit operator configuration.
-
-No MCP server tool may accept provider credentials or provider-specific request bodies.
-
-## 13.12 External runners and compatibility adapters
-
-ChatDB SHALL NOT contain a model runner that imports provider SDKs. Bulk evaluation and synthetic-data generation are performed by a separate external runner acting as an MCP client.
-
-### External synthetic-data runner
-
-The runner MAY support repeated execution across task sets, models, sampling configurations, seeds, and policy configurations while enforcing:
-
-- maximum total cost
-- maximum total tokens
-- per-episode limits
-- wall-clock deadline
-- model-call count
-- bounded concurrency
-- provider retry policy
-- resumability without duplicate committed steps
-
-The runner owns provider credentials, provider clients, model selection, provider retries, streaming, and cancellation. ChatDB owns tasks, observations, action admission, Lean verification, rewards, state transitions, trajectories, and export.
-
-For strict budget enforcement, the runner MUST request and settle ChatDB model-call leases. A configured external-call budget without an active trusted consumer is not a proof-correctness defect, but it is a cost-governance defect and must be reported.
-
-### Gymnasium-compatible wrapper
-
-A Python Gymnasium wrapper MAY exist as an MCP client and map:
-
-```text
-reset(seed, options) -> observation, info
-step(action) -> observation, reward, terminated, truncated, info
-close()
-```
-
-The wrapper MUST NOT call a model automatically unless it is explicitly operating as the external agent runner. It MUST NOT implement proof rules, rewards, termination policy, or state transitions.
-
-### HTTP or gRPC compatibility
-
-HTTP or gRPC MAY be provided for administration, artifact transfer, or high-throughput non-model integrations. It is not an alternative hidden model path. Any model-producing workflow must remain attributable to an external actor and must submit the same typed action contract, preferably through MCP.
-
-## 13.13 Trajectory record
-
-Every accepted or rejected step SHALL append one immutable trajectory event.
-
-```text
-TrajectoryEvent
-- event_id: UUID
-- trajectory_id: UUID
-- episode_id: UUID
-- task_id: UUID
-- step_index: Integer
-- parent_event_id: Optional<UUID>
-- environment_version: SemVer
-- protocol_version: SemVer
-- lean_environment_hash: Hash
-- reward_policy_version: SemVer
-- action_request_id: UUID
-- external_runner_config_hash: Optional<Hash>
-- declared_model_config_hash: Optional<Hash>
-- model_call_lease_id: Optional<UUID>
-- usage_attestation_level: Optional<Enum>
-- observation_hash: Hash
-- observation: Observation
-- raw_model_output: Optional<ArtifactRef>
-- parsed_action: Action
-- action_accepted: Boolean
-- proposal_attempt_id: Optional<UUID>
-- lean_result: Optional<StructuredLeanResult>
-- diagnostics: LeanDiagnostic[]
-- proof_events_committed: ProofEventRef[]
-- reward_components: RewardComponents
-- scalar_reward: Optional<Number>
-- state_hash_before: Hash
-- state_hash_after: Hash
-- terminated: Boolean
-- truncated: Boolean
-- termination_reason: Optional<Enum>
-- truncation_reason: Optional<Enum>
-- model_metadata: Optional<ModelMetadata>
-- token_usage: Optional<TokenUsage>
-- cost_micro_usd: Integer
-- latency_ms: Integer
-- created_at: Timestamp
-```
-
-Trajectories MUST preserve failures. Parse errors, type mismatches, unsolved goals, invalid imports, duplicate responses, repairs, and abandoned branches are valuable training data when accurately labeled.
-
-The trajectory record SHALL reference existing `proposal_attempts`, `verified_lemmas`, obligations, and certificates rather than duplicating those records as competing authorities.
-
-## 13.14 Replay and determinism
-
-Replay SHALL reconstruct an episode without invoking an LLM. It reuses the recorded typed actions and verifies that the authoritative state machine produces the same committed proof events and semantic state hashes.
-
-Replay MUST check:
-
-- task content hash
-- environment and protocol versions
-- database schema version
-- Lean version and environment hash
-- reward policy version
-- action ordering
-- idempotency behavior
-- proof commit outcomes
-- state hash after every step
-- termination or truncation result
-
-A divergence MUST fail at the first mismatching step and identify the field or event that differs.
-
-External model nondeterminism is not replayed. The raw model response and parsed action are historical inputs. Replay verifies the environment response to those inputs.
-
-## 13.15 Synthetic data products
-
-The canonical trajectory MAY be transformed into multiple derived datasets without changing the original record.
-
-Supported derived views SHOULD include:
-
-- supervised proof-proposal pairs
-- compiler-diagnostic repair pairs
-- successful multi-step proof trajectories
-- failed and recovered trajectories
-- preference pairs derived from deterministic proof outcomes and cost
-- step-level RL tuples
-- obligation-decomposition examples
-- dependency-selection examples
-- model evaluation summaries
-- oracle-trust and tool-use traces
-
-Derived data MUST preserve references to:
-
-- source task and split
-- canonical trajectory and event IDs
-- model and prompt versions
-- Lean environment hash
-- reward policy
-- licensing and provenance
-- redaction policy
-- generator and exporter versions
-
-A preference pair MUST NOT be labeled from an LLM judge alone when deterministic Lean outcomes are available. The pair construction policy SHALL state exactly which evidence made one trajectory preferable.
-
-## 13.16 Dataset governance and contamination control
-
-Synthetic generation SHALL use stable train, validation, test, and private evaluation splits.
-
-The system MUST prevent leakage through:
-
-- parameter variants of the same theorem family crossing protected splits
-- hidden evaluator lemmas appearing in observations or retrieval indexes
-- completed certificates entering prompts for their own target tasks
-- replay logs from evaluation episodes entering training exports without explicit approval
-- model-specific private data being exposed to other runs
-- theorem retrieval returning a target-equivalent proof from a protected split
-
-Every dataset export SHALL include a manifest containing:
-
-- dataset ID and version
-- source task families and revisions
-- split policy and contamination checks
-- environment, Lean, protocol, and reward versions
-- model configurations
-- trajectory counts and outcome distribution
-- checksums
-- license and provenance
-- filtering and redaction rules
-- known limitations
-
-## 13.17 Security and sandboxing
-
-The environment executes model-generated Lean source and MUST treat it as untrusted input.
-
-Required controls:
-
-- process isolation for Lean workers
-- bounded CPU, memory, wall time, process count, and file size
-- no network access from proof workers by default
-- allowlisted imports and package environment
-- temporary per-episode workspaces
-- canonical path validation
-- no shell interpolation of model text
-- output-size limits
-- cleanup after timeout or crash
-- structured classification of sandbox failures
-- local-only MCP binding by default
-
-The proof worker MUST reject `sorry`, unsafe axioms, disallowed imports, environment mutation, and any construct forbidden by the trusted theorem policy.
-
-## 13.18 Environment storage additions
-
-Add the following tables or equivalent append-only stores. They supplement the proof schema and MUST NOT duplicate its authority.
-
-```text
-environment_tasks
-episodes
-action_requests
-model_call_leases
-episode_steps
-episode_snapshots
-trajectory_exports
-dataset_manifests
-external_runner_configs
-external_run_jobs
-```
-
-`episode_steps` SHALL reference proof-core records such as `proposal_attempts`, `verified_lemmas`, proof events, and certificates. It MUST NOT contain a second mutable obligation status or duplicate verified theorem body that can drift from the core.
-
-## 13.19 Environment invariants
-
-The following invariants are mandatory:
-
-1. **Lean-only positive proof reward:** no kernel-backed proof event, no theorem-discharge reward.
-2. **One proof authority:** adapters and episodes cannot mutate proof status outside the core transition service.
-3. **Episode isolation:** no cross-episode state, diagnostic, budget, hidden-data, or artifact leakage.
-4. **Deterministic reset:** identical pinned inputs and seed produce the same initial semantic state.
-5. **Replayability:** recorded actions reproduce committed proof events and state hashes.
-6. **Budget enforcement:** no ChatDB-controlled Lean or tool call occurs without a reservation; no compliant external inference occurs without a model-call lease when the run policy requires one.
-7. **External-model boundary:** ChatDB contains no provider client, credentials, inference call, or provider retry loop.
-8. **Fail-closed diagnostics:** parser, verifier, sandbox, and infrastructure uncertainty cannot become success.
-9. **No hidden-answer leakage:** evaluator-only data never crosses the observation boundary.
-10. **MCP action parity:** the MCP server and direct Rust conformance harness produce identical transitions for identical typed actions; optional wrappers are tested as MCP clients.
-11. **Append-only trajectory truth:** failures and retries are preserved rather than rewritten into a clean success story.
-12. **Version binding:** task, environment, Lean, schema, reward, role, lease, and protocol versions are recorded for every episode.
-13. **Termination integrity:** truncation is never reported as natural task success.
-
-## 13.20 Required environment tests
-
-Before the environment may be described as RL-compatible, CI SHALL cover:
-
-- deterministic reset across processes
-- episode isolation and contamination attempts
-- stale revision and duplicate idempotency handling
-- direct Rust transition service and MCP server parity
-- optional Gym wrapper parity as an MCP client
-- proof that no ChatDB binary imports provider SDKs or reads provider API-key environment variables
-- external-runner disconnect leaves proof state unchanged
-- model-call lease denial, expiry, settlement, and misreported-usage handling
-- hidden evaluator leakage through observations, resources, logs, and exports
-- reward-hacking proposals
-- exact zero reward versus missing evidence
-- Lean timeout and sandbox failure behavior
-- budget exhaustion and truncation
-- crash between Lean verification and database commit
-- replay of accepted and rejected actions
-- replay divergence after version mismatch
-- trajectory schema validation
-- dataset manifest and checksum validation
-- train/test theorem-family contamination checks
-- local MCP end-to-end proof episode
-- external MCP runner resume without duplicate proof commits
-
-## 13.21 Current implementation alignment
-
-The current rebuilt Rust components already provide most of the internal environment machinery:
-
-- The SQLite schema supplies immutable problem versions, obligations, edges, proposal attempts, and verified lemmas.
-- The Lean gateway supplies deterministic validation and structured diagnostics.
-- The budget governor supplies internal-operation reservations and can be extended with external model-call leases.
-- The priority scheduler supplies deterministic work selection and progress features.
-- The compact context builder supplies bounded observations.
-- The orchestrator loop supplies the authoritative state transition logic and must be converted from internal-call assumptions to a reactive action-request state machine.
-
-The environment work is therefore primarily an extraction and protocol task, not a rewrite. The next implementation boundary is to make the orchestrator emit typed action requests and accept typed MCP submissions without any provider client in the ChatDB process.
-
-### Immediate next build
-
-1. Remove or quarantine the planned internal LLM proposal adapter.
-2. Convert the orchestrator into a reactive `advance -> ActionRequest -> episode_step` state machine.
-3. Extract a framework-independent Rust `EpisodeService` over that orchestrator.
-4. Define versioned task, role, observation, action-request, action, step-result, reward, lease, and trajectory schemas.
-5. Add isolated episode reset, revision, idempotency, snapshot, and replay.
-6. Expose the service through MCP over local stdio.
-7. Implement repetitive-response and proposal preflight guards on submitted actions, independent of provider transport.
-8. Build a separate external MCP runner for model routing and synthetic-data generation.
-9. Add an MCP-client Gym wrapper if required by training infrastructure.
-10. Add conformance, contamination, replay, lease-accounting, and reward-hacking tests.
-
----
-
 ## Implementation milestone sequence
 
 This sequence is normative for minimizing risk, though it does not add new architecture.
@@ -3278,31 +2455,13 @@ Milestone 5
 - Convergence monitor
 
 Milestone 6
-- Framework-independent Rust EpisodeService
-- Versioned environment, task, observation, action, reward, and trajectory schemas
-- Deterministic reset, snapshot, replay, and episode isolation
-
-Milestone 7
-- MCP server over local stdio
-- HTTP and Gymnasium-compatible adapters
-- Direct adapter parity tests
-
-Milestone 8
-- External MCP synthetic-data runner (separate process/package)
-- Synthetic trajectory and dataset export
-- Reward-hacking, contamination, and replay conformance suite
-
-Milestone 9
 - Tauri UI adapter
 - Legacy read-only viewer
 - Certificate export
-- Environment and dataset operations UI
 ```
 
 No milestone may reintroduce a non-Lean acceptance path as a temporary shortcut.
 
 ## Final architectural statement
 
-ChatDB’s core is not a conversation, a vote, or a chain of plausible statements. It is an immutable formal target, a dynamically discovered graph of formal obligations, and a content-addressed Lean certificate that proves the obligations compose to the root. Models may plan, formalize, propose, repair, and search for missing coverage. Only the Lean kernel may discharge a theorem, and only deterministic state plus measured reviewer convergence may complete a proof run.
-
-The headless environment makes that same proof machine reproducible and model-callable. The MCP server presents state and accepts typed actions. External runners and optional Gym wrappers may invoke models outside ChatDB and submit those actions, but they may never become alternative proof authorities. This separation is what allows ChatDB to generate high-value synthetic RL data: every positive proof signal is tied to a replayable state transition and a kernel-checked formal artifact.
+ChatDB’s core is not a conversation, a vote, or a chain of plausible statements. It is an immutable formal target, a dynamically discovered graph of formal obligations, and a content-addressed Lean certificate that proves the obligations compose to the root. Models may plan, formalize, propose, repair, and search for missing coverage. Only the Lean kernel may discharge a theorem, and only deterministic state plus measured reviewer convergence may complete a run.

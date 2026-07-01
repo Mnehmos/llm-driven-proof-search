@@ -1,1 +1,35 @@
 /target
+Cargo.lock
+
+# Database files (prevent file watcher rebuild loops)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.redb
+*.redb.lock
+campaign_data.redb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Lean build artifacts
+/lean-checker/build/
+/lean-checker/.lake/
+
+# Environment files
+.env
+.env.local

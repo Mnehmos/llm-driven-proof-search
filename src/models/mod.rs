@@ -397,6 +397,128 @@ pub struct VerifiedLemma {
     pub verified_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeanVerificationOutcome {
+    KernelPass,
+    KernelFail,
+    Timeout,
+    InfrastructureError,
+}
+
+impl std::fmt::Display for LeanVerificationOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            LeanVerificationOutcome::KernelPass => "kernel_pass",
+            LeanVerificationOutcome::KernelFail => "kernel_fail",
+            LeanVerificationOutcome::Timeout => "timeout",
+            LeanVerificationOutcome::InfrastructureError => "infrastructure_error",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl TryFrom<&str> for LeanVerificationOutcome {
+    type Error = String;
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "kernel_pass" => Ok(LeanVerificationOutcome::KernelPass),
+            "kernel_fail" => Ok(LeanVerificationOutcome::KernelFail),
+            "timeout" => Ok(LeanVerificationOutcome::Timeout),
+            "infrastructure_error" => Ok(LeanVerificationOutcome::InfrastructureError),
+            other => Err(format!("Unknown LeanVerificationOutcome: {}", other)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeanDiagnosticCategory {
+    ParseError,
+    ElaborationError,
+    TypeMismatch,
+    UnsolvedGoals,
+    TacticFailure,
+    Timeout,
+    ProhibitedConstruct,
+    DependencyMismatch,
+    InternalError,
+}
+
+impl std::fmt::Display for LeanDiagnosticCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            LeanDiagnosticCategory::ParseError => "parse_error",
+            LeanDiagnosticCategory::ElaborationError => "elaboration_error",
+            LeanDiagnosticCategory::TypeMismatch => "type_mismatch",
+            LeanDiagnosticCategory::UnsolvedGoals => "unsolved_goals",
+            LeanDiagnosticCategory::TacticFailure => "tactic_failure",
+            LeanDiagnosticCategory::Timeout => "timeout",
+            LeanDiagnosticCategory::ProhibitedConstruct => "prohibited_construct",
+            LeanDiagnosticCategory::DependencyMismatch => "dependency_mismatch",
+            LeanDiagnosticCategory::InternalError => "internal_error",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl TryFrom<&str> for LeanDiagnosticCategory {
+    type Error = String;
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "parse_error" => Ok(LeanDiagnosticCategory::ParseError),
+            "elaboration_error" => Ok(LeanDiagnosticCategory::ElaborationError),
+            "type_mismatch" => Ok(LeanDiagnosticCategory::TypeMismatch),
+            "unsolved_goals" => Ok(LeanDiagnosticCategory::UnsolvedGoals),
+            "tactic_failure" => Ok(LeanDiagnosticCategory::TacticFailure),
+            "timeout" => Ok(LeanDiagnosticCategory::Timeout),
+            "prohibited_construct" => Ok(LeanDiagnosticCategory::ProhibitedConstruct),
+            "dependency_mismatch" => Ok(LeanDiagnosticCategory::DependencyMismatch),
+            "internal_error" => Ok(LeanDiagnosticCategory::InternalError),
+            other => Err(format!("Unknown LeanDiagnosticCategory: {}", other)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeanDiagnostic {
+    pub category: LeanDiagnosticCategory,
+    pub primary_message: String,
+    pub source_span: Option<String>,
+    pub goal: Option<String>,
+    pub local_context: Vec<String>,
+    pub unsolved_goals: Vec<String>,
+    pub used_dependencies: Vec<String>,
+    pub error_code: Option<String>,
+    pub canonical_goal_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DependencyUseReport {
+    pub declared_direct_dependency_ids: Vec<Uuid>,
+    pub actual_generated_dependency_ids: Vec<Uuid>,
+    pub missing_required_dependency_ids: Vec<Uuid>,
+    pub undeclared_generated_dependency_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeanVerificationResult {
+    pub outcome: LeanVerificationOutcome,
+    pub attempt_id: Uuid,
+    pub obligation_id: Uuid,
+    pub theorem_name: String,
+    pub expected_statement_hash: String,
+    pub elaborated_statement_hash: Option<String>,
+    pub environment_hash: String,
+    pub proof_source_hash: String,
+    pub compiled_artifact_hash: Option<String>,
+    pub proof_term_hash: Option<String>,
+    pub diagnostic: Option<LeanDiagnostic>,
+    pub dependency_use_report: Option<DependencyUseReport>,
+    pub wall_time_ms: u64,
+    pub lean_cpu_time_ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
