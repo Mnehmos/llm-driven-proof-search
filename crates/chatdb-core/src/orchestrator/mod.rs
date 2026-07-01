@@ -4,6 +4,7 @@ pub mod context;
 pub mod lifecycle;
 pub mod attempts;
 pub mod step;
+pub mod trajectories;
 
 use rusqlite::Connection;
 use uuid::Uuid;
