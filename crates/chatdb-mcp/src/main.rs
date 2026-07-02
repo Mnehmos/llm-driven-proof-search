@@ -684,9 +684,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(cli.db_path);
 
     let conn = Connection::open(&db_path)?;
-    conn.execute("PRAGMA journal_mode = WAL;", [])?;
-    conn.execute("PRAGMA busy_timeout = 5000;", [])?;
-    conn.execute("PRAGMA foreign_keys = ON;", [])?;
+    conn.execute_batch("
+        PRAGMA journal_mode = WAL;
+        PRAGMA busy_timeout = 5000;
+        PRAGMA foreign_keys = ON;
+    ")?;
     
     schema_v1::initialize_v1_db(&conn)?;
 
