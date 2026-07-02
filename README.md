@@ -144,6 +144,22 @@ Add to your `mcp_settings.json`:
 }
 ```
 
+### ChatGPT (via OpenAI Tunnel or Direct HTTP)
+
+ChatGPT requires an HTTP endpoint speaking the MCP SSE transport. Start the server in `http` mode:
+
+```bash
+chatdb-mcp.exe --transport http --port 8080 chatdb.db
+```
+
+Then, use a tunneling solution like the [OpenAI Secure MCP Tunnel](https://github.com/openai/tunnel-client) or `ngrok` to expose it, and register the resulting HTTPS URL in your OpenAI platform settings as a Server URL.
+
+```bash
+# Example using OpenAI tunnel-client
+tunnel-client run --tunnel-id <YOUR_TUNNEL_ID> --mcp-command "chatdb-mcp.exe --transport http --port 8080 chatdb.db"
+```
+
+
 ### Programmatic (Python / Any stdio MCP client)
 
 ```python

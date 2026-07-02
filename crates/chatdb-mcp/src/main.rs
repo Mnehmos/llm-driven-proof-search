@@ -7,6 +7,7 @@ use uuid::Uuid;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use clap::Parser;
 
 use rmcp::ServerHandler;
 use rmcp::model::*;
@@ -20,6 +21,28 @@ use chatdb_proof_core::lean::RealLeanGateway;
 use chatdb_proof_core::models::action::{TypedAction, ActionRequest, ActionRole, StepDisposition};
 use chatdb_proof_core::models::episode::{EpisodeOutcome, TerminationReason, TruncationReason};
 use chatdb_proof_core::models::reward::{RewardComponent, RewardComponentId, RewardPolicy};
+
+/// ChatDB MCP Server — Verifier-backed RL environment for LLM-driven proof search
+#[derive(Parser, Debug)]
+#[command(version, about)]
+struct Cli {
+    /// Transport mode: stdio (default) or http
+    #[arg(long, default_value = "stdio")]
+    transport: String,
+
+    /// Port for HTTP transport (only used when --transport http)
+    #[arg(long, default_value = "8080")]
+    port: u16,
+
+    /// Bind address for HTTP transport
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+
+    /// Database path (also settable via CHATDB_DB_PATH env var)
+    #[arg(default_value = "chatdb.db")]
+    db_path: String,
+}
+
 
 // Define arg structs for schemars and serde
 #[derive(JsonSchema, Deserialize)]
@@ -655,11 +678,10 @@ impl ServerHandler for ChatDbMcp {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    let db_path = args.get(1)
-        .cloned()
-        .or_else(|| std::env::var("CHATDB_DB_PATH").ok())
-        .unwrap_or_else(|| "chatdb.db".to_string());
+    let cli = Cli::parse();
+    
+    let db_path = std::env::var("CHATDB_DB_PATH")
+        .unwrap_or(cli.db_path);
 
     let conn = Connection::open(&db_path)?;
     conn.execute("PRAGMA journal_mode = WAL;", [])?;
@@ -679,17 +701,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(home).join(".elan").join("bin"));
 
-    let gateway = RealLeanGateway::new(lean_project_path, elan_bin_path);
-    let handler = ChatDbMcp {
-        conn: Arc::new(Mutex::new(conn)),
-        gateway,
-    };
+    let shared_conn = Arc::new(Mutex::new(conn));
+    let shared_lean_project = lean_project_path.clone();
+    let shared_elan_bin = elan_bin_path.clone();
 
-    let transport = AsyncRwTransport::new(stdin(), stdout());
-    let service = serve_server(handler, transport).await?;
-    service.waiting().await?;
+    match cli.transport.as_str() {
+        "stdio" => {
+            let gateway = RealLeanGateway::new(lean_project_path, elan_bin_path);
+            let handler = ChatDbMcp {
+                conn: shared_conn,
+                gateway,
+            };
+
+            let transport = AsyncRwTransport::new(stdin(), stdout());
+            let service = serve_server(handler, transport).await?;
+            service.waiting().await?;
+        }
+        "http" => {
+            use rmcp::transport::streamable_http_server::{
+                StreamableHttpService,
+                session::local::LocalSessionManager,
+            };
+
+            let conn_for_factory = shared_conn.clone();
+            let lean_for_factory = shared_lean_project.clone();
+            let elan_for_factory = shared_elan_bin.clone();
+
+            let service = StreamableHttpService::new(
+                move || {
+                    let gateway = RealLeanGateway::new(
+                        lean_for_factory.clone(),
+                        elan_for_factory.clone(),
+                    );
+                    Ok(ChatDbMcp {
+                        conn: conn_for_factory.clone(),
+                        gateway,
+                    })
+                },
+                LocalSessionManager::default().into(),
+                Default::default(),
+            );
+
+            let app = axum::Router::new()
+                .nest_service("/mcp", service);
+
+            let bind_addr = format!("{}:{}", cli.host, cli.port);
+            eprintln!("ChatDB MCP HTTP server listening on http://{}/mcp", bind_addr);
+            let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+            axum::serve(listener, app).await?;
+        }
+        other => {
+            eprintln!("Unknown transport: {}. Use 'stdio' or 'http'.", other);
+            std::process::exit(1);
+        }
+    }
 
     Ok(())
+
 }
 
 #[cfg(test)]
