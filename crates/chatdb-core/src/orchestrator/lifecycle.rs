@@ -133,11 +133,14 @@ pub fn advance(tx: &Transaction, episode_id: Uuid) -> Result<Option<Uuid>> {
 
     if let Some(_target_obl_id) = next_obligation_id {
         let req_id = Uuid::new_v4();
-        
-        let pv_id: String = tx.query_row(
-            "SELECT problem_version_id FROM episodes WHERE id = ?1",
+
+        let (pv_id, env_hash, root_stmt): (String, String, String) = tx.query_row(
+            "SELECT pv.id, pv.environment_hash, pv.root_formal_statement 
+             FROM episodes e
+             JOIN problem_versions pv ON e.problem_version_id = pv.id
+             WHERE e.id = ?1",
             [episode_id.to_string()],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
         
         let seq: i64 = tx.query_row(
@@ -146,19 +149,30 @@ pub fn advance(tx: &Transaction, episode_id: Uuid) -> Result<Option<Uuid>> {
             |row| row.get(0),
         )?;
 
+        let builder = crate::orchestrator::context::CompactContextBuilder::new(4000);
+        let target_uuid = Uuid::parse_str(&_target_obl_id).unwrap();
+        let context = builder.build_episode(tx, episode_id, target_uuid, &env_hash, &root_stmt)
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))?;
+        
+        let observation_json = serde_json::to_string(&context).unwrap();
+        let observation_hash = crate::hashing::canonical_hash(&context)
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))?;
+
         tx.execute(
             "INSERT INTO action_requests (
                 id, episode_id, problem_version_id, episode_revision, request_sequence_number, role, 
-                state_hash_before, status, expiration_at, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'prover', 'dummy_hash', 'pending', ?6, ?7)",
+                state_hash_before, status, expiration_at, created_at, observation_json, observation_hash
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'prover', 'dummy_hash', 'pending', ?6, ?7, ?8, ?9)",
             (
                 req_id.to_string(),
                 episode_id.to_string(),
                 pv_id,
                 1_i64, // revision
                 seq,
-                Utc::now().to_rfc3339(), // expires_at
+                (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(), // expires_at (15 mins)
                 now, // created_at
+                observation_json,
+                observation_hash,
             ),
         )?;
         Ok(Some(req_id))

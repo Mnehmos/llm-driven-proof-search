@@ -163,6 +163,22 @@ pub fn replay_trajectory(
     Ok(())
 }
 
+fn scrub_value(val: &mut serde_json::Value) {
+    if let Some(obj) = val.as_object_mut() {
+        obj.remove("api_key");
+        obj.remove("private_endpoint");
+        obj.remove("auth_token");
+        obj.remove("credentials");
+        for (_, v) in obj.iter_mut() {
+            scrub_value(v);
+        }
+    } else if let Some(arr) = val.as_array_mut() {
+        for v in arr.iter_mut() {
+            scrub_value(v);
+        }
+    }
+}
+
 pub fn export_dataset_trajectory(
     conn: &Connection,
     episode_id: Uuid
@@ -177,11 +193,13 @@ pub fn export_dataset_trajectory(
     
     let mut exported_events = Vec::new();
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-        let payload: String = row.get(0).map_err(|e| e.to_string())?;
+        let payload_str: String = row.get(0).map_err(|e| e.to_string())?;
         
-        // Example scrub: parse JSON and remove anything sensitive.
-        // We simulate this by just passing the payload through.
-        exported_events.push(payload);
+        let mut val: serde_json::Value = serde_json::from_str(&payload_str)
+            .map_err(|e| e.to_string())?;
+        
+        scrub_value(&mut val);
+        exported_events.push(serde_json::to_string(&val).unwrap());
     }
 
     Ok(exported_events)
