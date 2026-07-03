@@ -188,12 +188,17 @@ impl<'a, L: LeanGateway, P: Prover> Orchestrator<'a, L, P> {
                 dep_ids
             };
 
-            // Run verification
+            // Run verification. This legacy canonical-storage Orchestrator predates
+            // per-problem import manifests; it isn't exercised by the MCP path, so
+            // it keeps the historical default manifest rather than threading a new
+            // field through ProblemVersion.
+            let default_manifest = ["Mathlib.Tactic.Ring".to_string(), "Mathlib.Tactic.NormNum".to_string()];
             let verify_result = self.lean_gateway.verify_exact(
                 &obligation,
                 &candidate_proof,
                 &dep_ids,
                 &pv.environment_hash,
+                &default_manifest,
             );
 
             match verify_result {
@@ -301,6 +306,7 @@ mod tests {
             _c: &str,
             _deps: &[Uuid],
             _env: &str,
+            _import_manifest: &[String],
         ) -> Result<crate::models::LeanVerificationResult, String> {
             Ok(crate::models::LeanVerificationResult {
                 outcome: LeanVerificationOutcome::KernelPass,

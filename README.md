@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  16 tools · typed schemas · JSON Schema 2020-12                 │
+│  17 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -64,6 +64,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 | `trajectory_export` | Paginated export of hash-chained trajectory events |
 | `episode_replay` | Re-execute typed Solve actions through Lean and verify trajectory integrity |
 | `proof_export` | Human-readable proof dossier: proof tree, assembled Lean source, full attempt history, proof/fidelity/promotion status, integrity line (`format: "markdown"` or `"lean"`) |
+| `lean_declaration_lookup` | Checks whether names resolve under a problem's import manifest AND under the full Mathlib umbrella — distinguishes "not imported here" from "genuinely absent." Call this before concluding an API is unavailable |
 
 ## Proof soundness vs. statement fidelity
 
@@ -79,6 +80,21 @@ Two ways to unlock proving:
 - **Dev bypass**: `problem_create(unsafe_dev_attestation=true)` → `fidelity_status="attested"` → proving is allowed, but the episode can only ever reach `kernel_verified`, never `certified` — and problems/episodes under `attested` are excluded from default dataset exports (`training_eligible=false`).
 
 A minimal prover loop is: `problem_create` → `problem_submit_fidelity_review` (or `unsafe_dev_attestation=true` for dev use) → `episode_create` → `episode_observe` → `attempt_claim` → `episode_step` → repeat `episode_observe`/`attempt_claim`/`episode_step` until `outcome` is set.
+
+## Import manifests and "environmental scope collapse"
+
+Every problem version has an immutable import manifest — the exact set of Mathlib modules its proofs are checked against (base: `Mathlib.Tactic.Ring` + `Mathlib.Tactic.NormNum`; extend it via `problem_create(problem_imports=[...])`, each validated with a real compile check before acceptance).
+
+**An `unknown_declaration` diagnostic only ever proves a name didn't resolve under that exact manifest — it never proves the name is absent from the pinned Mathlib.** Before either changing proof strategy or declaring an API unavailable, call `lean_declaration_lookup`, which checks a name under both the problem's manifest and the full Mathlib umbrella:
+
+- **`available`** — resolves under the current manifest.
+- **`not_in_current_import_scope`** — resolves under the full umbrella but not the current manifest → add the module via a new `problem_create(problem_imports=[...])`.
+- **`unknown_declaration`** — doesn't resolve even with everything imported → genuinely try a different name.
+- **`environment_error`** — the lookup itself failed; not evidence either way.
+
+Conflating the first case with the third — "unknown identifier" collapsing into "the library doesn't have this" — is a real failure mode we call **environmental scope collapse**: a local fact about one import closure gets inflated into a global claim about library capability, which can cascade into a model abandoning a provable branch. `environment_describe` carries this as an explicit epistemic rule for any agent driving the loop. Diagnostics also distinguish `unknown_declaration` (name resolution) from `parse_error` (syntax) and other categories — see `docs/fix_plan_playtest_03.md`.
+
+Import manifests are immutable per problem_version and included in every observation/trajectory event as `import_manifest_hash`, so replay always re-verifies against the exact closure the original attempt used.
 
 ## Prerequisites
 
@@ -309,7 +325,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 16 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 17 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   └── adr/                      # Architecture Decision Records

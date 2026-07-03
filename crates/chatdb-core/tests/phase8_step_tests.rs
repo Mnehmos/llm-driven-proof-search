@@ -13,6 +13,7 @@ impl LeanGateway for MockGateway {
         candidate_source: &str,
         _approved_dependency_ids: &[Uuid],
         _environment: &str,
+        _import_manifest: &[String],
     ) -> Result<LeanVerificationResult, String> {
         if candidate_source.contains("sorry") {
             Ok(LeanVerificationResult {
@@ -27,6 +28,7 @@ impl LeanGateway for MockGateway {
                 compiled_artifact_hash: None,
                 proof_term_hash: None,
                 diagnostic: None,
+                all_diagnostics: vec![],
                 dependency_use_report: None,
                 wall_time_ms: 10,
                 lean_cpu_time_ms: 10,
@@ -44,6 +46,7 @@ impl LeanGateway for MockGateway {
                 compiled_artifact_hash: None,
                 proof_term_hash: None,
                 diagnostic: None,
+                all_diagnostics: vec![],
                 dependency_use_report: None,
                 wall_time_ms: 10,
                 lean_cpu_time_ms: 10,

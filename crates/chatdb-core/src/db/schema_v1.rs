@@ -16,6 +16,14 @@ CREATE TABLE IF NOT EXISTS problem_versions (
     root_statement_hash TEXT NOT NULL,
     normalized_root_rendering TEXT NOT NULL,
     environment_hash TEXT NOT NULL,
+    -- Immutable per problem_version: the exact Lean import closure the verifier
+    -- compiles candidate proofs against. An 'unknown identifier' failure only
+    -- ever establishes that a name didn't resolve under THIS manifest — never
+    -- that it's absent from the pinned library. See lean_declaration_lookup and
+    -- docs/fix_plan_playtest_03.md. Defaults preserve the pre-manifest behavior
+    -- (Ring + NormNum) for rows/fixtures that predate this column.
+    import_manifest_json TEXT NOT NULL DEFAULT '["Mathlib.Tactic.Ring","Mathlib.Tactic.NormNum"]',
+    import_manifest_hash TEXT NOT NULL DEFAULT '',
     fidelity_status TEXT NOT NULL,
     fidelity_method TEXT NOT NULL,
     fidelity_approval_id TEXT,

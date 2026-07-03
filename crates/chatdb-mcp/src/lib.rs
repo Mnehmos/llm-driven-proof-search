@@ -21,6 +21,12 @@ use chatdb_proof_core::models::episode::{EpisodeOutcome, TerminationReason, Trun
 use chatdb_proof_core::models::reward::{RewardComponent, RewardComponentId, RewardPolicy};
 use chatdb_proof_core::hashing::canonical_hash;
 
+/// Every problem's import manifest starts with these two; problem_imports adds to
+/// them. Kept in one place so the "what does a bare problem_create get by
+/// default" answer stays consistent with what RealLeanGateway historically
+/// hardcoded.
+const BASE_IMPORT_MANIFEST: &[&str] = &["Mathlib.Tactic.Ring", "Mathlib.Tactic.NormNum"];
+
 // ---------------------------------------------------------------------------
 // Tool argument schemas
 // ---------------------------------------------------------------------------
@@ -38,6 +44,15 @@ pub struct ProblemCreateArgs {
     pub environment_hash: Option<String>,
     #[serde(default)]
     pub metadata_json: Option<String>,
+    /// Additional Mathlib modules (beyond the base Ring + NormNum set) this
+    /// problem's proofs may import — e.g. "Mathlib.NumberTheory.Padics.PadicVal.Basic".
+    /// Each is validated (a real compile check, not a name-shape check) before the
+    /// problem is created; an unresolvable module is rejected outright. The
+    /// resulting manifest is immutable for this problem_version — see
+    /// docs/fix_plan_playtest_03.md. Broadening imports for an existing problem
+    /// means creating a new problem_version with an extended list.
+    #[serde(default)]
+    pub problem_imports: Option<Vec<String>>,
     /// Named honestly on purpose: this is NOT a review. It sets fidelity_status
     /// to 'attested' (proving is allowed) — never 'verified'. Episodes created
     /// under 'attested' can reach outcome=kernel_verified but never 'certified',
@@ -172,6 +187,13 @@ pub struct ProofExportArgs {
     /// source only, ready to paste into a Mathlib project.
     #[serde(default)]
     pub format: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct LeanDeclarationLookupArgs {
+    pub problem_version_id: String,
+    /// Fully-qualified names to check, e.g. "Nat.factorization", "padicValNat".
+    pub names: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -640,7 +662,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.2.2"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.2.3"))
     }
 
     async fn list_tools(
@@ -665,6 +687,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<TrajectoryExportArgs>("trajectory_export", "Export trajectory with pagination (cursor + page_size)"),
             make_tool::<EpisodeReplayArgs>("episode_replay", "Re-execute typed actions through canonical reducer with Lean re-verification"),
             make_tool::<ProofExportArgs>("proof_export", "Render an episode as a human-readable proof dossier: proof tree with statuses, assembled Lean source (dependencies before root), full attempt history including failures, and the hash-chain integrity line. format: \"markdown\" (default) | \"lean\" (bare assembled source)"),
+            make_tool::<LeanDeclarationLookupArgs>("lean_declaration_lookup", "Check whether declaration names resolve — WITHOUT changing proof strategy first. An 'unknown identifier' error from episode_step only ever proves a name didn't resolve under the exact import manifest that attempt used; it never proves the name is absent from the pinned Mathlib. This tool checks BOTH: under the problem's own manifest, and under the full Mathlib umbrella. Status 'not_in_current_import_scope' means add an import to problem_imports (see problem_create); 'unknown_declaration' means the name is genuinely unresolvable (misspelled, wrong namespace, or absent) even with everything imported. Epistemic rule: before concluding an API is unavailable, call this tool — do not infer library capability from one elaboration failure"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -681,7 +704,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.2.2",
+                    "environment_version": "0.2.3",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -699,7 +722,11 @@ impl ServerHandler for ChatDbMcp {
                         {"type": "decompose", "sub_lemmas": ["n + 0 = n", "0 + n = n"]},
                         {"type": "give_up"}
                     ],
-                    "prover_loop": "problem_create(approve=true) -> episode_create -> episode_observe -> attempt_claim -> episode_step(action, expected_revision = action_request.episode_revision) -> repeat observe/claim/step until outcome is set"
+                    "prover_loop": "problem_create -> problem_submit_fidelity_review (or unsafe_dev_attestation=true for dev use) -> episode_create -> episode_observe -> attempt_claim -> episode_step(action, expected_revision = action_request.episode_revision) -> repeat observe/claim/step until outcome is set",
+                    "epistemic_rules": [
+                        "An 'unknown_declaration'/'unknown identifier' result under the active import manifest establishes ONLY that the name didn't resolve under that exact import closure. It does NOT establish that the declaration is absent from the pinned library. Before concluding an API is unavailable, call lean_declaration_lookup — do not infer a global capability limit from one local elaboration failure.",
+                        "A prior model's proof (from another session, another model, a paper, etc.) is a candidate artifact, not evidence of correctness, until it passes THIS pinned verifier. Do not skip verification because a candidate 'looks complete'."
+                    ]
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
@@ -721,6 +748,21 @@ impl ServerHandler for ChatDbMcp {
                         first_word
                     )));
                 }
+
+                let extra_imports = args.problem_imports.unwrap_or_default();
+                for m in &extra_imports {
+                    if m.trim().is_empty() {
+                        return Err(mcp_invalid_params("problem_imports entries must be non-empty module paths"));
+                    }
+                }
+                if !extra_imports.is_empty() {
+                    self.gateway.validate_import_manifest(&extra_imports)
+                        .map_err(|e| mcp_invalid_params(format!("problem_imports rejected — {}", e)))?;
+                }
+                let mut import_manifest: Vec<String> = BASE_IMPORT_MANIFEST.iter().map(|s| s.to_string()).collect();
+                import_manifest.extend(extra_imports);
+                let import_manifest_json = serde_json::to_string(&import_manifest).unwrap();
+                let import_manifest_hash = canonical_hash(&import_manifest).map_err(mcp_internal_error)?;
 
                 let pv_id = Uuid::new_v4();
                 let source_hash = canonical_hash(&args.source_problem_text).map_err(mcp_internal_error)?;
@@ -756,13 +798,15 @@ impl ServerHandler for ChatDbMcp {
                     "INSERT INTO problem_versions (
                         id, source_problem_text, source_problem_hash, source_metadata_json,
                         root_formal_statement, root_statement_hash, normalized_root_rendering,
-                        environment_hash, fidelity_status, fidelity_method, fidelity_approval_id,
+                        environment_hash, import_manifest_json, import_manifest_hash,
+                        fidelity_status, fidelity_method, fidelity_approval_id,
                         state, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'manual', ?10, ?11, ?12)",
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'manual', ?12, ?13, ?14)",
                     (
                         pv_id.to_string(), &args.source_problem_text, &source_hash, &metadata,
                         &args.root_formal_statement, &root_hash, &rendering,
-                        &env_hash, fidelity_status, &fidelity_approval_id, state,
+                        &env_hash, &import_manifest_json, &import_manifest_hash,
+                        fidelity_status, &fidelity_approval_id, state,
                         Utc::now().to_rfc3339(),
                     ),
                 ).map_err(rs)?;
@@ -773,6 +817,8 @@ impl ServerHandler for ChatDbMcp {
                     "fidelity_status": fidelity_status,
                     "state": state,
                     "environment_hash": env_hash,
+                    "import_manifest": import_manifest,
+                    "import_manifest_hash": import_manifest_hash,
                     // A fidelity reviewer must submit these back unchanged in
                     // problem_submit_fidelity_review — the server recomputes and
                     // compares them independently, so a client can copy these values
@@ -1724,6 +1770,39 @@ impl ServerHandler for ChatDbMcp {
                 let doc = render_proof_export(&conn, &args.episode_id, format)?;
                 Ok(CallToolResult::success(vec![Content::text(doc)]))
             }
+            "lean_declaration_lookup" => {
+                let args: LeanDeclarationLookupArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.names.is_empty() {
+                    return Err(mcp_invalid_params("names must be non-empty"));
+                }
+
+                let conn = self.conn.lock().await;
+                let (import_manifest_json, import_manifest_hash, env_hash): (String, String, String) = conn.query_row(
+                    "SELECT import_manifest_json, import_manifest_hash, environment_hash FROM problem_versions WHERE id = ?1",
+                    [&args.problem_version_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                ).map_err(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                    mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id))
+                } else {
+                    rs(e)
+                })?;
+                let import_manifest: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
+
+                let results = self.gateway.lookup_declarations(&args.names, &import_manifest)
+                    .map_err(mcp_internal_error)?;
+
+                let res = serde_json::json!({
+                    "environment_hash": env_hash,
+                    "import_manifest_hash": import_manifest_hash,
+                    "results": results.into_iter().map(|r| serde_json::json!({
+                        "query": r.query,
+                        "status": r.status.to_string(),
+                        "diagnostics": r.diagnostics,
+                    })).collect::<Vec<_>>(),
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
             _ => Err(McpError::new(ErrorCode::METHOD_NOT_FOUND, format!("Method not found: {}", request.name), None)),
         }
     }
@@ -1746,6 +1825,7 @@ mod tests {
             candidate_source: &str,
             _approved_dependency_ids: &[Uuid],
             environment: &str,
+            _import_manifest: &[String],
         ) -> Result<LeanVerificationResult, String> {
             let outcome = if candidate_source.contains("sorry") {
                 LeanVerificationOutcome::KernelFail
@@ -1764,6 +1844,7 @@ mod tests {
                 compiled_artifact_hash: None,
                 proof_term_hash: None,
                 diagnostic: None,
+                all_diagnostics: vec![],
                 dependency_use_report: None,
                 wall_time_ms: 1,
                 lean_cpu_time_ms: 1,
@@ -1816,7 +1897,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 16);
+        assert_eq!(list_res.tools.len(), 17);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -2348,5 +2429,61 @@ mod tests {
         let plist = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_list").with_arguments(serde_json::json!({}).as_object().unwrap().clone())).await.unwrap());
         let mine = plist.as_array().unwrap().iter().find(|p| p["problem_version_id"] == pv["problem_version_id"]).unwrap();
         assert_eq!(mine["state"], "COMPLETE");
+    }
+
+    /// problem_create with problem_imports must extend the base manifest (never
+    /// replace it), validate each new import through the gateway, and return a
+    /// manifest hash a client can copy into lean_declaration_lookup/replay checks.
+    #[tokio::test]
+    async fn test_problem_create_extends_import_manifest() {
+        // MockGateway (unlike test_handler()'s dummy-path RealLeanGateway) doesn't
+        // override validate_import_manifest, so the permissive trait default
+        // applies — this isolates "does the manifest extend/return correctly"
+        // from "does the real Lean validation work" (covered live separately).
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "x",
+            "problem_imports": ["Mathlib.NumberTheory.Padics.PadicVal.Basic"],
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let manifest = pv["import_manifest"].as_array().unwrap();
+        let manifest_strs: Vec<&str> = manifest.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(manifest_strs.contains(&"Mathlib.Tactic.Ring"), "{:?}", manifest_strs);
+        assert!(manifest_strs.contains(&"Mathlib.Tactic.NormNum"), "{:?}", manifest_strs);
+        assert!(manifest_strs.contains(&"Mathlib.NumberTheory.Padics.PadicVal.Basic"), "{:?}", manifest_strs);
+        assert!(pv["import_manifest_hash"].as_str().unwrap().len() > 0);
+
+        // A bad module path must be rejected at creation, not discovered later at
+        // solve time. test_handler's gateway doesn't override validate_import_manifest
+        // (default permissive Ok(())), so rejection itself is exercised live
+        // against the real lean-checker rather than here.
+    }
+
+    /// lean_declaration_lookup must return an honest per-name status even when
+    /// the gateway can't check (default trait impl) — never silently fabricate
+    /// availability or unavailability.
+    #[tokio::test]
+    async fn test_lean_declaration_lookup_reports_environment_error_honestly() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "x",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let res = tool_json(&peer.call_tool(CallToolRequestParams::new("lean_declaration_lookup").with_arguments(serde_json::json!({
+            "problem_version_id": pv["problem_version_id"], "names": ["Nat.factorization"],
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        assert_eq!(res["import_manifest_hash"], pv["import_manifest_hash"]);
+        let results = res["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["query"], "Nat.factorization");
+        // test_handler's gateway doesn't override lookup_declarations, so the
+        // honest default (environment_error) applies — this proves the tool
+        // never guesses when it can't actually check.
+        assert_eq!(results[0]["status"], "environment_error");
     }
 }

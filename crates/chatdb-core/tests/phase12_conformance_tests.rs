@@ -13,6 +13,7 @@ impl LeanGateway for MockGateway {
         _candidate_source: &str,
         _approved_dependency_ids: &[Uuid],
         _environment: &str,
+        _import_manifest: &[String],
     ) -> Result<LeanVerificationResult, String> {
         Ok(LeanVerificationResult {
             outcome: LeanVerificationOutcome::KernelPass,
@@ -26,6 +27,7 @@ impl LeanGateway for MockGateway {
             compiled_artifact_hash: None,
             proof_term_hash: None,
             diagnostic: None,
+            all_diagnostics: vec![],
             dependency_use_report: None,
             wall_time_ms: 10,
             lean_cpu_time_ms: 10,

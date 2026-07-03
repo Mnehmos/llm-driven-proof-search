@@ -256,8 +256,18 @@ pub fn replay_trajectory(
             closed_at: None,
         };
 
+        // The import manifest is immutable per problem_version — re-fetching it
+        // here (rather than trusting anything in the payload) means replay always
+        // verifies against the exact same import closure the original attempt used.
+        let import_manifest_json: String = conn.query_row(
+            "SELECT import_manifest_json FROM problem_versions WHERE id = ?1",
+            [problem_version_id_str],
+            |row| row.get(0),
+        ).map_err(|e| e.to_string())?;
+        let import_manifest: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
+
         let result = lean_gateway
-            .verify_exact(&obl, proof_term, &dep_ids, &lean_environment_hash)
+            .verify_exact(&obl, proof_term, &dep_ids, &lean_environment_hash, &import_manifest)
             .map_err(|e| format!("replay verification failed: {}", e))?;
 
         let replayed_outcome = result.outcome.to_string();

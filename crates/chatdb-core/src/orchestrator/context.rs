@@ -7,6 +7,11 @@ use schemars::JsonSchema;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CompactContext {
     pub env_id: String,
+    /// Immutable per problem_version. An `unknown identifier` result under this
+    /// exact manifest establishes only that the name didn't resolve HERE — never
+    /// that it's absent from the pinned library. Use lean_declaration_lookup to
+    /// tell the difference before concluding an API is missing.
+    pub import_manifest_hash: String,
     pub root_theorem_signature: String,
     pub obligation_signature: String,
     pub direct_dependency_signatures: Vec<String>,
@@ -30,9 +35,11 @@ impl CompactContextBuilder {
         episode_id: Uuid,
         obligation_id: Uuid,
         environment_hash: &str,
+        import_manifest_hash: &str,
         root_formal_statement: &str,
     ) -> Result<CompactContext, String> {
         let env_id = environment_hash.to_string();
+        let import_manifest_hash = import_manifest_hash.to_string();
         let root_theorem_signature = root_formal_statement.to_string();
 
         // Fetch the obligation from episode_obligations
@@ -119,6 +126,7 @@ impl CompactContextBuilder {
 
         Ok(CompactContext {
             env_id,
+            import_manifest_hash,
             root_theorem_signature,
             obligation_signature,
             direct_dependency_signatures,
@@ -205,6 +213,7 @@ impl CompactContextBuilder {
 
         Ok(CompactContext {
             env_id,
+            import_manifest_hash: String::new(), // legacy canonical-storage path predates manifests; unused by MCP
             root_theorem_signature,
             obligation_signature,
             direct_dependency_signatures,

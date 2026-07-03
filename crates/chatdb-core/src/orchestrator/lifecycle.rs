@@ -155,13 +155,13 @@ pub fn advance(tx: &Transaction, episode_id: Uuid) -> Result<Option<Uuid>> {
             |row| row.get(0),
         )?;
 
-        let (pv_id, env_hash, root_stmt): (String, String, String) = tx.query_row(
-            "SELECT pv.id, pv.environment_hash, pv.root_formal_statement
+        let (pv_id, env_hash, import_manifest_hash, root_stmt): (String, String, String, String) = tx.query_row(
+            "SELECT pv.id, pv.environment_hash, pv.import_manifest_hash, pv.root_formal_statement
              FROM episodes e
              JOIN problem_versions pv ON e.problem_version_id = pv.id
              WHERE e.id = ?1",
             [episode_id.to_string()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
 
         let seq: i64 = tx.query_row(
@@ -172,7 +172,7 @@ pub fn advance(tx: &Transaction, episode_id: Uuid) -> Result<Option<Uuid>> {
 
         let builder = crate::orchestrator::context::CompactContextBuilder::new(4000);
         let target_uuid = Uuid::parse_str(&target_obl_id).unwrap();
-        let context = builder.build_episode(tx, episode_id, target_uuid, &env_hash, &root_stmt)
+        let context = builder.build_episode(tx, episode_id, target_uuid, &env_hash, &import_manifest_hash, &root_stmt)
             .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))?;
 
         let observation_json = serde_json::to_string(&context).unwrap();

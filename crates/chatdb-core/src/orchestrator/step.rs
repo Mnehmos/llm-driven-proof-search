@@ -93,11 +93,12 @@ pub fn attempt_commit(
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )?;
 
-            let pv_env_hash: String = tx.query_row(
-                "SELECT environment_hash FROM problem_versions WHERE id = ?1",
+            let (pv_env_hash, import_manifest_json): (String, String) = tx.query_row(
+                "SELECT environment_hash, import_manifest_json FROM problem_versions WHERE id = ?1",
                 [&pv_id_str],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )?;
+            let import_manifest: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
 
             // Only direct dependencies that are already proved may be imported.
             let mut dep_stmt = tx.prepare(
@@ -133,7 +134,7 @@ pub fn attempt_commit(
                 closed_at: None,
             };
 
-            match lean_gateway.verify_exact(&obl, proof_term, &dep_ids, &pv_env_hash) {
+            match lean_gateway.verify_exact(&obl, proof_term, &dep_ids, &pv_env_hash, &import_manifest) {
                 Ok(result) => {
                     outcome_result = result.outcome.clone();
                     is_valid = matches!(result.outcome, LeanVerificationOutcome::KernelPass);

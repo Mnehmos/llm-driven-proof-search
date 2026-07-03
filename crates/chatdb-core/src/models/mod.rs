@@ -442,6 +442,13 @@ impl TryFrom<&str> for LeanVerificationOutcome {
 #[serde(rename_all = "snake_case")]
 pub enum LeanDiagnosticCategory {
     ParseError,
+    /// An identifier failed to resolve ("unknown identifier X"). Distinct from
+    /// ParseError: this is a NAME resolution failure, not a syntax failure, and it
+    /// says nothing about whether X exists anywhere in the pinned library — only
+    /// that it didn't resolve under the exact import closure used for this
+    /// attempt. See lean_declaration_lookup for distinguishing "not imported here"
+    /// from "genuinely absent."
+    UnknownDeclaration,
     ElaborationError,
     TypeMismatch,
     UnsolvedGoals,
@@ -456,6 +463,7 @@ impl std::fmt::Display for LeanDiagnosticCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             LeanDiagnosticCategory::ParseError => "parse_error",
+            LeanDiagnosticCategory::UnknownDeclaration => "unknown_declaration",
             LeanDiagnosticCategory::ElaborationError => "elaboration_error",
             LeanDiagnosticCategory::TypeMismatch => "type_mismatch",
             LeanDiagnosticCategory::UnsolvedGoals => "unsolved_goals",
@@ -474,6 +482,7 @@ impl TryFrom<&str> for LeanDiagnosticCategory {
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
             "parse_error" => Ok(LeanDiagnosticCategory::ParseError),
+            "unknown_declaration" => Ok(LeanDiagnosticCategory::UnknownDeclaration),
             "elaboration_error" => Ok(LeanDiagnosticCategory::ElaborationError),
             "type_mismatch" => Ok(LeanDiagnosticCategory::TypeMismatch),
             "unsolved_goals" => Ok(LeanDiagnosticCategory::UnsolvedGoals),
@@ -520,10 +529,57 @@ pub struct LeanVerificationResult {
     pub proof_source_hash: String,
     pub compiled_artifact_hash: Option<String>,
     pub proof_term_hash: Option<String>,
+    /// The primary (first) diagnostic — kept for existing call sites that only
+    /// need one. Prefer `all_diagnostics` for anything that reasons about
+    /// multiple independent errors (e.g. an unknown identifier AND a trailing
+    /// tactic in the same attempt): those are collapsed together in this field's
+    /// history if joined into one string, which is exactly what made several
+    /// diagnostic categories indistinguishable from each other.
     pub diagnostic: Option<LeanDiagnostic>,
+    #[serde(default)]
+    pub all_diagnostics: Vec<LeanDiagnostic>,
     pub dependency_use_report: Option<DependencyUseReport>,
     pub wall_time_ms: u64,
     pub lean_cpu_time_ms: u64,
+}
+
+/// Result of asking whether a declaration resolves — the answer to "is this
+/// genuinely absent from the pinned library, or just not imported here?" that an
+/// `unknown identifier` elaboration error cannot, by itself, distinguish.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeclarationLookupResult {
+    pub query: String,
+    pub status: DeclarationLookupStatus,
+    pub diagnostics: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclarationLookupStatus {
+    /// Resolves under the exact import manifest passed in.
+    Available,
+    /// Does not resolve under the given manifest, but DOES resolve under the full
+    /// Mathlib umbrella import — the fix is to add an import, not change strategy.
+    NotInCurrentImportScope,
+    /// Does not resolve even under the full Mathlib umbrella — genuinely absent
+    /// (or misspelled / wrong namespace; this status doesn't distinguish those,
+    /// but the corrective action is the same either way: try a different name).
+    UnknownDeclaration,
+    /// The lookup itself couldn't be performed (gateway unavailable, process
+    /// error, etc.) — NOT evidence about the declaration either way.
+    EnvironmentError,
+}
+
+impl std::fmt::Display for DeclarationLookupStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            DeclarationLookupStatus::Available => "available",
+            DeclarationLookupStatus::NotInCurrentImportScope => "not_in_current_import_scope",
+            DeclarationLookupStatus::UnknownDeclaration => "unknown_declaration",
+            DeclarationLookupStatus::EnvironmentError => "environment_error",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 #[cfg(test)]
