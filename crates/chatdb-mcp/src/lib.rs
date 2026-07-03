@@ -784,8 +784,12 @@ impl ServerHandler for ChatDbMcp {
                     "action_examples": [
                         {"type": "solve", "proof_term": "  norm_num"},
                         {"type": "decompose", "sub_lemmas": ["n + 0 = n", "0 + n = n"]},
+                        {"type": "submit_module", "module_items": [
+                            {"item_kind": "def", "name": "double", "type_signature": "Nat → Nat", "body": "fun n => n + n"}
+                        ], "root_theorem": {"name": "root", "statement": "double 2 = 4", "proof_term": "  rfl"}},
                         {"type": "give_up"}
                     ],
+                    "submit_module_boundary": "The server assembles the Lean file: it owns imports, the ChatDB.P_<problem> namespace, and server set_options. Clients send structured items only — never raw import/namespace/end/set_option lines, and never axiom/opaque/unsafe/instance declarations. Every name is sanitized to a single namespace-local identifier. The root_theorem.statement must canonical-hash to the problem's registered root_statement_hash. Either the whole module passes the kernel and is recorded, or nothing enters the trusted namespace.",
                     "prover_loop": "problem_create -> problem_submit_fidelity_review (or unsafe_dev_attestation=true for dev use) -> episode_create -> episode_observe -> attempt_claim -> episode_step(action, expected_revision = action_request.episode_revision) -> repeat observe/claim/step until outcome is set",
                     "epistemic_rules": [
                         "An 'unknown_declaration'/'unknown identifier' result under the active import manifest establishes ONLY that the name didn't resolve under that exact import closure. It does NOT establish that the declaration is absent from the pinned library. Before concluding an API is unavailable, call lean_declaration_lookup — do not infer a global capability limit from one local elaboration failure.",
@@ -1276,7 +1280,7 @@ impl ServerHandler for ChatDbMcp {
             "episode_step" => {
                 let args: EpisodeStepArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!(
-                        "Invalid params: {}. `action` must be one of: {{\"type\":\"solve\",\"proof_term\":\"  norm_num\"}} | {{\"type\":\"decompose\",\"sub_lemmas\":[\"...\"]}} | {{\"type\":\"give_up\"}} (see environment_describe.action_schema)", e
+                        "Invalid params: {}. `action` must be one of: {{\"type\":\"solve\",\"proof_term\":\"  norm_num\"}} | {{\"type\":\"decompose\",\"sub_lemmas\":[\"...\"]}} | {{\"type\":\"submit_module\",\"module_items\":[{{\"item_kind\":\"def\",\"name\":\"f\",\"type_signature\":\"Nat → Nat\",\"body\":\"fun n => n\"}}],\"root_theorem\":{{\"name\":\"root\",\"statement\":\"<must hash-match registered root>\",\"proof_term\":\"  rfl\"}}}} | {{\"type\":\"give_up\"}} (see environment_describe.action_schema)", e
                     )))?;
 
                 if args.cost_micros < 0 {
@@ -1522,7 +1526,10 @@ impl ServerHandler for ChatDbMcp {
                 // Solve and as a generic accept/reject signal for Decompose/GiveUp — only
                 // treat it as a proof-verification result (kernel_pass/kernel_fail reward)
                 // for an actual Solve action.
-                let is_solve = matches!(args.action, TypedAction::Solve { .. });
+                // Both Solve and SubmitModule are kernel-verification actions: each
+                // produces a real KernelPass/KernelFail that earns the corresponding
+                // reward. Decompose/GiveUp are structural and earn neither.
+                let is_verification_action = matches!(args.action, TypedAction::Solve { .. } | TypedAction::SubmitModule { .. });
                 let mut reward_components = Vec::new();
                 let policy = RewardPolicy::default_policy();
                 if disposition == StepDisposition::Accepted {
@@ -1530,12 +1537,12 @@ impl ServerHandler for ChatDbMcp {
                         id: RewardComponentId::StepPenalty,
                         value_scaled: policy.step_penalty,
                     });
-                    if is_solve && accepted {
+                    if is_verification_action && accepted {
                         reward_components.push(RewardComponent {
                             id: RewardComponentId::KernelPass,
                             value_scaled: policy.kernel_pass,
                         });
-                    } else if is_solve && !is_terminated {
+                    } else if is_verification_action && !is_terminated {
                         reward_components.push(RewardComponent {
                             id: RewardComponentId::KernelFail,
                             value_scaled: policy.kernel_fail,
@@ -1903,7 +1910,8 @@ mod tests {
     use rmcp::model::CallToolRequestParams;
     use rmcp::transport::async_rw::AsyncRwTransport;
     use chatdb_proof_core::lean::LeanGateway;
-    use chatdb_proof_core::models::{Obligation, LeanVerificationOutcome, LeanVerificationResult};
+    use chatdb_proof_core::lean::module::AssembledModule;
+    use chatdb_proof_core::models::{Obligation, LeanVerificationOutcome, LeanVerificationResult, LeanModuleVerificationResult, LeanDiagnostic, LeanDiagnosticCategory};
 
     struct MockGateway;
     impl LeanGateway for MockGateway {
@@ -1945,6 +1953,35 @@ mod tests {
         // covered live separately (see test_problem_create_extends_import_manifest).
         fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> {
             Ok(())
+        }
+
+        // Mock module verification: a module "passes" the kernel unless its
+        // assembled source carries the explicit MOCK_KERNEL_FAIL marker, so tests
+        // can drive both the pass and kernel-fail commit paths without a real Lean
+        // toolchain. Policy rejections (bad names, prohibited constructs, root hash
+        // mismatch) happen in chatdb-core BEFORE this is ever reached.
+        fn verify_module(&self, assembled: &AssembledModule, environment: &str) -> Result<LeanModuleVerificationResult, String> {
+            let fail = assembled.source.contains("MOCK_KERNEL_FAIL");
+            let outcome = if fail { LeanVerificationOutcome::KernelFail } else { LeanVerificationOutcome::KernelPass };
+            Ok(LeanModuleVerificationResult {
+                outcome,
+                problem_namespace: assembled.namespace.clone(),
+                root_lean_name: assembled.root_lean_name.clone(),
+                module_source_hash: assembled.module_source_hash.clone(),
+                declaration_manifest_hash: assembled.declaration_manifest_hash.clone(),
+                environment_hash: environment.to_string(),
+                kernel_result_hash: format!("mock-kernel-{}", &assembled.module_source_hash[..8.min(assembled.module_source_hash.len())]),
+                diagnostic: if fail {
+                    Some(LeanDiagnostic {
+                        category: LeanDiagnosticCategory::TacticFailure,
+                        primary_message: "mock kernel failure".to_string(),
+                        source_span: None, goal: None, local_context: vec![], unsolved_goals: vec![],
+                        used_dependencies: vec![], error_code: None, canonical_goal_hash: None,
+                    })
+                } else { None },
+                all_diagnostics: vec![],
+                wall_time_ms: 1,
+            })
         }
     }
 
@@ -2239,6 +2276,120 @@ mod tests {
         assert!(md.contains("## Verification context"), "dossier must carry verification context: {md}");
         assert!(md.contains("Import manifest hash:"), "dossier must carry manifest hash: {md}");
         assert!(md.contains("Environment hash:"), "dossier must carry environment hash: {md}");
+    }
+
+    /// Drives an episode through observe → claim → submit_module. A helper `def`
+    /// plus a root theorem whose statement hash-matches the registered root must
+    /// verify as one module and prove the root obligation. Under an attested (not
+    /// fidelity-verified) problem the terminal outcome is `kernel_verified`.
+    #[tokio::test]
+    async fn test_submit_module_def_and_root_passes() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "Define double and show double 2 = 4.",
+            "root_formal_statement": "double 2 = 4",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5, "cost_budget_micros": 1_000_000,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "mod-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {
+                "type": "submit_module",
+                "module_items": [
+                    {"item_kind": "def", "name": "double", "type_signature": "Nat → Nat", "body": "fun n => n + n"}
+                ],
+                "root_theorem": {"name": "double_two", "statement": "double 2 = 4", "proof_term": "rfl"}
+            },
+            "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["disposition"], "accepted", "{:?}", step);
+        assert_eq!(step["accepted"], true, "{:?}", step);
+        assert_eq!(step["outcome"], "kernel_verified", "attested problem: module root proof reaches kernel_verified, not certified: {:?}", step);
+        assert_eq!(step["termination_reason"], "root_proved", "{:?}", step);
+        // Kernel pass reward earned by the module verification action.
+        let reward = step["reward"].as_array().unwrap();
+        assert!(reward.iter().any(|r| r["id"] == "kernel_pass"), "module verification must earn kernel_pass: {:?}", reward);
+        assert!(reward.iter().any(|r| r["id"] == "root_kernel_verified"), "{:?}", reward);
+        assert!(!reward.iter().any(|r| r["id"] == "terminal_success"), "attested-only must NOT earn terminal_success: {:?}", reward);
+
+        let status = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_status").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(status["state"], "terminated");
+        assert_eq!(status["outcome"], "kernel_verified");
+    }
+
+    /// A module whose root theorem statement does NOT hash-match the registered
+    /// root is rejected by policy (before Lean), the obligation stays open, and the
+    /// episode does not terminate. This is the "cannot silently prove a different
+    /// goal" guard.
+    #[tokio::test]
+    async fn test_submit_module_root_statement_mismatch_rejected() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "Show 2 + 2 = 4.",
+            "root_formal_statement": "2 + 2 = 4",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "mod-bad", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {
+                "type": "submit_module",
+                "module_items": [],
+                // A trivially-true DIFFERENT statement — must be refused, not accepted.
+                "root_theorem": {"name": "sneaky", "statement": "True", "proof_term": "trivial"}
+            },
+            "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["disposition"], "accepted", "the step itself commits (as a rejected attempt): {:?}", step);
+        assert_eq!(step["accepted"], false, "a root-hash mismatch must not be accepted: {:?}", step);
+        assert!(step["outcome"] != "kernel_verified" && step["outcome"] != "certified", "{:?}", step);
+        assert!(step["termination_reason"].is_null(), "a rejected module must not terminate the episode: {:?}", step);
+
+        let status = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_status").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_ne!(status["state"], "terminated", "{:?}", status);
+        assert_eq!(status["invalid_action_count"], 1, "{:?}", status);
     }
 
     /// `proof_export` must render the problem's actual (custom) import manifest,

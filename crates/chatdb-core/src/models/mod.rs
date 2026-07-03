@@ -543,6 +543,35 @@ pub struct LeanVerificationResult {
     pub lean_cpu_time_ms: u64,
 }
 
+/// Result of staging and kernel-checking a whole structured module (defs +
+/// helper theorems + root theorem) as one unit. Distinct from
+/// `LeanVerificationResult`, which describes a single wrapped theorem body: a
+/// module either passes as a whole (all declarations enter the trusted namespace
+/// together) or fails as a whole (nothing does). The hashes are the same ones
+/// persisted to `episode_verified_modules` so replay can confirm the exact
+/// artifact re-derives.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeanModuleVerificationResult {
+    pub outcome: LeanVerificationOutcome,
+    /// `ChatDB.P_<problem>` — the namespace every declaration was placed under.
+    pub problem_namespace: String,
+    /// The sanitized local name of the root theorem within the namespace.
+    pub root_lean_name: String,
+    /// SHA-256 of the exact Lean source the kernel checked.
+    pub module_source_hash: String,
+    /// Canonical hash over the ordered declaration manifest (kind, name, hashes).
+    pub declaration_manifest_hash: String,
+    pub environment_hash: String,
+    /// A digest of the kernel verdict (outcome + source hash) — the module-level
+    /// analogue of a single lemma's `kernel_result_hash`.
+    pub kernel_result_hash: String,
+    /// Primary diagnostic on failure (first error, or the sorry/admit rejection).
+    pub diagnostic: Option<LeanDiagnostic>,
+    #[serde(default)]
+    pub all_diagnostics: Vec<LeanDiagnostic>,
+    pub wall_time_ms: u64,
+}
+
 /// Result of asking whether a declaration resolves — the answer to "is this
 /// genuinely absent from the pinned library, or just not imported here?" that an
 /// `unknown identifier` elaboration error cannot, by itself, distinguish.

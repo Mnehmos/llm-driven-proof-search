@@ -185,6 +185,108 @@ pub fn attempt_commit(
                 }
             }
         }
+        TypedAction::SubmitModule { module_items, root_theorem } => {
+            // A module proves its TARGET obligation as a whole. The root theorem's
+            // statement must hash-match that obligation's statement (for the root
+            // obligation, that is the problem's registered root formal statement).
+            // Either the entire assembled module passes the kernel and the
+            // obligation is closed, or nothing enters the trusted namespace.
+            let obl_id_str = target_obligation_id
+                .ok_or_else(|| StepError::ActionSchemaInvalid("No target obligation for this request".to_string()))?;
+
+            let (pv_id_str, _lean_stmt, stmt_hash): (String, String, String) = tx.query_row(
+                "SELECT problem_version_id, lean_statement, statement_hash
+                 FROM episode_obligations WHERE id = ?1 AND episode_id = ?2",
+                [&obl_id_str, &episode_id_str],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+
+            let (pv_env_hash, import_manifest_json): (String, String) = tx.query_row(
+                "SELECT environment_hash, import_manifest_json FROM problem_versions WHERE id = ?1",
+                [&pv_id_str],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            let import_manifest: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
+
+            // Same namespace derivation RealLeanGateway.verify_exact uses for the
+            // single-theorem path, so both live under one problem namespace.
+            let ns16 = pv_id_str.replace('-', "");
+            let problem_namespace = format!("ChatDB.P_{}", &ns16[..16.min(ns16.len())]);
+
+            tx.execute(
+                "UPDATE episode_obligations SET attempt_count = attempt_count + 1 WHERE id = ?1",
+                [&obl_id_str],
+            )?;
+
+            match crate::lean::module::assemble_module(&problem_namespace, &stmt_hash, module_items, root_theorem, &import_manifest) {
+                Err(policy_err) => {
+                    // Deterministic policy rejection (bad name, prohibited construct,
+                    // root hash mismatch, ...). A normal rejected attempt — never a
+                    // hard StepError — so the obligation stays open and re-attemptable
+                    // and the reason is preserved as a failure lesson.
+                    outcome_result = LeanVerificationOutcome::KernelFail;
+                    is_valid = false;
+                    let lesson = format!("module rejected by policy: {}", policy_err);
+                    tx.execute(
+                        "UPDATE episode_obligations SET status = 'open', failure_lesson = ?1 WHERE id = ?2",
+                        (lesson, &obl_id_str),
+                    )?;
+                }
+                Ok(assembled) => {
+                    match lean_gateway.verify_module(&assembled, &pv_env_hash) {
+                        Ok(result) => {
+                            outcome_result = result.outcome.clone();
+                            is_valid = matches!(result.outcome, LeanVerificationOutcome::KernelPass);
+
+                            if is_valid {
+                                let lemma_id = Uuid::new_v4();
+                                let root_theorem_name = format!("{}.{}", assembled.namespace, result.root_lean_name);
+                                // Reuse episode_verified_lemmas to close the root
+                                // obligation (so the existing kernel_verified/certified
+                                // promotion fires). The dedicated module artifact tables
+                                // land in issue #4; the module hashes are threaded through
+                                // here so nothing is lost in the meantime.
+                                tx.execute(
+                                    "INSERT INTO episode_verified_lemmas (
+                                        id, episode_id, obligation_id, polarity, theorem_name, statement_hash,
+                                        proof_source_artifact_hash, compiled_artifact_hash, proof_term_hash,
+                                        environment_hash, actual_dependency_ids_json, kernel_result_hash, verified_at
+                                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                                    (
+                                        lemma_id.to_string(),
+                                        &episode_id_str,
+                                        &obl_id_str,
+                                        Polarity::Positive.to_string(),
+                                        &root_theorem_name,
+                                        &stmt_hash,
+                                        &result.module_source_hash,
+                                        &result.declaration_manifest_hash,
+                                        "",
+                                        &pv_env_hash,
+                                        "[]",
+                                        &result.kernel_result_hash,
+                                        Utc::now().to_rfc3339(),
+                                    ),
+                                )?;
+                                tx.execute(
+                                    "UPDATE episode_obligations SET status = 'proved', proved_lemma_id = ?1, closed_at = ?2 WHERE id = ?3",
+                                    (lemma_id.to_string(), Utc::now().to_rfc3339(), &obl_id_str),
+                                )?;
+                            } else {
+                                let lesson = result.diagnostic.as_ref().map(|d| d.primary_message.clone());
+                                tx.execute(
+                                    "UPDATE episode_obligations SET status = 'open', failure_lesson = COALESCE(?1, failure_lesson) WHERE id = ?2",
+                                    (lesson, &obl_id_str),
+                                )?;
+                            }
+                        }
+                        Err(e) => {
+                            return Err(StepError::LeanGatewayError(e));
+                        }
+                    }
+                }
+            }
+        }
         TypedAction::Decompose { sub_lemmas } => {
             let obl_id_str = target_obligation_id
                 .ok_or_else(|| StepError::ActionSchemaInvalid("No target obligation for this request".to_string()))?;
@@ -255,11 +357,11 @@ pub fn attempt_commit(
         }
     }
 
-    // Only Solve produces a genuine Lean outcome (set above, pass or fail). For every
-    // other action, the caller reads `outcome_result` purely as an accepted/rejected
-    // signal — reflect `is_valid` here so Decompose/GiveUp don't fall through to the
-    // KernelFail default and get misreported as rejected.
-    if !matches!(action, TypedAction::Solve { .. }) {
+    // Only Solve and SubmitModule produce a genuine Lean outcome (set above, pass
+    // or fail). For every other action, the caller reads `outcome_result` purely
+    // as an accepted/rejected signal — reflect `is_valid` here so Decompose/GiveUp
+    // don't fall through to the KernelFail default and get misreported as rejected.
+    if !matches!(action, TypedAction::Solve { .. } | TypedAction::SubmitModule { .. }) {
         outcome_result = if is_valid { LeanVerificationOutcome::KernelPass } else { LeanVerificationOutcome::KernelFail };
     }
 
