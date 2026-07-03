@@ -201,10 +201,10 @@ pub fn attempt_commit(
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
 
-            let (pv_env_hash, import_manifest_json): (String, String) = tx.query_row(
-                "SELECT environment_hash, import_manifest_json FROM problem_versions WHERE id = ?1",
+            let (pv_env_hash, import_manifest_json, pv_manifest_hash): (String, String, String) = tx.query_row(
+                "SELECT environment_hash, import_manifest_json, import_manifest_hash FROM problem_versions WHERE id = ?1",
                 [&pv_id_str],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
             let import_manifest: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
 
@@ -272,6 +272,64 @@ pub fn attempt_commit(
                                     "UPDATE episode_obligations SET status = 'proved', proved_lemma_id = ?1, closed_at = ?2 WHERE id = ?3",
                                     (lemma_id.to_string(), Utc::now().to_rfc3339(), &obl_id_str),
                                 )?;
+
+                                // Persist the verified module as a structured,
+                                // replayable artifact (issue #4). module_items_json
+                                // holds the exact items + root theorem, so the precise
+                                // Lean source re-assembles deterministically on export
+                                // and replay. This insert shares the episode_step
+                                // transaction, so it is atomic with closing the root
+                                // obligation — either the whole module records or none
+                                // of it does.
+                                let module_row_id = Uuid::new_v4();
+                                let now_ts = Utc::now().to_rfc3339();
+                                let module_items_json = serde_json::json!({
+                                    "module_items": module_items,
+                                    "root_theorem": root_theorem,
+                                }).to_string();
+                                tx.execute(
+                                    "INSERT INTO episode_verified_modules (
+                                        id, episode_id, problem_version_id, root_obligation_id,
+                                        root_statement_hash, import_manifest_hash, environment_hash,
+                                        module_source_hash, module_items_json, declaration_manifest_hash,
+                                        kernel_result_hash, verified_at
+                                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                    (
+                                        module_row_id.to_string(),
+                                        &episode_id_str,
+                                        &pv_id_str,
+                                        &obl_id_str,
+                                        &stmt_hash,
+                                        &pv_manifest_hash,
+                                        &pv_env_hash,
+                                        &result.module_source_hash,
+                                        &module_items_json,
+                                        &result.declaration_manifest_hash,
+                                        &result.kernel_result_hash,
+                                        &now_ts,
+                                    ),
+                                )?;
+                                for item in &assembled.item_manifest {
+                                    let item_id = Uuid::new_v4();
+                                    let depends_on_json = serde_json::to_string(&item.depends_on).unwrap_or_else(|_| "[]".to_string());
+                                    tx.execute(
+                                        "INSERT INTO episode_verified_module_items (
+                                            id, module_id, item_order, item_kind, lean_name,
+                                            statement_or_type_hash, body_hash, depends_on_json, policy_result_json
+                                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                                        (
+                                            item_id.to_string(),
+                                            module_row_id.to_string(),
+                                            item.order as i64,
+                                            &item.kind,
+                                            &item.lean_name,
+                                            &item.statement_or_type_hash,
+                                            &item.body_hash,
+                                            &depends_on_json,
+                                            "{\"policy\":\"passed\"}",
+                                        ),
+                                    )?;
+                                }
                             } else {
                                 let lesson = result.diagnostic.as_ref().map(|d| d.primary_message.clone());
                                 tx.execute(

@@ -238,6 +238,47 @@ CREATE TABLE IF NOT EXISTS episode_verified_lemmas (
     CHECK(polarity IN ('positive', 'negative'))
 );
 
+-- A verified module submission (defs + helper theorems + root theorem checked
+-- as one unit — see docs/submit_module.md). One row per successful SubmitModule.
+-- Episode-local, like episode_verified_lemmas: canonical/promotion equivalents
+-- can come later, but the verified development must be remembered as a
+-- structured, replayable artifact NOW so module solves become training data,
+-- not just a compiled side effect. module_items_json holds the exact structured
+-- items + root theorem, so the precise Lean source re-assembles deterministically
+-- (its hash must equal module_source_hash).
+CREATE TABLE IF NOT EXISTS episode_verified_modules (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    root_obligation_id TEXT NOT NULL REFERENCES episode_obligations(id),
+    root_statement_hash TEXT NOT NULL,
+    import_manifest_hash TEXT NOT NULL,
+    environment_hash TEXT NOT NULL,
+    module_source_hash TEXT NOT NULL,
+    module_items_json TEXT NOT NULL,
+    declaration_manifest_hash TEXT NOT NULL,
+    kernel_result_hash TEXT NOT NULL,
+    verified_at TEXT NOT NULL,
+    UNIQUE(episode_id, root_obligation_id, module_source_hash)
+);
+
+-- One row per declaration in a verified module, in dependency (assembly) order.
+-- item_kind is 'def' | 'theorem' | 'root_theorem'; the single root_theorem row
+-- is explicitly linked to the root obligation via its parent module row.
+CREATE TABLE IF NOT EXISTS episode_verified_module_items (
+    id TEXT PRIMARY KEY,
+    module_id TEXT NOT NULL REFERENCES episode_verified_modules(id),
+    item_order INTEGER NOT NULL,
+    item_kind TEXT NOT NULL,
+    lean_name TEXT NOT NULL,
+    statement_or_type_hash TEXT NOT NULL,
+    body_hash TEXT NOT NULL,
+    depends_on_json TEXT NOT NULL,
+    policy_result_json TEXT NOT NULL,
+    UNIQUE(module_id, item_order),
+    CHECK(item_kind IN ('def', 'theorem', 'root_theorem'))
+);
+
 CREATE TABLE IF NOT EXISTS episode_budget_ledger (
     id TEXT PRIMARY KEY,
     episode_id TEXT NOT NULL REFERENCES episodes(id),

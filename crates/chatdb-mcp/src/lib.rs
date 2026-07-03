@@ -16,7 +16,8 @@ pub use rmcp::ErrorData as McpError;
 use chatdb_proof_core::db::schema_v1;
 use chatdb_proof_core::orchestrator::{lifecycle, attempts, step, trajectories};
 use chatdb_proof_core::lean::{LeanGateway, RealLeanGateway};
-use chatdb_proof_core::models::action::{TypedAction, ActionRequest, ActionRole, StepDisposition};
+use chatdb_proof_core::models::action::{TypedAction, ActionRequest, ActionRole, StepDisposition, LeanModuleItem, ModuleTheorem};
+use chatdb_proof_core::lean::module::assemble_module;
 use chatdb_proof_core::models::episode::{EpisodeOutcome, TerminationReason, TruncationReason};
 use chatdb_proof_core::models::reward::{RewardComponent, RewardComponentId, RewardPolicy};
 use chatdb_proof_core::hashing::canonical_hash;
@@ -414,6 +415,43 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
     let import_manifest: Vec<String> = serde_json::from_str::<Vec<String>>(&manifest_json)
         .unwrap_or_else(|_| vec!["Mathlib.Tactic.Ring".to_string(), "Mathlib.Tactic.NormNum".to_string()]);
 
+    // Verified modules (issue #4): a SubmitModule proves its obligation as a
+    // whole. When present, the export renders the EXACT module source —
+    // re-assembled deterministically from the stored structured items, so its
+    // hash equals the recorded module_source_hash — making the lean export
+    // byte-for-byte replayable and the dossier show the development, not just a
+    // proof tree.
+    #[derive(Deserialize)]
+    struct StoredModule { module_items: Vec<LeanModuleItem>, root_theorem: ModuleTheorem }
+    struct RenderedModule { source: String, source_hash: String, items: Vec<(i64, String, String)> }
+    let mut rendered_modules: Vec<RenderedModule> = Vec::new();
+    {
+        let ns16 = pv_id.replace('-', "");
+        let problem_namespace = format!("ChatDB.P_{}", &ns16[..16.min(ns16.len())]);
+        let mut mstmt = conn.prepare(
+            "SELECT id, root_statement_hash, module_items_json, module_source_hash
+             FROM episode_verified_modules WHERE episode_id = ?1 ORDER BY verified_at ASC",
+        ).map_err(rs)?;
+        let rows: Vec<(String, String, String, String)> = mstmt
+            .query_map([episode_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .map_err(rs)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(rs)?;
+        for (mod_id, root_hash, items_json, src_hash) in rows {
+            let Ok(stored) = serde_json::from_str::<StoredModule>(&items_json) else { continue };
+            let Ok(asm) = assemble_module(&problem_namespace, &root_hash, &stored.module_items, &stored.root_theorem, &import_manifest) else { continue };
+            let mut istmt = conn.prepare(
+                "SELECT item_order, item_kind, lean_name FROM episode_verified_module_items WHERE module_id = ?1 ORDER BY item_order ASC",
+            ).map_err(rs)?;
+            let items: Vec<(i64, String, String)> = istmt
+                .query_map([&mod_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .map_err(rs)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(rs)?;
+            rendered_modules.push(RenderedModule { source: asm.source, source_hash: src_hash, items });
+        }
+    }
+
     let mut stmt = conn.prepare(
         "SELECT id, theorem_name, lean_statement, status, kind, failure_lesson
          FROM episode_obligations WHERE episode_id = ?1 ORDER BY created_at ASC",
@@ -565,6 +603,11 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
     }
 
     if format == "lean" {
+        // A verified module is the exact, replayable artifact — prefer it over the
+        // theorem-by-theorem reconstruction when one exists.
+        if !rendered_modules.is_empty() {
+            return Ok(rendered_modules.iter().map(|m| m.source.clone()).collect::<Vec<_>>().join("\n\n"));
+        }
         return Ok(lean_src);
     }
 
@@ -656,8 +699,28 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
         None => md.push_str("*(no obligations seeded yet)*\n"),
     }
 
+    // A verified module is a structured development, not a single proof term —
+    // show its declaration manifest and the exact assembled source, so the dossier
+    // reflects the module, not only a proof tree.
+    if !rendered_modules.is_empty() {
+        md.push_str("\n## Verified module\n\n");
+        for (mi, m) in rendered_modules.iter().enumerate() {
+            if rendered_modules.len() > 1 {
+                md.push_str(&format!("### Module {}\n\n", mi + 1));
+            }
+            md.push_str(&format!("`module_source_hash: {}`\n\n", m.source_hash));
+            md.push_str("| # | kind | name |\n|---|---|---|\n");
+            for (order, kind, name) in &m.items {
+                md.push_str(&format!("| {} | {} | `{}` |\n", order, kind, name));
+            }
+            md.push_str(&format!("\n```lean\n{}\n```\n", m.source.trim_end()));
+        }
+    }
+
     md.push_str("\n## The proof, assembled\n\n");
-    if lean_order.iter().any(|o| o.status == "proved") {
+    if !rendered_modules.is_empty() {
+        md.push_str("*(see Verified module above — this episode was proved as a structured module)*\n");
+    } else if lean_order.iter().any(|o| o.status == "proved") {
         md.push_str(&format!("```lean\n{}```\n", lean_src));
     } else {
         md.push_str("*(nothing proved yet)*\n");
@@ -1491,6 +1554,20 @@ impl ServerHandler for ChatDbMcp {
                 let lean_outcome_str = outcome_res.as_ref().ok().map(|o| o.to_string());
                 let state_hash_after = episode_progress_hash(&tx, &args.episode_id)?;
 
+                // For an accepted SubmitModule, record the verified module's
+                // source + declaration-manifest hashes in the trajectory payload so
+                // replay can confirm the exact artifact re-derives (issue #4). Read
+                // back from the just-inserted row inside the same transaction.
+                let module_artifact: Option<(String, String)> = match (&args.action, &target_obligation_id, accepted) {
+                    (TypedAction::SubmitModule { .. }, Some(oid), true) => tx.query_row(
+                        "SELECT module_source_hash, declaration_manifest_hash FROM episode_verified_modules
+                         WHERE root_obligation_id = ?1 ORDER BY verified_at DESC LIMIT 1",
+                        [oid],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    ).optional().map_err(rs)?,
+                    _ => None,
+                };
+
                 let payload = serde_json::json!({
                     "obligation_id": target_obligation_id,
                     "problem_version_id": obligation_info.as_ref().map(|(pv, _, _)| pv),
@@ -1502,6 +1579,8 @@ impl ServerHandler for ChatDbMcp {
                     "disposition": disposition,
                     "accepted": accepted,
                     "diagnostics": error_msg,
+                    "module_source_hash": module_artifact.as_ref().map(|(s, _)| s),
+                    "declaration_manifest_hash": module_artifact.as_ref().map(|(_, d)| d),
                 });
                 trajectories::record_event(
                     &tx, ep_uuid, "action_committed", &state_hash_before, &state_hash_after, &env_hash,
@@ -2447,6 +2526,139 @@ mod tests {
             "expected_revision": revision, "claim_token": claim_token,
             "action": action, "cost_micros": 100,
         }).as_object().unwrap().clone())).await.unwrap())
+    }
+
+    /// Required test #12: under a fidelity-VERIFIED problem, a module root proof
+    /// reaches `certified` (both proof soundness AND statement fidelity), promoting
+    /// the problem to COMPLETE — the module analogue of the certified Solve path.
+    #[tokio::test]
+    async fn test_submit_module_with_verified_fidelity_reaches_certified() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "Show 1 + 1 = 2.",
+            "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+
+        let review = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_submit_fidelity_review").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "decision": "verified", "method": "human_review",
+            "approver_id": "reviewer-1", "rubric_version": "v1",
+            "source_problem_hash": create["source_problem_hash"], "root_statement_hash": create["root_statement_hash"],
+            "rendering_hash": create["rendering_hash"], "evidence_json": "{}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(review["fidelity_status"], "verified");
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "cert-mod", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {
+                "type": "submit_module",
+                "module_items": [],
+                "root_theorem": {"name": "one_one", "statement": "1 + 1 = 2", "proof_term": "norm_num"}
+            },
+            "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["outcome"], "certified", "verified fidelity + module root proof must certify: {:?}", step);
+        let reward = step["reward"].as_array().unwrap();
+        assert!(reward.iter().any(|r| r["id"] == "terminal_success"), "certified module must earn terminal_success: {:?}", reward);
+
+        // Problem promoted to COMPLETE.
+        let plist = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_list").with_arguments(serde_json::json!({}).as_object().unwrap().clone())).await.unwrap());
+        let mine = plist.as_array().unwrap().iter().find(|p| p["problem_version_id"] == pv_id || p["id"] == pv_id);
+        if let Some(p) = mine {
+            assert_eq!(p["state"], "COMPLETE", "certified module must promote the problem to COMPLETE: {:?}", p);
+        }
+    }
+
+    /// Issue #4: a verified module round-trips through replay and proof_export.
+    /// Replay re-assembles from structured JSON and re-verifies (matched(1)); the
+    /// lean export IS the exact module source; the markdown dossier shows the
+    /// module's declaration manifest, not only a proof tree.
+    #[tokio::test]
+    async fn test_submit_module_persist_export_and_replay_roundtrip() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "Define quad and show quad 2 = 8.",
+            "root_formal_statement": "quad 2 = 8",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "rt-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {
+                "type": "submit_module",
+                "module_items": [
+                    {"item_kind": "def", "name": "quad", "type_signature": "Nat → Nat", "body": "fun n => 4 * n"}
+                ],
+                "root_theorem": {"name": "quad_two", "statement": "quad 2 = 8", "proof_term": "rfl"}
+            },
+            "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["outcome"], "kernel_verified", "{:?}", step);
+
+        // Replay: the module re-assembles from structured JSON and re-verifies.
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_replay").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(replay["audit_passed"], true, "{:?}", replay);
+        assert_eq!(replay["events_replayed"], 1, "the module verification event must be re-verified, not vacuously passed: {:?}", replay);
+        assert_eq!(replay["replay_status"], "matched(1)");
+
+        // Lean export IS the exact module source, under the problem namespace.
+        let lean_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "lean",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let lean = lean_res.content[0].as_text().unwrap().text.clone();
+        assert!(lean.contains("namespace ChatDB.P_"), "module export must carry the namespace: {lean}");
+        assert!(lean.contains("def quad : Nat → Nat :="), "{lean}");
+        assert!(lean.contains("theorem quad_two : quad 2 = 8 := by"), "{lean}");
+        assert!(lean.trim_end().ends_with("end ChatDB.P_") || lean.contains("\nend ChatDB.P_"), "{lean}");
+
+        // Markdown dossier shows the module's declaration manifest.
+        let md_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let md = md_res.content[0].as_text().unwrap().text.clone();
+        assert!(md.contains("## Verified module"), "{md}");
+        assert!(md.contains("module_source_hash:"), "{md}");
+        assert!(md.contains("root_theorem"), "the manifest must mark the root theorem item: {md}");
+        assert!(md.contains("`quad`"), "the manifest must list the helper def: {md}");
     }
 
     /// Issue #3 acceptance: a helper def passes and the root theorem uses it — the

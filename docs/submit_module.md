@@ -100,3 +100,40 @@ Proof soundness (did the kernel check this exact formal statement?) and
 statement fidelity (does that statement represent the source problem?) remain
 independent — `SubmitModule` changes how the formal statement is *proved*, not
 how fidelity is decided.
+
+## Persistence, export, and replay
+
+A successful module is remembered as a structured, replayable artifact — not
+just a compiled side effect — so module solves become first-class training data.
+
+- **`episode_verified_modules`** — one row per verified module: the root
+  obligation it proves, the root statement / import manifest / environment
+  hashes, the `module_source_hash`, the `declaration_manifest_hash`, the kernel
+  result hash, and `module_items_json` (the exact structured items + root
+  theorem). Because assembly is deterministic, re-assembling from
+  `module_items_json` reproduces byte-identical source (hashing to
+  `module_source_hash`).
+- **`episode_verified_module_items`** — one row per declaration, in assembly
+  order: kind (`def` / `theorem` / `root_theorem`), local name, statement-or-type
+  and body hashes, dependency metadata, and policy result. The single
+  `root_theorem` row is linked to the root obligation through its parent module
+  row.
+
+Both tables are created by `CREATE TABLE IF NOT EXISTS`, so a pre-existing
+v0.2.5 database gains them on the next init with no migration and no change to
+existing rows.
+
+The `action_committed` trajectory event for a module carries the
+`module_source_hash` and `declaration_manifest_hash`, so replay can confirm the
+exact artifact re-derives:
+
+- **`proof_export(format="lean")`** returns the exact module source (re-assembled
+  from `module_items_json`), byte-for-byte replayable. The markdown dossier adds
+  a **Verified module** section with the declaration manifest and source.
+- **`episode_replay`** re-parses the structured action, re-assembles the module,
+  and **fails** if the re-assembled `module_source_hash` /
+  `declaration_manifest_hash` differ from what was recorded — then re-verifies
+  through the gateway and checks the outcome matches. Replay never trusts an
+  opaque saved file.
+- Dataset RL exports tag each step `solve_kind`:
+  `single_theorem_solve` vs `verified_module_solve`.
