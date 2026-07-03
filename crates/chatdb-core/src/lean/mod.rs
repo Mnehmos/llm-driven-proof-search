@@ -230,13 +230,23 @@ impl LeanGateway for RealLeanGateway {
         imports.push_str("set_option linter.unreachableTactic false\n");
 
         // 3. Construct Lean source code
+        // Lean 4.32+ requires the first tactic after `:= by` to be indented
+        // relative to the theorem — a proof block at column 0 is parsed as an
+        // empty `by` block followed by stray identifiers, failing every proof.
+        // Indent every line of the candidate proof by two spaces so both
+        // single-tactic and multi-tactic blocks elaborate correctly.
+        let indented_proof = candidate_source
+            .lines()
+            .map(|l| format!("  {}", l))
+            .collect::<Vec<_>>()
+            .join("\n");
         let file_content = format!(
             "{}\nnamespace {}\n\ntheorem {} : {} := by\n{}\n\nend {}\n",
             imports,
             problem_namespace,
             theorem_name,
             obligation.lean_statement,
-            candidate_source,
+            indented_proof,
             problem_namespace
         );
 

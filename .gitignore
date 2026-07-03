@@ -47,3 +47,6 @@ tunnel_client_dir/
 # Environment files
 .env
 .env.local
+
+# Kilo workspace tooling (machine-local)
+.kilo/
