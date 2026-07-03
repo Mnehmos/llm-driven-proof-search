@@ -83,10 +83,14 @@ pub fn export_sft(conn: &Connection, episode_id: Uuid) -> Result<Vec<SftRecord>,
 }
 
 pub fn export_rl(conn: &Connection, episode_id: Uuid) -> Result<Vec<RlTuple>, String> {
+    // The MCP runtime records step attempts as 'action_committed' (see
+    // chatdb-mcp episode_step) — this previously queried the nonexistent
+    // 'step_committed', which silently returned zero rows for every
+    // MCP-driven episode's RL export.
     let mut stmt = conn.prepare(
         "SELECT state_hash_before, state_hash_after, payload_json
-         FROM trajectory_events 
-         WHERE episode_id = ?1 AND event_type = 'step_committed'
+         FROM trajectory_events
+         WHERE episode_id = ?1 AND event_type = 'action_committed'
          ORDER BY event_sequence_number ASC"
     ).map_err(|e| e.to_string())?;
 
@@ -100,6 +104,11 @@ pub fn export_rl(conn: &Connection, episode_id: Uuid) -> Result<Vec<RlTuple>, St
         let state = serde_json::json!({ "state_hash": hash_before });
         let next_state = serde_json::json!({ "state_hash": hash_after });
         
+        // NOTE: the MCP runtime's action_committed payload does not currently carry
+        // scalar_reward_micros/terminated/truncated fields (those live only in the
+        // episode_step tool response, not the trajectory event) — this still
+        // defaults them until the payload schema is extended to include them.
+        // Tracked as a follow-up; not part of this fidelity-invariant fix.
         let reward_micros = payload.get("scalar_reward_micros").and_then(|v| v.as_i64()).unwrap_or(0);
         let terminated = payload.get("terminated").and_then(|v| v.as_bool()).unwrap_or(false);
         let truncated = payload.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false);

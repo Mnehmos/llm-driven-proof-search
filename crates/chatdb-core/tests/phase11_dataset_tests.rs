@@ -25,7 +25,7 @@ fn test_dataset_export_and_sanitization() {
     // Insert problem and episode
     conn.execute(
         "INSERT INTO problem_versions (id, source_problem_text, source_problem_hash, source_metadata_json, root_formal_statement, root_statement_hash, normalized_root_rendering, environment_hash, fidelity_status, fidelity_method, state, created_at)
-         VALUES (?1, 'proof', 'h1', '{}', 'thm', 'h2', 'thm', 'env1', 'approved', 'human', 'proving', '2026-07-02T00:00:00Z')",
+         VALUES (?1, 'proof', 'h1', '{}', 'thm', 'h2', 'thm', 'env1', 'verified', 'human', 'PROVING', '2026-07-02T00:00:00Z')",
         (pv_id.to_string(),)
     ).unwrap();
 
@@ -60,10 +60,14 @@ fn test_dataset_export_and_sanitization() {
     });
     
     let tx = conn.unchecked_transaction().unwrap();
+    // The MCP runtime records this event type as 'action_committed' (see
+    // chatdb-mcp episode_step) — this fixture previously used the nonexistent
+    // 'step_committed', which matched export_rl's identical bug rather than
+    // catching it.
     let ev_hash = record_event(
         &tx,
         ep_id,
-        "step_committed",
+        "action_committed",
         "hash_before",
         "hash_after",
         "env_hash",

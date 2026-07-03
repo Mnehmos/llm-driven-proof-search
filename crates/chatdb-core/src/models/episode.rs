@@ -15,7 +15,13 @@ pub enum EpisodeState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EpisodeOutcome {
+    /// Root kernel-verified AND the problem's statement fidelity is 'verified'.
+    /// The only outcome that means "this certifies the source claim."
     Certified,
+    /// Root kernel-verified, but statement fidelity is not yet 'verified' (may be
+    /// unreviewed, attested, rejected, or revoked). Proof soundness without
+    /// statement fidelity — never treat this as equivalent to Certified.
+    KernelVerified,
     Refuted,
     GaveUp,
     Timeout,

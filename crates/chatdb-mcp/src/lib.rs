@@ -38,19 +38,44 @@ pub struct ProblemCreateArgs {
     pub environment_hash: Option<String>,
     #[serde(default)]
     pub metadata_json: Option<String>,
-    /// Dev convenience: also mark fidelity_status='approved' so episodes can start
-    /// immediately, skipping the separate problem_approve_fidelity call.
+    /// Named honestly on purpose: this is NOT a review. It sets fidelity_status
+    /// to 'attested' (proving is allowed) — never 'verified'. Episodes created
+    /// under 'attested' can reach outcome=kernel_verified but never 'certified',
+    /// and their data is excluded from dataset exports by default. Use
+    /// problem_submit_fidelity_review for a real, evidence-backed determination.
     #[serde(default)]
-    pub approve: bool,
+    pub unsafe_dev_attestation: bool,
 }
 
 #[derive(JsonSchema, Deserialize)]
-pub struct ProblemApproveFidelityArgs {
+pub enum FidelityDecision {
+    #[serde(rename = "verified")]
+    Verified,
+    #[serde(rename = "rejected")]
+    Rejected,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ProblemSubmitFidelityReviewArgs {
     pub problem_version_id: String,
-    #[serde(default)]
-    pub approver_id: Option<String>,
+    pub decision: FidelityDecision,
+    /// e.g. "human_review", "dual_model_review", "gold_benchmark_alignment" —
+    /// free text naming how the decision was reached; not policy-enforced here.
+    pub method: String,
+    pub approver_id: String,
+    pub rubric_version: String,
+    /// The server independently recomputes source_problem_hash,
+    /// root_statement_hash, and normalized_rendering_hash from the CURRENT
+    /// problem_versions row and rejects the submission if these don't match —
+    /// a review can only authorize the exact text it actually reviewed.
+    pub source_problem_hash: String,
+    pub root_statement_hash: String,
+    pub rendering_hash: String,
+    pub evidence_json: String,
     #[serde(default)]
     pub notes: Option<String>,
+    #[serde(default)]
+    pub signature: Option<String>,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -311,10 +336,10 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
         return Err(mcp_invalid_params(format!("unknown episode_id: {}", episode_id)));
     };
 
-    let (source_text, root_statement): (String, String) = conn.query_row(
-        "SELECT source_problem_text, root_formal_statement FROM problem_versions WHERE id = ?1",
+    let (source_text, root_statement, fidelity_status): (String, String, String) = conn.query_row(
+        "SELECT source_problem_text, root_formal_statement, fidelity_status FROM problem_versions WHERE id = ?1",
         [&pv_id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     ).map_err(rs)?;
 
     let mut stmt = conn.prepare(
@@ -468,17 +493,60 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
         return Ok(lean_src);
     }
 
-    // Markdown dossier.
+    // Markdown dossier. Proof soundness (did Lean verify this exact formal
+    // statement?) and statement fidelity (does that formal statement represent
+    // the source problem?) are independent claims — a kernel-verified root of a
+    // weakened or vacuous formalization must never render as if it certified the
+    // source claim. Only outcome == "certified" (which requires BOTH) gets the
+    // unqualified CERTIFIED headline.
+    let is_certified = outcome.as_deref() == Some("certified");
+    let is_kernel_verified_only = outcome.as_deref() == Some("kernel_verified");
+    let training_eligible = fidelity_status == "verified";
+
     let mut md = String::new();
     let headline_marker = match outcome.as_deref() {
         Some("certified") => "✅ CERTIFIED",
+        Some("kernel_verified") if fidelity_status == "rejected" => "⚠️ FORMAL PROOF VALID, STATEMENT FIDELITY REJECTED",
+        Some("kernel_verified") => "⚠️ KERNEL-VERIFIED FORMAL STATEMENT — FIDELITY NOT YET VERIFIED",
         Some("refuted") => "❌ REFUTED",
         Some("gave_up") => "🏳️ GAVE UP",
         Some(other) => other,
         None => "🔄 IN PROGRESS",
     };
     md.push_str(&format!("# {} — {}\n\n", headline_marker, source_text.trim()));
-    md.push_str(&format!("**Root goal:** `{}`\n\n", root_statement));
+
+    if is_kernel_verified_only {
+        md.push_str(&format!(
+            "> This proof establishes:\n>\n> `{}`\n>\n> It does {}certify the source claim above.\n\n",
+            root_statement,
+            if fidelity_status == "rejected" { "**not** " } else { "**not yet** " },
+        ));
+    }
+
+    md.push_str(&format!("**Root goal (formal):** `{}`\n\n", root_statement));
+
+    // The three independent claims, always shown together so a reader can never
+    // mistake one for the others.
+    let proof_soundness = match outcome.as_deref() {
+        Some("certified") | Some("kernel_verified") => "VERIFIED",
+        Some("refuted") => "REFUTED",
+        None => "PENDING",
+        Some(_) => "INCOMPLETE",
+    };
+    let fidelity_display = match fidelity_status.as_str() {
+        "verified" => "VERIFIED",
+        "rejected" => "REJECTED",
+        "revoked" => "REVOKED",
+        "attested" => "ATTESTED (unsafe_dev_attestation — not reviewed)",
+        _ => "UNVERIFIED",
+    };
+    let promotion_display = if is_certified { "PROMOTED" } else { "BLOCKED" };
+    md.push_str(&format!(
+        "| Proof soundness | Statement fidelity | Canonical promotion | Training eligibility |\n|---|---|---|---|\n| {} | {} | {} | {} |\n\n",
+        proof_soundness, fidelity_display, promotion_display,
+        if training_eligible { "eligible" } else { "QUARANTINED" },
+    ));
+
     md.push_str(&format!(
         "| episode | state | steps | budget left (μ$) | started | finished |\n|---|---|---|---|---|---|\n| `{}` | {}{} | {} | {} | {} | {} |\n\n",
         episode_id, state,
@@ -572,7 +640,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.2.0"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.2.2"))
     }
 
     async fn list_tools(
@@ -582,10 +650,10 @@ impl ServerHandler for ChatDbMcp {
     ) -> Result<ListToolsResult, McpError> {
         let tools = vec![
             make_tool::<EnvironmentDescribeArgs>("environment_describe", "Return environment version, supported protocol, tool schemas, capabilities"),
-            make_tool::<ProblemCreateArgs>("problem_create", "Register a new problem version (source text + root formal statement). Set approve=true to skip a separate fidelity approval for dev use"),
-            make_tool::<ProblemApproveFidelityArgs>("problem_approve_fidelity", "Mark a problem version's fidelity_status as approved so episodes can be created against it"),
+            make_tool::<ProblemCreateArgs>("problem_create", "Register a new problem version (source text + root formal statement). fidelity_status starts 'unreviewed' — proving requires either a real problem_submit_fidelity_review or the honestly-named unsafe_dev_attestation=true (which can reach outcome=kernel_verified but never 'certified')"),
+            make_tool::<ProblemSubmitFidelityReviewArgs>("problem_submit_fidelity_review", "Record an evidence-backed determination of whether a problem's formal statement represents its source text. Requires the CURRENT source/statement/rendering hashes (recomputed server-side; mismatches are rejected as stale). decision='verified' is the ONLY path to outcome='certified' and problem state COMPLETE; 'rejected' blocks it. This is a review record, not a flag flip — proof soundness (Lean kernel) and statement fidelity (this tool) are independent claims"),
             make_tool::<ProblemListArgs>("problem_list", "List known problem versions (id, state, fidelity_status, root statement)"),
-            make_tool::<EpisodeCreateArgs>("episode_create", "Initialize an episode from an approved problem version + config. Returns first observation"),
+            make_tool::<EpisodeCreateArgs>("episode_create", "Initialize an episode from a problem version whose fidelity_status is 'verified' or 'attested' + config. Returns first observation"),
             make_tool::<EpisodeResetArgs>("episode_reset", "Nondestructive: creates new episode from existing config, sets parent_episode_id"),
             make_tool::<EpisodeObserveArgs>("episode_observe", "Get the active observation and pending action request"),
             make_tool::<AttemptClaimArgs>("attempt_claim", "Claim a pending action request to obtain the action_attempt_id + claim_token required by episode_step. Idempotent on idempotency_key"),
@@ -613,7 +681,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.2.0",
+                    "environment_version": "0.2.2",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -671,12 +739,16 @@ impl ServerHandler for ChatDbMcp {
                 serde_json::from_str::<serde_json::Value>(&metadata)
                     .map_err(|e| mcp_invalid_params(format!("metadata_json is not valid JSON: {}", e)))?;
 
-                let (fidelity_status, state) = if args.approve {
-                    ("approved", "PROVING")
+                // 'attested' permits proving (episode_create checks for this) but can
+                // NEVER reach 'verified' by itself — only problem_submit_fidelity_review
+                // can do that, and the DB CHECK on state='COMPLETE' enforces it even if
+                // application logic has a bug. No path here ever writes 'verified'.
+                let (fidelity_status, state) = if args.unsafe_dev_attestation {
+                    ("attested", "PROVING")
                 } else {
-                    ("pending", "CREATED")
+                    ("unreviewed", "CREATED")
                 };
-                let fidelity_approval_id = if args.approve { Some(Uuid::new_v4().to_string()) } else { None };
+                let fidelity_approval_id = if args.unsafe_dev_attestation { Some(Uuid::new_v4().to_string()) } else { None };
 
                 let mut conn = self.conn.lock().await;
                 let tx = conn.transaction().map_err(rs)?;
@@ -701,34 +773,118 @@ impl ServerHandler for ChatDbMcp {
                     "fidelity_status": fidelity_status,
                     "state": state,
                     "environment_hash": env_hash,
+                    // A fidelity reviewer must submit these back unchanged in
+                    // problem_submit_fidelity_review — the server recomputes and
+                    // compares them independently, so a client can copy these values
+                    // rather than needing to reimplement the canonical hash algorithm.
+                    "source_problem_hash": source_hash,
+                    "root_statement_hash": root_hash,
+                    "rendering_hash": canonical_hash(&rendering).map_err(mcp_internal_error)?,
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
-            "problem_approve_fidelity" => {
-                let args: ProblemApproveFidelityArgs = serde_json::from_value(args_val)
+            "problem_submit_fidelity_review" => {
+                let args: ProblemSubmitFidelityReviewArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
 
                 let mut conn = self.conn.lock().await;
                 let tx = conn.transaction().map_err(rs)?;
 
-                let exists: Option<String> = tx.query_row(
-                    "SELECT id FROM problem_versions WHERE id = ?1",
+                let current: Option<(String, String, String)> = tx.query_row(
+                    "SELECT source_problem_hash, root_statement_hash, normalized_root_rendering FROM problem_versions WHERE id = ?1",
                     [&args.problem_version_id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 ).optional().map_err(rs)?;
-                if exists.is_none() {
+                let Some((cur_source_hash, cur_root_hash, cur_rendering)) = current else {
                     return Err(mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id)));
+                };
+                let cur_rendering_hash = canonical_hash(&cur_rendering).map_err(mcp_internal_error)?;
+
+                // A review can only authorize the EXACT text it reviewed. Recompute
+                // independently — never trust the submitted hashes — and reject if
+                // the problem has changed (or the review targeted a different one)
+                // since the evidence was gathered. This is the anti-staleness check
+                // the fix plan calls "hash invalidation."
+                if args.source_problem_hash != cur_source_hash
+                    || args.root_statement_hash != cur_root_hash
+                    || args.rendering_hash != cur_rendering_hash
+                {
+                    return Err(mcp_invalid_params(
+                        "submitted hashes do not match the problem_version's CURRENT source/statement/rendering — \
+                         the problem changed since this review's evidence was gathered, or the review targeted a \
+                         different problem_version_id. Re-review the current text and resubmit."
+                    ));
                 }
 
-                let approval_id = Uuid::new_v4().to_string();
+                let (decision_str, new_status) = match args.decision {
+                    FidelityDecision::Verified => ("verified", "verified"),
+                    FidelityDecision::Rejected => ("rejected", "rejected"),
+                };
+
+                serde_json::from_str::<serde_json::Value>(&args.evidence_json)
+                    .map_err(|e| mcp_invalid_params(format!("evidence_json is not valid JSON: {}", e)))?;
+
+                let review_id = Uuid::new_v4().to_string();
                 tx.execute(
-                    "UPDATE problem_versions SET fidelity_status = 'approved', fidelity_method = 'manual', fidelity_approval_id = ?1 WHERE id = ?2",
-                    (&approval_id, &args.problem_version_id),
+                    "INSERT INTO problem_fidelity_reviews (
+                        id, problem_version_id, source_problem_hash, root_statement_hash, normalized_rendering_hash,
+                        decision, method, approver_id, rubric_version, evidence_json, notes, signature, created_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    (
+                        &review_id, &args.problem_version_id, &cur_source_hash, &cur_root_hash, &cur_rendering_hash,
+                        decision_str, &args.method, &args.approver_id, &args.rubric_version, &args.evidence_json,
+                        &args.notes, &args.signature, Utc::now().to_rfc3339(),
+                    ),
                 ).map_err(rs)?;
+
+                tx.execute(
+                    "UPDATE problem_versions SET fidelity_status = ?1, fidelity_method = ?2, fidelity_approval_id = ?3 WHERE id = ?4",
+                    (new_status, &args.method, &review_id, &args.problem_version_id),
+                ).map_err(rs)?;
+
+                // A verified review is what actually unlocks proving for a problem
+                // that was never touched by the dev-bypass path (still 'CREATED').
+                if new_status == "verified" {
+                    tx.execute(
+                        "UPDATE problem_versions SET state = 'PROVING' WHERE id = ?1 AND state = 'CREATED'",
+                        [&args.problem_version_id],
+                    ).map_err(rs)?;
+                }
+
+                // A review landing 'verified' after the root was already
+                // kernel-verified (episode outcome kernel_verified, problem state
+                // FIDELITY_REVIEW) completes the promotion retroactively — this is
+                // the only place 'COMPLETE' / 'certified' get assigned after the fact.
+                if new_status == "verified" {
+                    let pending_episodes: Vec<String> = {
+                        let mut s = tx.prepare(
+                            "SELECT id FROM episodes WHERE problem_version_id = ?1 AND outcome = 'kernel_verified'"
+                        ).map_err(rs)?;
+                        s.query_map([&args.problem_version_id], |row| row.get::<_, String>(0)).map_err(rs)?
+                            .collect::<Result<Vec<_>, _>>().map_err(rs)?
+                    };
+                    for ep_id in &pending_episodes {
+                        tx.execute(
+                            "UPDATE episodes SET outcome = 'certified' WHERE id = ?1",
+                            [ep_id],
+                        ).map_err(rs)?;
+                    }
+                    if !pending_episodes.is_empty() {
+                        tx.execute(
+                            "UPDATE problem_versions SET state = 'COMPLETE' WHERE id = ?1",
+                            [&args.problem_version_id],
+                        ).map_err(rs)?;
+                    }
+                }
+
                 tx.commit().map_err(rs)?;
 
-                let _ = (args.approver_id, args.notes); // reserved for episode_fidelity_reviews once episode-scoped review lands
-                let res = serde_json::json!({ "problem_version_id": args.problem_version_id, "fidelity_status": "approved", "fidelity_approval_id": approval_id });
+                let res = serde_json::json!({
+                    "problem_version_id": args.problem_version_id,
+                    "fidelity_review_id": review_id,
+                    "decision": decision_str,
+                    "fidelity_status": new_status,
+                });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
             "problem_list" => {
@@ -738,18 +894,27 @@ impl ServerHandler for ChatDbMcp {
 
                 let conn = self.conn.lock().await;
                 let mut stmt = conn.prepare(
-                    "SELECT id, state, fidelity_status, root_formal_statement, created_at
+                    "SELECT id, state, fidelity_status, root_formal_statement, created_at,
+                            source_problem_hash, root_statement_hash, normalized_root_rendering
                      FROM problem_versions ORDER BY created_at DESC LIMIT ?1"
                 ).map_err(rs)?;
                 let rows = stmt.query_map([limit], |row| {
-                    Ok(serde_json::json!({
+                    let rendering: String = row.get(7)?;
+                    Ok((serde_json::json!({
                         "problem_version_id": row.get::<_, String>(0)?,
                         "state": row.get::<_, String>(1)?,
                         "fidelity_status": row.get::<_, String>(2)?,
                         "root_formal_statement": row.get::<_, String>(3)?,
                         "created_at": row.get::<_, String>(4)?,
-                    }))
+                        "source_problem_hash": row.get::<_, String>(5)?,
+                        "root_statement_hash": row.get::<_, String>(6)?,
+                    }), rendering))
                 }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+                let rows: Vec<serde_json::Value> = rows.into_iter().map(|(mut v, rendering): (serde_json::Value, String)| {
+                    let rendering_hash = canonical_hash(&rendering).unwrap_or_default();
+                    v.as_object_mut().unwrap().insert("rendering_hash".to_string(), serde_json::Value::String(rendering_hash));
+                    v
+                }).collect();
 
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&rows).unwrap())]))
             }
@@ -770,9 +935,10 @@ impl ServerHandler for ChatDbMcp {
                 ).optional().map_err(rs)?;
                 match fidelity_status.as_deref() {
                     None => return Err(mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id))),
-                    Some("approved") => {}
+                    Some("verified") | Some("attested") => {}
                     Some(other) => return Err(mcp_invalid_params(format!(
-                        "problem_version {} is not fidelity-approved (status={}); call problem_approve_fidelity first",
+                        "problem_version {} has fidelity_status={}; proving requires 'verified' (call problem_submit_fidelity_review) \
+                         or 'attested' (problem_create's unsafe_dev_attestation=true — training-quarantined)",
                         args.problem_version_id, other
                     ))),
                 }
@@ -1102,21 +1268,52 @@ impl ServerHandler for ChatDbMcp {
                         ).optional().map_err(rs)?.map(|s| s == "proved").unwrap_or(false);
 
                         if root_proved {
+                            // PROOF SOUNDNESS ("Lean proved this exact formal statement")
+                            // and STATEMENT FIDELITY ("this formal statement represents the
+                            // source problem") are independent claims. A kernel-verified root
+                            // is only 'certified' — and only promotes the problem to COMPLETE
+                            // — when the problem's fidelity_status is ALSO 'verified'. This is
+                            // the fix for the weakened-root exploit: proving a trivially-true
+                            // relaxation of the source statement must never present as
+                            // certifying the source claim.
+                            let fidelity_status: String = tx.query_row(
+                                "SELECT pv.fidelity_status FROM episodes e JOIN problem_versions pv ON e.problem_version_id = pv.id WHERE e.id = ?1",
+                                [args.episode_id.clone()],
+                                |row| row.get(0),
+                            ).map_err(rs)?;
+                            let fidelity_verified = fidelity_status == "verified";
+
+                            let final_outcome = if fidelity_verified { EpisodeOutcome::Certified } else { EpisodeOutcome::KernelVerified };
                             tx.execute(
                                 "UPDATE episodes SET state = 'terminated', outcome = ?1, termination_reason = ?2, completed_at = ?3 WHERE id = ?4",
-                                (EpisodeOutcome::Certified.to_string(), TerminationReason::RootProved.to_string(), Utc::now().to_rfc3339(), args.episode_id.clone()),
+                                (final_outcome.to_string(), TerminationReason::RootProved.to_string(), Utc::now().to_rfc3339(), args.episode_id.clone()),
                             ).map_err(rs)?;
-                            // Advance the problem lifecycle too, so problem_list is a
-                            // status board rather than a stale cache of PROVING rows.
-                            tx.execute(
-                                "UPDATE problem_versions SET state = 'COMPLETE'
-                                 WHERE id = (SELECT problem_version_id FROM episodes WHERE id = ?1)
-                                 AND state = 'PROVING'",
-                                [args.episode_id.clone()],
-                            ).map_err(rs)?;
+
+                            if fidelity_verified {
+                                // Advance the problem lifecycle too, so problem_list is a
+                                // status board rather than a stale cache of PROVING rows.
+                                tx.execute(
+                                    "UPDATE problem_versions SET state = 'COMPLETE'
+                                     WHERE id = (SELECT problem_version_id FROM episodes WHERE id = ?1)
+                                     AND state = 'PROVING'",
+                                    [args.episode_id.clone()],
+                                ).map_err(rs)?;
+                            } else {
+                                // Root is proved but fidelity isn't — park the problem in
+                                // FIDELITY_REVIEW rather than PROVING (proof search is done)
+                                // or COMPLETE (nothing has been certified). A later
+                                // problem_submit_fidelity_review(decision=verified) promotes
+                                // this episode's outcome to 'certified' retroactively.
+                                tx.execute(
+                                    "UPDATE problem_versions SET state = 'FIDELITY_REVIEW'
+                                     WHERE id = (SELECT problem_version_id FROM episodes WHERE id = ?1)
+                                     AND state = 'PROVING'",
+                                    [args.episode_id.clone()],
+                                ).map_err(rs)?;
+                            }
                             is_terminated = true;
                             term_reason = Some(TerminationReason::RootProved);
-                            outcome_enum = Some(EpisodeOutcome::Certified);
+                            outcome_enum = Some(final_outcome);
                         } else {
                             let (steps, max_steps, budget): (i64, Option<i64>, Option<i64>) = tx.query_row(
                                 "SELECT step_count, max_steps, cost_budget_micros FROM episodes WHERE id = ?1",
@@ -1228,11 +1425,23 @@ impl ServerHandler for ChatDbMcp {
                         });
                     }
                 }
-                if outcome_enum == Some(EpisodeOutcome::Certified) {
+                if outcome_enum == Some(EpisodeOutcome::Certified) || outcome_enum == Some(EpisodeOutcome::KernelVerified) {
+                    // Real work either way: the prover proved exactly the formal
+                    // statement it was given. Composite success (TerminalSuccess) is
+                    // reserved for when fidelity is ALSO verified — never award it for
+                    // a kernel_verified-but-not-certified outcome, or a prover that
+                    // faithfully proved a bad formalization looks identical to one
+                    // that solved the real problem.
                     reward_components.push(RewardComponent {
-                        id: RewardComponentId::TerminalSuccess,
-                        value_scaled: policy.terminal_success,
+                        id: RewardComponentId::RootKernelVerified,
+                        value_scaled: policy.root_kernel_verified,
                     });
+                    if outcome_enum == Some(EpisodeOutcome::Certified) {
+                        reward_components.push(RewardComponent {
+                            id: RewardComponentId::TerminalSuccess,
+                            value_scaled: policy.terminal_success,
+                        });
+                    }
                 } else if is_truncated {
                     reward_components.push(RewardComponent {
                         id: RewardComponentId::TruncationPenalty,
@@ -1646,7 +1855,7 @@ mod tests {
         let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
             "source_problem_text": "1 + 1 = 2",
             "root_formal_statement": "1 + 1 = 2",
-            "approve": true,
+            "unsafe_dev_attestation": true,
         }).as_object().unwrap().clone())).await.unwrap());
         let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
 
@@ -1730,7 +1939,7 @@ mod tests {
         let peer = client.peer();
 
         let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
-            "source_problem_text": "x", "root_formal_statement": "x", "approve": true,
+            "source_problem_text": "x", "root_formal_statement": "x", "unsafe_dev_attestation": true,
         }).as_object().unwrap().clone())).await.unwrap());
         let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
@@ -1763,9 +1972,16 @@ mod tests {
         let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
             "source_problem_text": "Prove that 1 + 1 = 2 in the natural numbers.",
             "root_formal_statement": "1 + 1 = 2",
-            "approve": true,
         }).as_object().unwrap().clone())).await.unwrap());
         let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+
+        let review = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_submit_fidelity_review").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "decision": "verified", "method": "human_review",
+            "approver_id": "reviewer-1", "rubric_version": "v1",
+            "source_problem_hash": create["source_problem_hash"], "root_statement_hash": create["root_statement_hash"],
+            "rendering_hash": create["rendering_hash"], "evidence_json": "{}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(review["fidelity_status"], "verified");
 
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
             "problem_version_id": pv_id, "max_steps": 5, "cost_budget_micros": 1_000_000,
@@ -1848,7 +2064,7 @@ mod tests {
         let peer = client.peer();
 
         let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
-            "source_problem_text": "x", "root_formal_statement": "x", "approve": true,
+            "source_problem_text": "x", "root_formal_statement": "x", "unsafe_dev_attestation": true,
         }).as_object().unwrap().clone())).await.unwrap());
         let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
@@ -1892,7 +2108,7 @@ mod tests {
         let peer = client.peer();
 
         let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
-            "source_problem_text": "x", "root_formal_statement": "x", "approve": true,
+            "source_problem_text": "x", "root_formal_statement": "x", "unsafe_dev_attestation": true,
         }).as_object().unwrap().clone())).await.unwrap());
         let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
@@ -1923,7 +2139,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
         let peer = client.peer();
         let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
-            "source_problem_text": "x", "root_formal_statement": "x", "approve": true,
+            "source_problem_text": "x", "root_formal_statement": "x", "unsafe_dev_attestation": true,
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(pv["environment_hash"], "lean-gateway-unavailable", "{:?}", pv);
     }
@@ -1940,7 +2156,7 @@ mod tests {
         let peer = client.peer();
 
         let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
-            "source_problem_text": "x", "root_formal_statement": "x", "approve": true,
+            "source_problem_text": "x", "root_formal_statement": "x", "unsafe_dev_attestation": true,
         }).as_object().unwrap().clone())).await.unwrap());
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
             "problem_version_id": pv["problem_version_id"],
@@ -1968,5 +2184,169 @@ mod tests {
             "SELECT status FROM action_requests WHERE id = ?1", [&stale_request_id], |row| row.get(0),
         ).unwrap();
         assert_eq!(stale_status, "expired", "the lapsed request must be marked expired, not left as pending");
+    }
+
+    async fn claim_and_solve(peer: &rmcp::service::Peer<rmcp::RoleClient>, episode_id: &str, proof_term: &str, idem: &str) -> serde_json::Value {
+        let obs = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_observe").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let req = &obs["action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": idem, "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"], "expected_revision": req["episode_revision"],
+            "claim_token": claim["claim_token"], "action": {"type": "solve", "proof_term": proof_term}, "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap())
+    }
+
+    /// THE EXPLOIT REGRESSION: a kernel-verified root of a weakened/vacuous
+    /// formalization must reach `kernel_verified`, never `certified` — proof
+    /// soundness and statement fidelity are independent claims. Uses
+    /// unsafe_dev_attestation (the only way to prove without a real review),
+    /// which itself must never be enough to reach `certified`.
+    #[tokio::test]
+    async fn test_weakened_root_reaches_kernel_verified_not_certified() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "Every even natural is divisible by two.",
+            "root_formal_statement": "∀ n : ℕ, Even n → True", // weakened: conclusion is trivially true
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(pv["fidelity_status"], "attested");
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv["problem_version_id"], "cost_budget_micros": 1_000_000,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let step = claim_and_solve(&peer, &episode_id, "trivial", "weakened-root").await;
+        assert_eq!(step["accepted"], true, "{:?}", step);
+        assert_eq!(step["outcome"], "kernel_verified", "a weakened root must NOT present as certified: {:?}", step);
+        assert_eq!(step["termination_reason"], "root_proved");
+        let reward_ids: Vec<&str> = step["reward"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+        assert!(reward_ids.contains(&"root_kernel_verified"), "{:?}", reward_ids);
+        assert!(!reward_ids.contains(&"terminal_success"), "TerminalSuccess must never be paid without fidelity verification: {:?}", reward_ids);
+
+        let status = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_status").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(status["outcome"], "kernel_verified");
+
+        let plist = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_list").with_arguments(serde_json::json!({}).as_object().unwrap().clone())).await.unwrap());
+        let mine = plist.as_array().unwrap().iter().find(|p| p["problem_version_id"] == pv["problem_version_id"]).unwrap();
+        assert_eq!(mine["state"], "FIDELITY_REVIEW", "root-proved-but-unverified must park in FIDELITY_REVIEW, never COMPLETE: {:?}", mine);
+        assert_eq!(mine["fidelity_status"], "attested", "finalization must not silently upgrade fidelity_status");
+
+        // And the dossier must never render this as CERTIFIED.
+        let export_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let md = export_res.content[0].as_text().unwrap().text.clone();
+        assert!(!md.contains("✅ CERTIFIED"), "dossier must not overclaim: {md}");
+        assert!(md.contains("QUARANTINED"), "{md}");
+    }
+
+    /// A review can only authorize the exact text it reviewed — submitted hashes
+    /// that don't match the problem's CURRENT source/statement/rendering must be
+    /// rejected, not silently accepted as if they matched.
+    #[tokio::test]
+    async fn test_fidelity_review_wrong_hashes_rejected() {
+        let client = connected_client(test_handler()).await;
+        let peer = client.peer();
+        let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "y",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // mcp_invalid_params surfaces as a JSON-RPC-level error (Err from call_tool),
+        // not a CallToolResult with isError=true — this handler rejects the request
+        // outright rather than returning a "soft" failure result.
+        let res = peer.call_tool(CallToolRequestParams::new("problem_submit_fidelity_review").with_arguments(serde_json::json!({
+            "problem_version_id": pv["problem_version_id"], "decision": "verified", "method": "human_review",
+            "approver_id": "reviewer-1", "rubric_version": "v1",
+            "source_problem_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "root_statement_hash": pv["root_statement_hash"], "rendering_hash": pv["rendering_hash"],
+            "evidence_json": "{}",
+        }).as_object().unwrap().clone())).await;
+        assert!(res.is_err(), "a hash mismatch must be rejected, not silently accepted");
+
+        let plist = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_list").with_arguments(serde_json::json!({}).as_object().unwrap().clone())).await.unwrap());
+        let mine = plist.as_array().unwrap().iter().find(|p| p["problem_version_id"] == pv["problem_version_id"]).unwrap();
+        assert_eq!(mine["fidelity_status"], "unreviewed", "a rejected submission must not mutate fidelity_status");
+    }
+
+    /// POSITIVE CONTROL: a real review verifying a faithful formalization, done
+    /// BEFORE proving, reaches `certified` / COMPLETE directly on root proof —
+    /// the split must not penalize the case where fidelity was already settled.
+    #[tokio::test]
+    async fn test_fidelity_verified_before_proving_reaches_certified_directly() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "Every even natural is divisible by two.",
+            "root_formal_statement": "∀ n : ℕ, Even n → ∃ k : ℕ, n = 2 * k",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let review = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_submit_fidelity_review").with_arguments(serde_json::json!({
+            "problem_version_id": pv["problem_version_id"], "decision": "verified", "method": "human_review",
+            "approver_id": "reviewer-1", "rubric_version": "v1",
+            "source_problem_hash": pv["source_problem_hash"], "root_statement_hash": pv["root_statement_hash"],
+            "rendering_hash": pv["rendering_hash"], "evidence_json": "{\"note\":\"faithful\"}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(review["fidelity_status"], "verified");
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv["problem_version_id"], "cost_budget_micros": 1_000_000,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let step = claim_and_solve(&peer, &episode_id, "exact ⟨n, by ring⟩", "positive-control").await;
+        assert_eq!(step["outcome"], "certified", "{:?}", step);
+        let reward_ids: Vec<&str> = step["reward"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+        assert!(reward_ids.contains(&"terminal_success"), "{:?}", reward_ids);
+
+        let plist = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_list").with_arguments(serde_json::json!({}).as_object().unwrap().clone())).await.unwrap());
+        let mine = plist.as_array().unwrap().iter().find(|p| p["problem_version_id"] == pv["problem_version_id"]).unwrap();
+        assert_eq!(mine["state"], "COMPLETE");
+    }
+
+    /// A fidelity review landing 'verified' AFTER an episode already reached
+    /// `kernel_verified` must promote that episode's outcome to `certified`
+    /// retroactively — the review need not precede the proof.
+    #[tokio::test]
+    async fn test_fidelity_review_promotes_kernel_verified_episode_retroactively() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "y", "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv["problem_version_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let step = claim_and_solve(&peer, &episode_id, "trivial", "retro-1").await;
+        assert_eq!(step["outcome"], "kernel_verified");
+
+        let review = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_submit_fidelity_review").with_arguments(serde_json::json!({
+            "problem_version_id": pv["problem_version_id"], "decision": "verified", "method": "human_review",
+            "approver_id": "reviewer-1", "rubric_version": "v1",
+            "source_problem_hash": pv["source_problem_hash"], "root_statement_hash": pv["root_statement_hash"],
+            "rendering_hash": pv["rendering_hash"], "evidence_json": "{}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(review["fidelity_status"], "verified");
+
+        let status = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_status").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(status["outcome"], "certified", "retroactive promotion must flip the episode's outcome: {:?}", status);
+
+        let plist = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_list").with_arguments(serde_json::json!({}).as_object().unwrap().clone())).await.unwrap());
+        let mine = plist.as_array().unwrap().iter().find(|p| p["problem_version_id"] == pv["problem_version_id"]).unwrap();
+        assert_eq!(mine["state"], "COMPLETE");
     }
 }

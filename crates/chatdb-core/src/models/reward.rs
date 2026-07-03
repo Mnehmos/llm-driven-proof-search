@@ -8,6 +8,13 @@ pub enum RewardComponentId {
     KernelPass,
     KernelFail,
     InvalidResponse,
+    /// Root obligation passed the Lean kernel. Awarded on every kernel-verified
+    /// termination, whether or not fidelity is verified — the prover proved
+    /// exactly the formal statement it was given; that's real work regardless of
+    /// whether the statement matches the source problem.
+    RootKernelVerified,
+    /// Composite success: kernel-verified AND statement fidelity verified. Never
+    /// awarded on a kernel_verified-but-not-certified outcome.
     TerminalSuccess,
     TerminalRefutation,
     TruncationPenalty,
@@ -34,6 +41,8 @@ pub struct RewardPolicy {
     #[serde(with = "crate::models::string_i128")]
     pub invalid_response: i128,
     #[serde(with = "crate::models::string_i128")]
+    pub root_kernel_verified: i128,
+    #[serde(with = "crate::models::string_i128")]
     pub terminal_success: i128,
     #[serde(with = "crate::models::string_i128")]
     pub terminal_refutation: i128,
@@ -51,6 +60,7 @@ impl RewardPolicy {
             kernel_pass: 5_000,            // +0.5
             kernel_fail: -1_000,           // -0.1
             invalid_response: -2_000,      // -0.2
+            root_kernel_verified: 20_000,  // +2.0 — real work, independent of fidelity
             terminal_success: 100_000,     // +10.0
             terminal_refutation: 100_000,  // +10.0
             truncation_penalty: -50_000,   // -5.0

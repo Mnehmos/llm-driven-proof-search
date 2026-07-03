@@ -22,8 +22,36 @@ CREATE TABLE IF NOT EXISTS problem_versions (
     root_obligation_id TEXT,
     state TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    CHECK(state NOT IN ('PROVING', 'ROOT_PROVED_COVERAGE_PENDING', 'COMPLETE', 'ROOT_PROVED_COVERAGE_UNCONVERGED') OR fidelity_status = 'approved'),
-    CHECK(fidelity_status IN ('pending', 'approved', 'revoked'))
+    -- 'attested' (an honest, explicitly-named dev bypass — see problem_create's
+    -- unsafe_dev_attestation) may enter proving, but only a real
+    -- problem_submit_fidelity_review decision can reach 'verified', and only
+    -- 'verified' may reach COMPLETE. This is the DB-level backstop for the
+    -- proof-soundness-vs-statement-fidelity invariant; see docs/fix_plan_playtest_02.md.
+    CHECK(state NOT IN ('PROVING', 'ROOT_PROVED_COVERAGE_PENDING', 'ROOT_PROVED_COVERAGE_UNCONVERGED') OR fidelity_status IN ('verified', 'attested')),
+    CHECK(state <> 'COMPLETE' OR fidelity_status = 'verified'),
+    CHECK(fidelity_status IN ('unreviewed', 'attested', 'verified', 'rejected', 'revoked'))
+);
+
+-- Fidelity belongs to the problem version, not to any one proof episode: an
+-- immutable record of who/what decided the formal statement represents the
+-- source problem, bound to the exact hashes reviewed so a later edit can never
+-- silently inherit an old approval.
+CREATE TABLE IF NOT EXISTS problem_fidelity_reviews (
+    id TEXT PRIMARY KEY,
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    source_problem_hash TEXT NOT NULL,
+    root_statement_hash TEXT NOT NULL,
+    normalized_rendering_hash TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    method TEXT NOT NULL,
+    approver_id TEXT NOT NULL,
+    rubric_version TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    notes TEXT,
+    signature TEXT,
+    created_at TEXT NOT NULL,
+    revoked_at TEXT,
+    CHECK(decision IN ('verified', 'rejected'))
 );
 
 CREATE TABLE IF NOT EXISTS canonical_verified_lemmas (
@@ -110,7 +138,11 @@ CREATE TABLE IF NOT EXISTS episodes (
     updated_at TEXT,
     completed_at TEXT,
     CHECK(state IN ('awaiting_external_action', 'executing_action', 'terminated', 'truncated')),
-    CHECK(outcome IN ('certified', 'refuted', 'gave_up', 'timeout', 'budget_exhausted', 'model_error', 'infrastructure_error') OR outcome IS NULL),
+    -- 'kernel_verified': the root obligation passed the Lean kernel but the
+    -- problem's statement fidelity is not (yet) 'verified' — proof soundness
+    -- without statement fidelity. Distinct from 'certified', which requires both.
+    -- Never treat 'kernel_verified' as a synonym for 'certified' downstream.
+    CHECK(outcome IN ('certified', 'kernel_verified', 'refuted', 'gave_up', 'timeout', 'budget_exhausted', 'model_error', 'infrastructure_error') OR outcome IS NULL),
     CHECK((state = 'terminated' AND outcome IS NOT NULL AND termination_reason IS NOT NULL) OR state <> 'terminated'),
     CHECK((state = 'truncated' AND outcome IS NOT NULL AND truncation_reason IS NOT NULL) OR state <> 'truncated'),
     CHECK(NOT (state = 'terminated' AND truncation_reason IS NOT NULL)),

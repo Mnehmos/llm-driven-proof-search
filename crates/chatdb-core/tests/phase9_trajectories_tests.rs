@@ -17,7 +17,7 @@ fn test_trajectory_recording_and_audit() {
         ) VALUES (
             ?1, 'test', 'hash', '{}',
             'test_stmt', 'stmt_hash', 'rendering',
-            'env_hash', 'approved', 'manual', 'COMPLETE', ?2
+            'env_hash', 'verified', 'manual', 'COMPLETE', ?2
         )",
         (pv_id.to_string(), Utc::now().to_rfc3339()),
     ).unwrap();

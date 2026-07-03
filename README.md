@@ -49,10 +49,10 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 | Tool | Description |
 |---|---|
 | `environment_describe` | Protocol version, capabilities, tool schemas, Lean gateway readiness |
-| `problem_create` | Register a new problem version (source text + root formal statement) |
-| `problem_approve_fidelity` | Mark a problem version fidelity-approved so episodes can be created against it |
-| `problem_list` | List known problem versions |
-| `episode_create` | Start an episode from an approved problem version |
+| `problem_create` | Register a new problem version (source text + root formal statement). `fidelity_status` starts `unreviewed` |
+| `problem_submit_fidelity_review` | Record an evidence-backed determination that a problem's formal statement represents its source text. The ONLY path to `fidelity_status='verified'` — required for `outcome='certified'` |
+| `problem_list` | List known problem versions (includes the hashes a reviewer must submit back unchanged) |
+| `episode_create` | Start an episode from a problem version with `fidelity_status` `verified` or `attested` |
 | `episode_reset` | Nondestructive reset — creates a new episode with `parent_episode_id` |
 | `episode_observe` | Get the current observation and pending action request |
 | `attempt_claim` | Claim a pending action request to obtain the `action_attempt_id` + `claim_token` required by `episode_step` |
@@ -63,9 +63,22 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 | `model_call_settle` | Settle or void a lease (provider failure, cancellation) |
 | `trajectory_export` | Paginated export of hash-chained trajectory events |
 | `episode_replay` | Re-execute typed Solve actions through Lean and verify trajectory integrity |
-| `proof_export` | Human-readable proof dossier: proof tree, assembled Lean source, full attempt history, integrity line (`format: "markdown"` or `"lean"`) |
+| `proof_export` | Human-readable proof dossier: proof tree, assembled Lean source, full attempt history, proof/fidelity/promotion status, integrity line (`format: "markdown"` or `"lean"`) |
 
-A minimal prover loop is: `problem_create(approve=true)` → `episode_create` → `episode_observe` → `attempt_claim` → `episode_step` → repeat `episode_observe`/`attempt_claim`/`episode_step` until `outcome` is set.
+## Proof soundness vs. statement fidelity
+
+These are independent claims, and the environment never conflates them:
+
+- **Proof soundness** — the Lean kernel verified this exact formal statement. Reaching this alone yields `outcome: "kernel_verified"`.
+- **Statement fidelity** — that formal statement actually represents the source problem. Only `problem_submit_fidelity_review(decision="verified")` can establish this, based on evidence the server independently hash-checks against the problem's *current* source/statement/rendering (a stale or mismatched submission is rejected, not silently accepted).
+
+`outcome: "certified"` requires **both** — a kernel-verified root can never present as certifying the source claim on proof soundness alone. This closes a real exploit: a trivially-true weakening of a source problem (e.g. proving `∀ n, Even n → True` for the claim "every even natural is divisible by two") kernel-verifies but must never be reported, rewarded, or exported as if it certified the source claim. See `docs/fix_plan_playtest_02.md`.
+
+Two ways to unlock proving:
+- **Real review**: `problem_submit_fidelity_review(decision="verified", ...)` → `fidelity_status="verified"` → root proof reaches `certified` directly (or promotes retroactively if the root was already `kernel_verified`).
+- **Dev bypass**: `problem_create(unsafe_dev_attestation=true)` → `fidelity_status="attested"` → proving is allowed, but the episode can only ever reach `kernel_verified`, never `certified` — and problems/episodes under `attested` are excluded from default dataset exports (`training_eligible=false`).
+
+A minimal prover loop is: `problem_create` → `problem_submit_fidelity_review` (or `unsafe_dev_attestation=true` for dev use) → `episode_create` → `episode_observe` → `attempt_claim` → `episode_step` → repeat `episode_observe`/`attempt_claim`/`episode_step` until `outcome` is set.
 
 ## Prerequisites
 
