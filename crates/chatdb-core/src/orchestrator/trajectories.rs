@@ -151,16 +151,126 @@ pub fn audit_trajectory(conn: &Connection, episode_id: Uuid) -> Result<bool, Str
     Ok(true)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplayStatus {
+    /// No trajectory events exist for this episode — nothing was replayed.
+    Empty,
+    /// Every `action_committed` Solve event re-verified to the same Lean outcome
+    /// that was originally recorded. Carries the count of solve events checked.
+    Matched(usize),
+}
+
+impl std::fmt::Display for ReplayStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReplayStatus::Empty => write!(f, "empty"),
+            ReplayStatus::Matched(n) => write!(f, "matched({n})"),
+        }
+    }
+}
+
+/// Re-executes every recorded `solve` action through the Lean gateway and checks the
+/// outcome matches what was committed at the time. Non-solve events (decompose,
+/// give_up, episode lifecycle markers) are structural only and are not re-verified.
 pub fn replay_trajectory(
-    _conn: &Connection, 
-    _episode_id: Uuid,
-    _lean_gateway: &dyn crate::lean::LeanGateway
-) -> Result<(), String> {
-    // In a full implementation, this reads trajectory_events in order,
-    // extracts the payload_json, parses TypedAction,
-    // and re-executes Lean verification for each step to ensure deterministic matches.
-    // This satisfies the Phase 9 requirement.
-    Ok(())
+    conn: &Connection,
+    episode_id: Uuid,
+    lean_gateway: &dyn crate::lean::LeanGateway,
+) -> Result<ReplayStatus, String> {
+    let mut stmt = conn.prepare(
+        "SELECT event_type, payload_json, lean_environment_hash FROM trajectory_events
+         WHERE episode_id = ?1 ORDER BY event_sequence_number ASC",
+    ).map_err(|e| e.to_string())?;
+
+    let rows: Vec<(String, String, String)> = stmt
+        .query_map([episode_id.to_string()], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        }).map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    if rows.is_empty() {
+        return Ok(ReplayStatus::Empty);
+    }
+
+    let mut solve_events_checked = 0usize;
+
+    for (event_type, payload_json, lean_environment_hash) in rows {
+        if event_type != "action_committed" {
+            continue;
+        }
+        let payload: serde_json::Value = serde_json::from_str(&payload_json)
+            .map_err(|e| format!("corrupt trajectory payload: {}", e))?;
+
+        let Some(action_type) = payload.get("action").and_then(|a| a.get("type")).and_then(|t| t.as_str()) else {
+            continue;
+        };
+        if action_type != "solve" {
+            continue;
+        }
+
+        // The trajectory is append-only truth: it also records attempts that never
+        // reached the Lean gateway (stale revision, forged claim, gateway/infra
+        // error). Those carry no Lean outcome (`outcome: null` / disposition !=
+        // "accepted") — there is nothing deterministic to re-verify, so skip them.
+        let disposition = payload.get("disposition").and_then(|s| s.as_str()).unwrap_or("");
+        let Some(recorded_outcome) = payload.get("outcome").and_then(|s| s.as_str()) else {
+            continue;
+        };
+        if disposition != "accepted" {
+            continue;
+        }
+
+        let proof_term = payload.get("action").and_then(|a| a.get("proof_term")).and_then(|s| s.as_str())
+            .ok_or_else(|| "trajectory event missing action.proof_term".to_string())?;
+        let lean_statement = payload.get("lean_statement").and_then(|s| s.as_str())
+            .ok_or_else(|| "trajectory event missing lean_statement".to_string())?;
+        let statement_hash = payload.get("statement_hash").and_then(|s| s.as_str()).unwrap_or("").to_string();
+        let obligation_id_str = payload.get("obligation_id").and_then(|s| s.as_str())
+            .ok_or_else(|| "trajectory event missing obligation_id".to_string())?;
+        let problem_version_id_str = payload.get("problem_version_id").and_then(|s| s.as_str())
+            .ok_or_else(|| "trajectory event missing problem_version_id".to_string())?;
+        let dep_ids: Vec<Uuid> = payload.get("dependency_obligation_ids")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).filter_map(|s| Uuid::parse_str(s).ok()).collect())
+            .unwrap_or_default();
+
+        let obl = crate::models::Obligation {
+            id: Uuid::parse_str(obligation_id_str).map_err(|e| e.to_string())?,
+            problem_version_id: Uuid::parse_str(problem_version_id_str).map_err(|e| e.to_string())?,
+            kind: crate::models::ObligationKind::Proof,
+            theorem_name: "replay".to_string(),
+            lean_statement: lean_statement.to_string(),
+            statement_hash,
+            natural_description: "".to_string(),
+            status: crate::models::ObligationStatus::InProgress,
+            depth_from_root: 0,
+            created_by: crate::models::ObligationCreator::InitialSketch,
+            created_by_epoch_id: None,
+            superseded_by_id: None,
+            proved_lemma_id: None,
+            refutation_lemma_id: None,
+            failure_lesson: None,
+            attempt_count: 0,
+            created_at: Utc::now(),
+            closed_at: None,
+        };
+
+        let result = lean_gateway
+            .verify_exact(&obl, proof_term, &dep_ids, &lean_environment_hash)
+            .map_err(|e| format!("replay verification failed: {}", e))?;
+
+        let replayed_outcome = result.outcome.to_string();
+        if replayed_outcome != recorded_outcome {
+            return Err(format!(
+                "replay mismatch on obligation {}: recorded={}, replayed={}",
+                obligation_id_str, recorded_outcome, replayed_outcome
+            ));
+        }
+        solve_events_checked += 1;
+    }
+
+    Ok(ReplayStatus::Matched(solve_events_checked))
 }
 
 fn scrub_value(val: &mut serde_json::Value) {

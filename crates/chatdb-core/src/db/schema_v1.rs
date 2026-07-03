@@ -323,6 +323,7 @@ CREATE TABLE IF NOT EXISTS action_requests (
     action_schema_id TEXT,
     action_schema_version TEXT,
     environment_version TEXT,
+    target_obligation_id TEXT REFERENCES episode_obligations(id),
     observation_json TEXT,
     observation_hash TEXT,
     state_hash_before TEXT,

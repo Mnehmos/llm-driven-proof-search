@@ -1,7 +1,6 @@
-use rusqlite::{Connection, Result, Transaction, OptionalExtension};
+use rusqlite::{Result, Transaction, OptionalExtension};
 use uuid::Uuid;
 use chrono::Utc;
-use crate::models::episode::EpisodeState;
 
 /// Create a new episode for the given problem_version_id
 pub fn episode_create(
@@ -122,27 +121,49 @@ pub fn advance(tx: &Transaction, episode_id: Uuid) -> Result<Option<Uuid>> {
         }
     }
 
-    // 3. Find the next open obligation to work on
+    // 3. Find the next ready obligation to work on: open/in_progress AND every direct
+    // dependency (episode_obligation_edges) is already proved. This keeps advance()
+    // from ever handing out a target whose dependencies aren't proved yet, which
+    // would make CompactContextBuilder::build_episode fail with "Invariant violation".
+    // Leaves (no children) are always ready. Deepest-first so decomposition children
+    // are worked before the obligation that spawned them.
     let next_obligation_id: Option<String> = tx.query_row(
-        "SELECT id FROM episode_obligations 
-         WHERE episode_id = ?1 AND status IN ('open', 'in_progress')
-         ORDER BY created_at ASC LIMIT 1",
+        "SELECT eo.id FROM episode_obligations eo
+         WHERE eo.episode_id = ?1 AND eo.status IN ('open', 'in_progress')
+         AND NOT EXISTS (
+             SELECT 1 FROM episode_obligation_edges e
+             JOIN episode_obligations dep ON dep.id = e.dependency_obligation_id
+             WHERE e.parent_obligation_id = eo.id AND dep.status <> 'proved'
+         )
+         ORDER BY eo.depth_from_root DESC, eo.created_at ASC LIMIT 1",
         [episode_id.to_string()],
         |row| row.get(0),
     ).optional()?;
 
-    if let Some(_target_obl_id) = next_obligation_id {
+    if let Some(target_obl_id) = next_obligation_id {
         let req_id = Uuid::new_v4();
 
+        // The revision a client must present as `expected_revision` when stepping
+        // against the request we're about to insert is the episode's CURRENT
+        // revision — not a hardcoded value. Getting this wrong either collides with
+        // idx_active_request_per_revision (if it happens to match another live
+        // request) or advertises a revision the episode has already moved past
+        // (guaranteed stale_revision).
+        let current_revision: i64 = tx.query_row(
+            "SELECT current_revision FROM episodes WHERE id = ?1",
+            [episode_id.to_string()],
+            |row| row.get(0),
+        )?;
+
         let (pv_id, env_hash, root_stmt): (String, String, String) = tx.query_row(
-            "SELECT pv.id, pv.environment_hash, pv.root_formal_statement 
+            "SELECT pv.id, pv.environment_hash, pv.root_formal_statement
              FROM episodes e
              JOIN problem_versions pv ON e.problem_version_id = pv.id
              WHERE e.id = ?1",
             [episode_id.to_string()],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-        
+
         let seq: i64 = tx.query_row(
             "SELECT COALESCE(MAX(request_sequence_number), 0) + 1 FROM action_requests WHERE episode_id = ?1",
             [episode_id.to_string()],
@@ -150,25 +171,27 @@ pub fn advance(tx: &Transaction, episode_id: Uuid) -> Result<Option<Uuid>> {
         )?;
 
         let builder = crate::orchestrator::context::CompactContextBuilder::new(4000);
-        let target_uuid = Uuid::parse_str(&_target_obl_id).unwrap();
+        let target_uuid = Uuid::parse_str(&target_obl_id).unwrap();
         let context = builder.build_episode(tx, episode_id, target_uuid, &env_hash, &root_stmt)
             .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))?;
-        
+
         let observation_json = serde_json::to_string(&context).unwrap();
         let observation_hash = crate::hashing::canonical_hash(&context)
             .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))?;
 
         tx.execute(
             "INSERT INTO action_requests (
-                id, episode_id, problem_version_id, episode_revision, request_sequence_number, role, 
-                state_hash_before, status, expiration_at, created_at, observation_json, observation_hash
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'prover', 'dummy_hash', 'pending', ?6, ?7, ?8, ?9)",
+                id, episode_id, problem_version_id, episode_revision, request_sequence_number, role,
+                target_obligation_id, state_hash_before, status, expiration_at, created_at, observation_json, observation_hash
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'prover', ?6, ?7, 'pending', ?8, ?9, ?10, ?11)",
             (
                 req_id.to_string(),
                 episode_id.to_string(),
                 pv_id,
-                1_i64, // revision
+                current_revision,
                 seq,
+                target_obl_id,
+                observation_hash.clone(), // state_hash_before: the hash of the observation the client is about to see
                 (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(), // expires_at (15 mins)
                 now, // created_at
                 observation_json,

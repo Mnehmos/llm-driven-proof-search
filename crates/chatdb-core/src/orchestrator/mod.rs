@@ -10,7 +10,7 @@ pub mod dataset;
 use rusqlite::Connection;
 use uuid::Uuid;
 use crate::models::{
-    ProblemVersion, ProblemState, Obligation, ObligationStatus, ObligationKind, LeanVerificationOutcome,
+    ProblemState, Obligation, ObligationStatus, ObligationKind, LeanVerificationOutcome,
     VerifiedLemma, Polarity, AttemptDiagnostic, AttemptOutcome
 };
 use crate::orchestrator::scheduler::next_ready;

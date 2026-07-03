@@ -45,18 +45,19 @@ impl LeanGateway for RealLeanGateway {
         let problem_namespace = format!("ChatDB.P_{}", namespace_first_16);
         let theorem_name = format!("O_{}", obligation_first_16);
 
-        // 2. Generate dependency imports
+        // 2. Generate imports. ALL `import` lines must precede any other command
+        // (Lean hard-errors otherwise), so dependency imports go before set_option.
         let mut imports = String::new();
-        imports.push_str("import Mathlib.Tactic.Omega\n");
+        // Mathlib.Tactic.Omega no longer exists (omega moved into core Lean and is
+        // available once any Mathlib module is imported) — do not import it.
         imports.push_str("import Mathlib.Tactic.Ring\n");
         imports.push_str("import Mathlib.Tactic.NormNum\n");
-        imports.push_str("set_option linter.unusedTactic false\n");
-        imports.push_str("set_option linter.unreachableTactic false\n");
-
         for dep_id in approved_dependency_ids {
             let dep_first_16 = &dep_id.to_string().replace("-", "")[..16];
             imports.push_str(&format!("import LeanChecker.Verified.O_{}\n", dep_first_16));
         }
+        imports.push_str("set_option linter.unusedTactic false\n");
+        imports.push_str("set_option linter.unreachableTactic false\n");
 
         // 3. Construct Lean source code
         let file_content = format!(
@@ -76,18 +77,23 @@ impl LeanGateway for RealLeanGateway {
 
         // 5. Run lake env lean --json File.lean
         let lake_path = self.elan_bin_path.join("lake.exe");
-        
+
         let mut cmd = Command::new(&lake_path);
         cmd.arg("env")
             .arg("lean")
             .arg("--json")
             .arg(&file_path)
             .current_dir(&self.lean_project_path)
-            .env("ELAN_HOME", &self.elan_bin_path)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        // ELAN_HOME must be the elan root (where toolchains/ lives), NOT the bin dir.
+        // Honor an explicit override; otherwise let the elan proxy use the process
+        // env / its ~/.elan default.
+        if let Ok(elan_home) = std::env::var("CHATDB_ELAN_HOME") {
+            cmd.env("ELAN_HOME", elan_home);
+        }
 
-        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+        let child = cmd.spawn().map_err(|e| e.to_string())?;
         
         // Timeout management
         let (tx, rx) = std::sync::mpsc::channel();
@@ -141,35 +147,49 @@ impl LeanGateway for RealLeanGateway {
 
         let stdout_str = String::from_utf8_lossy(&output.stdout);
 
-        // Parse diagnostics
+        // Parse diagnostics. Lean's --json puts the human-readable text in `data`
+        // (older builds used `message`) — accept either.
         let mut parse_error = false;
         let mut elaboration_error = false;
         let mut unsolved_goals = false;
+        let mut has_sorry = false;
         let mut error_messages = Vec::new();
 
         for line in stdout_str.lines() {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-                if let Some(severity) = val.get("severity").and_then(|s| s.as_str()) {
-                    if severity == "error" {
-                        if let Some(msg) = val.get("message").and_then(|m| m.as_str()) {
-                            error_messages.push(msg.to_string());
-                            if msg.contains("expected") || msg.contains("unknown identifier") {
-                                parse_error = true;
-                            } else if msg.contains("unsolved goals") {
-                                unsolved_goals = true;
-                            } else if msg.contains("type mismatch") {
-                                elaboration_error = true;
-                            }
-                        }
+                let msg = val.get("data").or_else(|| val.get("message"))
+                    .and_then(|m| m.as_str()).unwrap_or("").to_string();
+                let kind = val.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+                let severity = val.get("severity").and_then(|s| s.as_str()).unwrap_or("");
+
+                // SOUNDNESS: `sorry`/`admit` compile with exit code 0 and only a
+                // `hasSorry` WARNING. A proof containing sorryAx proves nothing —
+                // it must be a hard rejection, never a KernelPass.
+                if kind == "hasSorry" || msg.contains("declaration uses `sorry`") || msg.contains("declaration uses 'sorry'") {
+                    has_sorry = true;
+                    error_messages.push(msg);
+                    continue;
+                }
+
+                if severity == "error" && !msg.is_empty() {
+                    if msg.contains("expected") || msg.contains("unknown identifier") {
+                        parse_error = true;
+                    } else if msg.contains("unsolved goals") {
+                        unsolved_goals = true;
+                    } else if msg.contains("type mismatch") {
+                        elaboration_error = true;
                     }
+                    error_messages.push(msg);
                 }
             }
         }
 
-        let success = output.status.success() && error_messages.is_empty();
+        let success = output.status.success() && error_messages.is_empty() && !has_sorry;
 
         let diagnostic = if !success {
-            let category = if parse_error {
+            let category = if has_sorry {
+                LeanDiagnosticCategory::ProhibitedConstruct
+            } else if parse_error {
                 LeanDiagnosticCategory::ParseError
             } else if unsolved_goals {
                 LeanDiagnosticCategory::UnsolvedGoals
@@ -211,9 +231,11 @@ impl LeanGateway for RealLeanGateway {
             let mut build_cmd = Command::new(&lake_path);
             build_cmd.arg("build")
                 .arg(format!("LeanChecker.Verified.{}", theorem_name))
-                .current_dir(&self.lean_project_path)
-                .env("ELAN_HOME", &self.elan_bin_path);
-            
+                .current_dir(&self.lean_project_path);
+            if let Ok(elan_home) = std::env::var("CHATDB_ELAN_HOME") {
+                build_cmd.env("ELAN_HOME", elan_home);
+            }
+
             let _ = build_cmd.output();
         }
 
