@@ -28,10 +28,16 @@ use crate::models::action::{LeanModuleItem, ModuleTheorem};
 const PROHIBITED_LEADING_TOKENS: &[&str] = &[
     // structural / scope — the server owns these
     "import", "namespace", "end", "section", "open", "set_option", "attribute",
-    "variable", "universe", "mutual", "deriving",
+    "variable", "universe", "mutual", "deriving", "export",
     // declaration keywords — every declaration is a separate structured item
     "def", "theorem", "lemma", "example", "abbrev", "instance", "structure",
     "inductive", "class", "axiom", "opaque", "unsafe", "partial", "noncomputable",
+    // declaration MODIFIERS: Lean allows these immediately before a declaration
+    // keyword (`private theorem cheat : False := ...`), so a scanner that only
+    // recognizes the declaration keyword itself is bypassed by prefixing one of
+    // these. There is no legitimate non-declaration use of these words at the
+    // start of a top-level line, so banning them outright is safe.
+    "private", "protected", "local", "scoped",
     // metaprogramming / evaluation — never allowed from a client
     "macro", "macro_rules", "syntax", "elab", "notation", "initialize", "run_cmd",
     "#eval", "#check", "#print", "#reduce", "#synth",
@@ -187,15 +193,32 @@ fn check_content(label: &str, content: &str) -> Result<(), ModulePolicyError> {
     // rejected, not compiled.
     for line in content.lines() {
         let trimmed = line.trim_start();
+        // Attribute syntax (`@[simp] theorem cheat : False := ...`) precedes a
+        // declaration exactly like a modifier does, and a first-token check
+        // alone would see `@[simp]`, not `theorem` — so it must be its own
+        // explicit ban, not just another entry in PROHIBITED_LEADING_TOKENS
+        // (attributes aren't a single fixed word). `@` alone (explicit-argument
+        // application, e.g. `@id Nat n`) is legitimate proof-term syntax and is
+        // deliberately NOT banned; only `@[` (an attribute LIST) is.
+        if trimmed.starts_with("@[") {
+            return Err(ModulePolicyError::ProhibitedConstruct {
+                item: label.to_string(),
+                token: "@[".to_string(),
+                detail: "a line may not begin with an attribute (`@[...]`) — attributes precede declarations, and every declaration must be its own structured item".to_string(),
+            });
+        }
         let first_word: String = trimmed.chars().take_while(|c| !c.is_whitespace()).collect();
         // Compare against the exact keyword (handles `#eval` etc. which aren't
-        // split on non-word chars the same way).
+        // split on non-word chars the same way). This also catches STACKED
+        // modifiers (`private noncomputable def ...`, `protected theorem ...`):
+        // whichever modifier or keyword comes first is itself already in this
+        // list, so the line is rejected before whatever follows it matters.
         for token in PROHIBITED_LEADING_TOKENS {
             if &first_word == token || trimmed == *token {
                 return Err(ModulePolicyError::ProhibitedConstruct {
                     item: label.to_string(),
                     token: token.to_string(),
-                    detail: format!("a line may not begin with the top-level command `{}` — submit declarations as separate structured items and let the server own scope/imports", token),
+                    detail: format!("a line may not begin with the top-level command or modifier `{}` — submit declarations as separate structured items and let the server own scope/imports", token),
                 });
             }
         }
@@ -432,6 +455,66 @@ mod tests {
             ModulePolicyError::ProhibitedConstruct { token, .. } => assert_eq!(token, "axiom"),
             other => panic!("expected ProhibitedConstruct(axiom), got {:?}", other),
         }
+    }
+
+    /// Review feedback on #16: an attribute list (`@[simp]`) immediately before a
+    /// declaration bypasses a scanner that only checks whether the first token IS
+    /// the declaration keyword — the first token here is `@[simp]`, not `theorem`.
+    #[test]
+    fn rejects_attribute_prefixed_declaration_escape() {
+        let items = vec![LeanModuleItem::Def {
+            name: "evil".to_string(),
+            type_signature: "Nat".to_string(),
+            body: "0\n\n@[simp] theorem cheat : False := by trivial".to_string(),
+        }];
+        let r = root("True", "trivial");
+        let err = assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).unwrap_err();
+        match err {
+            ModulePolicyError::ProhibitedConstruct { token, .. } => assert_eq!(token, "@["),
+            other => panic!("expected ProhibitedConstruct(@[), got {:?}", other),
+        }
+    }
+
+    /// Review feedback on #16: `private`/`protected`/`local`/`scoped` modifiers
+    /// immediately before a declaration keyword are the same escape as an
+    /// attribute — the first token is the modifier, not the declaration keyword.
+    #[test]
+    fn rejects_modifier_prefixed_declaration_escapes() {
+        let cases = ["private", "protected", "local", "scoped"];
+        for modifier in cases {
+            let items = vec![LeanModuleItem::Def {
+                name: "evil".to_string(),
+                type_signature: "Nat".to_string(),
+                body: format!("0\n\n{} theorem cheat : False := by trivial", modifier),
+            }];
+            let r = root("True", "trivial");
+            let err = assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).unwrap_err();
+            match err {
+                ModulePolicyError::ProhibitedConstruct { token, .. } => assert_eq!(token, modifier, "modifier {} not caught", modifier),
+                other => panic!("expected ProhibitedConstruct({}), got {:?}", modifier, other),
+            }
+        }
+    }
+
+    /// `local notation` / `scoped notation` are top-level commands (not
+    /// expressions) — a client string must not be able to declare notation, and
+    /// the leading-modifier ban must catch this form too.
+    #[test]
+    fn rejects_local_and_scoped_notation() {
+        for prefix in ["local notation", "scoped notation"] {
+            let r = root("True", &format!("{} \"¤\" => cheat\ntrivial", prefix));
+            let err = assemble_module("ChatDB.P_x", &root_hash("True"), &[], &r, &manifest()).unwrap_err();
+            assert!(matches!(err, ModulePolicyError::ProhibitedConstruct { .. }), "{:?}", err);
+        }
+    }
+
+    /// Explicit-argument application (`@id Nat n`) is legitimate proof-term
+    /// syntax and must NOT be confused with an attribute list (`@[...]`) — only
+    /// the literal `@[` prefix is banned, not a bare `@`.
+    #[test]
+    fn explicit_application_at_sign_is_not_confused_with_attribute() {
+        let r = root("True", "have := @id Nat 0\ntrivial");
+        assert!(assemble_module("ChatDB.P_x", &root_hash("True"), &[], &r, &manifest()).is_ok());
     }
 
     #[test]

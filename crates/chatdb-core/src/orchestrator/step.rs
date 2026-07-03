@@ -4,7 +4,8 @@ use uuid::Uuid;
 
 use crate::models::action::TypedAction;
 use crate::lean::LeanGateway;
-use crate::models::{LeanVerificationOutcome, Obligation, Polarity};
+use crate::lean::module::AssembledModule;
+use crate::models::{LeanVerificationOutcome, LeanVerificationResult, LeanModuleVerificationResult, Obligation, Polarity};
 
 #[derive(Debug)]
 pub enum StepError {
@@ -22,16 +23,88 @@ impl From<rusqlite::Error> for StepError {
     }
 }
 
-/// Executes a two-phase commit `step()` with compare-and-swap
-pub fn attempt_commit(
+/// Inputs for a Lean gateway call that must run OUTSIDE the DB lock (review
+/// feedback on #16/#17: "do not hold the DB mutex while running Lean"). Built by
+/// `attempt_prepare` from data read within its own short transaction; the caller
+/// invokes the actual gateway method with the lock released, then passes the
+/// response to `attempt_finalize`.
+pub enum GatewayRequest {
+    Solve {
+        obl: Obligation,
+        proof_term: String,
+        dep_ids: Vec<Uuid>,
+        env_hash: String,
+        import_manifest: Vec<String>,
+    },
+    SubmitModule {
+        assembled: AssembledModule,
+        env_hash: String,
+    },
+}
+
+/// The gateway's response to a [`GatewayRequest`], carried back into
+/// `attempt_finalize`. `Err(String)` on either variant means the invocation
+/// itself failed (spawn error, timeout) — an infrastructure failure, not a
+/// normal kernel_fail outcome — exactly as `verify_exact`/`verify_module` define it.
+pub enum GatewayResponse {
+    Solve(std::result::Result<LeanVerificationResult, String>),
+    SubmitModule(std::result::Result<LeanModuleVerificationResult, String>),
+}
+
+/// Data `attempt_finalize` needs to write results for the obligation this
+/// attempt targeted, carried across the gap between `attempt_prepare` and
+/// `attempt_finalize` (the gateway call happens in between, outside any tx).
+pub enum FinalizeContext {
+    Solve {
+        obl_id_str: String,
+        pv_env_hash: String,
+    },
+    SubmitModule {
+        obl_id_str: String,
+        stmt_hash: String,
+        pv_env_hash: String,
+        namespace: String,
+        module_items_json: String,
+        pv_id_str: String,
+        pv_manifest_hash: String,
+    },
+}
+
+/// What `attempt_prepare` learned about this attempt. `Done` means the action
+/// needed no Lean invocation and every write (including the episode/attempt
+/// bookkeeping tail) is already committed inside the same transaction the caller
+/// passed in — nothing further to finalize. `NeedsGateway` means only
+/// housekeeping (mark-executing, attempt_count) was written; the caller must
+/// commit that transaction, run the gateway call WITHOUT holding the DB lock,
+/// then call `attempt_finalize` in a fresh transaction with `request`'s result
+/// and `ctx`.
+pub enum PrepOutcome {
+    Done { outcome: LeanVerificationOutcome, is_valid: bool },
+    NeedsGateway { request: GatewayRequest, ctx: FinalizeContext },
+}
+
+/// Validates the attempt/claim/CAS, marks the attempt 'executing', and either:
+/// - fully executes and commits a non-Lean action (Decompose / GiveUp /
+///   ExternalResponseRejected) or a policy-rejected SubmitModule, returning
+///   `Ok(PrepOutcome::Done { .. })` — the caller's transaction already has
+///   everything (including the episode/attempt bookkeeping tail) and needs no
+///   further step.rs call; or
+/// - for Solve / a policy-passing SubmitModule, fetches everything needed to
+///   call the Lean gateway and returns `Ok(PrepOutcome::NeedsGateway { .. })`
+///   WITHOUT calling the gateway or writing the bookkeeping tail — the caller
+///   must commit this transaction, run the gateway call with the DB lock
+///   released, then call `attempt_finalize` in a new transaction.
+///
+/// Does not call the Lean gateway under any circumstances — that is the whole
+/// point of the split.
+pub fn attempt_prepare(
     tx: &Transaction,
     attempt_id: Uuid,
     expected_revision: i64,
     claim_token: &str,
     action: &TypedAction,
-    lean_gateway: &dyn LeanGateway,
     cost_micros: i128,
-) -> Result<LeanVerificationOutcome, StepError> {
+) -> Result<PrepOutcome, StepError> {
     let now = Utc::now().to_rfc3339();
 
     // 1. Verify attempt is valid
@@ -77,10 +150,6 @@ pub fn attempt_commit(
         (&now, attempt_id.to_string()),
     )?;
 
-    let is_valid: bool;
-    let mut outcome_result = LeanVerificationOutcome::KernelFail; // Dummy default
-
-    // 3. Execute the action
     match action {
         TypedAction::Solve { proof_term } => {
             let obl_id_str = target_obligation_id
@@ -113,6 +182,11 @@ pub fn attempt_commit(
                 .map(|s| Uuid::parse_str(&s).unwrap())
                 .collect();
 
+            tx.execute(
+                "UPDATE episode_obligations SET attempt_count = attempt_count + 1 WHERE id = ?1",
+                [&obl_id_str],
+            )?;
+
             let obl = Obligation {
                 id: Uuid::parse_str(&obl_id_str).unwrap(),
                 problem_version_id: Uuid::parse_str(&pv_id_str).unwrap(),
@@ -134,56 +208,13 @@ pub fn attempt_commit(
                 closed_at: None,
             };
 
-            match lean_gateway.verify_exact(&obl, proof_term, &dep_ids, &pv_env_hash, &import_manifest) {
-                Ok(result) => {
-                    outcome_result = result.outcome.clone();
-                    is_valid = matches!(result.outcome, LeanVerificationOutcome::KernelPass);
-
-                    tx.execute(
-                        "UPDATE episode_obligations SET attempt_count = attempt_count + 1 WHERE id = ?1",
-                        [&obl_id_str],
-                    )?;
-
-                    if is_valid {
-                        let lemma_id = Uuid::new_v4();
-                        tx.execute(
-                            "INSERT INTO episode_verified_lemmas (
-                                id, episode_id, obligation_id, polarity, theorem_name, statement_hash,
-                                proof_source_artifact_hash, compiled_artifact_hash, proof_term_hash,
-                                environment_hash, actual_dependency_ids_json, kernel_result_hash, verified_at
-                            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                            (
-                                lemma_id.to_string(),
-                                &episode_id_str,
-                                &obl_id_str,
-                                Polarity::Positive.to_string(),
-                                &result.theorem_name,
-                                &result.expected_statement_hash,
-                                &result.proof_source_hash,
-                                result.compiled_artifact_hash.as_deref().unwrap_or(""),
-                                result.proof_term_hash.as_deref().unwrap_or(""),
-                                &pv_env_hash,
-                                "[]",
-                                "",
-                                Utc::now().to_rfc3339(),
-                            ),
-                        )?;
-                        tx.execute(
-                            "UPDATE episode_obligations SET status = 'proved', proved_lemma_id = ?1, closed_at = ?2 WHERE id = ?3",
-                            (lemma_id.to_string(), Utc::now().to_rfc3339(), &obl_id_str),
-                        )?;
-                    } else {
-                        let lesson = result.diagnostic.as_ref().map(|d| d.primary_message.clone());
-                        tx.execute(
-                            "UPDATE episode_obligations SET status = 'open', failure_lesson = COALESCE(?1, failure_lesson) WHERE id = ?2",
-                            (lesson, &obl_id_str),
-                        )?;
-                    }
-                }
-                Err(e) => {
-                    return Err(StepError::LeanGatewayError(e));
-                }
-            }
+            Ok(PrepOutcome::NeedsGateway {
+                request: GatewayRequest::Solve {
+                    obl, proof_term: proof_term.clone(), dep_ids,
+                    env_hash: pv_env_hash.clone(), import_manifest,
+                },
+                ctx: FinalizeContext::Solve { obl_id_str, pv_env_hash },
+            })
         }
         TypedAction::SubmitModule { module_items, root_theorem } => {
             // A module proves its TARGET obligation as a whole. The root theorem's
@@ -222,126 +253,29 @@ pub fn attempt_commit(
                 Err(policy_err) => {
                     // Deterministic policy rejection (bad name, prohibited construct,
                     // root hash mismatch, ...). A normal rejected attempt — never a
-                    // hard StepError — so the obligation stays open and re-attemptable
-                    // and the reason is preserved as a failure lesson.
-                    outcome_result = LeanVerificationOutcome::KernelFail;
-                    is_valid = false;
+                    // hard StepError, and no Lean invocation needed — so this is fully
+                    // resolved right here, in this transaction.
                     let lesson = format!("module rejected by policy: {}", policy_err);
                     tx.execute(
                         "UPDATE episode_obligations SET status = 'open', failure_lesson = ?1 WHERE id = ?2",
                         (lesson, &obl_id_str),
                     )?;
+                    finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, cost_micros, false)?;
+                    Ok(PrepOutcome::Done { outcome: LeanVerificationOutcome::KernelFail, is_valid: false })
                 }
                 Ok(assembled) => {
-                    match lean_gateway.verify_module(&assembled, &pv_env_hash) {
-                        Ok(result) => {
-                            outcome_result = result.outcome.clone();
-                            is_valid = matches!(result.outcome, LeanVerificationOutcome::KernelPass);
-
-                            if is_valid {
-                                let lemma_id = Uuid::new_v4();
-                                let root_theorem_name = format!("{}.{}", assembled.namespace, result.root_lean_name);
-                                // Reuse episode_verified_lemmas to close the root
-                                // obligation (so the existing kernel_verified/certified
-                                // promotion fires). The dedicated module artifact tables
-                                // land in issue #4; the module hashes are threaded through
-                                // here so nothing is lost in the meantime.
-                                tx.execute(
-                                    "INSERT INTO episode_verified_lemmas (
-                                        id, episode_id, obligation_id, polarity, theorem_name, statement_hash,
-                                        proof_source_artifact_hash, compiled_artifact_hash, proof_term_hash,
-                                        environment_hash, actual_dependency_ids_json, kernel_result_hash, verified_at
-                                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                                    (
-                                        lemma_id.to_string(),
-                                        &episode_id_str,
-                                        &obl_id_str,
-                                        Polarity::Positive.to_string(),
-                                        &root_theorem_name,
-                                        &stmt_hash,
-                                        &result.module_source_hash,
-                                        &result.declaration_manifest_hash,
-                                        "",
-                                        &pv_env_hash,
-                                        "[]",
-                                        &result.kernel_result_hash,
-                                        Utc::now().to_rfc3339(),
-                                    ),
-                                )?;
-                                tx.execute(
-                                    "UPDATE episode_obligations SET status = 'proved', proved_lemma_id = ?1, closed_at = ?2 WHERE id = ?3",
-                                    (lemma_id.to_string(), Utc::now().to_rfc3339(), &obl_id_str),
-                                )?;
-
-                                // Persist the verified module as a structured,
-                                // replayable artifact (issue #4). module_items_json
-                                // holds the exact items + root theorem, so the precise
-                                // Lean source re-assembles deterministically on export
-                                // and replay. This insert shares the episode_step
-                                // transaction, so it is atomic with closing the root
-                                // obligation — either the whole module records or none
-                                // of it does.
-                                let module_row_id = Uuid::new_v4();
-                                let now_ts = Utc::now().to_rfc3339();
-                                let module_items_json = serde_json::json!({
-                                    "module_items": module_items,
-                                    "root_theorem": root_theorem,
-                                }).to_string();
-                                tx.execute(
-                                    "INSERT INTO episode_verified_modules (
-                                        id, episode_id, problem_version_id, root_obligation_id,
-                                        root_statement_hash, import_manifest_hash, environment_hash,
-                                        module_source_hash, module_items_json, declaration_manifest_hash,
-                                        kernel_result_hash, verified_at
-                                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                                    (
-                                        module_row_id.to_string(),
-                                        &episode_id_str,
-                                        &pv_id_str,
-                                        &obl_id_str,
-                                        &stmt_hash,
-                                        &pv_manifest_hash,
-                                        &pv_env_hash,
-                                        &result.module_source_hash,
-                                        &module_items_json,
-                                        &result.declaration_manifest_hash,
-                                        &result.kernel_result_hash,
-                                        &now_ts,
-                                    ),
-                                )?;
-                                for item in &assembled.item_manifest {
-                                    let item_id = Uuid::new_v4();
-                                    let depends_on_json = serde_json::to_string(&item.depends_on).unwrap_or_else(|_| "[]".to_string());
-                                    tx.execute(
-                                        "INSERT INTO episode_verified_module_items (
-                                            id, module_id, item_order, item_kind, lean_name,
-                                            statement_or_type_hash, body_hash, depends_on_json, policy_result_json
-                                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                                        (
-                                            item_id.to_string(),
-                                            module_row_id.to_string(),
-                                            item.order as i64,
-                                            &item.kind,
-                                            &item.lean_name,
-                                            &item.statement_or_type_hash,
-                                            &item.body_hash,
-                                            &depends_on_json,
-                                            "{\"policy\":\"passed\"}",
-                                        ),
-                                    )?;
-                                }
-                            } else {
-                                let lesson = result.diagnostic.as_ref().map(|d| d.primary_message.clone());
-                                tx.execute(
-                                    "UPDATE episode_obligations SET status = 'open', failure_lesson = COALESCE(?1, failure_lesson) WHERE id = ?2",
-                                    (lesson, &obl_id_str),
-                                )?;
-                            }
-                        }
-                        Err(e) => {
-                            return Err(StepError::LeanGatewayError(e));
-                        }
-                    }
+                    let module_items_json = serde_json::json!({
+                        "module_items": module_items,
+                        "root_theorem": root_theorem,
+                    }).to_string();
+                    let namespace = assembled.namespace.clone();
+                    Ok(PrepOutcome::NeedsGateway {
+                        request: GatewayRequest::SubmitModule { assembled, env_hash: pv_env_hash.clone() },
+                        ctx: FinalizeContext::SubmitModule {
+                            obl_id_str, stmt_hash, pv_env_hash, namespace,
+                            module_items_json, pv_id_str, pv_manifest_hash,
+                        },
+                    })
                 }
             }
         }
@@ -402,30 +336,240 @@ pub fn attempt_commit(
                 [&obl_id_str],
             )?;
 
-            is_valid = true;
+            finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, cost_micros, true)?;
+            Ok(PrepOutcome::Done { outcome: LeanVerificationOutcome::KernelPass, is_valid: true })
         }
         TypedAction::GiveUp => {
             // A deliberate give-up is a valid, terminal action — not an invalid
             // submission. The caller (MCP layer) is responsible for ending the
             // episode with outcome='gave_up' when it sees this committed.
-            is_valid = true;
+            finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, cost_micros, true)?;
+            Ok(PrepOutcome::Done { outcome: LeanVerificationOutcome::KernelPass, is_valid: true })
         }
         TypedAction::ExternalResponseRejected { .. } => {
-            is_valid = false;
+            finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, cost_micros, false)?;
+            Ok(PrepOutcome::Done { outcome: LeanVerificationOutcome::KernelFail, is_valid: false })
         }
     }
+}
 
-    // Only Solve and SubmitModule produce a genuine Lean outcome (set above, pass
-    // or fail). For every other action, the caller reads `outcome_result` purely
-    // as an accepted/rejected signal — reflect `is_valid` here so Decompose/GiveUp
-    // don't fall through to the KernelFail default and get misreported as rejected.
-    if !matches!(action, TypedAction::Solve { .. } | TypedAction::SubmitModule { .. }) {
-        outcome_result = if is_valid { LeanVerificationOutcome::KernelPass } else { LeanVerificationOutcome::KernelFail };
+/// Writes the Lean gateway's response for a deferred [`GatewayRequest`] (obtained
+/// with the DB lock released) and completes the attempt: the verified
+/// lemma/module row, the obligation status, and the episode/attempt/request
+/// bookkeeping tail — mirroring exactly what `attempt_prepare`'s `Done` branches
+/// write inline. Re-validates the attempt is still `executing` with the same
+/// `claim_token` first: the gap between prepare and finalize is a real window
+/// where a concurrent expiry sweep could have reclaimed a wedged attempt, and
+/// writing results for an attempt that is no longer the live one would corrupt
+/// state instead of just losing a report.
+pub fn attempt_finalize(
+    tx: &Transaction,
+    attempt_id: Uuid,
+    claim_token: &str,
+    cost_micros: i128,
+    ctx: FinalizeContext,
+    response: GatewayResponse,
+) -> Result<LeanVerificationOutcome, StepError> {
+    let (status, episode_id_str, db_claim_token, action_request_id_str, current_revision): (String, String, String, String, i64) = {
+        let (status, episode_id_str, db_claim_token, action_request_id_str): (String, String, String, String) = tx.query_row(
+            "SELECT status, episode_id, claim_token, action_request_id FROM action_attempts WHERE id = ?1",
+            [attempt_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).optional()?.ok_or(StepError::InvalidAttempt)?;
+        let current_revision: i64 = tx.query_row(
+            "SELECT current_revision FROM episodes WHERE id = ?1",
+            [&episode_id_str],
+            |row| row.get(0),
+        )?;
+        (status, episode_id_str, db_claim_token, action_request_id_str, current_revision)
+    };
+
+    if status != "executing" || db_claim_token != claim_token {
+        // The attempt was reclaimed (expiry sweep) or otherwise moved on while the
+        // gateway call was in flight. Nothing safe to write — the caller surfaces
+        // this exactly like any other InvalidAttempt (client re-claims and retries).
+        return Err(StepError::InvalidAttempt);
     }
 
-    // 4. Update episode telemetry and costs
+    let (outcome_result, is_valid) = match (ctx, response) {
+        (FinalizeContext::Solve { obl_id_str, pv_env_hash }, GatewayResponse::Solve(gw_result)) => {
+            match gw_result {
+                Ok(result) => {
+                    let is_valid = matches!(result.outcome, LeanVerificationOutcome::KernelPass);
+                    if is_valid {
+                        let lemma_id = Uuid::new_v4();
+                        tx.execute(
+                            "INSERT INTO episode_verified_lemmas (
+                                id, episode_id, obligation_id, polarity, theorem_name, statement_hash,
+                                proof_source_artifact_hash, compiled_artifact_hash, proof_term_hash,
+                                environment_hash, actual_dependency_ids_json, kernel_result_hash, verified_at
+                            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                            (
+                                lemma_id.to_string(),
+                                &episode_id_str,
+                                &obl_id_str,
+                                Polarity::Positive.to_string(),
+                                &result.theorem_name,
+                                &result.expected_statement_hash,
+                                &result.proof_source_hash,
+                                result.compiled_artifact_hash.as_deref().unwrap_or(""),
+                                result.proof_term_hash.as_deref().unwrap_or(""),
+                                &pv_env_hash,
+                                "[]",
+                                "",
+                                Utc::now().to_rfc3339(),
+                            ),
+                        )?;
+                        tx.execute(
+                            "UPDATE episode_obligations SET status = 'proved', proved_lemma_id = ?1, closed_at = ?2 WHERE id = ?3",
+                            (lemma_id.to_string(), Utc::now().to_rfc3339(), &obl_id_str),
+                        )?;
+                    } else {
+                        let lesson = result.diagnostic.as_ref().map(|d| d.primary_message.clone());
+                        tx.execute(
+                            "UPDATE episode_obligations SET status = 'open', failure_lesson = COALESCE(?1, failure_lesson) WHERE id = ?2",
+                            (lesson, &obl_id_str),
+                        )?;
+                    }
+                    (result.outcome, is_valid)
+                }
+                Err(e) => return Err(StepError::LeanGatewayError(e)),
+            }
+        }
+        (FinalizeContext::SubmitModule { obl_id_str, stmt_hash, pv_env_hash, namespace, module_items_json, pv_id_str, pv_manifest_hash }, GatewayResponse::SubmitModule(gw_result)) => {
+            match gw_result {
+                Ok(result) => {
+                    let is_valid = matches!(result.outcome, LeanVerificationOutcome::KernelPass);
+                    if is_valid {
+                        let lemma_id = Uuid::new_v4();
+                        let root_theorem_name = format!("{}.{}", namespace, result.root_lean_name);
+                        // Reuse episode_verified_lemmas to close the root obligation
+                        // (so the existing kernel_verified/certified promotion fires).
+                        tx.execute(
+                            "INSERT INTO episode_verified_lemmas (
+                                id, episode_id, obligation_id, polarity, theorem_name, statement_hash,
+                                proof_source_artifact_hash, compiled_artifact_hash, proof_term_hash,
+                                environment_hash, actual_dependency_ids_json, kernel_result_hash, verified_at
+                            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                            (
+                                lemma_id.to_string(),
+                                &episode_id_str,
+                                &obl_id_str,
+                                Polarity::Positive.to_string(),
+                                &root_theorem_name,
+                                &stmt_hash,
+                                &result.module_source_hash,
+                                &result.declaration_manifest_hash,
+                                "",
+                                &pv_env_hash,
+                                "[]",
+                                &result.kernel_result_hash,
+                                Utc::now().to_rfc3339(),
+                            ),
+                        )?;
+                        tx.execute(
+                            "UPDATE episode_obligations SET status = 'proved', proved_lemma_id = ?1, closed_at = ?2 WHERE id = ?3",
+                            (lemma_id.to_string(), Utc::now().to_rfc3339(), &obl_id_str),
+                        )?;
+
+                        // Persist the verified module as a structured, replayable
+                        // artifact (issue #4). module_items_json holds the exact items
+                        // + root theorem, so the precise Lean source re-assembles
+                        // deterministically on export and replay. Shares this
+                        // transaction, so it is atomic with closing the root obligation.
+                        let module_row_id = Uuid::new_v4();
+                        let now_ts = Utc::now().to_rfc3339();
+                        tx.execute(
+                            "INSERT INTO episode_verified_modules (
+                                id, episode_id, problem_version_id, root_obligation_id,
+                                root_statement_hash, import_manifest_hash, environment_hash,
+                                module_source_hash, module_items_json, declaration_manifest_hash,
+                                kernel_result_hash, verified_at
+                            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                            (
+                                module_row_id.to_string(),
+                                &episode_id_str,
+                                &pv_id_str,
+                                &obl_id_str,
+                                &stmt_hash,
+                                &pv_manifest_hash,
+                                &pv_env_hash,
+                                &result.module_source_hash,
+                                &module_items_json,
+                                &result.declaration_manifest_hash,
+                                &result.kernel_result_hash,
+                                &now_ts,
+                            ),
+                        )?;
+                        // Item manifest is re-derivable from module_items_json via
+                        // assemble_module (import_manifest doesn't affect per-item
+                        // hashes, only the rendered `source`, so an empty manifest here
+                        // is sufficient and avoids another DB round trip).
+                        if let Ok(stored) = serde_json::from_str::<serde_json::Value>(&module_items_json) {
+                            let parsed_items = stored.get("module_items")
+                                .and_then(|v| serde_json::from_value::<Vec<crate::models::action::LeanModuleItem>>(v.clone()).ok());
+                            let parsed_root = stored.get("root_theorem")
+                                .and_then(|v| serde_json::from_value::<crate::models::action::ModuleTheorem>(v.clone()).ok());
+                            if let (Some(items), Some(root)) = (parsed_items, parsed_root) {
+                                if let Ok(reassembled) = crate::lean::module::assemble_module(&namespace, &stmt_hash, &items, &root, &Vec::<String>::new()) {
+                                    for item in &reassembled.item_manifest {
+                                        let item_id = Uuid::new_v4();
+                                        let depends_on_json = serde_json::to_string(&item.depends_on).unwrap_or_else(|_| "[]".to_string());
+                                        tx.execute(
+                                            "INSERT INTO episode_verified_module_items (
+                                                id, module_id, item_order, item_kind, lean_name,
+                                                statement_or_type_hash, body_hash, depends_on_json, policy_result_json
+                                            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                                            (
+                                                item_id.to_string(),
+                                                module_row_id.to_string(),
+                                                item.order as i64,
+                                                &item.kind,
+                                                &item.lean_name,
+                                                &item.statement_or_type_hash,
+                                                &item.body_hash,
+                                                &depends_on_json,
+                                                "{\"policy\":\"passed\"}",
+                                            ),
+                                        )?;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        let lesson = result.diagnostic.as_ref().map(|d| d.primary_message.clone());
+                        tx.execute(
+                            "UPDATE episode_obligations SET status = 'open', failure_lesson = COALESCE(?1, failure_lesson) WHERE id = ?2",
+                            (lesson, &obl_id_str),
+                        )?;
+                    }
+                    (result.outcome, is_valid)
+                }
+                Err(e) => return Err(StepError::LeanGatewayError(e)),
+            }
+        }
+        _ => return Err(StepError::Internal("gateway response variant did not match the finalize context".to_string())),
+    };
+
+    finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, cost_micros, is_valid)?;
+    Ok(outcome_result)
+}
+
+/// Episode revision/step/budget bump, attempt status (committed/rejected), and
+/// marking the fulfilling request — the shared tail every action variant writes
+/// once its outcome (`is_valid`) is known, whether that happened immediately
+/// (`attempt_prepare`'s Done branches) or after a deferred gateway call
+/// (`attempt_finalize`).
+fn finalize_bookkeeping(
+    tx: &Transaction,
+    attempt_id: Uuid,
+    episode_id_str: &str,
+    action_request_id_str: &str,
+    current_revision: i64,
+    cost_micros: i128,
+    is_valid: bool,
+) -> Result<(), StepError> {
     let new_revision = current_revision + 1;
-    let _cost_str = cost_micros.to_string();
 
     if is_valid {
         tx.execute(
@@ -435,7 +579,7 @@ pub fn attempt_commit(
                 cost_budget_micros = cost_budget_micros - ?2,
                 updated_at = ?3
              WHERE id = ?4",
-            (new_revision, cost_micros as i64, Utc::now().to_rfc3339(), &episode_id_str),
+            (new_revision, cost_micros as i64, Utc::now().to_rfc3339(), episode_id_str),
         )?;
 
         tx.execute(
@@ -451,7 +595,7 @@ pub fn attempt_commit(
                 cost_budget_micros = cost_budget_micros - ?2,
                 updated_at = ?3
              WHERE id = ?4",
-            (new_revision, cost_micros as i64, Utc::now().to_rfc3339(), &episode_id_str),
+            (new_revision, cost_micros as i64, Utc::now().to_rfc3339(), episode_id_str),
         )?;
 
         tx.execute(
@@ -463,8 +607,43 @@ pub fn attempt_commit(
     // Mark the fulfilling request so episode_observe/advance never surface it again.
     tx.execute(
         "UPDATE action_requests SET status = 'fulfilled', fulfilled_at = ?1, fulfilled_attempt_id = ?2 WHERE id = ?3",
-        (Utc::now().to_rfc3339(), attempt_id.to_string(), &action_request_id_str),
+        (Utc::now().to_rfc3339(), attempt_id.to_string(), action_request_id_str),
     )?;
 
-    Ok(outcome_result)
+    Ok(())
+}
+
+/// Convenience wrapper composing `attempt_prepare` + (a synchronous, in-transaction)
+/// gateway call + `attempt_finalize` into the original single-call, single-transaction
+/// contract. Review feedback on #16/#17 established that the MCP layer's `episode_step`
+/// handler must NOT hold the DB mutex while Lean runs — `episode_step` calls
+/// `attempt_prepare`/`attempt_finalize` directly, with the gateway invocation happening
+/// in between while the lock is released (see `crates/chatdb-mcp/src/lib.rs`). This
+/// wrapper exists for callers that run entirely synchronously, outside any async lock
+/// (unit/integration tests driving a bare `rusqlite::Transaction` directly) — for those,
+/// running the gateway call inside one transaction is simpler and there is no lock to
+/// hold across it in the first place.
+pub fn attempt_commit(
+    tx: &Transaction,
+    attempt_id: Uuid,
+    expected_revision: i64,
+    claim_token: &str,
+    action: &TypedAction,
+    lean_gateway: &dyn LeanGateway,
+    cost_micros: i128,
+) -> Result<LeanVerificationOutcome, StepError> {
+    match attempt_prepare(tx, attempt_id, expected_revision, claim_token, action, cost_micros)? {
+        PrepOutcome::Done { outcome, .. } => Ok(outcome),
+        PrepOutcome::NeedsGateway { request, ctx } => {
+            let response = match request {
+                GatewayRequest::Solve { obl, proof_term, dep_ids, env_hash, import_manifest } => {
+                    GatewayResponse::Solve(lean_gateway.verify_exact(&obl, &proof_term, &dep_ids, &env_hash, &import_manifest))
+                }
+                GatewayRequest::SubmitModule { assembled, env_hash } => {
+                    GatewayResponse::SubmitModule(lean_gateway.verify_module(&assembled, &env_hash))
+                }
+            };
+            attempt_finalize(tx, attempt_id, claim_token, cost_micros, ctx, response)
+        }
+    }
 }
