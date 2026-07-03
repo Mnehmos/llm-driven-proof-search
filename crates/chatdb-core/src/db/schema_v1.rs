@@ -451,14 +451,180 @@ CREATE TABLE IF NOT EXISTS trajectory_events (
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute("PRAGMA foreign_keys = ON;", [])?;
+    // Foreign keys stay OFF for the whole init sequence: the constraint-vocabulary
+    // migrations below drop and recreate tables that other tables reference (e.g.
+    // problem_fidelity_reviews -> problem_versions, episode_obligations ->
+    // episodes), which foreign-key enforcement would otherwise block. Turned back
+    // on at the end so normal operation still enforces them.
+    conn.execute("PRAGMA foreign_keys = OFF;", [])?;
     // Must run BEFORE the CREATE TABLE IF NOT EXISTS batch below: that statement
     // is a no-op on a `problem_versions` table that already exists (from a
     // pre-v0.2.3 database), so a DB created before the import-manifest columns
     // existed would otherwise be left permanently missing them, and the first
     // query touching them would fail with "no such column".
     migrate_add_import_manifest_columns(conn)?;
+    // CHECK constraints are baked into a table at creation and CREATE TABLE IF
+    // NOT EXISTS cannot update them on a table that already exists — a database
+    // that predates the fidelity-vocabulary rewrite (docs/fix_plan_playtest_02.md)
+    // is otherwise left PERMANENTLY enforcing the old CHECK(fidelity_status IN
+    // ('pending','approved','revoked')) / CHECK(outcome IN (...) — no
+    // 'kernel_verified') constraints, silently rejecting every INSERT that uses
+    // the current vocabulary. This is a harder failure than a missing column:
+    // it's a deterministic, permanent rejection of the current code's writes,
+    // not a one-time schema gap. See docs/fix_plan_playtest_05.md.
+    migrate_fidelity_status_vocabulary(conn)?;
+    migrate_episode_outcome_vocabulary(conn)?;
     conn.execute_batch(V1_SCHEMA)?;
+    conn.execute("PRAGMA foreign_keys = ON;", [])?;
+    Ok(())
+}
+
+/// Rebuilds `problem_versions` if it still carries the pre-fidelity-split CHECK
+/// constraints (`fidelity_status IN ('pending','approved','revoked')`) — SQLite
+/// has no `ALTER TABLE ... DROP CONSTRAINT`, so the only way to change a CHECK
+/// is the standard create-copy-drop-rename sequence. No-op on a fresh database
+/// or an already-migrated one (detected by checking whether the stored table
+/// SQL already mentions the current vocabulary).
+///
+/// `'approved'` maps to `'verified'`, not `'attested'`: existing rows in state
+/// `COMPLETE` already satisfy the (then-nonexistent) invariant "COMPLETE implies
+/// verified" retroactively, and mapping to `'attested'` would make that INSERT
+/// violate the current CHECK on the spot, failing the migration itself for any
+/// database with a COMPLETE-state row.
+fn migrate_fidelity_status_vocabulary(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='problem_versions'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let current_sql: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='problem_versions'",
+        [],
+        |row| row.get(0),
+    )?;
+    if current_sql.contains("'unreviewed'") {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE problem_versions_migrating (
+            id TEXT PRIMARY KEY,
+            source_problem_text TEXT NOT NULL,
+            source_problem_hash TEXT NOT NULL,
+            source_metadata_json TEXT NOT NULL,
+            root_formal_statement TEXT NOT NULL,
+            root_statement_hash TEXT NOT NULL,
+            normalized_root_rendering TEXT NOT NULL,
+            environment_hash TEXT NOT NULL,
+            import_manifest_json TEXT NOT NULL DEFAULT '[\"Mathlib.Tactic.Ring\",\"Mathlib.Tactic.NormNum\"]',
+            import_manifest_hash TEXT NOT NULL DEFAULT '',
+            fidelity_status TEXT NOT NULL,
+            fidelity_method TEXT NOT NULL,
+            fidelity_approval_id TEXT,
+            root_obligation_id TEXT,
+            state TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK(state NOT IN ('PROVING', 'ROOT_PROVED_COVERAGE_PENDING', 'ROOT_PROVED_COVERAGE_UNCONVERGED') OR fidelity_status IN ('verified', 'attested')),
+            CHECK(state <> 'COMPLETE' OR fidelity_status = 'verified'),
+            CHECK(fidelity_status IN ('unreviewed', 'attested', 'verified', 'rejected', 'revoked'))
+        );
+        INSERT INTO problem_versions_migrating (
+            id, source_problem_text, source_problem_hash, source_metadata_json,
+            root_formal_statement, root_statement_hash, normalized_root_rendering,
+            environment_hash, import_manifest_json, import_manifest_hash,
+            fidelity_status, fidelity_method, fidelity_approval_id,
+            root_obligation_id, state, created_at
+        )
+        SELECT
+            id, source_problem_text, source_problem_hash, source_metadata_json,
+            root_formal_statement, root_statement_hash, normalized_root_rendering,
+            environment_hash, import_manifest_json, import_manifest_hash,
+            CASE fidelity_status
+                WHEN 'approved' THEN 'verified'
+                WHEN 'pending' THEN 'unreviewed'
+                WHEN 'revoked' THEN 'revoked'
+                ELSE 'unreviewed'
+            END,
+            fidelity_method, fidelity_approval_id, root_obligation_id, state, created_at
+        FROM problem_versions;
+        DROP TABLE problem_versions;
+        ALTER TABLE problem_versions_migrating RENAME TO problem_versions;",
+    )?;
+    Ok(())
+}
+
+/// Rebuilds `episodes` if it still carries the pre-fidelity-split CHECK on
+/// `outcome` (missing `'kernel_verified'`) — same create-copy-drop-rename
+/// technique as `migrate_fidelity_status_vocabulary`, and for the same reason:
+/// a database that predates the fidelity split would otherwise reject every
+/// episode reaching the `kernel_verified` outcome forever. The column set and
+/// order are unchanged by this migration (only the CHECK differs), so this is
+/// a straight `SELECT *` copy, unlike the `problem_versions` migration.
+fn migrate_episode_outcome_vocabulary(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='episodes'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let current_sql: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='episodes'",
+        [],
+        |row| row.get(0),
+    )?;
+    if current_sql.contains("'kernel_verified'") {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE episodes_migrating (
+            id TEXT PRIMARY KEY,
+            problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+            task_id TEXT,
+            task_revision INTEGER,
+            environment_version TEXT,
+            protocol_version TEXT,
+            observation_schema_version TEXT,
+            action_schema_version TEXT,
+            reward_policy_version TEXT,
+            verifier_version TEXT,
+            lean_toolchain_version TEXT,
+            seed INTEGER,
+            state TEXT NOT NULL,
+            current_revision INTEGER NOT NULL DEFAULT 0,
+            initial_state_hash TEXT,
+            current_state_hash TEXT,
+            step_count INTEGER NOT NULL DEFAULT 0,
+            max_steps INTEGER,
+            token_budget INTEGER,
+            cost_budget_micros INTEGER,
+            wall_clock_deadline TEXT,
+            invalid_action_count INTEGER NOT NULL DEFAULT 0,
+            invalid_action_limit INTEGER,
+            outcome TEXT,
+            termination_reason TEXT,
+            truncation_reason TEXT,
+            run_id TEXT,
+            parent_episode_id TEXT REFERENCES episodes(id),
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            completed_at TEXT,
+            CHECK(state IN ('awaiting_external_action', 'executing_action', 'terminated', 'truncated')),
+            CHECK(outcome IN ('certified', 'kernel_verified', 'refuted', 'gave_up', 'timeout', 'budget_exhausted', 'model_error', 'infrastructure_error') OR outcome IS NULL),
+            CHECK((state = 'terminated' AND outcome IS NOT NULL AND termination_reason IS NOT NULL) OR state <> 'terminated'),
+            CHECK((state = 'truncated' AND outcome IS NOT NULL AND truncation_reason IS NOT NULL) OR state <> 'truncated'),
+            CHECK(NOT (state = 'terminated' AND truncation_reason IS NOT NULL)),
+            CHECK(NOT (state = 'truncated' AND termination_reason IS NOT NULL))
+        );
+        INSERT INTO episodes_migrating SELECT * FROM episodes;
+        DROP TABLE episodes;
+        ALTER TABLE episodes_migrating RENAME TO episodes;",
+    )?;
     Ok(())
 }
 
