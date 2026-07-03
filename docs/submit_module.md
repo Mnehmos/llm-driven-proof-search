@@ -79,6 +79,12 @@ module's declarations — **no partial commit**. On failure, nothing is written,
 the obligation stays open, and the structured diagnostic is preserved as a
 failure lesson.
 
+A rejected module (whether refused by policy or by the staged kernel) surfaces
+its reason directly on the `episode_step` response as `rejection_diagnostic`, so
+a client learns *why* the draft was refused without a second `episode_observe`
+round-trip. The same reason is stored as the obligation's failure lesson and
+shown by `proof_export`.
+
 ## Outcomes and rewards
 
 `SubmitModule` is a kernel-verification action, exactly like `Solve`:

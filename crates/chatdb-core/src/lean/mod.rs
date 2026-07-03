@@ -754,6 +754,31 @@ mod tests {
         assert_eq!(categorize("unknown namespace 'Foo'", ""), LeanDiagnosticCategory::UnknownDeclaration);
     }
 
+    /// The staging trust boundary: a module that fails verification must NEVER
+    /// write to LeanChecker/Verified. Here the gateway can't even spawn lake (bogus
+    /// elan path), so verify_module returns KernelFail — and the Verified/ tree must
+    /// be untouched. No partial commit.
+    #[test]
+    fn verify_module_does_not_write_on_failure() {
+        use crate::models::action::ModuleTheorem;
+        let tmp = tempfile::tempdir().unwrap();
+        let lean_project = tmp.path().to_path_buf();
+        let gateway = RealLeanGateway::new(lean_project.clone(), PathBuf::from("Z:\\definitely\\nonexistent\\bin"));
+
+        let stmt = "1 + 1 = 2";
+        let root_hash = crate::hashing::canonical_hash(&stmt.to_string()).unwrap();
+        let root = ModuleTheorem { name: "r".to_string(), statement: stmt.to_string(), proof_term: "norm_num".to_string() };
+        let asm = module::assemble_module("ChatDB.P_test", &root_hash, &[], &root, &default_manifest()).unwrap();
+
+        let res = gateway.verify_module(&asm, "envhash").unwrap();
+        assert!(matches!(res.outcome, LeanVerificationOutcome::KernelFail), "a gateway that can't run Lean must fail closed");
+
+        let verified = lean_project.join("LeanChecker").join("Verified");
+        let wrote_any = verified.exists()
+            && std::fs::read_dir(&verified).map(|mut d| d.next().is_some()).unwrap_or(false);
+        assert!(!wrote_any, "a failed module must not write any artifact to LeanChecker/Verified");
+    }
+
     #[test]
     fn test_diagnostic_categories_stay_distinct() {
         assert_eq!(categorize("type mismatch, term has type...", ""), LeanDiagnosticCategory::TypeMismatch);
