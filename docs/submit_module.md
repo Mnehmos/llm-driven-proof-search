@@ -54,12 +54,20 @@ Policy checks are deterministic and run in `chatdb-core` before any compile:
 - **No client-written top-level commands.** A line inside any client string
   (type signature, body, statement, proof term) may not *begin* with `import`,
   `namespace`, `end`, `section`, `open`, `set_option`, `attribute`, `variable`,
-  `universe`, a declaration keyword (`def`, `theorem`, `lemma`, `example`,
-  `abbrev`, `instance`, `structure`, `inductive`, `class`, `axiom`, `opaque`,
-  `unsafe`, `partial`, `noncomputable`), or metaprogramming/eval commands
+  `universe`, `export`, a declaration keyword (`def`, `theorem`, `lemma`,
+  `example`, `abbrev`, `instance`, `structure`, `inductive`, `class`, `axiom`,
+  `opaque`, `unsafe`, `partial`, `noncomputable`), a declaration **modifier**
+  (`private`, `protected`, `local`, `scoped`), an **attribute list** (`@[...]`,
+  e.g. `@[simp] theorem cheat : False := ...`), or metaprogramming/eval commands
   (`macro`, `syntax`, `elab`, `notation`, `#eval`, `#check`, …). This is the
   injection boundary: a def body of `0\n\naxiom cheat : False` opens a new
-  top-level command and is refused, not compiled.
+  top-level command and is refused, not compiled — and so does
+  `0\n\n@[simp] theorem cheat : False := ...` or `0\n\nprivate theorem cheat : False := ...`,
+  since a modifier or attribute preceding a declaration keyword is just as much
+  a fresh top-level command as the keyword itself (a scanner that only checks
+  whether a line's first token *is* the declaration keyword is bypassed by
+  prefixing one of these — a bare `@` for explicit-argument application, e.g.
+  `@id Nat n`, is unaffected; only the literal `@[` attribute-list prefix is banned).
 - **Never anywhere:** `sorry`, `admit`, `axiom`, `unsafe`, `opaque`,
   `native_decide` (whole-word). `sorry`/`admit` typecheck but prove nothing — the
   kernel only warns — so they are a hard rejection here *and* at the staged
@@ -78,6 +86,34 @@ passes only if the process succeeds, no error diagnostics were emitted, and no
 module's declarations — **no partial commit**. On failure, nothing is written,
 the obligation stays open, and the structured diagnostic is preserved as a
 failure lesson.
+
+## The DB lock is never held during a Lean call
+
+`episode_step` runs the Lean gateway call (`verify_exact` for `Solve`,
+`verify_module` for `SubmitModule`) — up to 60-120 seconds against a real Lean
+toolchain — WITHOUT holding the server's DB mutex, so no other concurrent tool
+call on the session (`episode_observe`, `episode_status`, a different
+episode's `episode_step`, ...) blocks on it.
+
+This is a two-phase split in `chatdb-core::orchestrator::step`:
+
+- `attempt_prepare` validates the attempt/claim/CAS, marks the attempt
+  `executing`, and either fully resolves a non-Lean action (`Decompose` /
+  `GiveUp` / `ExternalResponseRejected` / a policy-rejected `SubmitModule`) in
+  one transaction, or — for `Solve` / a policy-passing `SubmitModule` — returns
+  exactly what's needed to call the gateway, WITHOUT calling it.
+- The MCP layer commits that transaction, drops the DB-lock guard, calls the
+  gateway, then re-acquires the lock and opens a fresh transaction.
+- `attempt_finalize` re-validates the attempt is still `executing` with the
+  same claim token (protecting against a concurrent expiry sweep reclaiming a
+  wedged attempt during the gap) and writes the result.
+
+`attempt_commit` still exists as a convenience wrapper (`attempt_prepare` +
+gateway call + `attempt_finalize` in one call) for callers that run
+synchronously outside any async lock — direct unit/integration tests driving a
+bare `rusqlite::Transaction`. The MCP layer never uses it; it calls
+`attempt_prepare`/`attempt_finalize` directly so the gap between them is where
+the lock is actually released.
 
 ## Outcomes and rewards
 
