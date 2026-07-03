@@ -408,9 +408,12 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
     // The export must be a receipt of what the verifier actually compiled, not a
     // reconstructed approximation — so the assembled Lean source carries the
     // problem's real, immutable import manifest (never a hardcoded Ring/NormNum
-    // stub). A malformed stored manifest should never silently degrade to a lie;
-    // fall back to the base set only if parsing fails, and that fallback is itself
-    // the historical default, not a guess at the problem's needs.
+    // stub). A malformed stored manifest is a corrupted receipt, not a normal
+    // condition to paper over: fall back to the base set so export doesn't crash,
+    // but flag it loudly in both formats (a WARNING comment in the lean source, a
+    // visible callout in the dossier) rather than silently rendering an artifact
+    // that looks like a normal, trustworthy receipt when it isn't one.
+    let manifest_parse_failed = serde_json::from_str::<Vec<String>>(&manifest_json).is_err();
     let import_manifest: Vec<String> = serde_json::from_str::<Vec<String>>(&manifest_json)
         .unwrap_or_else(|_| vec!["Mathlib.Tactic.Ring".to_string(), "Mathlib.Tactic.NormNum".to_string()]);
 
@@ -551,6 +554,14 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
     }
 
     let mut lean_src = String::new();
+    if manifest_parse_failed {
+        lean_src.push_str(&format!(
+            "-- WARNING: stored import_manifest_json for this problem_version failed to parse; \
+             the imports below are the historical Ring/NormNum fallback, NOT the manifest this proof \
+             was actually verified against. This export is NOT a trustworthy receipt (manifest_hash={}).\n",
+            manifest_hash
+        ));
+    }
     for module in &import_manifest {
         lean_src.push_str(&format!("import {}\n", module));
     }
@@ -680,6 +691,16 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
     // toolchain to `environment_hash` and re-derive `import_manifest_hash` from
     // the listed manifest to confirm they are re-verifying the same artifact.
     md.push_str("\n## Verification context\n\n");
+    if manifest_parse_failed {
+        md.push_str(&format!(
+            "> ⚠️ **WARNING: corrupted receipt.** The stored `import_manifest_json` for this \
+             problem_version failed to parse. The Lean export below falls back to the historical \
+             Ring/NormNum manifest so export doesn't crash, but that fallback is **not** what this \
+             proof was actually verified against (raw stored value: `{}`). Do not treat this export \
+             as a trustworthy replay artifact until the stored manifest is repaired.\n\n",
+            manifest_json.replace('|', "\\|"),
+        ));
+    }
     md.push_str(&format!("- **Environment hash:** `{}`\n", env_hash));
     md.push_str(&format!("- **Import manifest hash:** `{}`\n", manifest_hash));
     md.push_str(&format!("- **Import manifest:** `{}`\n", manifest_json));
@@ -2390,6 +2411,58 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         assert_ne!(status["state"], "terminated", "{:?}", status);
         assert_eq!(status["invalid_action_count"], 1, "{:?}", status);
+    }
+
+    /// Review feedback on #15: a malformed stored `import_manifest_json` must not
+    /// silently degrade to the historical Ring/NormNum fallback and look like a
+    /// normal, trustworthy receipt. Both formats must flag it loudly. Corrupts the
+    /// row directly (no tool can produce this — problem_create only ever writes
+    /// server-generated, well-formed JSON) to simulate pre-existing data corruption.
+    #[tokio::test]
+    async fn test_proof_export_flags_corrupted_import_manifest() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "corrupted manifest check",
+            "root_formal_statement": "True",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+
+        {
+            let conn = conn_arc.lock().await;
+            conn.execute(
+                "UPDATE problem_versions SET import_manifest_json = ?1 WHERE id = ?2",
+                ("{not valid json", &pv_id),
+            ).unwrap();
+        }
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let lean_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "lean",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let lean = lean_res.content[0].as_text().unwrap().text.clone();
+        assert!(lean.contains("WARNING"), "lean export must visibly flag a corrupted manifest: {lean}");
+
+        let md_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let md = md_res.content[0].as_text().unwrap().text.clone();
+        assert!(md.contains("WARNING") && md.contains("corrupted receipt"), "dossier must visibly flag a corrupted manifest: {md}");
     }
 
     /// `proof_export` must render the problem's actual (custom) import manifest,
