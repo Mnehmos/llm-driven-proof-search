@@ -397,11 +397,22 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
         return Err(mcp_invalid_params(format!("unknown episode_id: {}", episode_id)));
     };
 
-    let (source_text, root_statement, fidelity_status): (String, String, String) = conn.query_row(
-        "SELECT source_problem_text, root_formal_statement, fidelity_status FROM problem_versions WHERE id = ?1",
+    let (source_text, root_statement, fidelity_status, manifest_json, manifest_hash, env_hash):
+        (String, String, String, String, String, String) = conn.query_row(
+        "SELECT source_problem_text, root_formal_statement, fidelity_status,
+                import_manifest_json, import_manifest_hash, environment_hash
+         FROM problem_versions WHERE id = ?1",
         [&pv_id],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
     ).map_err(rs)?;
+    // The export must be a receipt of what the verifier actually compiled, not a
+    // reconstructed approximation — so the assembled Lean source carries the
+    // problem's real, immutable import manifest (never a hardcoded Ring/NormNum
+    // stub). A malformed stored manifest should never silently degrade to a lie;
+    // fall back to the base set only if parsing fails, and that fallback is itself
+    // the historical default, not a guess at the problem's needs.
+    let import_manifest: Vec<String> = serde_json::from_str::<Vec<String>>(&manifest_json)
+        .unwrap_or_else(|_| vec!["Mathlib.Tactic.Ring".to_string(), "Mathlib.Tactic.NormNum".to_string()]);
 
     let mut stmt = conn.prepare(
         "SELECT id, theorem_name, lean_statement, status, kind, failure_lesson
@@ -540,7 +551,10 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
     }
 
     let mut lean_src = String::new();
-    lean_src.push_str("import Mathlib.Tactic.Ring\nimport Mathlib.Tactic.NormNum\n\n");
+    for module in &import_manifest {
+        lean_src.push_str(&format!("import {}\n", module));
+    }
+    lean_src.push('\n');
     for o in &lean_order {
         if o.status != "proved" {
             continue;
@@ -658,6 +672,17 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
             md.push_str(&format!("| {} | `{}` | {} | {} | {} |\n", a.seq, a.obligation_name, a.action_type, a.detail.replace('|', "\\|"), a.verdict));
         }
     }
+
+    // Verification context: the export is a receipt, so it must state exactly
+    // which pinned environment and import manifest the kernel checked this proof
+    // under. These are the problem_version's immutable values — the same ones the
+    // gateway used — not a reconstruction. A reader can pin a third-party
+    // toolchain to `environment_hash` and re-derive `import_manifest_hash` from
+    // the listed manifest to confirm they are re-verifying the same artifact.
+    md.push_str("\n## Verification context\n\n");
+    md.push_str(&format!("- **Environment hash:** `{}`\n", env_hash));
+    md.push_str(&format!("- **Import manifest hash:** `{}`\n", manifest_hash));
+    md.push_str(&format!("- **Import manifest:** `{}`\n", manifest_json));
 
     md.push_str(&format!(
         "\n## Integrity\n\n{} hash-chained trajectory events, `{}…` → `{}…` (GENESIS-anchored). Re-verify anytime with `episode_replay`.\n",
@@ -2206,6 +2231,55 @@ mod tests {
         let lean = lean_res.content[0].as_text().unwrap().text.clone();
         assert!(lean.contains("theorem root_theorem : 1 + 1 = 2 := by"), "{lean}");
         assert!(!lean.contains("## "), "lean format must be bare source, not markdown: {lean}");
+        // The assembled source must carry the problem's REAL import manifest, not
+        // a hardcoded Ring/NormNum stub. This problem used the default manifest.
+        assert!(lean.contains("import Mathlib.Tactic.Ring"), "real manifest must be rendered: {lean}");
+        assert!(lean.contains("import Mathlib.Tactic.NormNum"), "real manifest must be rendered: {lean}");
+        // The dossier must state the pinned verification context as a receipt.
+        assert!(md.contains("## Verification context"), "dossier must carry verification context: {md}");
+        assert!(md.contains("Import manifest hash:"), "dossier must carry manifest hash: {md}");
+        assert!(md.contains("Environment hash:"), "dossier must carry environment hash: {md}");
+    }
+
+    /// `proof_export` must render the problem's actual (custom) import manifest,
+    /// not a hardcoded Ring/NormNum stub. Regression guard for the bug that made
+    /// the dossier export a non-replayable approximation.
+    #[tokio::test]
+    async fn test_proof_export_renders_custom_import_manifest() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "custom manifest export check",
+            "root_formal_statement": "True",
+            "problem_imports": ["Mathlib.Tactic.Ring", "Mathlib.Tactic.NormNum",
+                                "Mathlib.Data.Real.Basic", "Mathlib.Tactic.LinearCombination"],
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let manifest_hash = create["import_manifest_hash"].as_str().unwrap().to_string();
+        assert!(!manifest_hash.is_empty(), "custom manifest must have a real hash");
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        // Even with nothing proved yet, the lean-format export must already reflect
+        // the real manifest (imports are rendered before the obligation body).
+        let lean_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "lean",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let lean = lean_res.content[0].as_text().unwrap().text.clone();
+        assert!(lean.contains("import Mathlib.Data.Real.Basic"), "custom manifest module missing from export: {lean}");
+        assert!(lean.contains("import Mathlib.Tactic.LinearCombination"), "custom manifest module missing from export: {lean}");
+
+        let md_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let md = md_res.content[0].as_text().unwrap().text.clone();
+        assert!(md.contains(&manifest_hash), "dossier must carry the problem's manifest hash: {md}");
+        assert!(md.contains("Mathlib.Data.Real.Basic"), "dossier must list the manifest modules: {md}");
     }
 
     /// A solve that fails Lean verification must NOT terminate the episode, must
