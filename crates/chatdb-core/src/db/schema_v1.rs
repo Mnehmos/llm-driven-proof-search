@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use serde_json;
 
 pub const V1_SCHEMA: &str = r#"
 -- Canonical Tables
@@ -451,6 +452,62 @@ CREATE TABLE IF NOT EXISTS trajectory_events (
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("PRAGMA foreign_keys = ON;", [])?;
+    // Must run BEFORE the CREATE TABLE IF NOT EXISTS batch below: that statement
+    // is a no-op on a `problem_versions` table that already exists (from a
+    // pre-v0.2.3 database), so a DB created before the import-manifest columns
+    // existed would otherwise be left permanently missing them, and the first
+    // query touching them would fail with "no such column".
+    migrate_add_import_manifest_columns(conn)?;
     conn.execute_batch(V1_SCHEMA)?;
+    Ok(())
+}
+
+/// Adds `import_manifest_json`/`import_manifest_hash` to a `problem_versions`
+/// table that predates them (pre-v0.2.3 databases). No-op on a fresh database
+/// (table doesn't exist yet — CREATE TABLE below brings it up to the current
+/// shape with these columns already) and on an already-migrated one.
+fn migrate_add_import_manifest_columns(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='problem_versions'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+
+    let has_manifest_column = conn
+        .prepare("PRAGMA table_info(problem_versions)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == "import_manifest_json");
+    if has_manifest_column {
+        return Ok(());
+    }
+
+    let default_manifest: Vec<String> = vec!["Mathlib.Tactic.Ring".to_string(), "Mathlib.Tactic.NormNum".to_string()];
+    let default_manifest_json = serde_json::to_string(&default_manifest)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    // Same value the base manifest constant hashes to at problem_create time —
+    // pre-existing rows never had an explicit manifest, so this is the correct
+    // (not merely default) backfill for what they were actually checked against.
+    let default_manifest_hash = crate::hashing::canonical_hash(&default_manifest)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))?;
+
+    conn.execute(
+        &format!(
+            "ALTER TABLE problem_versions ADD COLUMN import_manifest_json TEXT NOT NULL DEFAULT '{}'",
+            default_manifest_json.replace('\'', "''")
+        ),
+        [],
+    )?;
+    conn.execute(
+        "ALTER TABLE problem_versions ADD COLUMN import_manifest_hash TEXT NOT NULL DEFAULT ''",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE problem_versions SET import_manifest_hash = ?1 WHERE import_manifest_hash = ''",
+        [&default_manifest_hash],
+    )?;
     Ok(())
 }

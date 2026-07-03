@@ -27,6 +27,34 @@ use chatdb_proof_core::hashing::canonical_hash;
 /// hardcoded.
 const BASE_IMPORT_MANIFEST: &[&str] = &["Mathlib.Tactic.Ring", "Mathlib.Tactic.NormNum"];
 
+/// A Lean import target is written verbatim into `import {module}\n` source.
+/// This is the entire security boundary for that interpolation: reject
+/// anything but a dotted sequence of identifier segments so a string can never
+/// contain a newline, comment, or command separator that would let it inject
+/// arbitrary Lean source (e.g. `axiom cheat : False`) into every proof file
+/// checked against this manifest.
+fn valid_lean_module_path(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 256
+        && s.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && segment.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+}
+
+/// A Lean declaration name is written verbatim into `#check {name}\n` source.
+/// Same boundary as `valid_lean_module_path`, slightly more permissive to
+/// admit Lean identifier characters (primes, unicode letters used in
+/// mathlib names) while still excluding anything that could break out of a
+/// single `#check` line: whitespace, newlines, comment/command syntax.
+fn valid_lean_declaration_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 256
+        && !s.chars().any(|c| c.is_whitespace())
+        && s.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '\'' | '.' | '!' | '?'))
+}
+
 // ---------------------------------------------------------------------------
 // Tool argument schemas
 // ---------------------------------------------------------------------------
@@ -194,6 +222,17 @@ pub struct LeanDeclarationLookupArgs {
     pub problem_version_id: String,
     /// Fully-qualified names to check, e.g. "Nat.factorization", "padicValNat".
     pub names: Vec<String>,
+    /// false (default, fast — sub-second beyond process spawn): only checks
+    /// under the problem's own manifest. A failure reports
+    /// "not_available_under_current_manifest" WITHOUT determining whether that's
+    /// because the name needs an import or is genuinely absent.
+    /// true (slow — reliably 15-40+ seconds, since there is no persistent Lean
+    /// server and the full Mathlib umbrella must be loaded from a cold process):
+    /// also checks names that failed under "import Mathlib", splitting the
+    /// result into "not_in_current_import_scope" vs "unknown_declaration". Only
+    /// set this when that distinction is worth the wait.
+    #[serde(default)]
+    pub deep_check: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -662,7 +701,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.2.3"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.2.4"))
     }
 
     async fn list_tools(
@@ -687,7 +726,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<TrajectoryExportArgs>("trajectory_export", "Export trajectory with pagination (cursor + page_size)"),
             make_tool::<EpisodeReplayArgs>("episode_replay", "Re-execute typed actions through canonical reducer with Lean re-verification"),
             make_tool::<ProofExportArgs>("proof_export", "Render an episode as a human-readable proof dossier: proof tree with statuses, assembled Lean source (dependencies before root), full attempt history including failures, and the hash-chain integrity line. format: \"markdown\" (default) | \"lean\" (bare assembled source)"),
-            make_tool::<LeanDeclarationLookupArgs>("lean_declaration_lookup", "Check whether declaration names resolve — WITHOUT changing proof strategy first. An 'unknown identifier' error from episode_step only ever proves a name didn't resolve under the exact import manifest that attempt used; it never proves the name is absent from the pinned Mathlib. This tool checks BOTH: under the problem's own manifest, and under the full Mathlib umbrella. Status 'not_in_current_import_scope' means add an import to problem_imports (see problem_create); 'unknown_declaration' means the name is genuinely unresolvable (misspelled, wrong namespace, or absent) even with everything imported. Epistemic rule: before concluding an API is unavailable, call this tool — do not infer library capability from one elaboration failure"),
+            make_tool::<LeanDeclarationLookupArgs>("lean_declaration_lookup", "Check whether declaration names resolve — WITHOUT changing proof strategy first. An 'unknown identifier' error from episode_step only ever proves a name didn't resolve under the exact import manifest that attempt used; it never proves the name is absent from the pinned Mathlib. By default this only checks under the problem's own manifest (fast, a few seconds) and returns 'not_available_under_current_manifest' if it fails to resolve — that result alone does NOT mean the name is absent from the library, only that it needs an import. Pass deep_check=true to additionally check under the full Mathlib umbrella and distinguish 'not_in_current_import_scope' (add an import to problem_imports, see problem_create) from genuinely 'unknown_declaration' (misspelled, wrong namespace, or absent); deep_check loads all of Mathlib and reliably takes 15-40+ seconds. Epistemic rule: before concluding an API is unavailable, call this tool with deep_check=true — do not infer library capability from one elaboration failure or from a fast-path result alone"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -704,7 +743,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.2.3",
+                    "environment_version": "0.2.4",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -725,6 +764,7 @@ impl ServerHandler for ChatDbMcp {
                     "prover_loop": "problem_create -> problem_submit_fidelity_review (or unsafe_dev_attestation=true for dev use) -> episode_create -> episode_observe -> attempt_claim -> episode_step(action, expected_revision = action_request.episode_revision) -> repeat observe/claim/step until outcome is set",
                     "epistemic_rules": [
                         "An 'unknown_declaration'/'unknown identifier' result under the active import manifest establishes ONLY that the name didn't resolve under that exact import closure. It does NOT establish that the declaration is absent from the pinned library. Before concluding an API is unavailable, call lean_declaration_lookup — do not infer a global capability limit from one local elaboration failure.",
+                        "lean_declaration_lookup defaults to a fast (few-second) check against only the problem's own import manifest, returning 'not_available_under_current_manifest' on failure — that status by itself does not prove absence from the library. Pass deep_check=true (15-40+ seconds, loads the full Mathlib umbrella) to get a conclusive 'not_in_current_import_scope' vs 'unknown_declaration' verdict before concluding a declaration is genuinely unavailable.",
                         "A prior model's proof (from another session, another model, a paper, etc.) is a candidate artifact, not evidence of correctness, until it passes THIS pinned verifier. Do not skip verification because a candidate 'looks complete'."
                     ]
                 });
@@ -750,9 +790,15 @@ impl ServerHandler for ChatDbMcp {
                 }
 
                 let extra_imports = args.problem_imports.unwrap_or_default();
+                if extra_imports.len() > 50 {
+                    return Err(mcp_invalid_params("problem_imports: at most 50 modules per problem"));
+                }
                 for m in &extra_imports {
-                    if m.trim().is_empty() {
-                        return Err(mcp_invalid_params("problem_imports entries must be non-empty module paths"));
+                    if !valid_lean_module_path(m) {
+                        return Err(mcp_invalid_params(format!(
+                            "problem_imports entry {:?} is not a valid Lean module path — must be dot-separated identifier segments only (letters, digits, underscore), no whitespace, comments, or command syntax",
+                            m
+                        )));
                     }
                 }
                 if !extra_imports.is_empty() {
@@ -1776,20 +1822,37 @@ impl ServerHandler for ChatDbMcp {
                 if args.names.is_empty() {
                     return Err(mcp_invalid_params("names must be non-empty"));
                 }
+                if args.names.len() > 50 {
+                    return Err(mcp_invalid_params("names: at most 50 declarations per call"));
+                }
+                for n in &args.names {
+                    if !valid_lean_declaration_name(n) {
+                        return Err(mcp_invalid_params(format!(
+                            "name {:?} is not a valid Lean declaration name — no whitespace, comments, or command syntax",
+                            n
+                        )));
+                    }
+                }
 
-                let conn = self.conn.lock().await;
-                let (import_manifest_json, import_manifest_hash, env_hash): (String, String, String) = conn.query_row(
-                    "SELECT import_manifest_json, import_manifest_hash, environment_hash FROM problem_versions WHERE id = ?1",
-                    [&args.problem_version_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                ).map_err(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
-                    mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id))
-                } else {
-                    rs(e)
-                })?;
+                let (import_manifest_json, import_manifest_hash, env_hash): (String, String, String) = {
+                    // Scoped so the DB mutex is released BEFORE the potentially
+                    // 15-40+ second blocking Lean invocation below — holding it
+                    // that long would stall every other concurrent tool call
+                    // (episode_observe, episode_status, ...) on the same session.
+                    let conn = self.conn.lock().await;
+                    conn.query_row(
+                        "SELECT import_manifest_json, import_manifest_hash, environment_hash FROM problem_versions WHERE id = ?1",
+                        [&args.problem_version_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    ).map_err(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                        mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id))
+                    } else {
+                        rs(e)
+                    })?
+                };
                 let import_manifest: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
 
-                let results = self.gateway.lookup_declarations(&args.names, &import_manifest)
+                let results = self.gateway.lookup_declarations(&args.names, &import_manifest, args.deep_check)
                     .map_err(mcp_internal_error)?;
 
                 let res = serde_json::json!({
@@ -1849,6 +1912,14 @@ mod tests {
                 wall_time_ms: 1,
                 lean_cpu_time_ms: 1,
             })
+        }
+
+        // The trait default now fails closed (see lean/mod.rs) — MockGateway
+        // deliberately vouches for any import so tests can isolate
+        // manifest-extension bookkeeping from real Lean validation, which is
+        // covered live separately (see test_problem_create_extends_import_manifest).
+        fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> {
+            Ok(())
         }
     }
 
@@ -2436,10 +2507,12 @@ mod tests {
     /// manifest hash a client can copy into lean_declaration_lookup/replay checks.
     #[tokio::test]
     async fn test_problem_create_extends_import_manifest() {
-        // MockGateway (unlike test_handler()'s dummy-path RealLeanGateway) doesn't
-        // override validate_import_manifest, so the permissive trait default
-        // applies — this isolates "does the manifest extend/return correctly"
-        // from "does the real Lean validation work" (covered live separately).
+        // MockGateway explicitly overrides validate_import_manifest to Ok(())
+        // (the trait default now fails closed) — this isolates "does the
+        // manifest extend/return correctly" from "does the real Lean validation
+        // work" (covered live separately). The module path still has to pass
+        // the syntax-level valid_lean_module_path check, which runs before any
+        // gateway is invoked regardless of which gateway is configured.
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
@@ -2456,9 +2529,11 @@ mod tests {
         assert!(pv["import_manifest_hash"].as_str().unwrap().len() > 0);
 
         // A bad module path must be rejected at creation, not discovered later at
-        // solve time. test_handler's gateway doesn't override validate_import_manifest
-        // (default permissive Ok(())), so rejection itself is exercised live
-        // against the real lean-checker rather than here.
+        // solve time. Syntax-level rejection is covered by
+        // test_problem_create_rejects_malformed_import_syntax below; rejection
+        // by real Lean (a syntactically-valid but nonexistent module) is
+        // exercised live against the real lean-checker rather than here, since
+        // test_handler's RealLeanGateway points at a dummy, nonexistent path.
     }
 
     /// lean_declaration_lookup must return an honest per-name status even when
@@ -2485,5 +2560,79 @@ mod tests {
         // honest default (environment_error) applies — this proves the tool
         // never guesses when it can't actually check.
         assert_eq!(results[0]["status"], "environment_error");
+    }
+
+    /// SOUNDNESS: `problem_imports` entries are written verbatim into
+    /// `import {module}\n` Lean source (see build_import_block). Without
+    /// syntax validation, a string containing a newline could append arbitrary
+    /// Lean commands (e.g. `axiom cheat : False`) to every proof file checked
+    /// against that problem's manifest — a full soundness bypass through a
+    /// different door than the one the fidelity-review split closed. Every
+    /// one of these must be rejected at problem_create, before it ever reaches
+    /// the gateway or gets stored.
+    #[tokio::test]
+    async fn test_problem_create_rejects_malformed_import_syntax() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let malicious = [
+            "Mathlib\naxiom cheat : False",
+            "Mathlib\nset_option maxHeartbeats 0",
+            "Mathlib -- comment",
+            "Mathlib; axiom cheat : False",
+            "Mathlib.Tactic (foo)",
+            "",
+            "   ",
+            "Mathlib.\u{0}Tactic",
+        ];
+        for m in malicious {
+            let res = peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+                "source_problem_text": "x", "root_formal_statement": "x",
+                "problem_imports": [m],
+            }).as_object().unwrap().clone())).await;
+            assert!(res.is_err(), "malformed import {:?} must be rejected, not compiled", m);
+        }
+
+        // A well-formed module path must still be accepted (this isn't just
+        // rejecting everything).
+        let ok = peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "x",
+            "problem_imports": ["Mathlib.NumberTheory.Padics.PadicVal.Basic"],
+        }).as_object().unwrap().clone())).await;
+        assert!(ok.is_ok(), "a syntactically valid module path must not be rejected: {:?}", ok);
+    }
+
+    /// SOUNDNESS: `lean_declaration_lookup`'s `names` are written verbatim into
+    /// `#check {name}\n` Lean source. Same injection surface as
+    /// problem_imports, one door earlier — a name containing a newline could
+    /// append arbitrary Lean commands that execute inside the verifier process
+    /// during the lookup itself.
+    #[tokio::test]
+    async fn test_lean_declaration_lookup_rejects_malformed_names() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "x",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let malicious = [
+            "Nat.factorization\naxiom cheat : False",
+            "Nat.factorization -- comment",
+            "Nat.factorization; #exit",
+            "",
+            "   ",
+        ];
+        for n in malicious {
+            let res = peer.call_tool(CallToolRequestParams::new("lean_declaration_lookup").with_arguments(serde_json::json!({
+                "problem_version_id": pv["problem_version_id"], "names": [n],
+            }).as_object().unwrap().clone())).await;
+            assert!(res.is_err(), "malformed declaration name {:?} must be rejected", n);
+        }
+
+        let too_many: Vec<String> = (0..51).map(|i| format!("Nat.foo{}", i)).collect();
+        let res = peer.call_tool(CallToolRequestParams::new("lean_declaration_lookup").with_arguments(serde_json::json!({
+            "problem_version_id": pv["problem_version_id"], "names": too_many,
+        }).as_object().unwrap().clone())).await;
+        assert!(res.is_err(), "more than 50 names must be rejected");
     }
 }

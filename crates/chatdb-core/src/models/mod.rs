@@ -556,14 +556,24 @@ pub struct DeclarationLookupResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeclarationLookupStatus {
-    /// Resolves under the exact import manifest passed in.
+    /// Resolves under the exact import manifest passed in. Fast (single pass,
+    /// no full-library load).
     Available,
-    /// Does not resolve under the given manifest, but DOES resolve under the full
-    /// Mathlib umbrella import — the fix is to add an import, not change strategy.
+    /// Does not resolve under the given manifest. Fast, default result — does
+    /// NOT distinguish "just needs an import" from "genuinely absent"; that
+    /// distinction requires loading the entire Mathlib umbrella (15-40+ seconds
+    /// from a cold process every time, since there is no persistent Lean
+    /// server). Ask for `deep_check: true` only when that distinction matters
+    /// enough to justify the wait.
+    NotAvailableUnderCurrentManifest,
+    /// (deep_check only) Does not resolve under the given manifest, but DOES
+    /// resolve under the full Mathlib umbrella import — the fix is to add an
+    /// import, not change strategy.
     NotInCurrentImportScope,
-    /// Does not resolve even under the full Mathlib umbrella — genuinely absent
-    /// (or misspelled / wrong namespace; this status doesn't distinguish those,
-    /// but the corrective action is the same either way: try a different name).
+    /// (deep_check only) Does not resolve even under the full Mathlib umbrella
+    /// — genuinely absent (or misspelled / wrong namespace; this status doesn't
+    /// distinguish those, but the corrective action is the same either way: try
+    /// a different name).
     UnknownDeclaration,
     /// The lookup itself couldn't be performed (gateway unavailable, process
     /// error, etc.) — NOT evidence about the declaration either way.
@@ -574,6 +584,7 @@ impl std::fmt::Display for DeclarationLookupStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             DeclarationLookupStatus::Available => "available",
+            DeclarationLookupStatus::NotAvailableUnderCurrentManifest => "not_available_under_current_manifest",
             DeclarationLookupStatus::NotInCurrentImportScope => "not_in_current_import_scope",
             DeclarationLookupStatus::UnknownDeclaration => "unknown_declaration",
             DeclarationLookupStatus::EnvironmentError => "environment_error",

@@ -64,7 +64,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 | `trajectory_export` | Paginated export of hash-chained trajectory events |
 | `episode_replay` | Re-execute typed Solve actions through Lean and verify trajectory integrity |
 | `proof_export` | Human-readable proof dossier: proof tree, assembled Lean source, full attempt history, proof/fidelity/promotion status, integrity line (`format: "markdown"` or `"lean"`) |
-| `lean_declaration_lookup` | Checks whether names resolve under a problem's import manifest AND under the full Mathlib umbrella — distinguishes "not imported here" from "genuinely absent." Call this before concluding an API is unavailable |
+| `lean_declaration_lookup` | Checks whether names resolve under a problem's import manifest (fast, default). Pass `deep_check=true` to also check under the full Mathlib umbrella and distinguish "not imported here" from "genuinely absent" (slow — loads all of Mathlib). Call this before concluding an API is unavailable |
 
 ## Proof soundness vs. statement fidelity
 
@@ -83,16 +83,22 @@ A minimal prover loop is: `problem_create` → `problem_submit_fidelity_review` 
 
 ## Import manifests and "environmental scope collapse"
 
-Every problem version has an immutable import manifest — the exact set of Mathlib modules its proofs are checked against (base: `Mathlib.Tactic.Ring` + `Mathlib.Tactic.NormNum`; extend it via `problem_create(problem_imports=[...])`, each validated with a real compile check before acceptance).
+Every problem version has an immutable import manifest — the exact set of Mathlib modules its proofs are checked against (base: `Mathlib.Tactic.Ring` + `Mathlib.Tactic.NormNum`; extend it via `problem_create(problem_imports=[...])`, each validated with a real compile check before acceptance). Import strings and `lean_declaration_lookup` names are written verbatim into Lean source, so both are restricted to plain identifier syntax (dot-separated `[A-Za-z_][A-Za-z0-9_]*` segments for imports; no whitespace/comment/command syntax for declaration names) and capped at 50 entries per call — anything else is rejected before it ever reaches Lean, never silently compiled. See `docs/fix_plan_playtest_04.md`.
 
-**An `unknown_declaration` diagnostic only ever proves a name didn't resolve under that exact manifest — it never proves the name is absent from the pinned Mathlib.** Before either changing proof strategy or declaring an API unavailable, call `lean_declaration_lookup`, which checks a name under both the problem's manifest and the full Mathlib umbrella:
+**An `unknown_declaration` diagnostic only ever proves a name didn't resolve under that exact manifest — it never proves the name is absent from the pinned Mathlib.** Before either changing proof strategy or declaring an API unavailable, call `lean_declaration_lookup`.
+
+By default the lookup only checks the problem's own manifest — a few seconds, since it doesn't load all of Mathlib:
 
 - **`available`** — resolves under the current manifest.
-- **`not_in_current_import_scope`** — resolves under the full umbrella but not the current manifest → add the module via a new `problem_create(problem_imports=[...])`.
-- **`unknown_declaration`** — doesn't resolve even with everything imported → genuinely try a different name.
+- **`not_available_under_current_manifest`** — doesn't resolve under the current manifest. **This alone does not prove absence from the library** — call again with `deep_check=true` to get a conclusive verdict.
 - **`environment_error`** — the lookup itself failed; not evidence either way.
 
-Conflating the first case with the third — "unknown identifier" collapsing into "the library doesn't have this" — is a real failure mode we call **environmental scope collapse**: a local fact about one import closure gets inflated into a global claim about library capability, which can cascade into a model abandoning a provable branch. `environment_describe` carries this as an explicit epistemic rule for any agent driving the loop. Diagnostics also distinguish `unknown_declaration` (name resolution) from `parse_error` (syntax) and other categories — see `docs/fix_plan_playtest_03.md`.
+Pass `deep_check=true` to additionally check under the full Mathlib umbrella (slow — reliably 15-40+ seconds, since it loads all of Mathlib) and get a conclusive verdict:
+
+- **`not_in_current_import_scope`** — resolves under the full umbrella but not the current manifest → add the module via a new `problem_create(problem_imports=[...])`.
+- **`unknown_declaration`** — doesn't resolve even with everything imported → genuinely try a different name.
+
+Conflating "not available under the current manifest" with "the library doesn't have this" — is a real failure mode we call **environmental scope collapse**: a local fact about one import closure gets inflated into a global claim about library capability, which can cascade into a model abandoning a provable branch. `environment_describe` carries this as an explicit epistemic rule for any agent driving the loop. Diagnostics also distinguish `unknown_declaration` (name resolution) from `parse_error` (syntax) and other categories — see `docs/fix_plan_playtest_03.md`. The fast-default/opt-in-deep split exists because the unconditional umbrella check was slow enough to blow past MCP client tool-call timeouts — see `docs/fix_plan_playtest_04.md`.
 
 Import manifests are immutable per problem_version and included in every observation/trajectory event as `import_manifest_hash`, so replay always re-verifies against the exact closure the original attempt used.
 

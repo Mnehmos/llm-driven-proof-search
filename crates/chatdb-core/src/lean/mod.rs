@@ -20,20 +20,28 @@ pub trait LeanGateway {
 
     /// Confirms every module in `imports` actually resolves (catches typos /
     /// renamed paths) before it's accepted into a problem's immutable import
-    /// manifest. Default is permissive — a gateway that can't check reports no
-    /// objection rather than silently rejecting. `RealLeanGateway` overrides this
-    /// with a real compile check.
+    /// manifest. Default fails closed — a gateway that can't actually check an
+    /// import shouldn't silently rubber-stamp it (imports are compiled into
+    /// every subsequent proof file for that problem, so an unchecked one is an
+    /// unchecked addition to the trusted base). `RealLeanGateway` overrides this
+    /// with a real compile check; only a gateway that's deliberately vouching
+    /// for arbitrary imports (e.g. a test double) should override this to `Ok`.
     fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> {
-        Ok(())
+        Err("this gateway cannot validate custom imports".to_string())
     }
 
-    /// Best-effort: does `name` resolve under `import_manifest`, and — if not —
-    /// does it resolve under the full Mathlib umbrella? This is the fix for
-    /// "environmental scope collapse": an `unknown identifier` elaboration error
-    /// only ever proves a name didn't resolve under the exact import closure
-    /// used for one attempt. It never proves the name is absent from the pinned
-    /// library. Default reports EnvironmentError honestly rather than guessing.
-    fn lookup_declarations(&self, names: &[String], _import_manifest: &[String]) -> Result<Vec<DeclarationLookupResult>, String> {
+    /// Fast pass (single Lean invocation, sub-second beyond process spawn): does
+    /// `name` resolve under `import_manifest`? If `deep_check` is true AND a name
+    /// fails that pass, ALSO checks under the full Mathlib umbrella — this
+    /// second pass loads the entire library from a cold process and reliably
+    /// takes 15-40+ seconds (there is no persistent Lean server), so it is
+    /// opt-in, not the default. This is the fix for "environmental scope
+    /// collapse": an `unknown identifier` elaboration error only ever proves a
+    /// name didn't resolve under the exact import closure used for one attempt.
+    /// It never proves the name is absent from the pinned library — but proving
+    /// that costs real time, so callers choose when to pay for it. Default
+    /// reports EnvironmentError honestly rather than guessing.
+    fn lookup_declarations(&self, names: &[String], _import_manifest: &[String], _deep_check: bool) -> Result<Vec<DeclarationLookupResult>, String> {
         Ok(names.iter().map(|n| DeclarationLookupResult {
             query: n.clone(),
             status: DeclarationLookupStatus::EnvironmentError,
@@ -53,11 +61,14 @@ impl RealLeanGateway {
     }
 
     /// Writes `file_content` to a temp file and runs `lake env lean --json` on it,
-    /// returning the process's overall success and every parsed JSON diagnostic
-    /// line. `Err` here means the invocation itself failed (spawn error or
-    /// 60s timeout) — not that Lean reported errors within the file, which is a
-    /// normal, successful run that the caller inspects via the returned lines.
-    fn run_lean_json(&self, file_content: &str, file_stem: &str) -> Result<(bool, Vec<serde_json::Value>), String> {
+    /// returning the process's overall success, every parsed JSON diagnostic
+    /// line, and raw stderr (Lake resolution/build failures land there, not in
+    /// the `--json` stdout stream, so silently dropping it hides the actual
+    /// cause of an otherwise-unexplained process failure). `Err` here means the
+    /// invocation itself failed (spawn error or timeout) — not that Lean
+    /// reported errors within the file, which is a normal, successful run that
+    /// the caller inspects via the returned lines.
+    fn run_lean_json(&self, file_content: &str, file_stem: &str, timeout: Duration) -> Result<(bool, Vec<serde_json::Value>, String), String> {
         let temp_dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let file_path = temp_dir.path().join(format!("{}.lean", file_stem));
         fs::write(&file_path, file_content).map_err(|e| e.to_string())?;
@@ -84,7 +95,7 @@ impl RealLeanGateway {
             let _ = tx.send(res);
         });
 
-        let output = match rx.recv_timeout(Duration::from_secs(60)) {
+        let output = match rx.recv_timeout(timeout) {
             Ok(Ok(out)) => out,
             Ok(Err(e)) => return Err(format!("Process error: {}", e)),
             Err(_) => {
@@ -94,7 +105,7 @@ impl RealLeanGateway {
                         .arg("/F").arg("/T").arg("/PID").arg(pid.to_string())
                         .status();
                 }
-                return Err("Lean invocation timed out after 60 seconds".to_string());
+                return Err(format!("Lean invocation timed out after {} seconds", timeout.as_secs()));
             }
         };
 
@@ -102,7 +113,8 @@ impl RealLeanGateway {
         let lines: Vec<serde_json::Value> = stdout_str.lines()
             .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
             .collect();
-        Ok((output.status.success(), lines))
+        let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
+        Ok((output.status.success(), lines, stderr_str))
     }
 
     fn build_import_block(import_manifest: &[String], approved_dependency_ids: &[Uuid]) -> String {
@@ -229,7 +241,7 @@ impl LeanGateway for RealLeanGateway {
         );
 
         // 4/5. Write + run.
-        let (proc_success, lines) = match self.run_lean_json(&file_content, &theorem_name) {
+        let (proc_success, lines, stderr) = match self.run_lean_json(&file_content, &theorem_name, Duration::from_secs(60)) {
             Ok(v) => v,
             Err(timeout_or_spawn_err) => {
                 return Ok(LeanVerificationResult {
@@ -307,8 +319,25 @@ impl LeanGateway for RealLeanGateway {
                     error_code: None,
                     canonical_goal_hash: None,
                 })
+            } else if let Some(d) = all_diagnostics.first().cloned() {
+                Some(d)
+            } else if !stderr.trim().is_empty() {
+                // Process failed but stdout's --json stream had nothing parseable
+                // (e.g. a Lake resolution failure) — surface stderr rather than
+                // reporting an unexplained failure with no diagnostic at all.
+                Some(LeanDiagnostic {
+                    category: LeanDiagnosticCategory::TacticFailure,
+                    primary_message: stderr.trim().to_string(),
+                    source_span: None,
+                    goal: None,
+                    local_context: vec![],
+                    unsolved_goals: vec![],
+                    used_dependencies: vec![],
+                    error_code: None,
+                    canonical_goal_hash: None,
+                })
             } else {
-                all_diagnostics.first().cloned()
+                None
             }
         } else {
             None
@@ -371,7 +400,11 @@ impl LeanGateway for RealLeanGateway {
         for module in imports {
             content.push_str(&format!("import {}\n", module));
         }
-        let (proc_success, lines) = self.run_lean_json(&content, "import_probe")?;
+        // Validating imports means resolving them, which can itself pull in a
+        // large chunk of Mathlib (e.g. NumberTheory modules) — give this more
+        // room than the fast declaration-lookup pass, but well under
+        // verify_exact's 60s since this only elaborates imports, not a proof.
+        let (proc_success, lines, stderr) = self.run_lean_json(&content, "import_probe", Duration::from_secs(45))?;
         let errors: Vec<String> = lines.iter()
             .filter_map(|v| {
                 let (msg, _kind, severity, _line) = parse_diagnostic_line(v);
@@ -379,35 +412,57 @@ impl LeanGateway for RealLeanGateway {
             })
             .collect();
         if !proc_success || !errors.is_empty() {
+            let detail = if !errors.is_empty() {
+                errors.join("; ")
+            } else if !stderr.trim().is_empty() {
+                stderr.trim().to_string()
+            } else {
+                "process failed with no diagnostic output".to_string()
+            };
             return Err(format!(
                 "one or more imports failed to resolve under the pinned environment: {}",
-                if errors.is_empty() { "process failed".to_string() } else { errors.join("; ") }
+                detail
             ));
         }
         Ok(())
     }
 
-    fn lookup_declarations(&self, names: &[String], import_manifest: &[String]) -> Result<Vec<DeclarationLookupResult>, String> {
+    fn lookup_declarations(&self, names: &[String], import_manifest: &[String], deep_check: bool) -> Result<Vec<DeclarationLookupResult>, String> {
         if names.is_empty() {
             return Ok(vec![]);
         }
 
         // Pass 1: exactly the problem's own import manifest — mirrors what a
-        // Solve attempt actually sees.
-        let pass1 = self.check_pass(names, import_manifest)?;
+        // Solve attempt actually sees. Fast: no full-library load.
+        let pass1 = self.check_pass(names, import_manifest, Duration::from_secs(20))?;
 
-        // Pass 2, only for names that failed pass 1: the full Mathlib umbrella.
-        // This is what distinguishes "not imported here" from "genuinely absent."
         let need_umbrella: Vec<String> = names.iter().enumerate()
             .filter(|(i, _)| !pass1[*i])
             .map(|(_, n)| n.clone())
             .collect();
-        let pass2: std::collections::HashMap<String, bool> = if need_umbrella.is_empty() {
-            std::collections::HashMap::new()
-        } else {
-            let umbrella_results = self.check_pass(&need_umbrella, &["Mathlib".to_string()])?;
-            need_umbrella.into_iter().zip(umbrella_results).collect()
-        };
+
+        if !deep_check || need_umbrella.is_empty() {
+            return Ok(names.iter().enumerate().map(|(i, name)| {
+                if pass1[i] {
+                    DeclarationLookupResult { query: name.clone(), status: DeclarationLookupStatus::Available, diagnostics: vec![] }
+                } else {
+                    DeclarationLookupResult {
+                        query: name.clone(),
+                        status: DeclarationLookupStatus::NotAvailableUnderCurrentManifest,
+                        diagnostics: vec!["does not resolve under the current import manifest. This does NOT mean the declaration is absent from the pinned library \
+                                           — call again with deep_check=true to distinguish 'needs an import' from 'genuinely absent' \
+                                           (loads the full Mathlib umbrella; reliably takes 15-40+ seconds)".to_string()],
+                    }
+                }
+            }).collect());
+        }
+
+        // deep_check, only for names that failed pass 1: the full Mathlib
+        // umbrella. This is what distinguishes "not imported here" from
+        // "genuinely absent" — and is the slow path (cold process, full library
+        // load) callers must explicitly opt into.
+        let umbrella_results = self.check_pass(&need_umbrella, &["Mathlib".to_string()], Duration::from_secs(90))?;
+        let pass2: std::collections::HashMap<String, bool> = need_umbrella.into_iter().zip(umbrella_results).collect();
 
         Ok(names.iter().enumerate().map(|(i, name)| {
             if pass1[i] {
@@ -416,7 +471,7 @@ impl LeanGateway for RealLeanGateway {
                 DeclarationLookupResult {
                     query: name.clone(),
                     status: DeclarationLookupStatus::NotInCurrentImportScope,
-                    diagnostics: vec![format!("resolves under `import Mathlib` but not under the current manifest — add the module that provides it")],
+                    diagnostics: vec!["resolves under `import Mathlib` but not under the current manifest — add the module that provides it".to_string()],
                 }
             } else {
                 DeclarationLookupResult {
@@ -433,7 +488,7 @@ impl RealLeanGateway {
     /// Checks each name's resolution in ONE compile pass (`#check` per name;
     /// Lean continues past an unresolved `#check` rather than aborting the file),
     /// returning true/false per name in the same order as `names`.
-    fn check_pass(&self, names: &[String], imports: &[String]) -> Result<Vec<bool>, String> {
+    fn check_pass(&self, names: &[String], imports: &[String], timeout: Duration) -> Result<Vec<bool>, String> {
         let mut content = String::new();
         for module in imports {
             content.push_str(&format!("import {}\n", module));
@@ -444,15 +499,43 @@ impl RealLeanGateway {
             content.push_str(&format!("#check {}\n", name));
         }
 
-        let (_proc_success, lines) = self.run_lean_json(&content, "decl_lookup")?;
+        let check_end_line = check_start_line + names.len() as i64 - 1;
+        let (proc_success, lines, stderr) = self.run_lean_json(&content, "decl_lookup", timeout)?;
         let mut failed_lines: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        // An error that lands OUTSIDE the #check lines (e.g. a bad import on
+        // line 1) is an environment problem, not a per-declaration result — if
+        // it were silently ignored, every name would fall through as "no
+        // failure recorded" and get reported Available even though none of the
+        // #check lines actually ran. That's the false-availability failure mode:
+        // a broken environment must never look like a clean resolution.
+        let mut environment_errors: Vec<String> = Vec::new();
         for val in &lines {
             let (msg, _kind, severity, line) = parse_diagnostic_line(val);
             if severity == "error" && !msg.is_empty() {
-                if let Some(l) = line {
-                    failed_lines.insert(l);
+                match line {
+                    Some(l) if l >= check_start_line && l <= check_end_line => {
+                        failed_lines.insert(l);
+                    }
+                    _ => environment_errors.push(msg),
                 }
             }
+        }
+        if !environment_errors.is_empty() {
+            return Err(format!(
+                "declaration lookup environment failed (error outside the #check lines, likely a bad import): {}",
+                environment_errors.join("; ")
+            ));
+        }
+        // The process can legitimately exit non-zero purely because one or more
+        // #check lines failed (an unresolved name IS an error) — that's the
+        // normal per-name failure path above, not an environment problem. But if
+        // it failed AND produced no diagnostics we could attribute to anything —
+        // no #check failures, no environment errors — there's nothing to
+        // distinguish "everything resolved" from "the process crashed before
+        // producing output"; don't guess "Available" in that case.
+        if !proc_success && failed_lines.is_empty() && environment_errors.is_empty() {
+            let detail = if !stderr.trim().is_empty() { stderr.trim().to_string() } else { "process failed with no parseable diagnostics".to_string() };
+            return Err(format!("declaration lookup environment failed: {}", detail));
         }
         Ok((0..names.len() as i64)
             .map(|i| !failed_lines.contains(&(check_start_line + i)))
