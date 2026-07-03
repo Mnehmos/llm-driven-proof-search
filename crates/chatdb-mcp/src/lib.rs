@@ -548,14 +548,20 @@ pub struct ChatDbMcp {
     pub conn: Arc<Mutex<Connection>>,
     pub gateway: Box<dyn LeanGateway + Send + Sync>,
     pub lean_available: bool,
+    /// The server's own read of what it actually verifies against — the only
+    /// trustworthy source for this, since a client can't see the installed
+    /// toolchain. `None` when lean-checker isn't set up (`lean_available == false`
+    /// implies this is `None`, but the manifest can also be absent independently).
+    pub lean_environment: Option<chatdb_proof_core::lean::LeanEnvironmentInfo>,
 }
 
 impl ChatDbMcp {
     pub fn new(conn: Arc<Mutex<Connection>>, lean_project_path: PathBuf, elan_bin_path: PathBuf) -> Self {
         let lean_available = elan_bin_path.join("lake.exe").exists()
             && (lean_project_path.join("lakefile.toml").exists() || lean_project_path.join("lakefile.lean").exists());
+        let lean_environment = chatdb_proof_core::lean::detect_environment(&lean_project_path);
         let gateway = Box::new(RealLeanGateway::new(lean_project_path, elan_bin_path));
-        Self { conn, gateway, lean_available }
+        Self { conn, gateway, lean_available, lean_environment }
     }
 }
 
@@ -616,6 +622,9 @@ impl ServerHandler for ChatDbMcp {
                         "reward_policy_version": "1.0"
                     },
                     "lean_gateway": if self.lean_available { "ready" } else { "unavailable" },
+                    "lean_environment": self.lean_environment.as_ref().map(|e| serde_json::json!({
+                        "descriptor": e.descriptor, "hash": e.hash
+                    })),
                     "action_schema": action_schema,
                     "action_examples": [
                         {"type": "solve", "proof_term": "  norm_num"},
@@ -649,7 +658,15 @@ impl ServerHandler for ChatDbMcp {
                 let source_hash = canonical_hash(&args.source_problem_text).map_err(mcp_internal_error)?;
                 let root_hash = canonical_hash(&args.root_formal_statement).map_err(mcp_internal_error)?;
                 let rendering = args.normalized_root_rendering.unwrap_or_else(|| args.root_formal_statement.clone());
-                let env_hash = args.environment_hash.unwrap_or_else(|| "unspecified-env".to_string());
+                // The server, not the client, is the source of truth for what Lean
+                // environment actually verifies proofs — a client-supplied hash was
+                // almost always omitted and silently defaulted to a meaningless
+                // placeholder, which made `replay`'s determinism claim untraceable
+                // to any specific toolchain/Mathlib pin. Auto-detect; still allow an
+                // explicit override for advanced/cross-environment bookkeeping.
+                let env_hash = args.environment_hash
+                    .or_else(|| self.lean_environment.as_ref().map(|e| e.hash.clone()))
+                    .unwrap_or_else(|| "lean-gateway-unavailable".to_string());
                 let metadata = args.metadata_json.unwrap_or_else(|| "{}".to_string());
                 serde_json::from_str::<serde_json::Value>(&metadata)
                     .map_err(|e| mcp_invalid_params(format!("metadata_json is not valid JSON: {}", e)))?;
@@ -683,6 +700,7 @@ impl ServerHandler for ChatDbMcp {
                     "problem_version_id": pv_id.to_string(),
                     "fidelity_status": fidelity_status,
                     "state": state,
+                    "environment_hash": env_hash,
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
@@ -851,9 +869,16 @@ impl ServerHandler for ChatDbMcp {
                 let args: EpisodeObserveArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
 
+                let ep_uuid = Uuid::parse_str(&args.episode_id)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid episode Uuid: {}", e)))?;
+
                 let mut conn = self.conn.lock().await;
                 let tx = conn.transaction().map_err(rs)?;
                 attempts::attempt_recover_expired(&tx).map_err(rs)?;
+                attempts::request_recover_expired(&tx, ep_uuid).map_err(rs)?;
+                // If the only pending request just lapsed, advance() notices there's
+                // no live one and mints a fresh one against the same target obligation.
+                lifecycle::advance(&tx, ep_uuid).map_err(rs)?;
                 tx.commit().map_err(rs)?;
 
                 let active_req_id_str: Option<String> = conn.query_row(
@@ -901,6 +926,7 @@ impl ServerHandler for ChatDbMcp {
                 let mut conn = self.conn.lock().await;
                 let tx = conn.transaction().map_err(rs)?;
                 attempts::attempt_recover_expired(&tx).map_err(rs)?;
+                attempts::request_recover_expired(&tx, ep_uuid).map_err(rs)?;
 
                 let ep_state: Option<String> = tx.query_row(
                     "SELECT state FROM episodes WHERE id = ?1", [&args.episode_id], |row| row.get(0)
@@ -1547,6 +1573,7 @@ mod tests {
             conn: Arc::new(Mutex::new(conn)),
             gateway: Box::new(gateway),
             lean_available: false,
+            lean_environment: None,
         }
     }
 
@@ -1602,6 +1629,7 @@ mod tests {
         let json = tool_json(&call_res);
         assert_eq!(json["protocol_version"], "2025-11-25");
         assert_eq!(json["lean_gateway"], "unavailable");
+        assert!(json["lean_environment"].is_null(), "no lean-checker at the dummy test path -> no environment to report");
         assert!(json["action_schema"].is_object(), "environment_describe must expose the TypedAction schema");
         assert_eq!(json["action_examples"][0]["type"], "solve");
     }
@@ -1883,5 +1911,62 @@ mod tests {
 
         assert_eq!(first["action_attempt_id"], second["action_attempt_id"], "retried claim with same idempotency_key must return the same attempt");
         assert_eq!(first["claim_token"], second["claim_token"]);
+    }
+
+    /// A problem_create with no lean-checker configured (test_handler's gateway
+    /// points at a dummy path) must not silently write a meaningless placeholder
+    /// like "unspecified-env" — that made replay's determinism claim untraceable
+    /// to any actual toolchain/Mathlib pin. It should say plainly that the
+    /// gateway was unavailable.
+    #[tokio::test]
+    async fn test_problem_create_env_hash_is_not_a_silent_placeholder() {
+        let client = connected_client(test_handler()).await;
+        let peer = client.peer();
+        let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "x", "approve": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(pv["environment_hash"], "lean-gateway-unavailable", "{:?}", pv);
+    }
+
+    /// A request nobody ever claimed still carries its own `expiration_at` timer,
+    /// separate from an attempt's claim_expiration. Nothing previously checked it,
+    /// so a lapsed unclaimed request displayed `status: pending` forever instead of
+    /// being retired and replaced.
+    #[tokio::test]
+    async fn test_unclaimed_request_expiry_is_recovered() {
+        let handler = test_handler();
+        let conn_handle = handler.conn.clone();
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "x", "approve": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv["problem_version_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let stale_request_id = ep["next_action_request"]["id"].as_str().unwrap().to_string();
+
+        {
+            let conn = conn_handle.lock().await;
+            conn.execute(
+                "UPDATE action_requests SET expiration_at = '2000-01-01T00:00:00Z' WHERE id = ?1",
+                [&stale_request_id],
+            ).unwrap();
+        }
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_observe").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let fresh_request_id = observed["action_request"]["id"].as_str().unwrap().to_string();
+        assert_ne!(fresh_request_id, stale_request_id, "episode_observe must retire a lapsed request and mint a fresh one, not keep serving the stale one");
+        assert_eq!(observed["action_request"]["status"], "pending");
+
+        let conn = conn_handle.lock().await;
+        let stale_status: String = conn.query_row(
+            "SELECT status FROM action_requests WHERE id = ?1", [&stale_request_id], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(stale_status, "expired", "the lapsed request must be marked expired, not left as pending");
     }
 }

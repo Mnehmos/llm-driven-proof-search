@@ -28,6 +28,35 @@ impl RealLeanGateway {
     }
 }
 
+/// Human-readable identity of the actual Lean+Mathlib environment the gateway
+/// verifies against, plus a stable hash of it. Read from `lean-toolchain` and the
+/// resolved (not just requested) Mathlib commit in `lake-manifest.json` — the
+/// server is the only party that can know this, so it should never be a
+/// client-supplied placeholder like "unspecified-env".
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeanEnvironmentInfo {
+    pub toolchain: String,
+    pub mathlib_rev: String,
+    pub descriptor: String,
+    pub hash: String,
+}
+
+/// Returns `None` if `lean-toolchain` or a resolved mathlib manifest entry is
+/// missing — i.e. the project isn't set up, matching `lean_available == false`.
+pub fn detect_environment(lean_project_path: &std::path::Path) -> Option<LeanEnvironmentInfo> {
+    let toolchain = fs::read_to_string(lean_project_path.join("lean-toolchain")).ok()?.trim().to_string();
+
+    let manifest_str = fs::read_to_string(lean_project_path.join("lake-manifest.json")).ok()?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_str).ok()?;
+    let mathlib_rev = manifest.get("packages")?.as_array()?.iter()
+        .find(|p| p.get("name").and_then(|n| n.as_str()) == Some("mathlib"))?
+        .get("rev")?.as_str()?.to_string();
+
+    let descriptor = format!("{} + mathlib@{}", toolchain, mathlib_rev);
+    let hash = crate::hashing::canonical_hash(&descriptor).ok()?;
+    Some(LeanEnvironmentInfo { toolchain, mathlib_rev, descriptor, hash })
+}
+
 impl LeanGateway for RealLeanGateway {
     fn verify_exact(
         &self,

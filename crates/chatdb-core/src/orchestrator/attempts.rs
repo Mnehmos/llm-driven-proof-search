@@ -119,6 +119,21 @@ pub fn attempt_recover_expired(tx: &Transaction) -> Result<usize> {
     Ok(count)
 }
 
+/// Requests carry their own `expiration_at` (set by `lifecycle::advance`) separate
+/// from an attempt's `claim_expiration` — a request nobody ever claimed still
+/// lapses on its own timer. Nothing previously checked this column, so a stale
+/// unclaimed request displayed `status: pending` indefinitely. Mark lapsed ones
+/// 'expired' so callers know to re-`advance()` for a fresh request.
+pub fn request_recover_expired(tx: &Transaction, episode_id: Uuid) -> Result<usize> {
+    let now = Utc::now().to_rfc3339();
+    let n = tx.execute(
+        "UPDATE action_requests SET status = 'expired'
+         WHERE episode_id = ?1 AND status = 'pending' AND expiration_at IS NOT NULL AND expiration_at < ?2",
+        (episode_id.to_string(), now),
+    )?;
+    Ok(n)
+}
+
 /// Abandon a wedged attempt (e.g. after a Lean gateway error) and free its request
 /// back to 'pending' so a client can re-claim without waiting for the 5-minute
 /// claim-expiration recovery. No-op if the attempt is already in a terminal state,
