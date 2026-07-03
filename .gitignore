@@ -29,6 +29,20 @@ desktop.ini
 # Lean build artifacts
 /lean-checker/build/
 /lean-checker/.lake/
+# Kernel-passing proofs the gateway drops here at runtime — episode-local artifacts,
+# not source. Delete freely; they regenerate on the next certified solve.
+/lean-checker/LeanChecker/Verified/*.lean
+# Scaffold CI from the mathlib template — would run full Mathlib builds on GitHub.
+# Deliberately untracked; restore from `lake new <name> math` if ever wanted.
+/lean-checker/.github/
+
+# Local MCP registration (machine-specific absolute paths)
+.mcp.json
+
+# Local DB snapshots and incidental tooling
+*.bak
+tunnel.zip
+tunnel_client_dir/
 
 # Environment files
 .env
