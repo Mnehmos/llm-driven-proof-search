@@ -177,9 +177,23 @@ last):
    the original pre-SubmitModule spec were left untouched (still dead code,
    noted on issue #23) — this feature uses fresh `drafts`/`draft_moves`
    tables instead, since the old ones didn't fit either issue's shape.
-4. #25 — Mathlib librarian (plans need real coverage data, not guesses).
+4. **#25 — Mathlib librarian.** ✅ Shipped in v0.3.4. Scans the REAL pinned
+   Mathlib source tree (not a precomputed/offline index — a live scan of
+   ~111MB takes a fraction of a second) via `mathlib_search_declarations`,
+   plus `mathlib_search_local_artifacts` (this instance's own verified
+   precedents) and `formalization_plan_attach_librarian_result` (feeds
+   directly into #10's coverage tracking). Found and fixed three real bugs
+   via end-to-end testing against the actual Mathlib checkout, not just
+   inspection: a char-count-vs-byte-index panic on Unicode declaration names
+   (killed the server task silently — looked like a hang, not an error), a
+   modifier/attribute-prefix blind spot affecting ~80% of real files (with a
+   false-confidence failure mode, not just a coverage gap), and a
+   trailing-dot query degrading into a match-everything scan. See
+   `docs/librarian.md`.
 
-**Status:** #24 shipped (v0.3.2). #23 + #10 shipped together (v0.3.3). #25 open.
+**Status:** Level 3 MVP complete. #24 shipped (v0.3.2). #23 + #10 shipped
+together (v0.3.3). #25 shipped (v0.3.4). Next: the PutnamBench sprint
+(#28-32).
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a

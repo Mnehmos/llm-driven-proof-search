@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  29 tools · typed schemas · JSON Schema 2020-12                 │
+│  32 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -85,6 +85,9 @@ terms of overall system capability and what's still ahead, see
 | `formalization_plan_add_item` | Add a planning item (concept, missing_definition, missing_lemma, planned_module, or external_citation) to a plan |
 | `formalization_plan_attach_lookup` | Attach a `lean_declaration_lookup` result to a plan item, updating its Mathlib coverage status |
 | `formalization_plan_promote_item_to_obligation` | Link a plan item to an episode_obligation that already exists (created via a normal `Decompose` action). Never creates the obligation itself |
+| `mathlib_search_declarations` | Search the real pinned Mathlib source tree for declaration names containing a substring (beyond exact-name lookup). Advisory only |
+| `mathlib_search_local_artifacts` | Search this instance's own previously-verified theorem/def names for a substring match |
+| `formalization_plan_attach_librarian_result` | Attach a Mathlib librarian result to a formalization plan item, updating its coverage status |
 
 ## `Solve` vs. `SubmitModule`
 
@@ -423,7 +426,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 29 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 32 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records
@@ -450,6 +453,9 @@ Architectural decisions are recorded in [`docs/adr/`](docs/adr/):
   a real-toolchain playtest sprint covering algebraic inequalities, induction,
   structural/well-founded/mutual recursion, and list predicates, with full
   proof exports and reusable proof-pattern lessons.
+- [`docs/librarian.md`](docs/librarian.md) — the Mathlib librarian's
+  architecture, trust boundary, confidence vocabulary, and deliberate MVP
+  scope cuts (issue #25).
 
 ## License
 
