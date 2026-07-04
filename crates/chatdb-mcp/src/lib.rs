@@ -2129,7 +2129,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.10"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.11"))
     }
 
     async fn list_tools(
@@ -2220,7 +2220,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.10",
+                    "environment_version": "0.3.11",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -8074,5 +8074,131 @@ mod tests {
         let text = res.content[0].as_text().unwrap().text.clone();
         assert!(text.contains("## Narrative"), "paper_dossier must include a written narrative section, not just tables: {text}");
         assert!(text.contains("PAPER DOSSIER"), "paper_dossier must carry its private banner: {text}");
+    }
+
+    // PutnamBench smoke subset (issue #32). Embedded at compile time via
+    // include_str! — this test needs NO CHATDB_PUTNAM_BENCH_PATH / external
+    // clone, so it runs in every normal `cargo test`, unlike a full-suite
+    // import/run which is deliberately opt-in only (see
+    // docs/benchmarks/putnambench.md).
+    const PUTNAMBENCH_SMOKE_FIXTURE: &str = include_str!("../../../benchmarks/putnambench_smoke.json");
+
+    #[derive(serde::Deserialize)]
+    struct SmokeImportFixture {
+        upstream_problem_id: String,
+        theorem_name: String,
+        root_formal_statement: String,
+        root_statement_hash: String,
+        prover_ready_statement_hash: Option<String>,
+        import_manifest: Vec<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SmokeCannedProofFixture {
+        fixture_id: String,
+        kind: String,
+        root_formal_statement: String,
+        import_manifest: Vec<String>,
+        attempt: serde_json::Value,
+        expected_status: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SmokeFixtureFile {
+        import_fixtures: Vec<SmokeImportFixture>,
+        canned_proof_fixtures: Vec<SmokeCannedProofFixture>,
+    }
+
+    #[tokio::test]
+    async fn test_putnambench_smoke_import_fixtures_register_with_stable_hashes() {
+        // Real, embedded PutnamBench problems (not synthetic) — verifies the
+        // importer's hash computation is stable over time: if canonical_hash
+        // or to_pi_form's conversion ever changes behavior, these
+        // hand-verified expected hashes (captured against the real corpus at
+        // commit a23d8e6d4e9e3418fd78f76de7bfcb9414cbfd39) would catch it.
+        let fixture: SmokeFixtureFile = serde_json::from_str(PUTNAMBENCH_SMOKE_FIXTURE).unwrap();
+        assert!(fixture.import_fixtures.len() >= 5, "issue #32 requires 5-10 selected Lean targets");
+
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBenchSmoke").await;
+
+        for f in &fixture.import_fixtures {
+            let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+                "suite_id": suite_id, "upstream_problem_id": f.upstream_problem_id, "theorem_name": f.theorem_name,
+                "root_formal_statement": f.root_formal_statement, "import_manifest": f.import_manifest,
+            }).as_object().unwrap().clone())).await.unwrap());
+            assert_eq!(registered["root_statement_hash"], f.root_statement_hash,
+                "root_statement_hash for {} must match the hand-verified expected value — canonical_hash must be stable", f.upstream_problem_id);
+            match &f.prover_ready_statement_hash {
+                Some(expected) => assert_eq!(registered["prover_ready_statement_hash"], *expected,
+                    "prover_ready_statement_hash for {} must match — to_pi_form's conversion must be stable", f.upstream_problem_id),
+                None => assert!(registered["prover_ready_statement_hash"].is_null()),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_putnambench_smoke_canned_proof_fixtures_produce_expected_status() {
+        // Deliberately synthetic statements (real Putnam problems require
+        // genuine multi-step argument, not a one-line tactic) — this is the
+        // "canned-proof fixture" / "expected-fail fixture" modes issue #32
+        // asks for: at least one Solve-only success, one SubmitModule
+        // success, one intentionally-bad attempt, all driven through the
+        // real episode_step path and checked against the fixture's own
+        // expected_status.
+        let fixture: SmokeFixtureFile = serde_json::from_str(PUTNAMBENCH_SMOKE_FIXTURE).unwrap();
+        assert!(fixture.canned_proof_fixtures.iter().any(|f| f.kind == "solve_only" && f.expected_status == "kernel_verified"),
+            "issue #32 requires at least one Solve-only success fixture");
+        assert!(fixture.canned_proof_fixtures.iter().any(|f| matches!(f.attempt["type"].as_str(), Some("submit_module")) && f.expected_status == "kernel_verified"),
+            "issue #32 requires at least one SubmitModule success fixture");
+        assert!(fixture.canned_proof_fixtures.iter().any(|f| f.expected_status != "kernel_verified" && f.expected_status != "certified"),
+            "issue #32 requires at least one expected-failure fixture");
+
+        for f in &fixture.canned_proof_fixtures {
+            let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+            let peer = client.peer();
+            let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+                "source_problem_text": format!("smoke fixture: {}", f.fixture_id),
+                "root_formal_statement": f.root_formal_statement,
+                "problem_imports": f.import_manifest,
+                "unsafe_dev_attestation": true,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv["problem_version_id"], "max_steps": 5,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+            let req = &ep["next_action_request"];
+            let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+                "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": format!("{}-1", f.fixture_id),
+                "expected_revision": req["episode_revision"],
+            }).as_object().unwrap().clone())).await.unwrap());
+            let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+                "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+                "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+                "action": f.attempt, "cost_micros": 1,
+            }).as_object().unwrap().clone())).await.unwrap());
+
+            match f.expected_status.as_str() {
+                "kernel_verified" | "certified" => assert_eq!(step["outcome"], f.expected_status,
+                    "fixture {} expected {} but got: {:?}", f.fixture_id, f.expected_status, step),
+                _ => {
+                    // A real adversarial-review finding: `outcome` is JSON
+                    // null after ANY non-terminal step (a genuine kernel
+                    // rejection with attempts remaining, an infra hiccup, a
+                    // malformed action that still parsed) — asserting only
+                    // `outcome != "kernel_verified"` would pass identically
+                    // for all of those, not specifically for "the kernel
+                    // correctly rejected this attempt." `accepted: false`
+                    // is the field that actually means the verification
+                    // step ran and was rejected, which is what an
+                    // expected-failure fixture must demonstrate.
+                    assert_eq!(step["accepted"], false,
+                        "fixture {} is an expected-failure case and the step must be rejected (accepted=false), not just non-terminal: {:?}", f.fixture_id, step);
+                    assert_ne!(step["outcome"], "kernel_verified", "{:?}", step);
+                    assert_ne!(step["outcome"], "certified", "{:?}", step);
+                }
+            }
+        }
     }
 }
