@@ -2,6 +2,7 @@ use std::fs;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 use crate::models::{
     Obligation, LeanVerificationResult, LeanVerificationOutcome, LeanDiagnostic, LeanDiagnosticCategory,
     DeclarationLookupResult, DeclarationLookupStatus, LeanModuleVerificationResult,
@@ -69,6 +70,24 @@ pub trait LeanGateway {
         Err("this gateway cannot verify modules".to_string())
     }
 }
+
+/// Serializes `lake build` invocations against the shared Lake workspace at
+/// `lean_project_path`. The staged compile (`run_lean_json`, an isolated
+/// tempdir per call) is safe under concurrency and stays unserialized — this
+/// lock covers only the narrow post-success step that copies a verified
+/// source into `LeanChecker/Verified` and runs `lake build` on it. Before the
+/// two-phase DB-lock split (review feedback on #16/#17), the single
+/// server-wide DB mutex incidentally serialized every `episode_step` call
+/// end-to-end, which also serialized this step as a side effect; releasing
+/// that mutex during the Lean gateway call means two sessions can now reach
+/// `lake build` concurrently for the first time. Lake's build cache is not
+/// documented as safe for concurrent cross-process invocations, and the
+/// build's exit status is intentionally best-effort (`let _ =
+/// build_cmd.output()`) — soundness of the kernel check is unaffected either
+/// way (it already happened in the isolated staged compile), but a corrupted
+/// or missing durable build artifact for one of two racing submissions would
+/// otherwise go unnoticed.
+static LAKE_BUILD_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 pub struct RealLeanGateway {
     pub lean_project_path: PathBuf,
@@ -398,6 +417,7 @@ impl LeanGateway for RealLeanGateway {
             if let Ok(elan_home) = std::env::var("CHATDB_ELAN_HOME") {
                 build_cmd.env("ELAN_HOME", elan_home);
             }
+            let _build_lock = LAKE_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let _ = build_cmd.output();
         }
 
@@ -529,6 +549,7 @@ impl LeanGateway for RealLeanGateway {
         if let Ok(elan_home) = std::env::var("CHATDB_ELAN_HOME") {
             build_cmd.env("ELAN_HOME", elan_home);
         }
+        let _build_lock = LAKE_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _ = build_cmd.output();
 
         Ok(LeanModuleVerificationResult {
