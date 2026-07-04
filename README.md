@@ -44,6 +44,14 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 
 **Key invariant:** ChatDB contains **no provider SDKs, no API keys, no model routing, no inference calls, no streaming logic, and no provider retry code.** The external host owns all of that. ChatDB is the environment; the host is the policy.
 
+As of v0.3.x, ChatDB verifies more than single theorem bodies — see
+[`Solve` vs. `SubmitModule`](#solve-vs-submitmodule) below and
+[`docs/submit_module.md`](docs/submit_module.md) for the small local Lean
+development this environment now supports (helper defs/theorems, mutual
+recursion, staged all-or-nothing verification). For what this represents in
+terms of overall system capability and what's still ahead, see
+[`docs/roadmap.md`](docs/roadmap.md).
+
 ## MCP Tools
 
 | Tool | Description |
@@ -56,15 +64,57 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 | `episode_reset` | Nondestructive reset — creates a new episode with `parent_episode_id` |
 | `episode_observe` | Get the current observation and pending action request |
 | `attempt_claim` | Claim a pending action request to obtain the `action_attempt_id` + `claim_token` required by `episode_step` |
-| `episode_step` | Submit a typed action (Solve / Decompose / GiveUp) with CAS revision check |
+| `episode_step` | Submit a typed action (`Solve` / `SubmitModule` / `Decompose` / `GiveUp`) with CAS revision check |
 | `episode_status` | Episode state, revision, budget, step count, outcome |
 | `episode_close` | Gracefully terminate an active episode |
 | `model_call_reserve` | Reserve a budget lease before calling an external model |
 | `model_call_settle` | Settle or void a lease (provider failure, cancellation) |
 | `trajectory_export` | Paginated export of hash-chained trajectory events |
-| `episode_replay` | Re-execute typed Solve actions through Lean and verify trajectory integrity |
+| `episode_replay` | Re-execute typed actions (`Solve` or `SubmitModule`) through Lean and verify trajectory integrity |
 | `proof_export` | Human-readable proof dossier: proof tree, assembled Lean source, full attempt history, proof/fidelity/promotion status, integrity line (`format: "markdown"` or `"lean"`) |
 | `lean_declaration_lookup` | Checks whether names resolve under a problem's import manifest (fast, default). Pass `deep_check=true` to also check under the full Mathlib umbrella and distinguish "not imported here" from "genuinely absent" (slow — loads all of Mathlib). Call this before concluding an API is unavailable |
+
+## `Solve` vs. `SubmitModule`
+
+As of v0.3.x, `episode_step` accepts more than a single theorem body:
+
+- **`Solve { proof_term }`** — one theorem: `theorem O_<id> : <statement> := by <proof_term>`. Good for a self-contained tactic proof.
+- **`SubmitModule { module_items, root_theorem }`** — a small local Lean *development*: helper `def`s, helper `theorem`s, and a root theorem, assembled by the server into one namespaced module and verified as a unit. `module_items` is a list of:
+  - `LeanModuleItem::Def { name, type_signature, body }` — `def <name> : <type_signature> := <body>`
+  - `LeanModuleItem::Theorem { name, statement, proof_term }` — `theorem <name> : <statement> := by <proof_term>`
+  - `LeanModuleItem::MutualGroup { members }` — 2+ `Def`/`Theorem` members that must forward-reference each other (e.g. mutually recursive functions), rendered together inside one server-owned `mutual ... end` block.
+
+The trust boundary is the same one the single-theorem path already has, one
+level up: **the model proposes, the server assembles, Lean verifies, the
+ledger records.** A client never writes raw Lean — no `import`/`namespace`/
+`end`/`set_option` lines, no `axiom`/`opaque`/`unsafe`/`instance`
+declarations, never `mutual`/`end` directly (the server owns those tokens
+even for a `MutualGroup`). Every name is sanitized to a single namespace-local
+identifier, and `root_theorem.statement` must canonical-hash to the problem's
+registered root formal statement — a module can never silently prove a
+different goal. Verification is **staged and all-or-nothing**: either the
+whole module passes the kernel and is recorded, or nothing enters the trusted
+namespace.
+
+```jsonc
+{
+  "type": "submit_module",
+  "module_items": [
+    { "item_kind": "def", "name": "double", "type_signature": "Nat → Nat", "body": "fun n => n + n" }
+  ],
+  "root_theorem": { "name": "root", "statement": "double 2 = 4", "proof_term": "rfl" }
+}
+```
+
+Proof soundness vs. statement fidelity (below) is unchanged for module
+proofs — a `SubmitModule` root proof reaches the same `kernel_verified`/
+`certified` outcomes a `Solve` proof does. A verified module is also a
+first-class replayable artifact: `proof_export(format="lean")` can emit the
+exact verified module source, and `episode_replay` re-assembles it from the
+recorded structured items and re-verifies against the kernel. Full detail,
+including the mutual-recursion trust boundary and injection hardening: see
+[`docs/submit_module.md`](docs/submit_module.md). For what level of capability
+this represents and what's still missing, see [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Proof soundness vs. statement fidelity
 
@@ -114,7 +164,7 @@ Import manifests are immutable per problem_version and included in every observa
 
 ## Lean Checker Setup
 
-`CHATDB_LEAN_PROJECT_PATH` (default `./lean-checker`) must point at a [Lake](https://github.com/leanprover/lake) project that depends on [Mathlib](https://github.com/leanprover-community/mathlib4), because `RealLeanGateway` hardcodes `import Mathlib.Tactic.{Ring,NormNum}` into every candidate proof it checks (`omega` comes with core Lean once any Mathlib module is imported) (`crates/chatdb-core/src/lean/mod.rs`). This is a one-time, multi-gigabyte setup — do it once per machine, not per session:
+`CHATDB_LEAN_PROJECT_PATH` (default `./lean-checker`) must point at a [Lake](https://github.com/leanprover/lake) project that depends on [Mathlib](https://github.com/leanprover-community/mathlib4). Every problem version has its own immutable **import manifest** — the exact Mathlib modules its proofs (and its `SubmitModule` developments) are checked against, starting from a base of `Mathlib.Tactic.Ring` + `Mathlib.Tactic.NormNum` (`omega` comes with core Lean once any Mathlib module is imported) and extendable per-problem via `problem_create(problem_imports=[...])` — each additional module is validated with a real compile check before the problem is accepted, not merely a name-shape check (`crates/chatdb-core/src/lean/mod.rs`). This is not a single hardcoded import list baked into the gateway; see [Import manifests and "environmental scope collapse"](#import-manifests-and-environmental-scope-collapse) above. Setting up the Lake project itself is a one-time, multi-gigabyte task — do it once per machine, not per session:
 
 ```powershell
 # 0. (Optional but recommended on machines with a small C: drive) Keep the multi-GB
@@ -299,6 +349,16 @@ episode_create(problem_version_id)
            │                    │ KernelFail  │──▶ next obligation
            │                    └─────────────┘─────────┘
            │
+           ├── SubmitModule → staged, all-or-nothing Lean module verification ──┐
+           │        (defs + helper theorems + root theorem, one namespace)      │
+           │                                            ▼                      │
+           │                    ┌─────────────┐  whole module passes           │
+           │                    │ KernelPass  │──▶ root proved ──▶ terminated(certified)
+           │                    └─────────────┘                                │
+           │                    ┌─────────────┐  policy rejection OR           │
+           │                    │ KernelFail  │  any declaration fails ──▶ next obligation
+           │                    └─────────────┘  (nothing enters the trusted namespace)
+           │
            ├── Decompose → child obligations ──▶ next (child) obligation
            ├── GiveUp ──▶ terminated(gave_up)
            ├── budget_exhausted / max_steps_reached ──▶ truncated(budget_exhausted)
@@ -334,7 +394,10 @@ ChatDB produces training-grade synthetic data:
 │       ├── src/lib.rs            # 17 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
-│   └── adr/                      # Architecture Decision Records
+│   ├── adr/                      # Architecture Decision Records
+│   ├── playtests/                # Dated playtest reports (real-toolchain sprints, lessons learned)
+│   ├── roadmap.md                # Capability levels (0-6) and what each requires
+│   └── submit_module.md          # SubmitModule / mutual recursion trust boundary and mechanics
 ├── fixtures/                     # Test fixtures
 └── CHATDB_SPEC.md                # Full specification document
 ```
@@ -346,6 +409,15 @@ Architectural decisions are recorded in [`docs/adr/`](docs/adr/):
 - **ADR-0001** — Lean sandbox platform isolation strategy
 - **ADR-0002** — Canonical vs. episode-local storage separation
 - **ADR-0003** — Hash-chained trajectory design
+
+## Playtests and roadmap
+
+- [`docs/roadmap.md`](docs/roadmap.md) — capability levels (0 through 6), what
+  v0.3.1 actually reaches (Level 2), and what each subsequent level requires.
+- [`docs/playtests/2026-07-04-v0.3.1-overnight-module-sprint.md`](docs/playtests/2026-07-04-v0.3.1-overnight-module-sprint.md) —
+  a real-toolchain playtest sprint covering algebraic inequalities, induction,
+  structural/well-founded/mutual recursion, and list predicates, with full
+  proof exports and reusable proof-pattern lessons.
 
 ## License
 
