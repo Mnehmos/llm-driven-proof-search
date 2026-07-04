@@ -191,9 +191,45 @@ last):
    trailing-dot query degrading into a match-everything scan. See
    `docs/librarian.md`.
 
+5. **#35 — `readme_first`.** ✅ Shipped in v0.3.5. A dedicated, zero-argument,
+   first-contact tool — registered first in `list_tools` — that returns the
+   proof-search protocol (the loop, the trust boundary, Solve vs
+   SubmitModule guidance, why an untracked proof check doesn't count as a
+   valid attempt, and the cost/benchmark-mode boundary) as static JSON, so
+   any agent host (not just this session) starts from the same grounding.
+6. **#34 + #38 — Run envelopes (core).** ✅ Core shipped in v0.3.6, both
+   issues remain open for their full scope. `run_envelope_create/_update/
+   _attach_episode/_observe` track host/model identity, run mode
+   (development/evaluation/benchmark/private_audit/public_report), and
+   host-side cost — reusing the pre-existing, previously-unused
+   `episodes.run_id` column as the link rather than adding a redundant one.
+   Still open: #34's full tool-classification audit and enforcement gates
+   (only the run-envelope data model exists so far); #38's multi-surface
+   cost split (only `host_side_cost_micros` is tracked — environment_build,
+   mcp_side, verifier, storage_export, and unknown_external costs are not).
+7. **#29 + #30 — PutnamBench suite/problem/run/result schema.** ✅ Schema +
+   5 tools shipped (v0.3.7): `benchmark_suite_create`,
+   `benchmark_problem_register`, `benchmark_run_create`,
+   `benchmark_result_record`, `benchmark_run_observe`. Designed jointly
+   since both issues wanted overlapping schema. `benchmark_run_create`
+   reads `lean_version`/`mathlib_commit` from the server's own detected
+   environment, never the client. `benchmark_result_record` enforces
+   issue #36's invariant concretely: if `episode_id` is given, the episode
+   must have actually concluded, its claimed status must match the
+   episode's real recorded outcome, AND the episode must have proved the
+   SAME statement as the benchmark problem (root_statement_hash match) —
+   an adversarial review caught that the first version of this check only
+   verified "some real verification happened," not "this one." Metrics
+   distinguish `solved_rate` (solved at all within budget) from
+   `pass_at_1_rate` (genuine first-attempt success) — an earlier version
+   conflated the two. Still open: #29's actual importer (needs the real
+   PutnamBench repo).
+
 **Status:** Level 3 MVP complete. #24 shipped (v0.3.2). #23 + #10 shipped
-together (v0.3.3). #25 shipped (v0.3.4). Next: the PutnamBench sprint
-(#28-32).
+together (v0.3.3). #25 shipped (v0.3.4). #35 shipped (v0.3.5). #34+#38 core
+shipped (v0.3.6). #29+#30 schema shipped (v0.3.7). Next: #33+#37
+(contamination/redaction + export modes), #28 (harness design doc), #29's
+real importer, #31 (pass@k runner), #32 (smoke fixtures).
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
@@ -284,8 +320,9 @@ toward, not a near-term milestone.
 |---|---|---|
 | 1 | #1–#4 (closed) | — |
 | 2 | #19 (closed) | #5, #6, #7 (open) |
-| 3 | #10, #23, #24, #25 | #6 (shared with 2) |
+| 3 | #10, #23, #24, #25, #34, #35, #38 | #6 (shared with 2) |
 | 4 | #8, #9, #11, #12, #13, #14, #26, #27 | #7 (shared with 2) |
+| PutnamBench sprint | #28, #29, #30, #31, #32, #33, #36, #37 | #34, #38 (shared with 3) |
 | docs/roadmap | #20, #21, #22 | — |
 
 ## What this roadmap is not
