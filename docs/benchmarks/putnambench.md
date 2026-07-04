@@ -32,7 +32,7 @@ Every PutnamBench concept has a home in the schema shipped in v0.3.7:
 |---|---|
 | the benchmark itself | `benchmark_suites` row (name="PutnamBench", `upstream_url`, `upstream_commit` = the PutnamBench repo commit this import was taken from) |
 | one Putnam problem's Lean formalization | `benchmark_problems` row (`upstream_problem_id` = PutnamBench's own problem id, e.g. `putnam_1988_a1`; `root_formal_statement` + server-computed `root_statement_hash`; `import_manifest_json` = the Lean imports the formalization needs) |
-| one evaluation run's configuration | `benchmark_runs` row (`solve_mode`, `allowed_tools_json`, `attempt_budget`, `wall_clock_budget_ms`, `lean_timeout_ms`; `lean_version`/`mathlib_commit` auto-read from the server's own detected environment, never client-supplied; optional `run_envelope_id` for host/cost tracking) |
+| one evaluation run's configuration | `benchmark_runs` row (`solve_mode`, `allowed_tools_json`, `attempt_budget`, `wall_clock_budget_ms`, `lean_timeout_ms`; `lean_version`/`mathlib_commit` auto-read from the server's own detected environment, never client-supplied; `run_envelope_id` for host/mode/cost tracking — **required** since issue #34: "a benchmark run should not start unless a run envelope exists") |
 | one problem's outcome within a run | `benchmark_results` row (`status`, `outcome`, `pass_at`, `attempts_used`, `episode_id` linking back to the real proof-search episode, cross-checked against that episode's actual recorded outcome — issue #36) |
 
 The still-open pieces below (#29's importer, #31's runner, #32's fixtures)
