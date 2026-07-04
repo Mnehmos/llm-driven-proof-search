@@ -568,8 +568,9 @@ pub fn attempt_finalize(
                             tx.execute(
                                 "INSERT INTO episode_verified_module_items (
                                     id, module_id, item_order, item_kind, lean_name,
-                                    statement_or_type_hash, body_hash, depends_on_json, policy_result_json
-                                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                                    statement_or_type_hash, body_hash, depends_on_json, policy_result_json,
+                                    mutual_group
+                                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                                 (
                                     item_id.to_string(),
                                     module_row_id.to_string(),
@@ -580,6 +581,7 @@ pub fn attempt_finalize(
                                     &item.body_hash,
                                     &depends_on_json,
                                     "{\"policy\":\"passed\"}",
+                                    item.mutual_group,
                                 ),
                             )?;
                         }

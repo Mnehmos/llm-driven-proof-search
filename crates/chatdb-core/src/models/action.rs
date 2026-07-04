@@ -59,6 +59,36 @@ pub enum LeanModuleItem {
         /// The tactic block proving `statement` (what goes after `:= by`).
         proof_term: String,
     },
+    /// Two or more declarations that must forward-reference each other (e.g. a
+    /// pair of mutually recursive functions) — rendered together inside one
+    /// server-owned `mutual ... end` block, the only way Lean lets a member see
+    /// a sibling declared later in the group. The client still never writes
+    /// `mutual`/`end` itself (both stay banned anywhere in client content); it
+    /// only supplies the same per-member content a bare `Def`/`Theorem` would,
+    /// structured so the server knows which declarations belong in one block.
+    /// A group of fewer than two members is rejected — that's just a bare
+    /// `Def`/`Theorem`, which has no forward-reference problem to begin with.
+    MutualGroup {
+        members: Vec<MutualMember>,
+    },
+}
+
+/// One declaration inside a [`LeanModuleItem::MutualGroup`]. Deliberately not
+/// `LeanModuleItem` itself: a group cannot legally contain another group, and
+/// this shape makes that unrepresentable rather than a runtime check.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "item_kind", rename_all = "snake_case")]
+pub enum MutualMember {
+    Def {
+        name: String,
+        type_signature: String,
+        body: String,
+    },
+    Theorem {
+        name: String,
+        statement: String,
+        proof_term: String,
+    },
 }
 
 /// The root theorem of a [`TypedAction::SubmitModule`] development — the one
