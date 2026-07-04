@@ -222,8 +222,7 @@ last):
    verified "some real verification happened," not "this one." Metrics
    distinguish `solved_rate` (solved at all within budget) from
    `pass_at_1_rate` (genuine first-attempt success) — an earlier version
-   conflated the two. Still open: #29's actual importer (needs the real
-   PutnamBench repo).
+   conflated the two.
 8. **#33 + #37 — Contamination policy and rich `proof_export` modes.** ✅
    Shipped in v0.3.8. Designed together since #33's redaction requirement
    needed #37's export-mode mechanism to exist first. `proof_export` gained
@@ -244,12 +243,34 @@ last):
    `docs/benchmarks/putnambench.md`. `markdown`/`lean` are unchanged
    (existing callers keep working; the field is still named `format` on the
    wire).
+9. **#28 — PutnamBench harness design doc.** ✅ Shipped, docs-only, no
+   version bump. See `docs/benchmarks/putnambench.md`.
+10. **#29 — PutnamBench importer.** ✅ Shipped in v0.3.9. A new
+    `chatdb_proof_core::putnambench` module parses PutnamBench's Lean 4
+    problem files (shared with the future #31 runner, which needs the same
+    `has_solution_abbrev` classification), plus a new
+    `examples/import_putnambench.rs` batch-import binary, following the same
+    in-process-MCP-client pattern as `examples/playtest.rs`. Verified against
+    the real 672-file corpus (commit `a23d8e6d4e9e3418fd78f76de7bfcb9414cbfd39`):
+    100% parse success, 100% registration success, zero comment/spoiler
+    leakage, zero `theorem_name`/`upstream_problem_id` mismatches. A real
+    contamination finding caught and fixed before shipping: PutnamBench's
+    own convention for its ~350 "find the answer" problems is an
+    `abbrev X_solution := sorry` immediately followed by the actual answer
+    as a `--` comment — PutnamBench's own extractor captures this verbatim;
+    ChatDB's importer strips it (and doc-comments) so `root_formal_statement`
+    never leaks the answer key. An adversarial review then caught two more
+    real bugs: a colon-adjacent theorem line (`theorem NAME:` with no space)
+    corrupting the extracted name via naive whitespace-splitting, and the
+    importer being non-resumable (an unconditional `benchmark_suite_create`
+    failed outright on any re-run against the same db, since suite names are
+    unique) — both fixed and regression-tested.
 
 **Status:** Level 3 MVP complete. #24 shipped (v0.3.2). #23 + #10 shipped
 together (v0.3.3). #25 shipped (v0.3.4). #35 shipped (v0.3.5). #34+#38 core
 shipped (v0.3.6). #29+#30 schema shipped (v0.3.7). #33+#37 shipped (v0.3.8).
-#28 (harness design doc) shipped, docs-only, no version bump. Next: #29's
-real importer, #31 (pass@k runner), #32 (smoke fixtures).
+#28 shipped, docs-only. #29 (importer) shipped (v0.3.9). Next: #31 (pass@k
+runner), #32 (smoke fixtures).
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
