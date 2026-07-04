@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  20 tools · typed schemas · JSON Schema 2020-12                 │
+│  29 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -76,6 +76,15 @@ terms of overall system capability and what's still ahead, see
 | `proof_pattern_create` | Register a reusable proof-pattern lesson (failure signature + recommended repair). Advisory only — never marks anything proved |
 | `proof_pattern_search` | Free-text search over the proof-pattern library, or list it whole. Call before repeating a failure another attempt already diagnosed |
 | `proof_pattern_record_application` | Record that a pattern was relevant to a real episode/attempt (failed example, repair example, or suggested hint). Insert-only metadata — never touches proof/fidelity/certification status |
+| `draft_create` | Register an informal Draft artifact — untrusted planning/reasoning content. A draft can never mark anything proved |
+| `draft_observe` | Read back a draft's content and any moves recorded against it |
+| `draft_extract_moves` | Record structured moves (construction, auxiliary_lemma, case_split, ...) the external agent identified in a draft. Metadata only |
+| `formalization_plan_create` | Create a formalization plan for a problem, optionally seeded from selected moves of an existing draft |
+| `formalization_plan_observe` | Read back a formalization plan and all its items |
+| `formalization_plan_update` | Update a plan's title, status, or risk flags |
+| `formalization_plan_add_item` | Add a planning item (concept, missing_definition, missing_lemma, planned_module, or external_citation) to a plan |
+| `formalization_plan_attach_lookup` | Attach a `lean_declaration_lookup` result to a plan item, updating its Mathlib coverage status |
+| `formalization_plan_promote_item_to_obligation` | Link a plan item to an episode_obligation that already exists (created via a normal `Decompose` action). Never creates the obligation itself |
 
 ## `Solve` vs. `SubmitModule`
 
@@ -118,6 +127,26 @@ recorded structured items and re-verifies against the kernel. Full detail,
 including the mutual-recursion trust boundary and injection hardening: see
 [`docs/submit_module.md`](docs/submit_module.md). For what level of capability
 this represents and what's still missing, see [`docs/roadmap.md`](docs/roadmap.md).
+
+## Drafts and formalization planning (Level 3)
+
+Before a `Solve`/`SubmitModule` attempt, a client can preserve informal
+reasoning as a **Draft** (`draft_create`) and record the moves it identifies
+within it (`draft_extract_moves` — construction, auxiliary_lemma, case_split,
+induction, reduction, bijection, counterexample_search, asymptotic_step,
+external_citation, unknown). Selected moves can seed a **formalization
+plan** (`formalization_plan_create`), which tracks planned concepts,
+definitions, lemmas, and modules together with their Mathlib coverage status
+(`formalization_plan_attach_lookup`, using `lean_declaration_lookup`
+results).
+
+Both are strictly advisory, mirroring the trust boundary everywhere else in
+this environment: a Draft or a plan item can never mark anything proved.
+Real obligations are still created only through `Decompose`, via the normal
+budget-accounted `episode_step` flow —
+`formalization_plan_promote_item_to_obligation` only records a metadata
+*link* to an obligation that already exists that way; it never creates one
+itself. See `docs/roadmap.md`'s Level 3 section for the full design.
 
 ## Proof soundness vs. statement fidelity
 
@@ -394,7 +423,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 20 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 29 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records

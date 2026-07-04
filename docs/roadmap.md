@@ -158,20 +158,28 @@ last):
    (insert-only — never touches proof/fidelity/certification status). See
    `docs/playtests/2026-07-04-v0.3.1-overnight-module-sprint.md` for the
    seed provenance.
-2. #23 — Draft artifacts (nothing to plan around without a place to put the
-   informal sketch first). **Note:** `episode_drafts`/
-   `episode_formalization_candidates` already exist in `schema_v1.rs` from the
-   original pre-SubmitModule spec but are wired to zero code anywhere — see
-   the research comment on issue #23 before reusing or replacing them.
-3. #10 — Formalization plans (the planning artifact Draft moves promote
-   into). **Note:** #23 and #10 both want to own a `formalization_plans`/
-   `formalization_plan_items` schema (`formalization_plan_create_from_draft`
-   vs. `formalization_plan_create`) — design these two together, not
-   independently, or the second one implemented redefines a schema the first
-   already created.
+2. **#23 + #10 — Draft artifacts and formalization plans.** ✅ Shipped
+   together in v0.3.3, exactly as flagged: both issues wanted to own a
+   `formalization_plans`/`formalization_plan_items` schema
+   (`formalization_plan_create_from_draft` vs. `formalization_plan_create`),
+   so they were designed and implemented as one feature rather than two.
+   `draft_create`/`draft_observe`/`draft_extract_moves` preserve informal
+   reasoning and structured moves (construction, auxiliary_lemma, case_split,
+   induction, reduction, bijection, counterexample_search, asymptotic_step,
+   external_citation, unknown); `formalization_plan_create` (optionally
+   seeded from selected draft moves)/`_observe`/`_update`/`_add_item`/
+   `_attach_lookup` track planned concepts/definitions/lemmas/modules and
+   their Mathlib coverage. `formalization_plan_promote_item_to_obligation`
+   only records a metadata LINK to an obligation that already exists
+   (created through a normal, budget-accounted `Decompose` action) — it
+   never creates one itself, mirroring #24's advisory-layer boundary. The
+   vestigial `episode_drafts`/`episode_formalization_candidates` tables from
+   the original pre-SubmitModule spec were left untouched (still dead code,
+   noted on issue #23) — this feature uses fresh `drafts`/`draft_moves`
+   tables instead, since the old ones didn't fit either issue's shape.
 4. #25 — Mathlib librarian (plans need real coverage data, not guesses).
 
-**Status:** #24 shipped (v0.3.2). #23, #10, #25 open.
+**Status:** #24 shipped (v0.3.2). #23 + #10 shipped together (v0.3.3). #25 open.
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
