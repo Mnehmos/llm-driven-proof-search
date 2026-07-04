@@ -2129,7 +2129,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.11"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.12"))
     }
 
     async fn list_tools(
@@ -2220,7 +2220,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.11",
+                    "environment_version": "0.3.12",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -4335,8 +4335,23 @@ impl ServerHandler for ChatDbMcp {
                     BenchmarkResultStatus::Skipped => "skipped",
                 };
 
-                // Issue #36's core invariant, enforced concretely: a result
-                // cannot claim an outcome the episode ledger doesn't back.
+                // Issue #36's core invariant, enforced concretely: "a proof
+                // attempt that bypasses the ledger is not part of ChatDB
+                // evidence." A claimed kernel_verified/certified status
+                // MUST reference the episode that actually reached it — the
+                // checks below (statement-match, outcome-match) only ran
+                // when episode_id happened to be given; a caller claiming
+                // kernel_verified/certified with NO episode_id at all
+                // skipped every check entirely and was accepted with zero
+                // backing evidence. Any other status (failed/timeout/
+                // infra_error/formalization_gap/skipped) legitimately has
+                // no episode to reference — those are unaffected.
+                if matches!(status_str, "kernel_verified" | "certified") && args.episode_id.is_none() {
+                    return Err(mcp_invalid_params(format!(
+                        "status {:?} claims a verified proof but no episode_id was given — a kernel_verified/certified result must reference the episode that actually reached that outcome through the tracked episode_step path (issue #36: a proof attempt that bypasses the ledger is not part of ChatDB evidence)",
+                        status_str
+                    )));
+                }
                 if let Some(episode_id) = &args.episode_id {
                     let episode_row: Option<(String, Option<String>)> = conn.query_row(
                         "SELECT problem_version_id, outcome FROM episodes WHERE id = ?1", [episode_id],
@@ -7660,6 +7675,47 @@ mod tests {
         assert!(res.is_err(), "a result must not reference a problem from a different suite than its run");
     }
 
+    /// Issue #36's core invariant, closed at its widest gap: earlier
+    /// enforcement (outcome-match, statement-match) only ran when an
+    /// episode_id happened to be given at all — a caller claiming
+    /// kernel_verified/certified with NO episode_id whatsoever skipped
+    /// every check and was accepted with zero backing evidence. A verified
+    /// claim must always reference the episode that reached it; any other
+    /// status (failed/timeout/infra_error/formalization_gap/skipped)
+    /// legitimately has no episode to reference.
+    #[tokio::test]
+    async fn test_benchmark_result_record_rejects_verified_claims_with_no_episode() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // No episode_id at all: both verified statuses must be rejected outright.
+        for status in ["kernel_verified", "certified"] {
+            let res = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+                "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+                "status": status, "attempts_used": 1,
+            }).as_object().unwrap().clone())).await;
+            assert!(res.is_err(), "claiming {} with no episode_id must be rejected — it has zero backing evidence: {:?}", status, res);
+        }
+
+        // Non-verified statuses legitimately have no episode to reference —
+        // must still be accepted (this is not a blanket "episode_id always
+        // required" rule, only for statuses that claim verification).
+        for status in ["failed", "timeout", "infra_error", "formalization_gap", "skipped"] {
+            let res = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+                "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+                "status": status, "attempts_used": 1,
+            }).as_object().unwrap().clone())).await;
+            assert!(res.is_ok(), "status {} with no episode_id must still be accepted: {:?}", status, res.err());
+        }
+    }
+
     /// Issue #36's core invariant, enforced concretely: a benchmark result
     /// cannot claim kernel_verified/certified unless the referenced episode
     /// ACTUALLY reached that outcome, and cannot reference an episode that
@@ -7783,9 +7839,28 @@ mod tests {
             "run_id": run_id, "benchmark_problem_id": p1["benchmark_problem_id"], "status": "failed", "attempts_used": 1,
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(first["updated"], false);
-        // Second attempt for the SAME problem: upserts to kernel_verified, attempts_used=2.
+        // Second attempt for the SAME problem: upserts to kernel_verified,
+        // attempts_used=2 — backed by a real episode that actually proved
+        // "True" (issue #36: kernel_verified/certified must reference the
+        // episode that reached it, never a bare claim).
+        let p1_pv_id = create_problem(&peer, "True").await;
+        let p1_ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": p1_pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let p1_episode_id = p1_ep["episode_id"].as_str().unwrap().to_string();
+        let p1_req = &p1_ep["next_action_request"];
+        let p1_claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": p1_episode_id, "action_request_id": p1_req["id"], "idempotency_key": "upsert-p1-1",
+            "expected_revision": p1_req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": p1_episode_id, "action_attempt_id": p1_claim["action_attempt_id"],
+            "expected_revision": p1_req["episode_revision"], "claim_token": p1_claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
         let second = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
-            "run_id": run_id, "benchmark_problem_id": p1["benchmark_problem_id"], "status": "kernel_verified", "attempts_used": 2,
+            "run_id": run_id, "benchmark_problem_id": p1["benchmark_problem_id"], "episode_id": p1_episode_id,
+            "status": "kernel_verified", "attempts_used": 2,
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(second["updated"], true);
         // p2: skipped.
@@ -7828,17 +7903,42 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         let run_id = run["run_id"].as_str().unwrap().to_string();
 
+        // Each "solved" claim below (issue #36) must reference a real
+        // episode that actually proved the SAME statement — a helper that
+        // creates one, proves it, and returns the episode_id.
+        async fn solved_episode_for(peer: &rmcp::service::Peer<rmcp::RoleClient>, statement: &str, key: &str) -> String {
+            let pv_id = create_problem(peer, statement).await;
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv_id, "max_steps": 5,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+            let req = &ep["next_action_request"];
+            let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+                "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": key,
+                "expected_revision": req["episode_revision"],
+            }).as_object().unwrap().clone())).await.unwrap());
+            tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+                "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+                "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+                "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
+            }).as_object().unwrap().clone())).await.unwrap());
+            episode_id
+        }
+
         // p1: solved, but attempts_used=2 and no explicit pass_at -- NOT pass@1.
+        let p1_episode = solved_episode_for(&peer, "stmt_p1", "pass1-p1").await;
         tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
-            "run_id": run_id, "benchmark_problem_id": problem_ids[0], "status": "kernel_verified", "attempts_used": 2,
+            "run_id": run_id, "benchmark_problem_id": problem_ids[0], "episode_id": p1_episode, "status": "kernel_verified", "attempts_used": 2,
         }).as_object().unwrap().clone())).await.unwrap());
         // p2: solved, attempts_used=1, no explicit pass_at -- fallback counts as pass@1.
+        let p2_episode = solved_episode_for(&peer, "stmt_p2", "pass1-p2").await;
         tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
-            "run_id": run_id, "benchmark_problem_id": problem_ids[1], "status": "kernel_verified", "attempts_used": 1,
+            "run_id": run_id, "benchmark_problem_id": problem_ids[1], "episode_id": p2_episode, "status": "kernel_verified", "attempts_used": 1,
         }).as_object().unwrap().clone())).await.unwrap());
         // p3: solved, attempts_used=3 but explicit pass_at=1 (authoritative) -- pass@1.
+        let p3_episode = solved_episode_for(&peer, "stmt_p3", "pass1-p3").await;
         tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
-            "run_id": run_id, "benchmark_problem_id": problem_ids[2], "status": "kernel_verified", "attempts_used": 3, "pass_at": 1,
+            "run_id": run_id, "benchmark_problem_id": problem_ids[2], "episode_id": p3_episode, "status": "kernel_verified", "attempts_used": 3, "pass_at": 1,
         }).as_object().unwrap().clone())).await.unwrap());
         // p4: not solved at all.
         tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
@@ -8074,6 +8174,31 @@ mod tests {
         let text = res.content[0].as_text().unwrap().text.clone();
         assert!(text.contains("## Narrative"), "paper_dossier must include a written narrative section, not just tables: {text}");
         assert!(text.contains("PAPER DOSSIER"), "paper_dossier must carry its private banner: {text}");
+    }
+
+    /// Issue #36's code-review guard: the PutnamBench runner must never call
+    /// `RealLeanGateway`/`LeanGateway::verify_exact`/`verify_module`
+    /// directly for candidate proof search — its only path to Lean must be
+    /// the tracked `episode_step` MCP tool. A static source-text check
+    /// (embedded at compile time, same as the smoke fixture below) is
+    /// deliberately simpler and more robust than trying to intercept calls
+    /// at runtime: if a future change ever adds a "shortcut" direct-gateway
+    /// call to the runner (e.g. to pre-screen a candidate before submitting
+    /// it), this fails immediately and unambiguously, regardless of whether
+    /// any test happens to exercise that code path.
+    #[test]
+    fn test_putnam_runner_never_references_lean_gateway_directly() {
+        const RUNNER_SOURCE: &str = include_str!("../examples/putnam_runner.rs");
+        // Strip comment lines first — the module's own doc comment
+        // legitimately NAMES these APIs (backtick-quoted) to explain the
+        // invariant it upholds; only actual code usage should fail this.
+        let code_only: String = RUNNER_SOURCE.lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>().join("\n");
+        for forbidden in ["RealLeanGateway", "verify_exact(", "verify_module(", "LeanGateway::verify"] {
+            assert!(!code_only.contains(forbidden),
+                "putnam_runner.rs must never reference {:?} in actual code — issue #36: a proof attempt that bypasses episode_step is not part of ChatDB evidence", forbidden);
+        }
     }
 
     // PutnamBench smoke subset (issue #32). Embedded at compile time via
