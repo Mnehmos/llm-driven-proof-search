@@ -194,11 +194,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::from_str(&text).map_err(|e| format!("{} returned non-JSON: {} ({})", tool, text, e))
     }
 
+    // benchmark_run_create requires an existing run_envelope_id (issue #34:
+    // "a benchmark run should not start unless a run envelope exists") — it
+    // carries the host/mode identity a benchmark_run itself has no column
+    // for.
+    let envelope_res = call(&peer, "run_envelope_create", serde_json::json!({
+        "mode": "benchmark", "host_name": "putnam_runner", "benchmark_suite_name": "PutnamBench",
+    })).await?;
+    let run_envelope_id = envelope_res["run_envelope_id"].as_str().unwrap().to_string();
+
     let run_res = call(&peer, "benchmark_run_create", serde_json::json!({
-        "suite_id": suite_id, "solve_mode": solve_mode_str, "attempt_budget": attempt_budget,
+        "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": solve_mode_str, "attempt_budget": attempt_budget,
     })).await?;
     let run_id = run_res["run_id"].as_str().unwrap().to_string();
-    eprintln!("Created run {} (solve_mode={}, attempt_budget={})", run_id, solve_mode_str, attempt_budget);
+    eprintln!("Created run {} (run_envelope_id={}, solve_mode={}, attempt_budget={})", run_id, run_envelope_id, solve_mode_str, attempt_budget);
 
     let mut results: Vec<ResultRow> = Vec::new();
 

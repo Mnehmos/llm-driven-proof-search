@@ -332,6 +332,23 @@ outside `episode_step`), and a verified claim is now impossible to record
 without a real backing episode, leaving nothing for a post-hoc marking
 mechanism to catch.
 
+**#34 (partial) — require a run envelope before a benchmark run.** ✅
+Shipped in v0.3.13, one small bounded slice of #34's larger scope (the full
+42-tool classification audit and benchmark-mode source-mutation guardrails
+remain open — see below). `benchmark_run_create`'s `run_envelope_id` is now
+a required field, not optional — enforced both in the wire schema
+(`String`, not `Option<String>`) and by the handler still checking the
+referenced envelope actually exists. `putnam_runner.rs` now calls
+`run_envelope_create` (mode `"benchmark"`) once before creating its run.
+Two independent adversarial reviews in a row (this fix and #36's) found no
+real bugs — the first clean streak this session, plausible for smaller,
+well-scoped changes building on already-established patterns.
+Still open on #34: the full per-tool metadata classification (side effect,
+trust level, cost surface, benchmark safety, replayability), and
+benchmark-mode guardrails against source-code mutation (moot for ChatDB's
+actual tool surface today — there is no MCP tool that edits source files —
+but worth revisiting if one is ever added).
+
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
 `SubmitModule` skeleton, and no record of what Mathlib coverage was actually
