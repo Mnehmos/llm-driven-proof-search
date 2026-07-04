@@ -262,9 +262,15 @@ CREATE TABLE IF NOT EXISTS episode_verified_modules (
     UNIQUE(episode_id, root_obligation_id, module_source_hash)
 );
 
--- One row per declaration in a verified module, in dependency (assembly) order.
--- item_kind is 'def' | 'theorem' | 'root_theorem'; the single root_theorem row
--- is explicitly linked to the root obligation via its parent module row.
+-- One row per declaration in a verified module, in assembly order. item_kind
+-- is 'def' | 'theorem' | 'root_theorem' (a MutualGroup member is still 'def'
+-- or 'theorem' — the grouping itself is recorded in mutual_group, not a
+-- distinct item_kind); the single root_theorem row is explicitly linked to the
+-- root obligation via its parent module row. mutual_group is NULL for a
+-- standalone item/the root theorem, or a 0-based group index shared by every
+-- member of the same `mutual ... end` block (issue #19) — purely
+-- informational: replay/export never key on it, since the exact source
+-- re-assembles from the parent module's module_items_json regardless.
 CREATE TABLE IF NOT EXISTS episode_verified_module_items (
     id TEXT PRIMARY KEY,
     module_id TEXT NOT NULL REFERENCES episode_verified_modules(id),
@@ -275,6 +281,7 @@ CREATE TABLE IF NOT EXISTS episode_verified_module_items (
     body_hash TEXT NOT NULL,
     depends_on_json TEXT NOT NULL,
     policy_result_json TEXT NOT NULL,
+    mutual_group INTEGER,
     UNIQUE(module_id, item_order),
     CHECK(item_kind IN ('def', 'theorem', 'root_theorem'))
 );
@@ -504,6 +511,7 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     // existed would otherwise be left permanently missing them, and the first
     // query touching them would fail with "no such column".
     migrate_add_import_manifest_columns(conn)?;
+    migrate_add_mutual_group_column(conn)?;
     // CHECK constraints are baked into a table at creation and CREATE TABLE IF
     // NOT EXISTS cannot update them on a table that already exists — a database
     // that predates the fidelity-vocabulary rewrite (docs/fix_plan_playtest_02.md)
@@ -715,6 +723,39 @@ fn migrate_add_import_manifest_columns(conn: &Connection) -> rusqlite::Result<()
     conn.execute(
         "UPDATE problem_versions SET import_manifest_hash = ?1 WHERE import_manifest_hash = ''",
         [&default_manifest_hash],
+    )?;
+    Ok(())
+}
+
+/// Adds `mutual_group` to an `episode_verified_module_items` table that
+/// predates it (pre-mutual-recursion-support databases, issue #19). No-op on a
+/// fresh database (table doesn't exist yet — CREATE TABLE below brings it up
+/// to the current shape with the column already present) and on an
+/// already-migrated one. A plain nullable `ALTER TABLE ADD COLUMN` suffices —
+/// unlike the CHECK-constraint migrations above, no existing row's meaning
+/// changes (every pre-existing row simply has no mutual group, i.e. NULL).
+fn migrate_add_mutual_group_column(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='episode_verified_module_items'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+
+    let has_column = conn
+        .prepare("PRAGMA table_info(episode_verified_module_items)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == "mutual_group");
+    if has_column {
+        return Ok(());
+    }
+
+    conn.execute(
+        "ALTER TABLE episode_verified_module_items ADD COLUMN mutual_group INTEGER",
+        [],
     )?;
     Ok(())
 }

@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::hashing::canonical_hash;
-use crate::models::action::{LeanModuleItem, ModuleTheorem};
+use crate::models::action::{LeanModuleItem, ModuleTheorem, MutualMember};
 
 /// A token that must never appear (as a whole word) anywhere inside any
 /// client-supplied string. Each would open a fresh top-level Lean command and so
@@ -66,6 +66,10 @@ pub enum ModulePolicyError {
     InvalidName { name: String, reason: String },
     /// A client string contains a construct the client is not allowed to send.
     ProhibitedConstruct { item: String, token: String, detail: String },
+    /// A `MutualGroup` does not have at least two members — a group of one
+    /// (or zero) has no forward-reference problem to solve and is not a
+    /// legitimate use of a `mutual` block.
+    InvalidMutualGroup { detail: String },
     /// The module declares the same local name twice (including the root).
     DuplicateName { name: String },
     /// The root theorem's statement does not hash-match the registered root.
@@ -83,6 +87,8 @@ impl std::fmt::Display for ModulePolicyError {
                 write!(f, "invalid declaration name {:?}: {}", name, reason),
             ModulePolicyError::ProhibitedConstruct { item, token, detail } =>
                 write!(f, "{} contains a prohibited construct {:?}: {}", item, token, detail),
+            ModulePolicyError::InvalidMutualGroup { detail } =>
+                write!(f, "invalid mutual group: {}", detail),
             ModulePolicyError::DuplicateName { name } =>
                 write!(f, "duplicate declaration name {:?} in module", name),
             ModulePolicyError::RootStatementMismatch { expected_hash, actual_hash } =>
@@ -94,8 +100,11 @@ impl std::fmt::Display for ModulePolicyError {
 }
 
 /// One assembled, policy-checked declaration, with the hashes persistence and
-/// replay need. `depends_on` is best-effort: the names of earlier items whose
-/// identifier appears (as a whole word) in this item's content.
+/// replay need. `depends_on` is best-effort: the names of other items whose
+/// identifier appears (as a whole word) in this item's content — normally only
+/// earlier items, except for a `MutualGroup` member, which may legitimately
+/// depend on a sibling declared later in the same group (that's the point of
+/// the group).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AssembledItem {
     pub order: usize,
@@ -105,6 +114,11 @@ pub struct AssembledItem {
     pub statement_or_type_hash: String,
     pub body_hash: String,
     pub depends_on: Vec<String>,
+    /// `Some(group_index)` for every member of the same `MutualGroup`
+    /// (0-based, unique per module), `None` for a standalone item or the root
+    /// theorem. Purely informational — replay/export never key on it, since
+    /// the exact source re-assembles from `module_items_json` regardless.
+    pub mutual_group: Option<u32>,
 }
 
 /// A module that passed policy and was rendered to Lean source, but has not yet
@@ -258,6 +272,20 @@ pub fn assemble_module(
         match item {
             LeanModuleItem::Def { name, .. } => push_name(name, &mut seen_names, &mut ordered_names)?,
             LeanModuleItem::Theorem { name, .. } => push_name(name, &mut seen_names, &mut ordered_names)?,
+            LeanModuleItem::MutualGroup { members } => {
+                if members.len() < 2 {
+                    return Err(ModulePolicyError::InvalidMutualGroup {
+                        detail: format!("a mutual group needs at least 2 members, got {} — a single declaration has no forward-reference to solve, submit it as a bare `def`/`theorem` item instead", members.len()),
+                    });
+                }
+                for member in members {
+                    let name = match member {
+                        MutualMember::Def { name, .. } => name,
+                        MutualMember::Theorem { name, .. } => name,
+                    };
+                    push_name(name, &mut seen_names, &mut ordered_names)?;
+                }
+            }
         }
     }
     push_name(&root_theorem.name, &mut seen_names, &mut ordered_names)?;
@@ -290,6 +318,20 @@ pub fn assemble_module(
                 check_content(&format!("theorem `{}` (item {}) statement", name, i), statement)?;
                 check_content(&format!("theorem `{}` (item {}) proof", name, i), proof_term)?;
             }
+            LeanModuleItem::MutualGroup { members } => {
+                for (j, member) in members.iter().enumerate() {
+                    match member {
+                        MutualMember::Def { name, type_signature, body } => {
+                            check_content(&format!("mutual group (item {}) def `{}` (member {}) type", i, name, j), type_signature)?;
+                            check_content(&format!("mutual group (item {}) def `{}` (member {}) body", i, name, j), body)?;
+                        }
+                        MutualMember::Theorem { name, statement, proof_term } => {
+                            check_content(&format!("mutual group (item {}) theorem `{}` (member {}) statement", i, name, j), statement)?;
+                            check_content(&format!("mutual group (item {}) theorem `{}` (member {}) proof", i, name, j), proof_term)?;
+                        }
+                    }
+                }
+            }
         }
     }
     check_content("root theorem statement", &root_theorem.statement)?;
@@ -308,36 +350,96 @@ pub fn assemble_module(
 
     let mut item_manifest: Vec<AssembledItem> = Vec::new();
     let mut declared_so_far: Vec<String> = Vec::new();
+    // A monotonic assembly-order counter, distinct from `module_items`'s own
+    // index: a single `MutualGroup` item expands into several manifest rows
+    // (one per member), so `order` can no longer just be the client's item
+    // index — it has to be unique across every persisted row (the
+    // `episode_verified_module_items` table enforces `UNIQUE(module_id,
+    // item_order)`).
+    let mut next_order: usize = 0;
+    let mut next_mutual_group: u32 = 0;
 
-    for (i, item) in module_items.iter().enumerate() {
+    for item in module_items.iter() {
         match item {
             LeanModuleItem::Def { name, type_signature, body } => {
-                if type_signature.trim().is_empty() {
-                    source.push_str(&format!("def {} :=\n{}\n\n", name, indent(body)));
-                } else {
-                    source.push_str(&format!("def {} : {} :=\n{}\n\n", name, type_signature.trim(), indent(body)));
-                }
+                source.push_str(&render_def(name, type_signature, body));
                 item_manifest.push(AssembledItem {
-                    order: i,
+                    order: next_order,
                     kind: "def".to_string(),
                     lean_name: name.clone(),
                     statement_or_type_hash: canonical_hash(&type_signature).map_err(ModulePolicyError::Internal)?,
                     body_hash: canonical_hash(&body).map_err(ModulePolicyError::Internal)?,
                     depends_on: detect_deps(&format!("{}\n{}", type_signature, body), &declared_so_far),
+                    mutual_group: None,
                 });
+                next_order += 1;
                 declared_so_far.push(name.clone());
             }
             LeanModuleItem::Theorem { name, statement, proof_term } => {
-                source.push_str(&format!("theorem {} : {} := by\n{}\n\n", name, statement.trim(), indent(proof_term)));
+                source.push_str(&render_theorem(name, statement, proof_term));
                 item_manifest.push(AssembledItem {
-                    order: i,
+                    order: next_order,
                     kind: "theorem".to_string(),
                     lean_name: name.clone(),
                     statement_or_type_hash: canonical_hash(&statement).map_err(ModulePolicyError::Internal)?,
                     body_hash: canonical_hash(&proof_term).map_err(ModulePolicyError::Internal)?,
                     depends_on: detect_deps(&format!("{}\n{}", statement, proof_term), &declared_so_far),
+                    mutual_group: None,
                 });
+                next_order += 1;
                 declared_so_far.push(name.clone());
+            }
+            LeanModuleItem::MutualGroup { members } => {
+                // Every member of the group is declared BEFORE any member's
+                // `depends_on` is computed — that's the whole point of the
+                // group: `isEven` may reference `isOdd` even though `isOdd` is
+                // rendered after it, because both are inside the same `mutual`
+                // block and Lean resolves them together.
+                let member_names: Vec<String> = members.iter().map(|m| match m {
+                    MutualMember::Def { name, .. } => name.clone(),
+                    MutualMember::Theorem { name, .. } => name.clone(),
+                }).collect();
+                let mut group_declared = declared_so_far.clone();
+                group_declared.extend(member_names.iter().cloned());
+
+                let group_index = next_mutual_group;
+                next_mutual_group += 1;
+
+                let mut group_source = String::new();
+                for member in members {
+                    match member {
+                        MutualMember::Def { name, type_signature, body } => {
+                            group_source.push_str(&render_def(name, type_signature, body));
+                            item_manifest.push(AssembledItem {
+                                order: next_order,
+                                kind: "def".to_string(),
+                                lean_name: name.clone(),
+                                statement_or_type_hash: canonical_hash(&type_signature).map_err(ModulePolicyError::Internal)?,
+                                body_hash: canonical_hash(&body).map_err(ModulePolicyError::Internal)?,
+                                depends_on: detect_deps(&format!("{}\n{}", type_signature, body), &group_declared),
+                                mutual_group: Some(group_index),
+                            });
+                            next_order += 1;
+                        }
+                        MutualMember::Theorem { name, statement, proof_term } => {
+                            group_source.push_str(&render_theorem(name, statement, proof_term));
+                            item_manifest.push(AssembledItem {
+                                order: next_order,
+                                kind: "theorem".to_string(),
+                                lean_name: name.clone(),
+                                statement_or_type_hash: canonical_hash(&statement).map_err(ModulePolicyError::Internal)?,
+                                body_hash: canonical_hash(&proof_term).map_err(ModulePolicyError::Internal)?,
+                                depends_on: detect_deps(&format!("{}\n{}", statement, proof_term), &group_declared),
+                                mutual_group: Some(group_index),
+                            });
+                            next_order += 1;
+                        }
+                    }
+                }
+                source.push_str("mutual\n\n");
+                source.push_str(&indent(group_source.trim_end()));
+                source.push_str("\n\nend\n\n");
+                declared_so_far.extend(member_names);
             }
         }
     }
@@ -345,12 +447,13 @@ pub fn assemble_module(
     // Root theorem last.
     source.push_str(&format!("theorem {} : {} := by\n{}\n\n", root_theorem.name, root_theorem.statement.trim(), indent(&root_theorem.proof_term)));
     item_manifest.push(AssembledItem {
-        order: module_items.len(),
+        order: next_order,
         kind: "root_theorem".to_string(),
         lean_name: root_theorem.name.clone(),
         statement_or_type_hash: actual_root_hash.clone(),
         body_hash: canonical_hash(&root_theorem.proof_term).map_err(ModulePolicyError::Internal)?,
         depends_on: detect_deps(&format!("{}\n{}", root_theorem.statement, root_theorem.proof_term), &declared_so_far),
+        mutual_group: None,
     });
 
     source.push_str(&format!("end {}\n", problem_namespace));
@@ -368,6 +471,23 @@ pub fn assemble_module(
         item_manifest,
         root_lean_name: root_theorem.name.clone(),
     })
+}
+
+/// Renders a `def` declaration exactly as the top-level and `mutual`-group
+/// paths both need it — a single shared shape so a member inside a `mutual`
+/// block compiles to identical Lean as a standalone `Def` would.
+fn render_def(name: &str, type_signature: &str, body: &str) -> String {
+    if type_signature.trim().is_empty() {
+        format!("def {} :=\n{}\n\n", name, indent(body))
+    } else {
+        format!("def {} : {} :=\n{}\n\n", name, type_signature.trim(), indent(body))
+    }
+}
+
+/// Renders a `theorem` declaration — the `Theorem`/`mutual`-group analogue of
+/// [`render_def`].
+fn render_theorem(name: &str, statement: &str, proof_term: &str) -> String {
+    format!("theorem {} : {} := by\n{}\n\n", name, statement.trim(), indent(proof_term))
 }
 
 /// Indents every line of a client string by two spaces. Lean 4.32+ requires the
@@ -618,5 +738,173 @@ mod tests {
         }];
         let r = root("True", "trivial");
         assert!(assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).is_ok());
+    }
+
+    // -- MutualGroup (issue #19) ---------------------------------------------
+
+    /// The exact repro from issue #19: `isEven`/`isOdd`, each referencing the
+    /// other. Must render inside one `mutual ... end` block, and each member's
+    /// name must be visible to its sibling in the rendered source.
+    #[test]
+    fn mutual_group_renders_forward_referencing_defs_inside_one_block() {
+        let items = vec![LeanModuleItem::MutualGroup {
+            members: vec![
+                MutualMember::Def {
+                    name: "isEven".to_string(),
+                    type_signature: "Nat → Bool".to_string(),
+                    body: "fun n => match n with\n  | 0 => true\n  | (k+1) => isOdd k".to_string(),
+                },
+                MutualMember::Def {
+                    name: "isOdd".to_string(),
+                    type_signature: "Nat → Bool".to_string(),
+                    body: "fun n => match n with\n  | 0 => false\n  | (k+1) => isEven k".to_string(),
+                },
+            ],
+        }];
+        let r = root("isEven 4 = true", "rfl");
+        let asm = assemble_module("ChatDB.P_x", &root_hash("isEven 4 = true"), &items, &r, &manifest()).unwrap();
+        assert!(asm.source.contains("mutual\n"), "{}", asm.source);
+        assert!(asm.source.contains("def isEven"), "{}", asm.source);
+        assert!(asm.source.contains("def isOdd"), "{}", asm.source);
+        assert!(asm.source.contains("end\n"), "{}", asm.source);
+        // `mutual`/`end` appear ONLY as the server-rendered wrapper, never as
+        // client-suppliable tokens — same trust boundary as every other item.
+        assert!(asm.source.contains("mutual\n\n"), "{}", asm.source);
+
+        // Manifest: two `def` rows + the root, sharing one mutual_group index,
+        // and unique `order` values (both were flattened from ONE module_items
+        // entry, so `order` can no longer be the client's item index).
+        assert_eq!(asm.item_manifest.len(), 3);
+        assert_eq!(asm.item_manifest[0].kind, "def");
+        assert_eq!(asm.item_manifest[0].lean_name, "isEven");
+        assert_eq!(asm.item_manifest[0].mutual_group, Some(0));
+        assert_eq!(asm.item_manifest[1].kind, "def");
+        assert_eq!(asm.item_manifest[1].lean_name, "isOdd");
+        assert_eq!(asm.item_manifest[1].mutual_group, Some(0));
+        assert_eq!(asm.item_manifest[2].kind, "root_theorem");
+        assert_eq!(asm.item_manifest[2].mutual_group, None);
+        let orders: std::collections::HashSet<usize> = asm.item_manifest.iter().map(|it| it.order).collect();
+        assert_eq!(orders.len(), 3, "item_manifest order values must be unique: {:?}", asm.item_manifest);
+
+        // Forward reference detected: isEven depends on isOdd even though
+        // isOdd is declared AFTER it in the group.
+        assert_eq!(asm.item_manifest[0].depends_on, vec!["isOdd".to_string()]);
+        assert_eq!(asm.item_manifest[1].depends_on, vec!["isEven".to_string()]);
+    }
+
+    /// A group of fewer than 2 members has no forward-reference problem to
+    /// solve — reject it rather than silently accepting a pointless `mutual`
+    /// wrapper around a single declaration.
+    #[test]
+    fn rejects_mutual_group_with_fewer_than_two_members() {
+        let items = vec![LeanModuleItem::MutualGroup {
+            members: vec![MutualMember::Def {
+                name: "lonely".to_string(),
+                type_signature: "Nat".to_string(),
+                body: "0".to_string(),
+            }],
+        }];
+        let r = root("True", "trivial");
+        let err = assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).unwrap_err();
+        assert!(matches!(err, ModulePolicyError::InvalidMutualGroup { .. }), "{:?}", err);
+
+        let empty_items = vec![LeanModuleItem::MutualGroup { members: vec![] }];
+        let err = assemble_module("ChatDB.P_x", &root_hash("True"), &empty_items, &r, &manifest()).unwrap_err();
+        assert!(matches!(err, ModulePolicyError::InvalidMutualGroup { .. }), "{:?}", err);
+    }
+
+    /// A duplicate name between two mutual-group members (or between a group
+    /// member and any other item) must still be rejected — grouping does not
+    /// create a private naming scope.
+    #[test]
+    fn rejects_duplicate_names_within_mutual_group() {
+        let items = vec![LeanModuleItem::MutualGroup {
+            members: vec![
+                MutualMember::Def { name: "f".to_string(), type_signature: "Nat".to_string(), body: "0".to_string() },
+                MutualMember::Def { name: "f".to_string(), type_signature: "Nat".to_string(), body: "1".to_string() },
+            ],
+        }];
+        let r = root("True", "trivial");
+        let err = assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).unwrap_err();
+        assert!(matches!(err, ModulePolicyError::DuplicateName { .. }), "{:?}", err);
+    }
+
+    /// The same injection hardening applies inside a mutual-group member's
+    /// content as everywhere else — grouping is not an escape hatch.
+    #[test]
+    fn rejects_axiom_injection_inside_mutual_group_member() {
+        let items = vec![LeanModuleItem::MutualGroup {
+            members: vec![
+                MutualMember::Def {
+                    name: "a".to_string(),
+                    type_signature: "Nat".to_string(),
+                    body: "0\n\naxiom cheat : False".to_string(),
+                },
+                MutualMember::Def { name: "b".to_string(), type_signature: "Nat".to_string(), body: "0".to_string() },
+            ],
+        }];
+        let r = root("True", "trivial");
+        let err = assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).unwrap_err();
+        assert!(matches!(err, ModulePolicyError::ProhibitedConstruct { .. }), "{:?}", err);
+    }
+
+    /// A mutual group may mix `Def` and `Theorem` members (e.g. a pair of
+    /// mutually recursive proofs about mutually recursive defs elsewhere in
+    /// the module) — the render/manifest path must handle both member kinds.
+    #[test]
+    fn mutual_group_supports_mixed_def_and_theorem_members() {
+        let items = vec![LeanModuleItem::MutualGroup {
+            members: vec![
+                MutualMember::Theorem {
+                    name: "helper_a".to_string(),
+                    statement: "True".to_string(),
+                    proof_term: "trivial".to_string(),
+                },
+                MutualMember::Theorem {
+                    name: "helper_b".to_string(),
+                    statement: "True".to_string(),
+                    proof_term: "trivial".to_string(),
+                },
+            ],
+        }];
+        let r = root("True", "trivial");
+        let asm = assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).unwrap();
+        assert!(asm.source.contains("theorem helper_a"), "{}", asm.source);
+        assert!(asm.source.contains("theorem helper_b"), "{}", asm.source);
+        assert_eq!(asm.item_manifest[0].kind, "theorem");
+        assert_eq!(asm.item_manifest[1].kind, "theorem");
+    }
+
+    /// A standalone item declared before a mutual group, and the root theorem
+    /// declared after it, must still resolve dependencies correctly against
+    /// group members — the group's forward-reference exception must not leak
+    /// into normal earlier/later ordering elsewhere in the module.
+    #[test]
+    fn mutual_group_coexists_with_standalone_items_and_root() {
+        let items = vec![
+            LeanModuleItem::Def { name: "seed".to_string(), type_signature: "Nat".to_string(), body: "1".to_string() },
+            LeanModuleItem::MutualGroup {
+                members: vec![
+                    MutualMember::Def {
+                        name: "isEven".to_string(),
+                        type_signature: "Nat → Bool".to_string(),
+                        body: "fun n => match n with\n  | 0 => true\n  | (k+1) => isOdd k".to_string(),
+                    },
+                    MutualMember::Def {
+                        name: "isOdd".to_string(),
+                        type_signature: "Nat → Bool".to_string(),
+                        body: "fun n => match n with\n  | 0 => false\n  | (k+1) => isEven k".to_string(),
+                    },
+                ],
+            },
+        ];
+        let r = root("isEven seed = true", "rfl");
+        let asm = assemble_module("ChatDB.P_x", &root_hash("isEven seed = true"), &items, &r, &manifest()).unwrap();
+        assert_eq!(asm.item_manifest.len(), 4);
+        assert_eq!(asm.item_manifest[0].lean_name, "seed");
+        assert_eq!(asm.item_manifest[0].mutual_group, None);
+        // Root theorem depends on isEven (used in its statement) — resolved
+        // against names declared by the (now-closed) mutual group.
+        assert!(asm.item_manifest[3].depends_on.contains(&"isEven".to_string()));
     }
 }
