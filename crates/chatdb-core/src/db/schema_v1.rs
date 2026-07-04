@@ -530,6 +530,33 @@ CREATE TABLE IF NOT EXISTS draft_moves (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_formalization_plan_items_promoted_obligation
     ON formalization_plan_items(promoted_obligation_id) WHERE promoted_obligation_id IS NOT NULL;
 
+-- Run envelopes (issues #34 core concept + #38 cost-surface splitting): a
+-- run envelope separates WHO/WHAT/WHY around a set of episodes from the
+-- episodes themselves -- host identity, run mode (a plain dev/exploratory
+-- episode vs. a frozen benchmark run like PutnamBench), and host-side cost
+-- accounting ChatDB itself cannot observe (MCP-visible cost_micros/budget
+-- ledger fields only ever reflect this environment's OWN bookkeeping --
+-- Lean invocation time and internal accounting -- never the total cost of
+-- running the external host/model that's calling these tools; see
+-- readme_first's cost_boundary section). Purely descriptive metadata: a run
+-- envelope's mode/cost fields never affect proof status, and episodes.run_id
+-- (below) is never validated with a DB-level foreign key -- see the comment
+-- on run_envelope_attach_episode for why.
+CREATE TABLE IF NOT EXISTS run_envelopes (
+    id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL,
+    host_name TEXT,
+    host_model TEXT,
+    benchmark_suite_name TEXT,
+    host_side_cost_micros INTEGER,
+    host_cost_confidence TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(mode IN ('development', 'evaluation', 'benchmark', 'private_audit', 'public_report')),
+    CHECK(host_cost_confidence IN ('exact_provider_receipt', 'exact_local_meter', 'estimated', 'attested', 'unknown'))
+);
+
 CREATE TABLE IF NOT EXISTS action_requests (
     id TEXT PRIMARY KEY,
     episode_id TEXT NOT NULL REFERENCES episodes(id),

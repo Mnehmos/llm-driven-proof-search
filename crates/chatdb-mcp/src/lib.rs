@@ -286,6 +286,92 @@ pub struct EnvironmentDescribeArgs {}
 #[derive(JsonSchema, Deserialize)]
 pub struct ReadmeFirstArgs {}
 
+// -- Run envelopes (issues #34 core concept + #38 cost surfaces) ----------
+//
+// Purely descriptive metadata layered over episodes: which host/model/mode
+// produced a set of episodes, and host-side cost ChatDB itself cannot
+// observe. Reuses `episodes.run_id` -- a column already present in the
+// schema from the original pre-SubmitModule spec but never read or written
+// by any code anywhere (confirmed via search before reusing it) -- as the
+// link to a run_envelopes row, rather than adding a redundant new column.
+// Deliberately NOT a DB-level foreign key: `run_id` predates this feature as
+// a free-text column, and retrofitting a FK constraint onto it would need
+// the full create-copy-drop-rename migration this codebase reserves for
+// CHECK-constraint changes (see schema_v1.rs's migrate_* functions) for a
+// benefit (referential integrity on a field nothing else ever wrote) that
+// doesn't justify that cost — validated at the application layer instead
+// (run_envelope_attach_episode checks both ids exist before writing).
+
+#[derive(JsonSchema, Deserialize)]
+pub enum RunEnvelopeMode {
+    #[serde(rename = "development")] Development,
+    #[serde(rename = "evaluation")] Evaluation,
+    #[serde(rename = "benchmark")] Benchmark,
+    #[serde(rename = "private_audit")] PrivateAudit,
+    #[serde(rename = "public_report")] PublicReport,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub enum HostCostConfidence {
+    #[serde(rename = "exact_provider_receipt")] ExactProviderReceipt,
+    #[serde(rename = "exact_local_meter")] ExactLocalMeter,
+    #[serde(rename = "estimated")] Estimated,
+    #[serde(rename = "attested")] Attested,
+    #[serde(rename = "unknown")] Unknown,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct RunEnvelopeCreateArgs {
+    pub mode: RunEnvelopeMode,
+    /// Free text naming the calling agent host, e.g. "Claude Code", "Codex".
+    #[serde(default)]
+    pub host_name: Option<String>,
+    #[serde(default)]
+    pub host_model: Option<String>,
+    /// e.g. "PutnamBench" for a benchmark-mode run. Free text, not validated
+    /// against any registry.
+    #[serde(default)]
+    pub benchmark_suite_name: Option<String>,
+    #[serde(default)]
+    pub host_side_cost_micros: Option<i64>,
+    /// Defaults to "unknown" — the honest default when the caller hasn't
+    /// measured or attested any host-side cost yet.
+    #[serde(default)]
+    pub host_cost_confidence: Option<HostCostConfidence>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+/// Self-review note: an omitted field and an explicit JSON `null` are
+/// indistinguishable here (both deserialize to `None` and are treated as
+/// "leave unchanged") — there's currently no way to intentionally reset a
+/// field back to NULL/unknown once set. Same limitation as
+/// FormalizationPlanUpdateArgs's identical pattern; accepted for the same
+/// reason: no acceptance criterion calls for a reset path, and adding one
+/// would need a three-state (unset/reset/set) representation for no
+/// currently-needed benefit.
+#[derive(JsonSchema, Deserialize)]
+pub struct RunEnvelopeUpdateArgs {
+    pub run_envelope_id: String,
+    #[serde(default)]
+    pub host_side_cost_micros: Option<i64>,
+    #[serde(default)]
+    pub host_cost_confidence: Option<HostCostConfidence>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct RunEnvelopeAttachEpisodeArgs {
+    pub run_envelope_id: String,
+    pub episode_id: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct RunEnvelopeObserveArgs {
+    pub run_envelope_id: String,
+}
+
 #[derive(JsonSchema, Deserialize)]
 pub struct ProblemCreateArgs {
     pub source_problem_text: String,
@@ -1702,7 +1788,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.5"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.6"))
     }
 
     async fn list_tools(
@@ -1744,6 +1830,10 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
             make_tool::<MathlibSearchLocalArtifactsArgs>("mathlib_search_local_artifacts", "Search THIS ChatDB instance's own previously-verified theorem/def names for a substring match — a local usage_example precedent, not a Mathlib-library result"),
             make_tool::<FormalizationPlanAttachLibrarianResultArgs>("formalization_plan_attach_librarian_result", "Attach a mathlib_search_declarations/mathlib_search_local_artifacts result to a formalization plan item, updating its Mathlib coverage status. A hint attachment, not a re-check — never changes proof status"),
+            make_tool::<RunEnvelopeCreateArgs>("run_envelope_create", "Create a run envelope (issues #34/#38): who/what produced a set of episodes — host, model, mode (development/evaluation/benchmark/private_audit/public_report), and host-side cost accounting ChatDB itself cannot observe. Purely descriptive metadata; never affects proof status"),
+            make_tool::<RunEnvelopeUpdateArgs>("run_envelope_update", "Update a run envelope's host-side cost fields or notes after the fact"),
+            make_tool::<RunEnvelopeAttachEpisodeArgs>("run_envelope_attach_episode", "Tag an existing episode with a run envelope. Metadata only — never changes the episode's outcome/state"),
+            make_tool::<RunEnvelopeObserveArgs>("run_envelope_observe", "Read back a run envelope and every episode tagged with it"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -1784,7 +1874,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.5",
+                    "environment_version": "0.3.6",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -3545,6 +3635,157 @@ impl ServerHandler for ChatDbMcp {
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
+            "run_envelope_create" => {
+                let args: RunEnvelopeCreateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let mode_str = match args.mode {
+                    RunEnvelopeMode::Development => "development",
+                    RunEnvelopeMode::Evaluation => "evaluation",
+                    RunEnvelopeMode::Benchmark => "benchmark",
+                    RunEnvelopeMode::PrivateAudit => "private_audit",
+                    RunEnvelopeMode::PublicReport => "public_report",
+                };
+                let confidence_str = match args.host_cost_confidence.unwrap_or(HostCostConfidence::Unknown) {
+                    HostCostConfidence::ExactProviderReceipt => "exact_provider_receipt",
+                    HostCostConfidence::ExactLocalMeter => "exact_local_meter",
+                    HostCostConfidence::Estimated => "estimated",
+                    HostCostConfidence::Attested => "attested",
+                    HostCostConfidence::Unknown => "unknown",
+                };
+
+                let conn = self.conn.lock().await;
+                let run_envelope_id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO run_envelopes (
+                        id, mode, host_name, host_model, benchmark_suite_name,
+                        host_side_cost_micros, host_cost_confidence, notes, created_at, updated_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+                    (&run_envelope_id, mode_str, &args.host_name, &args.host_model, &args.benchmark_suite_name,
+                     &args.host_side_cost_micros, confidence_str, &args.notes, &now),
+                ).map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "run_envelope_id": run_envelope_id,
+                    "mode": mode_str,
+                    "host_cost_confidence": confidence_str,
+                    "created_at": now,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "run_envelope_update" => {
+                let args: RunEnvelopeUpdateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let current: Option<(Option<i64>, String, Option<String>)> = conn.query_row(
+                    "SELECT host_side_cost_micros, host_cost_confidence, notes FROM run_envelopes WHERE id = ?1",
+                    [&args.run_envelope_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                ).optional().map_err(rs)?;
+                let Some((cur_cost, cur_confidence, cur_notes)) = current else {
+                    return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
+                };
+
+                let new_cost = args.host_side_cost_micros.or(cur_cost);
+                let new_confidence = match args.host_cost_confidence {
+                    Some(HostCostConfidence::ExactProviderReceipt) => "exact_provider_receipt".to_string(),
+                    Some(HostCostConfidence::ExactLocalMeter) => "exact_local_meter".to_string(),
+                    Some(HostCostConfidence::Estimated) => "estimated".to_string(),
+                    Some(HostCostConfidence::Attested) => "attested".to_string(),
+                    Some(HostCostConfidence::Unknown) => "unknown".to_string(),
+                    None => cur_confidence,
+                };
+                let new_notes = args.notes.or(cur_notes);
+                let now = Utc::now().to_rfc3339();
+
+                conn.execute(
+                    "UPDATE run_envelopes SET host_side_cost_micros = ?1, host_cost_confidence = ?2, notes = ?3, updated_at = ?4 WHERE id = ?5",
+                    (&new_cost, &new_confidence, &new_notes, &now, &args.run_envelope_id),
+                ).map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "run_envelope_id": args.run_envelope_id,
+                    "host_side_cost_micros": new_cost,
+                    "host_cost_confidence": new_confidence,
+                    "updated_at": now,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "run_envelope_attach_episode" => {
+                let args: RunEnvelopeAttachEpisodeArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let envelope_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM run_envelopes WHERE id = ?1", [&args.run_envelope_id], |row| row.get(0),
+                ).map_err(rs)?;
+                if envelope_exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
+                }
+                let episode_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM episodes WHERE id = ?1", [&args.episode_id], |row| row.get(0),
+                ).map_err(rs)?;
+                if episode_exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown episode_id: {}", args.episode_id)));
+                }
+
+                // Sets episodes.run_id only — never touches outcome/state/
+                // current_revision or any other proof-status column.
+                conn.execute(
+                    "UPDATE episodes SET run_id = ?1 WHERE id = ?2",
+                    (&args.run_envelope_id, &args.episode_id),
+                ).map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "run_envelope_id": args.run_envelope_id,
+                    "episode_id": args.episode_id,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "run_envelope_observe" => {
+                let args: RunEnvelopeObserveArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let row: Option<(String, Option<String>, Option<String>, Option<String>, Option<i64>, String, Option<String>, String, String)> = conn.query_row(
+                    "SELECT mode, host_name, host_model, benchmark_suite_name, host_side_cost_micros,
+                            host_cost_confidence, notes, created_at, updated_at
+                     FROM run_envelopes WHERE id = ?1",
+                    [&args.run_envelope_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+                ).optional().map_err(rs)?;
+                let Some((mode, host_name, host_model, benchmark_suite_name, host_side_cost_micros, host_cost_confidence, notes, created_at, updated_at)) = row else {
+                    return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
+                };
+
+                let mut estmt = conn.prepare(
+                    "SELECT id, outcome, state FROM episodes WHERE run_id = ?1 ORDER BY created_at ASC"
+                ).map_err(rs)?;
+                let episodes: Vec<serde_json::Value> = estmt.query_map([&args.run_envelope_id], |row| {
+                    Ok(serde_json::json!({
+                        "episode_id": row.get::<_, String>(0)?,
+                        "outcome": row.get::<_, Option<String>>(1)?,
+                        "state": row.get::<_, String>(2)?,
+                    }))
+                }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "run_envelope_id": args.run_envelope_id,
+                    "mode": mode,
+                    "host_name": host_name,
+                    "host_model": host_model,
+                    "benchmark_suite_name": benchmark_suite_name,
+                    "host_side_cost_micros": host_side_cost_micros,
+                    "host_cost_confidence": host_cost_confidence,
+                    "notes": notes,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "episodes": episodes,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
             _ => Err(McpError::new(ErrorCode::METHOD_NOT_FOUND, format!("Method not found: {}", request.name), None)),
         }
     }
@@ -3696,7 +3937,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 33);
+        assert_eq!(list_res.tools.len(), 37);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -6351,5 +6592,148 @@ mod tests {
 
         let after = { let c = conn_arc.lock().await; snapshot(&c) };
         assert_eq!(before, after, "no librarian tool call may change episodes or episode_obligations in any way");
+    }
+
+    // -- Run envelopes (issues #34, #38) -------------------------------------
+
+    #[tokio::test]
+    async fn test_run_envelope_create_update_and_observe() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "benchmark", "host_name": "Claude Code", "host_model": "claude-sonnet-5",
+            "benchmark_suite_name": "PutnamBench",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let envelope_id = created["run_envelope_id"].as_str().unwrap().to_string();
+        assert_eq!(created["mode"], "benchmark");
+        assert_eq!(created["host_cost_confidence"], "unknown", "omitted confidence must default to the honest 'unknown', not a made-up value");
+
+        let updated = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_update").with_arguments(serde_json::json!({
+            "run_envelope_id": envelope_id, "host_side_cost_micros": 42_000_000i64, "host_cost_confidence": "estimated",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(updated["host_side_cost_micros"], 42_000_000i64);
+        assert_eq!(updated["host_cost_confidence"], "estimated");
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_observe").with_arguments(serde_json::json!({
+            "run_envelope_id": envelope_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["mode"], "benchmark");
+        assert_eq!(observed["host_name"], "Claude Code");
+        assert_eq!(observed["benchmark_suite_name"], "PutnamBench");
+        assert_eq!(observed["host_side_cost_micros"], 42_000_000i64);
+        assert_eq!(observed["episodes"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_run_envelope_update_preserves_omitted_fields() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "development", "notes": "original note",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let envelope_id = created["run_envelope_id"].as_str().unwrap().to_string();
+
+        // Update ONLY cost — notes must survive untouched.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_update").with_arguments(serde_json::json!({
+            "run_envelope_id": envelope_id, "host_side_cost_micros": 10i64,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_observe").with_arguments(serde_json::json!({
+            "run_envelope_id": envelope_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["notes"], "original note", "an update that omits notes must not clear it");
+        assert_eq!(observed["host_side_cost_micros"], 10i64);
+    }
+
+    #[tokio::test]
+    async fn test_run_envelope_attach_episode_rejects_unknown_ids() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "development",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let envelope_id = created["run_envelope_id"].as_str().unwrap().to_string();
+
+        let bad1 = peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+            "run_envelope_id": "not-a-real-envelope", "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(bad1.is_err());
+        let bad2 = peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+            "run_envelope_id": envelope_id, "episode_id": "not-a-real-episode",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad2.is_err());
+
+        // Happy path: attaching succeeds and shows up in observe.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+            "run_envelope_id": envelope_id, "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_observe").with_arguments(serde_json::json!({
+            "run_envelope_id": envelope_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episodes = observed["episodes"].as_array().unwrap();
+        assert_eq!(episodes.len(), 1, "{:?}", episodes);
+        assert_eq!(episodes[0]["episode_id"], episode_id);
+    }
+
+    /// Core regression test: tagging an episode with a run envelope may set
+    /// `episodes.run_id` (that's the whole point), but must never touch any
+    /// OTHER column — outcome, state, current_revision, or anything in
+    /// episode_obligations. Snapshots every column of both tables before and
+    /// after, with run_id excluded from the episodes comparison (it's
+    /// EXPECTED to change), asserting everything else is byte-identical.
+    #[tokio::test]
+    async fn test_run_envelope_attach_only_changes_run_id_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "development",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let envelope_id = envelope["run_envelope_id"].as_str().unwrap().to_string();
+
+        // Snapshot every column EXCEPT run_id (found by name, not by a
+        // hardcoded index) — that one is expected to change.
+        let snapshot = |conn: &Connection| -> (String, String) {
+            let episodes: Vec<String> = conn.prepare("SELECT * FROM episodes ORDER BY id").unwrap()
+                .query_map([], |row| {
+                    let names = row.as_ref().column_names();
+                    let n = row.as_ref().column_count();
+                    Ok((0..n)
+                        .filter(|&i| names[i] != "run_id")
+                        .map(|i| format!("{:?}", row.get_ref(i).unwrap()))
+                        .collect::<Vec<_>>().join(","))
+                }).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            let obligations: Vec<String> = conn.prepare("SELECT * FROM episode_obligations ORDER BY id").unwrap()
+                .query_map([], |row| { let n = row.as_ref().column_count(); Ok((0..n).map(|i| format!("{:?}", row.get_ref(i).unwrap())).collect::<Vec<_>>().join(",")) }).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            (episodes.join("|"), obligations.join("|"))
+        };
+        let before = { let c = conn_arc.lock().await; snapshot(&c) };
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+            "run_envelope_id": envelope_id, "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let after = { let c = conn_arc.lock().await; snapshot(&c) };
+        assert_eq!(before, after, "attaching a run envelope must change ONLY episodes.run_id — everything else (outcome, state, revision, obligations) must be untouched");
+
+        let run_id: Option<String> = { let c = conn_arc.lock().await; c.query_row("SELECT run_id FROM episodes WHERE id = ?1", [&episode_id], |row| row.get(0)).unwrap() };
+        assert_eq!(run_id.as_deref(), Some(envelope_id.as_str()), "run_id must actually be set to the envelope id");
     }
 }
