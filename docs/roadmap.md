@@ -313,6 +313,25 @@ mathematical effort per problem, not the environment. One real environment
 finding from the attempt — a multi-line `proof_term` can silently break
 tactic-block parsing with a misleading error — filed as issue #41.
 
+**#36 — require measured proof attempts to flow through `episode_step`.** ✅
+Shipped in v0.3.12. Found and closed a real gap while formalizing this
+already-mostly-true invariant: `benchmark_result_record`'s anti-fabrication
+checks (from #30) only ran when an `episode_id` happened to be supplied at
+all — a caller claiming `kernel_verified`/`certified` with no `episode_id`
+whatsoever skipped every check and was accepted with zero backing evidence.
+Now rejected outright. Also added a static code-review guard
+(`test_putnam_runner_never_references_lean_gateway_directly`) proving the
+runner never calls `RealLeanGateway`/`verify_exact`/`verify_module`
+directly, and a "Tracked vs. untracked verifier use" doc section in
+`docs/benchmarks/putnambench.md`. The remaining acceptance criteria (a
+run-mode field marking direct-gateway diagnostics dev-only, and
+`training_incomplete`/`benchmark_invalid` run-marking) turned out to be
+structurally unnecessary once the core gap closed: the gateway is never
+exposed as an MCP tool at all (so no client-driven diagnostic can originate
+outside `episode_step`), and a verified claim is now impossible to record
+without a real backing episode, leaving nothing for a post-hoc marking
+mechanism to catch.
+
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
 `SubmitModule` skeleton, and no record of what Mathlib coverage was actually

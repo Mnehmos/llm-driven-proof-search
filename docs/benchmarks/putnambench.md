@@ -274,6 +274,65 @@ The full 672-theorem suite (`import_putnambench`/`putnam_runner` against a
 real local clone) is a separate, explicitly-invoked mode — never run as part
 of the normal `cargo test` suite.
 
+## Tracked vs. untracked verifier use (issue #36)
+
+**The product principle:** a proof attempt that bypasses the episode ledger
+is not part of ChatDB evidence. A benchmark run must not test candidate
+proofs through a side-channel checker and then submit only the winning one
+— that loses every failed attempt, the verifier diagnostics, and the cost
+signals, and turns the environment into a trophy case instead of a
+proof-search ledger.
+
+**Tracked path** (the only one that produces measurable evidence):
+`episode_create` → `attempt_claim` → `episode_step` with `Solve` or
+`SubmitModule`. Every candidate attempt this way is recorded as a
+trajectory event (hash-chained, replayable via `episode_replay`), whether
+it succeeds or fails.
+
+**Untracked path**: calling `LeanGateway::verify_exact`/`verify_module` (or
+constructing a `RealLeanGateway` directly) outside that flow. This is a
+legitimate *internal* primitive — the orchestrator's own
+`attempt_prepare`/`attempt_finalize` split (`crates/chatdb-core/src/orchestrator/step.rs`)
+uses it to actually reach Lean, and unit tests/replay internals use it in
+isolation deliberately — but it is never exposed as a callable MCP tool. A
+client (including `putnam_runner.rs`) has no way to invoke it directly even
+if it wanted to; the *only* path any client-driven proof attempt has to
+reach Lean is `episode_step`. This is enforced by construction, not by a
+runtime policy check, which is why the acceptance criterion asking for "a
+run-mode field that marks direct-gateway diagnostics as development-only"
+doesn't need a new mechanism here: there is no code path where a client
+could produce a direct-gateway diagnostic in the first place.
+
+**Enforced concretely, closing the one real gap this session's own review
+found:** `benchmark_result_record`'s cross-checks (episode-outcome match,
+statement-hash match) previously only ran when an `episode_id` happened to
+be given at all — a caller claiming `kernel_verified`/`certified` with **no
+episode_id whatsoever** skipped every check and was accepted with zero
+backing evidence, which is a strictly worse gap than the mismatched-episode
+bug #30 already fixed. `benchmark_result_record` now rejects any
+`kernel_verified`/`certified` claim that doesn't reference an episode
+outright — see `test_benchmark_result_record_rejects_verified_claims_with_no_episode`.
+Since a verified claim is now structurally impossible without a real,
+matching, concluded episode, there is nothing left for a
+`training_incomplete`/`benchmark_invalid` marking to catch after the fact —
+the bad state can no longer be recorded in the first place, which is a
+stronger guarantee than detecting it post hoc.
+
+**Code-review guard**: `test_putnam_runner_never_references_lean_gateway_directly`
+(a static source-text check, embedded at compile time) fails immediately if
+`putnam_runner.rs` ever references `RealLeanGateway`/`verify_exact`/
+`verify_module` in actual code — not just as a doc-comment mention of the
+invariant it upholds. Explicitly scoped to this one file, not a project-wide
+policy: a future sibling benchmark-runner binary would need its own guard.
+
+**Public benchmark reports**: `benchmark_run_observe`'s response and
+`proof_export(format="public_summary")` are both built entirely from
+`benchmark_results`/`episodes` rows that — per the enforcement above — can
+only exist if every verified claim in them passed through `episode_step`.
+That is the "statement that all measured proof attempts were tracked
+through MCP" the acceptance criteria asks for: it's true by construction of
+what can be written to those tables, not an additional printed disclaimer.
+
 ## Contamination policy (issue #33)
 
 The rest of this document (below) covers the contamination/redaction policy
