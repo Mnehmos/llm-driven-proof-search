@@ -2,11 +2,15 @@ use std::fs;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 use crate::models::{
     Obligation, LeanVerificationResult, LeanVerificationOutcome, LeanDiagnostic, LeanDiagnosticCategory,
-    DeclarationLookupResult, DeclarationLookupStatus,
+    DeclarationLookupResult, DeclarationLookupStatus, LeanModuleVerificationResult,
 };
 use uuid::Uuid;
+
+pub mod module;
+use module::AssembledModule;
 
 pub trait LeanGateway {
     fn verify_exact(
@@ -48,7 +52,42 @@ pub trait LeanGateway {
             diagnostics: vec!["this gateway does not support declaration lookup".to_string()],
         }).collect())
     }
+
+    /// Kernel-checks a whole assembled module (defs + helper theorems + root
+    /// theorem) as one unit, in a staged location. Returns `KernelPass` only if
+    /// the process succeeds, no error diagnostics were emitted, AND no
+    /// `sorry`/`admit` warning appears — the same soundness rule as
+    /// `verify_exact`, applied to the module as a whole. On pass the gateway may
+    /// write the verified source to `LeanChecker/Verified`; on failure it MUST
+    /// NOT (no partial commit). Default fails closed for the same reason
+    /// `validate_import_manifest` does — a gateway that can't actually run Lean
+    /// must never report a module as verified.
+    fn verify_module(
+        &self,
+        _assembled: &AssembledModule,
+        _environment: &str,
+    ) -> Result<LeanModuleVerificationResult, String> {
+        Err("this gateway cannot verify modules".to_string())
+    }
 }
+
+/// Serializes `lake build` invocations against the shared Lake workspace at
+/// `lean_project_path`. The staged compile (`run_lean_json`, an isolated
+/// tempdir per call) is safe under concurrency and stays unserialized — this
+/// lock covers only the narrow post-success step that copies a verified
+/// source into `LeanChecker/Verified` and runs `lake build` on it. Before the
+/// two-phase DB-lock split (review feedback on #16/#17), the single
+/// server-wide DB mutex incidentally serialized every `episode_step` call
+/// end-to-end, which also serialized this step as a side effect; releasing
+/// that mutex during the Lean gateway call means two sessions can now reach
+/// `lake build` concurrently for the first time. Lake's build cache is not
+/// documented as safe for concurrent cross-process invocations, and the
+/// build's exit status is intentionally best-effort (`let _ =
+/// build_cmd.output()`) — soundness of the kernel check is unaffected either
+/// way (it already happened in the isolated staged compile), but a corrupted
+/// or missing durable build artifact for one of two racing submissions would
+/// otherwise go unnoticed.
+static LAKE_BUILD_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 pub struct RealLeanGateway {
     pub lean_project_path: PathBuf,
@@ -378,6 +417,7 @@ impl LeanGateway for RealLeanGateway {
             if let Ok(elan_home) = std::env::var("CHATDB_ELAN_HOME") {
                 build_cmd.env("ELAN_HOME", elan_home);
             }
+            let _build_lock = LAKE_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let _ = build_cmd.output();
         }
 
@@ -399,6 +439,130 @@ impl LeanGateway for RealLeanGateway {
             dependency_use_report: None,
             wall_time_ms,
             lean_cpu_time_ms: wall_time_ms,
+        })
+    }
+
+    fn verify_module(
+        &self,
+        assembled: &AssembledModule,
+        environment: &str,
+    ) -> Result<LeanModuleVerificationResult, String> {
+        let start_time = Instant::now();
+        // Stem is derived from the source hash so a re-submission of the same
+        // module lands on the same Verified/ file, and two different modules never
+        // collide. The namespace inside the file is independent of the file name.
+        let file_stem = format!("M_{}", &assembled.module_source_hash[..16.min(assembled.module_source_hash.len())]);
+
+        let kernel_result_hash = crate::hashing::canonical_hash(&(
+            assembled.module_source_hash.clone(),
+            assembled.declaration_manifest_hash.clone(),
+        )).unwrap_or_default();
+
+        let mk_fail = |diag: LeanDiagnostic, all: Vec<LeanDiagnostic>, elapsed: u64| LeanModuleVerificationResult {
+            outcome: LeanVerificationOutcome::KernelFail,
+            problem_namespace: assembled.namespace.clone(),
+            root_lean_name: assembled.root_lean_name.clone(),
+            module_source_hash: assembled.module_source_hash.clone(),
+            declaration_manifest_hash: assembled.declaration_manifest_hash.clone(),
+            environment_hash: environment.to_string(),
+            kernel_result_hash: kernel_result_hash.clone(),
+            diagnostic: Some(diag),
+            all_diagnostics: all,
+            wall_time_ms: elapsed,
+        };
+
+        let (proc_success, lines, stderr) = match self.run_lean_json(&assembled.source, &file_stem, Duration::from_secs(120)) {
+            Ok(v) => v,
+            Err(timeout_or_spawn_err) => {
+                return Ok(mk_fail(
+                    LeanDiagnostic {
+                        category: LeanDiagnosticCategory::TacticFailure,
+                        primary_message: timeout_or_spawn_err,
+                        source_span: None, goal: None, local_context: vec![], unsolved_goals: vec![],
+                        used_dependencies: vec![], error_code: None, canonical_goal_hash: None,
+                    },
+                    vec![],
+                    start_time.elapsed().as_millis() as u64,
+                ));
+            }
+        };
+
+        // Parse every error / hasSorry diagnostic independently — same policy as
+        // verify_exact: a module with sorry/admit compiles (exit 0 + warning) yet
+        // proves nothing, so it must be a hard rejection.
+        let mut all_diagnostics: Vec<LeanDiagnostic> = Vec::new();
+        let mut has_sorry = false;
+        for val in &lines {
+            let (msg, kind, severity, _line) = parse_diagnostic_line(val);
+            let is_sorry = kind == "hasSorry" || msg.contains("declaration uses `sorry`") || msg.contains("declaration uses 'sorry'");
+            if is_sorry {
+                has_sorry = true;
+            } else if severity != "error" || msg.is_empty() {
+                continue;
+            }
+            all_diagnostics.push(LeanDiagnostic {
+                category: categorize(&msg, &kind),
+                primary_message: msg,
+                source_span: source_span_of(val),
+                goal: None, local_context: vec![], unsolved_goals: vec![],
+                used_dependencies: vec![], error_code: None, canonical_goal_hash: None,
+            });
+        }
+
+        let success = proc_success && all_diagnostics.is_empty() && !has_sorry;
+
+        if !success {
+            let elapsed = start_time.elapsed().as_millis() as u64;
+            let diag = if has_sorry && all_diagnostics.is_empty() {
+                LeanDiagnostic {
+                    category: LeanDiagnosticCategory::ProhibitedConstruct,
+                    primary_message: "module uses `sorry`/`admit` — proves nothing".to_string(),
+                    source_span: None, goal: None, local_context: vec![], unsolved_goals: vec![],
+                    used_dependencies: vec![], error_code: None, canonical_goal_hash: None,
+                }
+            } else if let Some(d) = all_diagnostics.first().cloned() {
+                d
+            } else {
+                LeanDiagnostic {
+                    category: LeanDiagnosticCategory::TacticFailure,
+                    primary_message: if stderr.trim().is_empty() { "module verification failed with no diagnostic".to_string() } else { stderr.trim().to_string() },
+                    source_span: None, goal: None, local_context: vec![], unsolved_goals: vec![],
+                    used_dependencies: vec![], error_code: None, canonical_goal_hash: None,
+                }
+            };
+            return Ok(mk_fail(diag, all_diagnostics, elapsed));
+        }
+
+        // Success: write the verified source into Verified/ ONLY now. No partial
+        // commit — this line is reached only after the entire module passed.
+        let verified_dir = self.lean_project_path.join("LeanChecker").join("Verified");
+        if !verified_dir.exists() {
+            let _ = fs::create_dir_all(&verified_dir);
+        }
+        let dest_path = verified_dir.join(format!("{}.lean", file_stem));
+        let _ = fs::write(&dest_path, &assembled.source);
+        let lake_path = self.elan_bin_path.join("lake.exe");
+        let mut build_cmd = Command::new(&lake_path);
+        build_cmd.arg("build")
+            .arg(format!("LeanChecker.Verified.{}", file_stem))
+            .current_dir(&self.lean_project_path);
+        if let Ok(elan_home) = std::env::var("CHATDB_ELAN_HOME") {
+            build_cmd.env("ELAN_HOME", elan_home);
+        }
+        let _build_lock = LAKE_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = build_cmd.output();
+
+        Ok(LeanModuleVerificationResult {
+            outcome: LeanVerificationOutcome::KernelPass,
+            problem_namespace: assembled.namespace.clone(),
+            root_lean_name: assembled.root_lean_name.clone(),
+            module_source_hash: assembled.module_source_hash.clone(),
+            declaration_manifest_hash: assembled.declaration_manifest_hash.clone(),
+            environment_hash: environment.to_string(),
+            kernel_result_hash,
+            diagnostic: None,
+            all_diagnostics: vec![],
+            wall_time_ms: start_time.elapsed().as_millis() as u64,
         })
     }
 

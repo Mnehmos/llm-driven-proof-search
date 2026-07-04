@@ -353,6 +353,227 @@ fn episode_progress_hash(tx: &Transaction, episode_id: &str) -> Result<String, M
     canonical_hash(&serde_json::json!({"revision": rev, "step_count": steps, "state": state})).map_err(mcp_internal_error)
 }
 
+/// Everything `episode_step` does with the (by then fully resolved)
+/// `Result<LeanVerificationOutcome, StepError>` — disposition mapping, freeing a
+/// wedged attempt, terminal/truncation checks, `lifecycle::advance`, and
+/// trajectory recording — factored out so it runs identically whether the
+/// result came back immediately (`step::attempt_prepare`'s `Done` branches, no
+/// Lean call needed) or after a deferred Lean gateway call
+/// (`step::attempt_finalize`, run with the DB lock released — see
+/// `run_in_background`/two-phase note on `episode_step`). Takes `tx` generically
+/// so either transaction can drive it; does NOT commit `tx` — the caller does,
+/// once it knows no further writes are coming on that transaction.
+struct PostProcessing {
+    disposition: StepDisposition,
+    accepted: bool,
+    error_msg: Option<String>,
+    outcome_enum: Option<EpisodeOutcome>,
+    term_reason: Option<TerminationReason>,
+    trunc_reason: Option<TruncationReason>,
+    next_req_id: Option<Uuid>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_step_post_processing(
+    tx: &Transaction,
+    ep_uuid: Uuid,
+    episode_id: &str,
+    attempt_uuid: Uuid,
+    action: &TypedAction,
+    outcome_res: Result<chatdb_proof_core::models::LeanVerificationOutcome, step::StepError>,
+    target_obligation_id: &Option<String>,
+    state_hash_before: &str,
+) -> Result<PostProcessing, McpError> {
+    let (disposition, accepted, error_msg) = match &outcome_res {
+        Ok(chatdb_proof_core::models::LeanVerificationOutcome::KernelPass) => {
+            (StepDisposition::Accepted, true, None)
+        }
+        Ok(_) => (StepDisposition::Accepted, false, None),
+        Err(step::StepError::Conflict) => (
+            StepDisposition::StaleRevision, false,
+            Some("Revision conflict — retry episode_step with the episode's current revision (see episode_status); the claim is still valid".to_string()),
+        ),
+        Err(step::StepError::InvalidAttempt) => (
+            StepDisposition::InvalidResponse, false,
+            Some("Invalid attempt claim or status".to_string()),
+        ),
+        Err(e) => (StepDisposition::Error, false, Some(format!("{:?}", e))),
+    };
+
+    // Recovery: a Conflict means the client should retry with a corrected
+    // revision using the SAME claim (nothing to reset). InvalidAttempt means
+    // there was never a real, matching attempt row to reset (or, for a
+    // finalize-stage InvalidAttempt, the attempt was reclaimed by an expiry
+    // sweep while the Lean call was in flight — also nothing safe to reset).
+    // Everything past that point (attempt already marked 'executing') failed
+    // structurally and must be freed so the request doesn't wedge until the
+    // 5-minute expiry.
+    if let Err(e) = &outcome_res {
+        if matches!(e, step::StepError::LeanGatewayError(_) | step::StepError::ActionSchemaInvalid(_) | step::StepError::DatabaseError(_) | step::StepError::Internal(_)) {
+            let new_status = if matches!(e, step::StepError::LeanGatewayError(_)) { "infrastructure_failed" } else { "abandoned" };
+            attempts::attempt_abandon(tx, attempt_uuid, new_status).map_err(rs)?;
+        }
+    }
+
+    let mut is_terminated = false;
+    let mut is_truncated = false;
+    let mut term_reason = None;
+    let mut trunc_reason = None;
+    let mut outcome_enum: Option<EpisodeOutcome> = None;
+
+    if disposition == StepDisposition::Accepted {
+        let is_give_up = matches!(action, TypedAction::GiveUp);
+
+        if is_give_up {
+            tx.execute(
+                "UPDATE episodes SET state = 'terminated', outcome = ?1, termination_reason = ?2, completed_at = ?3 WHERE id = ?4",
+                (EpisodeOutcome::GaveUp.to_string(), TerminationReason::ModelGaveUp.to_string(), Utc::now().to_rfc3339(), episode_id),
+            ).map_err(rs)?;
+            is_terminated = true;
+            term_reason = Some(TerminationReason::ModelGaveUp);
+            outcome_enum = Some(EpisodeOutcome::GaveUp);
+        } else {
+            let root_proved: bool = tx.query_row(
+                "SELECT status FROM episode_obligations WHERE episode_id = ?1 AND kind = 'root'",
+                [episode_id],
+                |row| row.get::<_, String>(0),
+            ).optional().map_err(rs)?.map(|s| s == "proved").unwrap_or(false);
+
+            if root_proved {
+                // PROOF SOUNDNESS ("Lean proved this exact formal statement")
+                // and STATEMENT FIDELITY ("this formal statement represents the
+                // source problem") are independent claims. A kernel-verified root
+                // is only 'certified' — and only promotes the problem to COMPLETE
+                // — when the problem's fidelity_status is ALSO 'verified'. This is
+                // the fix for the weakened-root exploit: proving a trivially-true
+                // relaxation of the source statement must never present as
+                // certifying the source claim.
+                let fidelity_status: String = tx.query_row(
+                    "SELECT pv.fidelity_status FROM episodes e JOIN problem_versions pv ON e.problem_version_id = pv.id WHERE e.id = ?1",
+                    [episode_id],
+                    |row| row.get(0),
+                ).map_err(rs)?;
+                let fidelity_verified = fidelity_status == "verified";
+
+                let final_outcome = if fidelity_verified { EpisodeOutcome::Certified } else { EpisodeOutcome::KernelVerified };
+                tx.execute(
+                    "UPDATE episodes SET state = 'terminated', outcome = ?1, termination_reason = ?2, completed_at = ?3 WHERE id = ?4",
+                    (final_outcome.to_string(), TerminationReason::RootProved.to_string(), Utc::now().to_rfc3339(), episode_id),
+                ).map_err(rs)?;
+
+                if fidelity_verified {
+                    // Advance the problem lifecycle too, so problem_list is a
+                    // status board rather than a stale cache of PROVING rows.
+                    tx.execute(
+                        "UPDATE problem_versions SET state = 'COMPLETE'
+                         WHERE id = (SELECT problem_version_id FROM episodes WHERE id = ?1)
+                         AND state = 'PROVING'",
+                        [episode_id],
+                    ).map_err(rs)?;
+                } else {
+                    // Root is proved but fidelity isn't — park the problem in
+                    // FIDELITY_REVIEW rather than PROVING (proof search is done)
+                    // or COMPLETE (nothing has been certified). A later
+                    // problem_submit_fidelity_review(decision=verified) promotes
+                    // this episode's outcome to 'certified' retroactively.
+                    tx.execute(
+                        "UPDATE problem_versions SET state = 'FIDELITY_REVIEW'
+                         WHERE id = (SELECT problem_version_id FROM episodes WHERE id = ?1)
+                         AND state = 'PROVING'",
+                        [episode_id],
+                    ).map_err(rs)?;
+                }
+                is_terminated = true;
+                term_reason = Some(TerminationReason::RootProved);
+                outcome_enum = Some(final_outcome);
+            } else {
+                let (steps, max_steps, budget): (i64, Option<i64>, Option<i64>) = tx.query_row(
+                    "SELECT step_count, max_steps, cost_budget_micros FROM episodes WHERE id = ?1",
+                    [episode_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                ).map_err(rs)?;
+
+                let steps_exhausted = max_steps.map(|m| steps >= m).unwrap_or(false);
+                let budget_exhausted = budget.map(|b| b <= 0).unwrap_or(false);
+
+                if steps_exhausted || budget_exhausted {
+                    tx.execute(
+                        "UPDATE episodes SET state = 'truncated', outcome = ?1, truncation_reason = ?2, completed_at = ?3 WHERE id = ?4",
+                        (EpisodeOutcome::BudgetExhausted.to_string(), TruncationReason::BudgetExhausted.to_string(), Utc::now().to_rfc3339(), episode_id),
+                    ).map_err(rs)?;
+                    is_truncated = true;
+                    trunc_reason = Some(TruncationReason::BudgetExhausted);
+                    outcome_enum = Some(EpisodeOutcome::BudgetExhausted);
+                }
+            }
+        }
+    }
+
+    // If not ended, call advance to prepare the next request
+    let next_req_id = if !is_terminated && !is_truncated && disposition == StepDisposition::Accepted {
+        lifecycle::advance(tx, ep_uuid).map_err(rs)?
+    } else {
+        None
+    };
+
+    // Trajectory: always record what was attempted (append-only truth,
+    // including rejected/conflicted/errored attempts), then terminal markers.
+    let env_hash = episode_env_hash(tx, episode_id).map_err(rs)?;
+    let obligation_info: Option<(String, String, String)> = match target_obligation_id {
+        Some(oid) => tx.query_row(
+            "SELECT problem_version_id, lean_statement, statement_hash FROM episode_obligations WHERE id = ?1",
+            [oid],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional().map_err(rs)?,
+        None => None,
+    };
+    let dependency_obligation_ids: Vec<String> = match target_obligation_id {
+        Some(oid) => {
+            let mut s = tx.prepare(
+                "SELECT dependency_obligation_id FROM episode_obligation_edges e
+                 JOIN episode_obligations dep ON dep.id = e.dependency_obligation_id
+                 WHERE e.parent_obligation_id = ?1 AND dep.status = 'proved'",
+            ).map_err(rs)?;
+            s.query_map([oid], |row| row.get::<_, String>(0)).map_err(rs)?
+                .collect::<Result<Vec<_>, _>>().map_err(rs)?
+        }
+        None => vec![],
+    };
+    let lean_outcome_str = outcome_res.as_ref().ok().map(|o| o.to_string());
+    let state_hash_after = episode_progress_hash(tx, episode_id)?;
+
+    let payload = serde_json::json!({
+        "obligation_id": target_obligation_id,
+        "problem_version_id": obligation_info.as_ref().map(|(pv, _, _)| pv),
+        "lean_statement": obligation_info.as_ref().map(|(_, s, _)| s),
+        "statement_hash": obligation_info.as_ref().map(|(_, _, h)| h),
+        "dependency_obligation_ids": dependency_obligation_ids,
+        "action": action,
+        "outcome": lean_outcome_str,
+        "disposition": disposition,
+        "accepted": accepted,
+        "diagnostics": error_msg,
+    });
+    trajectories::record_event(
+        tx, ep_uuid, "action_committed", state_hash_before, &state_hash_after, &env_hash,
+        &payload.to_string(),
+    ).map_err(mcp_internal_error)?;
+
+    if is_terminated {
+        trajectories::record_event(
+            tx, ep_uuid, "episode_terminated", &state_hash_after, &state_hash_after, &env_hash,
+            &serde_json::json!({"outcome": outcome_enum, "termination_reason": term_reason}).to_string(),
+        ).map_err(mcp_internal_error)?;
+    } else if is_truncated {
+        trajectories::record_event(
+            tx, ep_uuid, "episode_truncated", &state_hash_after, &state_hash_after, &env_hash,
+            &serde_json::json!({"outcome": outcome_enum, "truncation_reason": trunc_reason}).to_string(),
+        ).map_err(mcp_internal_error)?;
+    }
+
+    Ok(PostProcessing { disposition, accepted, error_msg, outcome_enum, term_reason, trunc_reason, next_req_id })
+}
+
 // ---------------------------------------------------------------------------
 // Proof export rendering
 // ---------------------------------------------------------------------------
@@ -486,6 +707,32 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
                     format!("❌ {}", outcome.unwrap_or("kernel_fail"))
                 };
                 (format!("`{}`", proof.trim().replace('\n', " ; ")), verdict)
+            }
+            "submit_module" => {
+                // A module has no single flat proof_term — the closest analogue
+                // for the theorem-by-theorem fallback rendering is the root
+                // theorem's own proof_term (helper defs/theorems aren't shown by
+                // this fallback path; a caller wanting the exact verified module
+                // should get it from the dedicated module rendering instead).
+                // Populating winning_proof here is a correctness requirement, not
+                // cosmetic: without it, the fallback render below embeds a
+                // fabricated `sorry` for an obligation the kernel actually
+                // verified — exactly the dishonest-receipt bug this export
+                // exists to prevent.
+                let proof = action["root_theorem"]["proof_term"].as_str().unwrap_or("").to_string();
+                if accepted && outcome == Some("kernel_pass") {
+                    if let Some(oid) = &obligation_id {
+                        winning_proof.insert(oid.clone(), proof.clone());
+                    }
+                }
+                let verdict = if disposition != "accepted" {
+                    format!("⚠️ {}", disposition)
+                } else if outcome == Some("kernel_pass") {
+                    "✅ kernel_pass (module)".to_string()
+                } else {
+                    format!("❌ {}", outcome.unwrap_or("kernel_fail"))
+                };
+                (format!("module root: `{}`", proof.trim().replace('\n', " ; ")), verdict)
             }
             "decompose" => {
                 let subs: Vec<String> = action["sub_lemmas"].as_array().map(|a| {
@@ -805,8 +1052,12 @@ impl ServerHandler for ChatDbMcp {
                     "action_examples": [
                         {"type": "solve", "proof_term": "  norm_num"},
                         {"type": "decompose", "sub_lemmas": ["n + 0 = n", "0 + n = n"]},
+                        {"type": "submit_module", "module_items": [
+                            {"item_kind": "def", "name": "double", "type_signature": "Nat → Nat", "body": "fun n => n + n"}
+                        ], "root_theorem": {"name": "root", "statement": "double 2 = 4", "proof_term": "  rfl"}},
                         {"type": "give_up"}
                     ],
+                    "submit_module_boundary": "The server assembles the Lean file: it owns imports, the ChatDB.P_<problem> namespace, and server set_options. Clients send structured items only — never raw import/namespace/end/set_option lines, and never axiom/opaque/unsafe/instance declarations. Every name is sanitized to a single namespace-local identifier. The root_theorem.statement must canonical-hash to the problem's registered root_statement_hash. Either the whole module passes the kernel and is recorded, or nothing enters the trusted namespace.",
                     "prover_loop": "problem_create -> problem_submit_fidelity_review (or unsafe_dev_attestation=true for dev use) -> episode_create -> episode_observe -> attempt_claim -> episode_step(action, expected_revision = action_request.episode_revision) -> repeat observe/claim/step until outcome is set",
                     "epistemic_rules": [
                         "An 'unknown_declaration'/'unknown identifier' result under the active import manifest establishes ONLY that the name didn't resolve under that exact import closure. It does NOT establish that the declaration is absent from the pinned library. Before concluding an API is unavailable, call lean_declaration_lookup — do not infer a global capability limit from one local elaboration failure.",
@@ -1297,7 +1548,7 @@ impl ServerHandler for ChatDbMcp {
             "episode_step" => {
                 let args: EpisodeStepArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!(
-                        "Invalid params: {}. `action` must be one of: {{\"type\":\"solve\",\"proof_term\":\"  norm_num\"}} | {{\"type\":\"decompose\",\"sub_lemmas\":[\"...\"]}} | {{\"type\":\"give_up\"}} (see environment_describe.action_schema)", e
+                        "Invalid params: {}. `action` must be one of: {{\"type\":\"solve\",\"proof_term\":\"  norm_num\"}} | {{\"type\":\"decompose\",\"sub_lemmas\":[\"...\"]}} | {{\"type\":\"submit_module\",\"module_items\":[{{\"item_kind\":\"def\",\"name\":\"f\",\"type_signature\":\"Nat → Nat\",\"body\":\"fun n => n\"}}],\"root_theorem\":{{\"name\":\"root\",\"statement\":\"<must hash-match registered root>\",\"proof_term\":\"  rfl\"}}}} | {{\"type\":\"give_up\"}} (see environment_describe.action_schema)", e
                     )))?;
 
                 if args.cost_micros < 0 {
@@ -1311,239 +1562,127 @@ impl ServerHandler for ChatDbMcp {
                     .map_err(|e| mcp_invalid_params(format!("Invalid attempt Uuid: {}", e)))?;
 
                 let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                attempts::attempt_recover_expired(&tx).map_err(rs)?;
 
-                // Capture what this attempt targets before attempt_commit mutates state,
-                // so the trajectory payload reflects what was actually acted on.
-                let action_request_id: Option<String> = tx.query_row(
-                    "SELECT action_request_id FROM action_attempts WHERE id = ?1",
-                    [args.action_attempt_id.clone()],
-                    |row| row.get(0),
-                ).optional().map_err(rs)?;
-                let target_obligation_id: Option<String> = match &action_request_id {
-                    Some(rid) => tx.query_row(
-                        "SELECT target_obligation_id FROM action_requests WHERE id = ?1",
-                        [rid], |row| row.get::<_, Option<String>>(0),
-                    ).optional().map_err(rs)?.flatten(),
-                    None => None,
-                };
-                let state_hash_before: String = match &action_request_id {
-                    Some(rid) => tx.query_row(
-                        "SELECT state_hash_before FROM action_requests WHERE id = ?1",
-                        [rid], |row| row.get::<_, Option<String>>(0),
-                    ).optional().map_err(rs)?.flatten().unwrap_or_else(|| "GENESIS".to_string()),
-                    None => "GENESIS".to_string(),
-                };
-
-                // Deduct or settle leases if any exist
-                tx.execute(
-                    "UPDATE model_call_leases SET status = 'settled', actual_cost_micros = ?1, settled_at = ?2
-                     WHERE episode_id = ?3 AND action_attempt_id = ?4 AND status = 'reserved'",
-                    (args.cost_micros, Utc::now().to_rfc3339(), args.episode_id.clone(), args.action_attempt_id.clone()),
-                ).map_err(rs)?;
-
-                let outcome_res = step::attempt_commit(
-                    &tx,
-                    attempt_uuid,
-                    args.expected_revision,
-                    &args.claim_token,
-                    &args.action,
-                    &*self.gateway,
-                    args.cost_micros as i128,
-                );
-
-                let (disposition, accepted, error_msg) = match &outcome_res {
-                    Ok(chatdb_proof_core::models::LeanVerificationOutcome::KernelPass) => {
-                        (StepDisposition::Accepted, true, None)
-                    }
-                    Ok(_) => (StepDisposition::Accepted, false, None),
-                    Err(step::StepError::Conflict) => (
-                        StepDisposition::StaleRevision, false,
-                        Some("Revision conflict — retry episode_step with the episode's current revision (see episode_status); the claim is still valid".to_string()),
-                    ),
-                    Err(step::StepError::InvalidAttempt) => (
-                        StepDisposition::InvalidResponse, false,
-                        Some("Invalid attempt claim or status".to_string()),
-                    ),
-                    Err(e) => (StepDisposition::Error, false, Some(format!("{:?}", e))),
-                };
-
-                // Recovery: a Conflict means the client should retry with a corrected
-                // revision using the SAME claim (nothing to reset). InvalidAttempt means
-                // there was never a real, matching attempt row to reset. Everything past
-                // that point (attempt already marked 'executing') failed structurally and
-                // must be freed so the request doesn't wedge until the 5-minute expiry.
-                if let Err(e) = &outcome_res {
-                    if matches!(e, step::StepError::LeanGatewayError(_) | step::StepError::ActionSchemaInvalid(_) | step::StepError::DatabaseError(_) | step::StepError::Internal(_)) {
-                        let new_status = if matches!(e, step::StepError::LeanGatewayError(_)) { "infrastructure_failed" } else { "abandoned" };
-                        attempts::attempt_abandon(&tx, attempt_uuid, new_status).map_err(rs)?;
-                    }
+                // Everything that touches `tx1` lives in this block and the block ends
+                // (dropping `tx1`) before any `.await` — a `Transaction` borrows from
+                // `Connection`, which is `!Sync` (hence `!Send`), so it must be
+                // LEXICALLY out of scope, not merely logically unused, before crossing
+                // an await point in an async fn (the generator transform otherwise
+                // reserves state for it and the whole future stops being `Send`).
+                // `conn` itself is only ever mutably BORROWED by `tx1.transaction()`,
+                // never moved, so it's still ours to use/drop once this block ends.
+                enum Prepared {
+                    Resolved(PostProcessing),
+                    NeedsGateway { request: step::GatewayRequest, ctx: step::FinalizeContext },
                 }
+                let (prepared, target_obligation_id, state_hash_before) = {
+                    let tx1 = conn.transaction().map_err(rs)?;
+                    attempts::attempt_recover_expired(&tx1).map_err(rs)?;
 
-                let mut is_terminated = false;
-                let mut is_truncated = false;
-                let mut term_reason = None;
-                let mut trunc_reason = None;
-                let mut outcome_enum: Option<EpisodeOutcome> = None;
+                    // Capture what this attempt targets before attempt_prepare mutates
+                    // state, so the trajectory payload reflects what was actually acted on.
+                    let action_request_id: Option<String> = tx1.query_row(
+                        "SELECT action_request_id FROM action_attempts WHERE id = ?1",
+                        [args.action_attempt_id.clone()],
+                        |row| row.get(0),
+                    ).optional().map_err(rs)?;
+                    let target_obligation_id: Option<String> = match &action_request_id {
+                        Some(rid) => tx1.query_row(
+                            "SELECT target_obligation_id FROM action_requests WHERE id = ?1",
+                            [rid], |row| row.get::<_, Option<String>>(0),
+                        ).optional().map_err(rs)?.flatten(),
+                        None => None,
+                    };
+                    let state_hash_before: String = match &action_request_id {
+                        Some(rid) => tx1.query_row(
+                            "SELECT state_hash_before FROM action_requests WHERE id = ?1",
+                            [rid], |row| row.get::<_, Option<String>>(0),
+                        ).optional().map_err(rs)?.flatten().unwrap_or_else(|| "GENESIS".to_string()),
+                        None => "GENESIS".to_string(),
+                    };
 
-                if disposition == StepDisposition::Accepted {
-                    let is_give_up = matches!(args.action, TypedAction::GiveUp);
+                    // Deduct or settle leases if any exist
+                    tx1.execute(
+                        "UPDATE model_call_leases SET status = 'settled', actual_cost_micros = ?1, settled_at = ?2
+                         WHERE episode_id = ?3 AND action_attempt_id = ?4 AND status = 'reserved'",
+                        (args.cost_micros, Utc::now().to_rfc3339(), args.episode_id.clone(), args.action_attempt_id.clone()),
+                    ).map_err(rs)?;
 
-                    if is_give_up {
-                        tx.execute(
-                            "UPDATE episodes SET state = 'terminated', outcome = ?1, termination_reason = ?2, completed_at = ?3 WHERE id = ?4",
-                            (EpisodeOutcome::GaveUp.to_string(), TerminationReason::ModelGaveUp.to_string(), Utc::now().to_rfc3339(), args.episode_id.clone()),
-                        ).map_err(rs)?;
-                        is_terminated = true;
-                        term_reason = Some(TerminationReason::ModelGaveUp);
-                        outcome_enum = Some(EpisodeOutcome::GaveUp);
-                    } else {
-                        let root_proved: bool = tx.query_row(
-                            "SELECT status FROM episode_obligations WHERE episode_id = ?1 AND kind = 'root'",
-                            [args.episode_id.clone()],
-                            |row| row.get::<_, String>(0),
-                        ).optional().map_err(rs)?.map(|s| s == "proved").unwrap_or(false);
+                    // Two-phase commit: `attempt_prepare` validates the attempt/claim/CAS
+                    // and either (a) fully executes a non-Lean action (Decompose / GiveUp /
+                    // ExternalResponseRejected / a policy-rejected SubmitModule) within
+                    // tx1, or (b) marks the attempt 'executing' and returns exactly what's
+                    // needed to call the Lean gateway — WITHOUT calling it. Case (b) is why
+                    // this is split: the gateway call (up to 60-120s) must never run while
+                    // the DB mutex (`self.conn`) is held, or every other concurrent tool
+                    // call on this session blocks on it for the duration.
+                    let prep_res = step::attempt_prepare(
+                        &tx1, attempt_uuid, args.expected_revision, &args.claim_token, &args.action, args.cost_micros as i128,
+                    );
 
-                        if root_proved {
-                            // PROOF SOUNDNESS ("Lean proved this exact formal statement")
-                            // and STATEMENT FIDELITY ("this formal statement represents the
-                            // source problem") are independent claims. A kernel-verified root
-                            // is only 'certified' — and only promotes the problem to COMPLETE
-                            // — when the problem's fidelity_status is ALSO 'verified'. This is
-                            // the fix for the weakened-root exploit: proving a trivially-true
-                            // relaxation of the source statement must never present as
-                            // certifying the source claim.
-                            let fidelity_status: String = tx.query_row(
-                                "SELECT pv.fidelity_status FROM episodes e JOIN problem_versions pv ON e.problem_version_id = pv.id WHERE e.id = ?1",
-                                [args.episode_id.clone()],
-                                |row| row.get(0),
-                            ).map_err(rs)?;
-                            let fidelity_verified = fidelity_status == "verified";
-
-                            let final_outcome = if fidelity_verified { EpisodeOutcome::Certified } else { EpisodeOutcome::KernelVerified };
-                            tx.execute(
-                                "UPDATE episodes SET state = 'terminated', outcome = ?1, termination_reason = ?2, completed_at = ?3 WHERE id = ?4",
-                                (final_outcome.to_string(), TerminationReason::RootProved.to_string(), Utc::now().to_rfc3339(), args.episode_id.clone()),
-                            ).map_err(rs)?;
-
-                            if fidelity_verified {
-                                // Advance the problem lifecycle too, so problem_list is a
-                                // status board rather than a stale cache of PROVING rows.
-                                tx.execute(
-                                    "UPDATE problem_versions SET state = 'COMPLETE'
-                                     WHERE id = (SELECT problem_version_id FROM episodes WHERE id = ?1)
-                                     AND state = 'PROVING'",
-                                    [args.episode_id.clone()],
-                                ).map_err(rs)?;
-                            } else {
-                                // Root is proved but fidelity isn't — park the problem in
-                                // FIDELITY_REVIEW rather than PROVING (proof search is done)
-                                // or COMPLETE (nothing has been certified). A later
-                                // problem_submit_fidelity_review(decision=verified) promotes
-                                // this episode's outcome to 'certified' retroactively.
-                                tx.execute(
-                                    "UPDATE problem_versions SET state = 'FIDELITY_REVIEW'
-                                     WHERE id = (SELECT problem_version_id FROM episodes WHERE id = ?1)
-                                     AND state = 'PROVING'",
-                                    [args.episode_id.clone()],
-                                ).map_err(rs)?;
-                            }
-                            is_terminated = true;
-                            term_reason = Some(TerminationReason::RootProved);
-                            outcome_enum = Some(final_outcome);
-                        } else {
-                            let (steps, max_steps, budget): (i64, Option<i64>, Option<i64>) = tx.query_row(
-                                "SELECT step_count, max_steps, cost_budget_micros FROM episodes WHERE id = ?1",
-                                [args.episode_id.clone()],
-                                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                            ).map_err(rs)?;
-
-                            let steps_exhausted = max_steps.map(|m| steps >= m).unwrap_or(false);
-                            let budget_exhausted = budget.map(|b| b <= 0).unwrap_or(false);
-
-                            if steps_exhausted || budget_exhausted {
-                                tx.execute(
-                                    "UPDATE episodes SET state = 'truncated', outcome = ?1, truncation_reason = ?2, completed_at = ?3 WHERE id = ?4",
-                                    (EpisodeOutcome::BudgetExhausted.to_string(), TruncationReason::BudgetExhausted.to_string(), Utc::now().to_rfc3339(), args.episode_id.clone()),
-                                ).map_err(rs)?;
-                                is_truncated = true;
-                                trunc_reason = Some(TruncationReason::BudgetExhausted);
-                                outcome_enum = Some(EpisodeOutcome::BudgetExhausted);
-                            }
+                    let prepared = match prep_res {
+                        Err(e) => {
+                            let post = run_step_post_processing(
+                                &tx1, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
+                                Err(e), &target_obligation_id, &state_hash_before,
+                            )?;
+                            tx1.commit().map_err(rs)?;
+                            Prepared::Resolved(post)
                         }
+                        Ok(step::PrepOutcome::Done { outcome, .. }) => {
+                            let post = run_step_post_processing(
+                                &tx1, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
+                                Ok(outcome), &target_obligation_id, &state_hash_before,
+                            )?;
+                            tx1.commit().map_err(rs)?;
+                            Prepared::Resolved(post)
+                        }
+                        Ok(step::PrepOutcome::NeedsGateway { request, ctx }) => {
+                            tx1.commit().map_err(rs)?; // commit prepare-only writes (mark-executing, attempt_count)
+                            Prepared::NeedsGateway { request, ctx }
+                        }
+                    };
+                    (prepared, target_obligation_id, state_hash_before)
+                }; // tx1 fully out of scope here — safe to cross an .await below.
+
+                let post = match prepared {
+                    Prepared::Resolved(post) => post,
+                    Prepared::NeedsGateway { request, ctx } => {
+                        drop(conn); // RELEASE THE LOCK — no other tool call is blocked while Lean runs.
+
+                        let response = match request {
+                            step::GatewayRequest::Solve { obl, proof_term, dep_ids, env_hash, import_manifest } => {
+                                step::GatewayResponse::Solve(self.gateway.verify_exact(&obl, &proof_term, &dep_ids, &env_hash, &import_manifest))
+                            }
+                            step::GatewayRequest::SubmitModule { assembled, env_hash } => {
+                                step::GatewayResponse::SubmitModule(self.gateway.verify_module(&assembled, &env_hash))
+                            }
+                        };
+
+                        conn = self.conn.lock().await; // reacquire
+                        let post = {
+                            let tx2 = conn.transaction().map_err(rs)?;
+                            let finalize_res = step::attempt_finalize(&tx2, attempt_uuid, &args.claim_token, args.cost_micros as i128, ctx, response);
+                            let post = run_step_post_processing(
+                                &tx2, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
+                                finalize_res, &target_obligation_id, &state_hash_before,
+                            )?;
+                            tx2.commit().map_err(rs)?;
+                            post
+                        }; // tx2 out of scope here too.
+                        post
                     }
-                }
-
-                // If not ended, call advance to prepare the next request
-                let next_req_id = if !is_terminated && !is_truncated && disposition == StepDisposition::Accepted {
-                    lifecycle::advance(&tx, ep_uuid).map_err(rs)?
-                } else {
-                    None
                 };
 
-                // Trajectory: always record what was attempted (append-only truth,
-                // including rejected/conflicted/errored attempts), then terminal markers.
-                let env_hash = episode_env_hash(&tx, &args.episode_id).map_err(rs)?;
-                let obligation_info: Option<(String, String, String)> = match &target_obligation_id {
-                    Some(oid) => tx.query_row(
-                        "SELECT problem_version_id, lean_statement, statement_hash FROM episode_obligations WHERE id = ?1",
-                        [oid],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                    ).optional().map_err(rs)?,
-                    None => None,
-                };
-                let dependency_obligation_ids: Vec<String> = match &target_obligation_id {
-                    Some(oid) => {
-                        let mut s = tx.prepare(
-                            "SELECT dependency_obligation_id FROM episode_obligation_edges e
-                             JOIN episode_obligations dep ON dep.id = e.dependency_obligation_id
-                             WHERE e.parent_obligation_id = ?1 AND dep.status = 'proved'",
-                        ).map_err(rs)?;
-                        s.query_map([oid], |row| row.get::<_, String>(0)).map_err(rs)?
-                            .collect::<Result<Vec<_>, _>>().map_err(rs)?
-                    }
-                    None => vec![],
-                };
-                let lean_outcome_str = outcome_res.as_ref().ok().map(|o| o.to_string());
-                let state_hash_after = episode_progress_hash(&tx, &args.episode_id)?;
-
-                let payload = serde_json::json!({
-                    "obligation_id": target_obligation_id,
-                    "problem_version_id": obligation_info.as_ref().map(|(pv, _, _)| pv),
-                    "lean_statement": obligation_info.as_ref().map(|(_, s, _)| s),
-                    "statement_hash": obligation_info.as_ref().map(|(_, _, h)| h),
-                    "dependency_obligation_ids": dependency_obligation_ids,
-                    "action": &args.action,
-                    "outcome": lean_outcome_str,
-                    "disposition": disposition,
-                    "accepted": accepted,
-                    "diagnostics": error_msg,
-                });
-                trajectories::record_event(
-                    &tx, ep_uuid, "action_committed", &state_hash_before, &state_hash_after, &env_hash,
-                    &payload.to_string(),
-                ).map_err(mcp_internal_error)?;
-
-                if is_terminated {
-                    trajectories::record_event(
-                        &tx, ep_uuid, "episode_terminated", &state_hash_after, &state_hash_after, &env_hash,
-                        &serde_json::json!({"outcome": outcome_enum, "termination_reason": term_reason}).to_string(),
-                    ).map_err(mcp_internal_error)?;
-                } else if is_truncated {
-                    trajectories::record_event(
-                        &tx, ep_uuid, "episode_truncated", &state_hash_after, &state_hash_after, &env_hash,
-                        &serde_json::json!({"outcome": outcome_enum, "truncation_reason": trunc_reason}).to_string(),
-                    ).map_err(mcp_internal_error)?;
-                }
-
-                tx.commit().map_err(rs)?;
+                let PostProcessing { disposition, accepted, error_msg, outcome_enum, term_reason, trunc_reason, next_req_id } = post;
+                let is_terminated = term_reason.is_some();
+                let is_truncated = trunc_reason.is_some();
 
                 // Calculate reward. `accepted` doubles as "not a Lean kernel_fail" for
-                // Solve and as a generic accept/reject signal for Decompose/GiveUp — only
-                // treat it as a proof-verification result (kernel_pass/kernel_fail reward)
-                // for an actual Solve action.
-                let is_solve = matches!(args.action, TypedAction::Solve { .. });
+                // Solve/SubmitModule and as a generic accept/reject signal for
+                // Decompose/GiveUp — only treat it as a proof-verification result
+                // (kernel_pass/kernel_fail reward) for an actual verification action.
+                let is_verification_action = matches!(args.action, TypedAction::Solve { .. } | TypedAction::SubmitModule { .. });
                 let mut reward_components = Vec::new();
                 let policy = RewardPolicy::default_policy();
                 if disposition == StepDisposition::Accepted {
@@ -1551,12 +1690,12 @@ impl ServerHandler for ChatDbMcp {
                         id: RewardComponentId::StepPenalty,
                         value_scaled: policy.step_penalty,
                     });
-                    if is_solve && accepted {
+                    if is_verification_action && accepted {
                         reward_components.push(RewardComponent {
                             id: RewardComponentId::KernelPass,
                             value_scaled: policy.kernel_pass,
                         });
-                    } else if is_solve && !is_terminated {
+                    } else if is_verification_action && !is_terminated {
                         reward_components.push(RewardComponent {
                             id: RewardComponentId::KernelFail,
                             value_scaled: policy.kernel_fail,
@@ -1924,7 +2063,8 @@ mod tests {
     use rmcp::model::CallToolRequestParams;
     use rmcp::transport::async_rw::AsyncRwTransport;
     use chatdb_proof_core::lean::LeanGateway;
-    use chatdb_proof_core::models::{Obligation, LeanVerificationOutcome, LeanVerificationResult};
+    use chatdb_proof_core::lean::module::AssembledModule;
+    use chatdb_proof_core::models::{Obligation, LeanVerificationOutcome, LeanVerificationResult, LeanModuleVerificationResult, LeanDiagnostic, LeanDiagnosticCategory};
 
     struct MockGateway;
     impl LeanGateway for MockGateway {
@@ -1966,6 +2106,35 @@ mod tests {
         // covered live separately (see test_problem_create_extends_import_manifest).
         fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> {
             Ok(())
+        }
+
+        // Mock module verification: a module "passes" the kernel unless its
+        // assembled source carries the explicit MOCK_KERNEL_FAIL marker, so tests
+        // can drive both the pass and kernel-fail commit paths without a real Lean
+        // toolchain. Policy rejections (bad names, prohibited constructs, root hash
+        // mismatch) happen in chatdb-core BEFORE this is ever reached.
+        fn verify_module(&self, assembled: &AssembledModule, environment: &str) -> Result<LeanModuleVerificationResult, String> {
+            let fail = assembled.source.contains("MOCK_KERNEL_FAIL");
+            let outcome = if fail { LeanVerificationOutcome::KernelFail } else { LeanVerificationOutcome::KernelPass };
+            Ok(LeanModuleVerificationResult {
+                outcome,
+                problem_namespace: assembled.namespace.clone(),
+                root_lean_name: assembled.root_lean_name.clone(),
+                module_source_hash: assembled.module_source_hash.clone(),
+                declaration_manifest_hash: assembled.declaration_manifest_hash.clone(),
+                environment_hash: environment.to_string(),
+                kernel_result_hash: format!("mock-kernel-{}", &assembled.module_source_hash[..8.min(assembled.module_source_hash.len())]),
+                diagnostic: if fail {
+                    Some(LeanDiagnostic {
+                        category: LeanDiagnosticCategory::TacticFailure,
+                        primary_message: "mock kernel failure".to_string(),
+                        source_span: None, goal: None, local_context: vec![], unsolved_goals: vec![],
+                        used_dependencies: vec![], error_code: None, canonical_goal_hash: None,
+                    })
+                } else { None },
+                all_diagnostics: vec![],
+                wall_time_ms: 1,
+            })
         }
     }
 
@@ -2262,6 +2431,298 @@ mod tests {
         assert!(md.contains("Environment hash:"), "dossier must carry environment hash: {md}");
     }
 
+    /// Review feedback on #16/#17: `episode_step` must NOT hold the DB mutex while
+    /// the Lean gateway call is in flight, or every other concurrent tool call on
+    /// this session blocks on it for the whole verification (up to 60-120s for a
+    /// real toolchain). This gateway holds the SAME `Arc<Mutex<Connection>>` the
+    /// handler uses and asserts `try_lock()` succeeds from INSIDE `verify_exact`/
+    /// `verify_module` — a deterministic, non-timing-dependent proof: if the
+    /// handler still held the lock at the moment it calls the gateway, `try_lock`
+    /// would fail and the assertion would trip. Exercises both the Solve AND
+    /// SubmitModule paths, since both defer their gateway call across the lock
+    /// release (see `step::PrepOutcome::NeedsGateway` in chatdb-core).
+    struct LockCheckingGateway {
+        conn: Arc<Mutex<Connection>>,
+    }
+    impl LeanGateway for LockCheckingGateway {
+        fn verify_exact(
+            &self,
+            obligation: &Obligation,
+            _candidate_source: &str,
+            _approved_dependency_ids: &[Uuid],
+            environment: &str,
+            _import_manifest: &[String],
+        ) -> Result<LeanVerificationResult, String> {
+            // Returning Err (a normal, non-panicking gateway failure) rather than
+            // panicking/asserting: a panic here unwinds inside the spawned server
+            // task, which is fragile to test against (the client sees a transport
+            // error, not a clean tool-result failure). An Err propagates through
+            // the ordinary StepError::LeanGatewayError path instead.
+            if self.conn.try_lock().is_err() {
+                return Err("DB mutex must be released before invoking the Lean gateway (verify_exact)".to_string());
+            }
+            Ok(LeanVerificationResult {
+                outcome: LeanVerificationOutcome::KernelPass,
+                attempt_id: Uuid::new_v4(),
+                obligation_id: obligation.id,
+                theorem_name: obligation.theorem_name.clone(),
+                expected_statement_hash: obligation.statement_hash.clone(),
+                elaborated_statement_hash: None,
+                environment_hash: environment.to_string(),
+                proof_source_hash: "".to_string(),
+                compiled_artifact_hash: None,
+                proof_term_hash: None,
+                diagnostic: None,
+                all_diagnostics: vec![],
+                dependency_use_report: None,
+                wall_time_ms: 1,
+                lean_cpu_time_ms: 1,
+            })
+        }
+        fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> { Ok(()) }
+        fn verify_module(&self, assembled: &AssembledModule, environment: &str) -> Result<LeanModuleVerificationResult, String> {
+            if self.conn.try_lock().is_err() {
+                return Err("DB mutex must be released before invoking the Lean gateway (verify_module)".to_string());
+            }
+            Ok(LeanModuleVerificationResult {
+                outcome: LeanVerificationOutcome::KernelPass,
+                problem_namespace: assembled.namespace.clone(),
+                root_lean_name: assembled.root_lean_name.clone(),
+                module_source_hash: assembled.module_source_hash.clone(),
+                declaration_manifest_hash: assembled.declaration_manifest_hash.clone(),
+                environment_hash: environment.to_string(),
+                kernel_result_hash: "k".to_string(),
+                diagnostic: None,
+                all_diagnostics: vec![],
+                wall_time_ms: 1,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_episode_step_releases_db_lock_before_solve_gateway_call() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(LockCheckingGateway { conn: conn_arc }),
+            lean_available: false,
+            lean_environment: None,
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "lock release check", "root_formal_statement": "1 + 1 = 2",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "lock-check", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        // If the DB mutex were still held during verify_exact, LockCheckingGateway
+        // returns Err, which surfaces as disposition="error" in the response
+        // payload (episode_step's transport-level call still succeeds either way —
+        // the tool call itself doesn't fail; the internal Lean-gateway failure is
+        // reported in the JSON body). Assert the step actually reached
+        // disposition="accepted" with a real kernel_pass to confirm the lock was
+        // genuinely free.
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {"type": "solve", "proof_term": "norm_num"},
+            "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["disposition"], "accepted", "a tripped lock check means the DB mutex was still held during verify_exact: {:?}", step);
+        assert_eq!(step["accepted"], true, "{:?}", step);
+    }
+
+    /// Same proof as above, for the `SubmitModule` gateway path.
+    #[tokio::test]
+    async fn test_episode_step_releases_db_lock_before_module_gateway_call() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(LockCheckingGateway { conn: conn_arc }),
+            lean_available: false,
+            lean_environment: None,
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "lock release check (module)", "root_formal_statement": "True",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "lock-check-mod", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {
+                "type": "submit_module", "module_items": [],
+                "root_theorem": {"name": "root", "statement": "True", "proof_term": "trivial"}
+            },
+            "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["disposition"], "accepted", "a tripped lock check means the DB mutex was still held during verify_module: {:?}", step);
+        assert_eq!(step["accepted"], true, "{:?}", step);
+    }
+
+    /// Drives an episode through observe → claim → submit_module. A helper `def`
+    /// plus a root theorem whose statement hash-matches the registered root must
+    /// verify as one module and prove the root obligation. Under an attested (not
+    /// fidelity-verified) problem the terminal outcome is `kernel_verified`.
+    #[tokio::test]
+    async fn test_submit_module_def_and_root_passes() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "Define double and show double 2 = 4.",
+            "root_formal_statement": "double 2 = 4",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5, "cost_budget_micros": 1_000_000,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "mod-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {
+                "type": "submit_module",
+                "module_items": [
+                    {"item_kind": "def", "name": "double", "type_signature": "Nat → Nat", "body": "fun n => n + n"}
+                ],
+                "root_theorem": {"name": "double_two", "statement": "double 2 = 4", "proof_term": "rfl"}
+            },
+            "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["disposition"], "accepted", "{:?}", step);
+        assert_eq!(step["accepted"], true, "{:?}", step);
+        assert_eq!(step["outcome"], "kernel_verified", "attested problem: module root proof reaches kernel_verified, not certified: {:?}", step);
+        assert_eq!(step["termination_reason"], "root_proved", "{:?}", step);
+        // Kernel pass reward earned by the module verification action.
+        let reward = step["reward"].as_array().unwrap();
+        assert!(reward.iter().any(|r| r["id"] == "kernel_pass"), "module verification must earn kernel_pass: {:?}", reward);
+        assert!(reward.iter().any(|r| r["id"] == "root_kernel_verified"), "{:?}", reward);
+        assert!(!reward.iter().any(|r| r["id"] == "terminal_success"), "attested-only must NOT earn terminal_success: {:?}", reward);
+
+        let status = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_status").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(status["state"], "terminated");
+        assert_eq!(status["outcome"], "kernel_verified");
+
+        // Self-review finding: proof_export's attempt-log renderer had no
+        // "submit_module" arm, so winning_proof was never populated for a
+        // module-proved obligation — the format="lean" fallback rendering then
+        // embedded a fabricated `sorry` for a theorem the kernel actually
+        // verified. Must never happen: the real root proof_term ("rfl") must
+        // appear, and "sorry" must not.
+        let lean_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "lean",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let lean = lean_res.content[0].as_text().unwrap().text.clone();
+        assert!(!lean.contains("sorry"), "a kernel-verified module theorem must never be exported with a fabricated sorry: {lean}");
+        assert!(lean.contains("rfl"), "the real root proof_term must appear in the export: {lean}");
+    }
+
+    /// A module whose root theorem statement does NOT hash-match the registered
+    /// root is rejected by policy (before Lean), the obligation stays open, and the
+    /// episode does not terminate. This is the "cannot silently prove a different
+    /// goal" guard.
+    #[tokio::test]
+    async fn test_submit_module_root_statement_mismatch_rejected() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "Show 2 + 2 = 4.",
+            "root_formal_statement": "2 + 2 = 4",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "mod-bad", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {
+                "type": "submit_module",
+                "module_items": [],
+                // A trivially-true DIFFERENT statement — must be refused, not accepted.
+                "root_theorem": {"name": "sneaky", "statement": "True", "proof_term": "trivial"}
+            },
+            "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["disposition"], "accepted", "the step itself commits (as a rejected attempt): {:?}", step);
+        assert_eq!(step["accepted"], false, "a root-hash mismatch must not be accepted: {:?}", step);
+        assert!(step["outcome"] != "kernel_verified" && step["outcome"] != "certified", "{:?}", step);
+        assert!(step["termination_reason"].is_null(), "a rejected module must not terminate the episode: {:?}", step);
+
+        let status = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_status").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_ne!(status["state"], "terminated", "{:?}", status);
+        assert_eq!(status["invalid_action_count"], 1, "{:?}", status);
+    }
+
     /// Review feedback on #15: a malformed stored `import_manifest_json` must not
     /// silently degrade to the historical Ring/NormNum fallback and look like a
     /// normal, trustworthy receipt. Both formats must flag it loudly. Corrupts the
@@ -2356,10 +2817,22 @@ mod tests {
     }
 
     /// A solve that fails Lean verification must NOT terminate the episode, must
-    /// count as a step, and must leave the obligation open (re-attemptable).
+    /// count as a step, and must leave the obligation open (re-attemptable). It
+    /// also MUST still bump attempt_count — unlike a bare gateway/infrastructure
+    /// error (see test_gateway_infrastructure_error_does_not_bump_attempt_count),
+    /// a kernel_fail is a genuine verdict about the prover's submission.
     #[tokio::test]
     async fn test_solve_kernel_fail_does_not_terminate() {
-        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+        };
+        let client = connected_client(handler).await;
         let peer = client.peer();
 
         let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
@@ -2397,6 +2870,183 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(status["state"], "awaiting_external_action");
         assert_eq!(status["step_count"], 1);
+
+        let attempt_count: i64 = {
+            let conn = conn_arc.lock().await;
+            conn.query_row(
+                "SELECT attempt_count FROM episode_obligations WHERE episode_id = ?1 AND kind = 'root'",
+                [&episode_id],
+                |row| row.get(0),
+            ).unwrap()
+        };
+        assert_eq!(attempt_count, 1, "a genuine kernel_fail verdict must count as an attempt");
+    }
+
+    /// Self-review finding: a bare gateway/infrastructure failure (spawn error,
+    /// timeout — `Err(String)` from `verify_exact`, NOT a normal kernel_fail
+    /// verdict) carries no information about the prover's submission and must
+    /// NOT bump `episode_obligations.attempt_count` — scheduler.rs feeds
+    /// attempt_count into difficulty estimation and uses it as a sort
+    /// tie-breaker, so counting bare infra flakes would misrepresent how many
+    /// real semantic attempts were made. A genuine kernel verdict (pass OR fail)
+    /// DOES bump it, exactly as before the prepare/finalize split.
+    struct FailingGateway;
+    impl LeanGateway for FailingGateway {
+        fn verify_exact(&self, _o: &Obligation, _p: &str, _d: &[Uuid], _e: &str, _m: &[String]) -> Result<LeanVerificationResult, String> {
+            Err("simulated infrastructure failure: process spawn error".to_string())
+        }
+        fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> { Ok(()) }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_infrastructure_error_does_not_bump_attempt_count() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(FailingGateway),
+            lean_available: false,
+            lean_environment: None,
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "x", "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5, "cost_budget_micros": 1_000_000,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "infra-fail-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {"type": "solve", "proof_term": "norm_num"},
+            "cost_micros": 50,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["disposition"], "error", "a gateway Err must surface as disposition=error: {:?}", step);
+
+        let (attempt_count, budget): (i64, i64) = {
+            let conn = conn_arc.lock().await;
+            let attempt_count = conn.query_row(
+                "SELECT attempt_count FROM episode_obligations WHERE episode_id = ?1 AND kind = 'root'",
+                [&episode_id],
+                |row| row.get(0),
+            ).unwrap();
+            let budget = conn.query_row(
+                "SELECT cost_budget_micros FROM episodes WHERE id = ?1", [&episode_id], |row| row.get(0),
+            ).unwrap();
+            (attempt_count, budget)
+        };
+        assert_eq!(attempt_count, 0, "a bare gateway/infrastructure error must not count as an attempt");
+        assert_eq!(budget, 1_000_000, "a bare gateway/infrastructure error must refund the pessimistic budget reservation, leaving budget unchanged");
+    }
+
+    /// Review feedback (self-review): `cost_budget_micros` must be reserved
+    /// atomically with the CAS check in `attempt_prepare`, BEFORE the Lean
+    /// gateway call runs with the DB lock released — otherwise a concurrent
+    /// `model_call_reserve` could read the stale, not-yet-deducted budget during
+    /// the gateway call and grant a lease against budget this attempt is already
+    /// about to spend (a TOCTOU overcommit). This gateway peeks at the budget
+    /// from INSIDE verify_exact (the same window a concurrent tool call would
+    /// see) and asserts it is already reduced — proving the window is closed.
+    struct BudgetPeekingGateway {
+        conn: Arc<Mutex<Connection>>,
+        episode_id: Arc<std::sync::Mutex<Option<String>>>,
+    }
+    impl LeanGateway for BudgetPeekingGateway {
+        fn verify_exact(&self, obligation: &Obligation, _p: &str, _d: &[Uuid], environment: &str, _m: &[String]) -> Result<LeanVerificationResult, String> {
+            let episode_id = self.episode_id.lock().unwrap().clone().expect("episode_id must be set before calling");
+            let budget: i64 = {
+                let conn = self.conn.try_lock().expect("DB mutex must be released during the gateway call");
+                conn.query_row("SELECT cost_budget_micros FROM episodes WHERE id = ?1", [&episode_id], |row| row.get(0)).unwrap()
+            };
+            if budget != 999_900 {
+                return Err(format!("budget was not reserved before the gateway call: expected 999900, got {}", budget));
+            }
+            Ok(LeanVerificationResult {
+                outcome: LeanVerificationOutcome::KernelPass,
+                attempt_id: Uuid::new_v4(),
+                obligation_id: obligation.id,
+                theorem_name: obligation.theorem_name.clone(),
+                expected_statement_hash: obligation.statement_hash.clone(),
+                elaborated_statement_hash: None,
+                environment_hash: environment.to_string(),
+                proof_source_hash: "".to_string(),
+                compiled_artifact_hash: None,
+                proof_term_hash: None,
+                diagnostic: None,
+                all_diagnostics: vec![],
+                dependency_use_report: None,
+                wall_time_ms: 1,
+                lean_cpu_time_ms: 1,
+            })
+        }
+        fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> { Ok(()) }
+    }
+
+    #[tokio::test]
+    async fn test_budget_reserved_before_gateway_call_closes_toctou_window() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let gateway_episode_id: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(BudgetPeekingGateway { conn: conn_arc.clone(), episode_id: gateway_episode_id.clone() }),
+            lean_available: false,
+            lean_environment: None,
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "x", "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5, "cost_budget_micros": 1_000_000,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        *gateway_episode_id.lock().unwrap() = Some(episode_id.clone());
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "budget-toctou-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {"type": "solve", "proof_term": "norm_num"},
+            "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["disposition"], "accepted", "if the gateway's budget check failed, this surfaces as disposition=error: {:?}", step);
+        assert_eq!(step["accepted"], true, "{:?}", step);
+
+        let budget: i64 = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT cost_budget_micros FROM episodes WHERE id = ?1", [&episode_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(budget, 999_900, "budget must be exactly once-deducted after a successful step (no double-charge from prepare+finalize)");
     }
 
     /// The idempotency key on attempt_claim must be safe to retry: same key while
