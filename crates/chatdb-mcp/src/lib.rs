@@ -280,6 +280,12 @@ fn plan_item_kind_str(kind: &PlanItemKind) -> &'static str {
 #[derive(JsonSchema, Deserialize)]
 pub struct EnvironmentDescribeArgs {}
 
+/// Issue #35's dedicated read-me-first tool — no args, matching
+/// EnvironmentDescribeArgs, since its whole point is to be the first,
+/// zero-friction call any agent host makes before creating an episode.
+#[derive(JsonSchema, Deserialize)]
+pub struct ReadmeFirstArgs {}
+
 #[derive(JsonSchema, Deserialize)]
 pub struct ProblemCreateArgs {
     pub source_problem_text: String,
@@ -1696,7 +1702,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.4"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.5"))
     }
 
     async fn list_tools(
@@ -1705,6 +1711,7 @@ impl ServerHandler for ChatDbMcp {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let tools = vec![
+            make_tool::<ReadmeFirstArgs>("readme_first", "CALL THIS FIRST, before creating any episode. Explains what ChatDB is (an environment, not a prover), the trust boundary (tracked MCP actions and Lean verifier results are evidence; hidden model reasoning is not), the required proof-search loop, when to use Solve vs SubmitModule, why untracked/side-channel proof checks don't count as valid attempts, and the cost/benchmark-mode boundary"),
             make_tool::<EnvironmentDescribeArgs>("environment_describe", "Return environment version, supported protocol, tool schemas, capabilities"),
             make_tool::<ProblemCreateArgs>("problem_create", "Register a new problem version (source text + root formal statement). fidelity_status starts 'unreviewed' — proving requires either a real problem_submit_fidelity_review or the honestly-named unsafe_dev_attestation=true (which can reach outcome=kernel_verified but never 'certified')"),
             make_tool::<ProblemSubmitFidelityReviewArgs>("problem_submit_fidelity_review", "Record an evidence-backed determination of whether a problem's formal statement represents its source text. Requires the CURRENT source/statement/rendering hashes (recomputed server-side; mismatches are rejected as stale). decision='verified' is the ONLY path to outcome='certified' and problem state COMPLETE; 'rejected' blocks it. This is a review record, not a flag flip — proof soundness (Lean kernel) and statement fidelity (this tool) are independent claims"),
@@ -1750,10 +1757,34 @@ impl ServerHandler for ChatDbMcp {
         let args_val = serde_json::Value::Object(args_map);
 
         match request.name.as_ref() {
+            "readme_first" => {
+                let res = serde_json::json!({
+                    "what_this_is": "ChatDB is a verifier-backed RL ENVIRONMENT, not a prover. It contains no provider SDKs, no API keys, no model routing, no inference calls. The external agent host (you, or whatever is calling this tool) IS the policy — you choose what to try. ChatDB assembles Lean source under a strict trust boundary, the real Lean 4 kernel verifies it, and the ledger records what happened. If you have not read anything else in this environment, read this response before calling problem_create or episode_create.",
+                    "trust_boundary": "Tracked MCP actions and Lean kernel verdicts are evidence. Your own hidden reasoning, a prior session's transcript, a paper's claim, or a candidate proof you evaluated some OTHER way is NOT evidence — it is a candidate, until this pinned verifier checks it through episode_step. Do not report an obligation as proved, or a problem as solved, based on anything other than an outcome this environment actually recorded (kernel_verified or certified).",
+                    "the_loop": "problem_create -> problem_submit_fidelity_review (or unsafe_dev_attestation=true for dev/benchmark use, which caps the result at kernel_verified, never certified) -> episode_create -> episode_observe -> attempt_claim -> episode_step(action, expected_revision = action_request.episode_revision) -> repeat episode_observe/attempt_claim/episode_step until the episode's outcome is set. Call episode_observe before acting (it tells you the current obligation and action_request) and attempt_claim before every episode_step (it hands you the action_attempt_id + claim_token that step requires).",
+                    "proof_attempts": {
+                        "rule": "Every candidate proof attempt that should count as real proof-search activity MUST go through episode_step, not a side channel.",
+                        "solve": "Use the Solve action for a single self-contained tactic/term proof of the current obligation.",
+                        "submit_module": "Use SubmitModule for helper definitions, helper theorems, structural or well-founded recursion, and mutually recursive definitions (via MutualGroup) — a small local Lean development, not just one theorem body. See environment_describe's submit_module_boundary for the exact trust rules.",
+                        "decompose": "Use Decompose to split the current obligation into child sub-lemma obligations when the root goal is too large to attack directly.",
+                        "why_this_matters": "A proof attempt checked some OTHER way (e.g. a bare `lake env lean` invocation outside this episode, or an internal LeanGateway call bypassed around episode_step) and then only submitted as a final winning SubmitModule/Solve loses every failed attempt, every Lean diagnostic, every repair step — the data this environment exists to preserve. Untracked checks do not count as valid benchmark or training attempts, and a run built that way should be reported as incomplete, not as a clean success."
+                    },
+                    "lookup_and_planning_tools": "Use lean_declaration_lookup, mathlib_search_declarations, mathlib_search_local_artifacts, proof_pattern_search, draft_create/draft_extract_moves, and formalization_plan_* tools rather than an external side channel for the same job during a tracked run — that keeps the reasoning trail inside the environment's own ledger, replayable and auditable later.",
+                    "cost_boundary": "cost_micros (episode_step), model_call_reserve/model_call_settle, and the episode budget ledger track ONLY this environment's own MCP-visible accounting — Lean invocation time and ChatDB's own bookkeeping. They are NOT the total cost of running you (the external host/model). Host-side reasoning cost (tokens spent thinking, editing, or calling other tools before or around an MCP call) is invisible to ChatDB entirely unless you report it through model_call_reserve/model_call_settle. Never present MCP-visible cost_micros as if it were the complete cost of a run.",
+                    "benchmark_mode": "Development/exploratory use and a frozen benchmark run (e.g. PutnamBench) are different modes with different rules. In benchmark mode: every candidate attempt must flow through episode_step (see proof_attempts above) so the run counts as valid evidence, not just a trophy case; and public reports of benchmark results follow a redaction policy — a public summary must not contain completed proof source by default, only aggregate status/hashes/replay information. Check the benchmark documentation (docs/benchmarks/) for the exact export mode to use before publishing any benchmark result.",
+                    "forbidden_or_discouraged": [
+                        "Do not infer that a declaration is absent from the pinned Mathlib from one 'unknown_declaration' result — call lean_declaration_lookup(deep_check=true) first.",
+                        "Do not treat a prior model's or paper's proof as verified — it is a candidate until THIS pinned verifier checks it via episode_step.",
+                        "Do not submit a proof attempt that was actually checked outside this episode's tracked flow and present it as if it were tracked.",
+                        "Do not present MCP-visible cost accounting as the total cost of the run."
+                    ]
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.4",
+                    "environment_version": "0.3.5",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -3642,12 +3673,30 @@ mod tests {
         serde_json::from_str(res.content[0].as_text().unwrap().text.as_str()).unwrap()
     }
 
+    /// Issue #35 acceptance: readme_first exists, is listed, and its content
+    /// covers all five required sections (loop, trust boundary, proof
+    /// attempts, cost boundary, benchmark mode) — checked structurally (as
+    /// distinct JSON keys), not by fragile substring matching on prose.
+    #[tokio::test]
+    async fn test_readme_first_covers_required_sections() {
+        let client = connected_client(test_handler()).await;
+        let list_res = client.peer().list_tools(None).await.unwrap();
+        assert!(list_res.tools.iter().any(|t| t.name == "readme_first"), "{:?}", list_res.tools.iter().map(|t| &t.name).collect::<Vec<_>>());
+
+        let res = tool_json(&client.peer().call_tool(CallToolRequestParams::new("readme_first")).await.unwrap());
+        assert!(res["the_loop"].as_str().unwrap().contains("episode_step"), "{:?}", res);
+        assert!(res["trust_boundary"].as_str().unwrap().contains("evidence"), "{:?}", res);
+        assert!(res["proof_attempts"]["rule"].as_str().unwrap().contains("episode_step"), "{:?}", res);
+        assert!(res["cost_boundary"].as_str().unwrap().to_lowercase().contains("cost"), "{:?}", res);
+        assert!(res["benchmark_mode"].as_str().unwrap().to_lowercase().contains("benchmark"), "{:?}", res);
+    }
+
     #[tokio::test]
     async fn test_mcp_list_tools_and_describe() {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 32);
+        assert_eq!(list_res.tools.len(), 33);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
