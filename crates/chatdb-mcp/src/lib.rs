@@ -762,6 +762,32 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
                 };
                 (format!("`{}`", proof.trim().replace('\n', " ; ")), verdict)
             }
+            "submit_module" => {
+                // A module has no single flat proof_term — the closest analogue
+                // for the theorem-by-theorem fallback rendering is the root
+                // theorem's own proof_term (helper defs/theorems aren't shown by
+                // this fallback path; a caller wanting the exact verified module
+                // should get it from the dedicated module rendering instead).
+                // Populating winning_proof here is a correctness requirement, not
+                // cosmetic: without it, the fallback render below embeds a
+                // fabricated `sorry` for an obligation the kernel actually
+                // verified — exactly the dishonest-receipt bug this export
+                // exists to prevent.
+                let proof = action["root_theorem"]["proof_term"].as_str().unwrap_or("").to_string();
+                if accepted && outcome == Some("kernel_pass") {
+                    if let Some(oid) = &obligation_id {
+                        winning_proof.insert(oid.clone(), proof.clone());
+                    }
+                }
+                let verdict = if disposition != "accepted" {
+                    format!("⚠️ {}", disposition)
+                } else if outcome == Some("kernel_pass") {
+                    "✅ kernel_pass (module)".to_string()
+                } else {
+                    format!("❌ {}", outcome.unwrap_or("kernel_fail"))
+                };
+                (format!("module root: `{}`", proof.trim().replace('\n', " ; ")), verdict)
+            }
             "decompose" => {
                 let subs: Vec<String> = action["sub_lemmas"].as_array().map(|a| {
                     a.iter().filter_map(|v| v.as_str()).map(|s| format!("`{}`", s)).collect()
@@ -2727,6 +2753,19 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(status["state"], "terminated");
         assert_eq!(status["outcome"], "kernel_verified");
+
+        // Self-review finding: proof_export's attempt-log renderer had no
+        // "submit_module" arm, so winning_proof was never populated for a
+        // module-proved obligation — the format="lean" fallback rendering then
+        // embedded a fabricated `sorry` for a theorem the kernel actually
+        // verified. Must never happen: the real root proof_term ("rfl") must
+        // appear, and "sorry" must not.
+        let lean_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "lean",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let lean = lean_res.content[0].as_text().unwrap().text.clone();
+        assert!(!lean.contains("sorry"), "a kernel-verified module theorem must never be exported with a fabricated sorry: {lean}");
+        assert!(lean.contains("rfl"), "the real root proof_term must appear in the export: {lean}");
     }
 
     /// A module whose root theorem statement does NOT hash-match the registered
@@ -3146,10 +3185,22 @@ mod tests {
     }
 
     /// A solve that fails Lean verification must NOT terminate the episode, must
-    /// count as a step, and must leave the obligation open (re-attemptable).
+    /// count as a step, and must leave the obligation open (re-attemptable). It
+    /// also MUST still bump attempt_count — unlike a bare gateway/infrastructure
+    /// error (see test_gateway_infrastructure_error_does_not_bump_attempt_count),
+    /// a kernel_fail is a genuine verdict about the prover's submission.
     #[tokio::test]
     async fn test_solve_kernel_fail_does_not_terminate() {
-        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+        };
+        let client = connected_client(handler).await;
         let peer = client.peer();
 
         let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
@@ -3187,6 +3238,183 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(status["state"], "awaiting_external_action");
         assert_eq!(status["step_count"], 1);
+
+        let attempt_count: i64 = {
+            let conn = conn_arc.lock().await;
+            conn.query_row(
+                "SELECT attempt_count FROM episode_obligations WHERE episode_id = ?1 AND kind = 'root'",
+                [&episode_id],
+                |row| row.get(0),
+            ).unwrap()
+        };
+        assert_eq!(attempt_count, 1, "a genuine kernel_fail verdict must count as an attempt");
+    }
+
+    /// Self-review finding: a bare gateway/infrastructure failure (spawn error,
+    /// timeout — `Err(String)` from `verify_exact`, NOT a normal kernel_fail
+    /// verdict) carries no information about the prover's submission and must
+    /// NOT bump `episode_obligations.attempt_count` — scheduler.rs feeds
+    /// attempt_count into difficulty estimation and uses it as a sort
+    /// tie-breaker, so counting bare infra flakes would misrepresent how many
+    /// real semantic attempts were made. A genuine kernel verdict (pass OR fail)
+    /// DOES bump it, exactly as before the prepare/finalize split.
+    struct FailingGateway;
+    impl LeanGateway for FailingGateway {
+        fn verify_exact(&self, _o: &Obligation, _p: &str, _d: &[Uuid], _e: &str, _m: &[String]) -> Result<LeanVerificationResult, String> {
+            Err("simulated infrastructure failure: process spawn error".to_string())
+        }
+        fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> { Ok(()) }
+    }
+
+    #[tokio::test]
+    async fn test_gateway_infrastructure_error_does_not_bump_attempt_count() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(FailingGateway),
+            lean_available: false,
+            lean_environment: None,
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "x", "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5, "cost_budget_micros": 1_000_000,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "infra-fail-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {"type": "solve", "proof_term": "norm_num"},
+            "cost_micros": 50,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["disposition"], "error", "a gateway Err must surface as disposition=error: {:?}", step);
+
+        let (attempt_count, budget): (i64, i64) = {
+            let conn = conn_arc.lock().await;
+            let attempt_count = conn.query_row(
+                "SELECT attempt_count FROM episode_obligations WHERE episode_id = ?1 AND kind = 'root'",
+                [&episode_id],
+                |row| row.get(0),
+            ).unwrap();
+            let budget = conn.query_row(
+                "SELECT cost_budget_micros FROM episodes WHERE id = ?1", [&episode_id], |row| row.get(0),
+            ).unwrap();
+            (attempt_count, budget)
+        };
+        assert_eq!(attempt_count, 0, "a bare gateway/infrastructure error must not count as an attempt");
+        assert_eq!(budget, 1_000_000, "a bare gateway/infrastructure error must refund the pessimistic budget reservation, leaving budget unchanged");
+    }
+
+    /// Review feedback (self-review): `cost_budget_micros` must be reserved
+    /// atomically with the CAS check in `attempt_prepare`, BEFORE the Lean
+    /// gateway call runs with the DB lock released — otherwise a concurrent
+    /// `model_call_reserve` could read the stale, not-yet-deducted budget during
+    /// the gateway call and grant a lease against budget this attempt is already
+    /// about to spend (a TOCTOU overcommit). This gateway peeks at the budget
+    /// from INSIDE verify_exact (the same window a concurrent tool call would
+    /// see) and asserts it is already reduced — proving the window is closed.
+    struct BudgetPeekingGateway {
+        conn: Arc<Mutex<Connection>>,
+        episode_id: Arc<std::sync::Mutex<Option<String>>>,
+    }
+    impl LeanGateway for BudgetPeekingGateway {
+        fn verify_exact(&self, obligation: &Obligation, _p: &str, _d: &[Uuid], environment: &str, _m: &[String]) -> Result<LeanVerificationResult, String> {
+            let episode_id = self.episode_id.lock().unwrap().clone().expect("episode_id must be set before calling");
+            let budget: i64 = {
+                let conn = self.conn.try_lock().expect("DB mutex must be released during the gateway call");
+                conn.query_row("SELECT cost_budget_micros FROM episodes WHERE id = ?1", [&episode_id], |row| row.get(0)).unwrap()
+            };
+            if budget != 999_900 {
+                return Err(format!("budget was not reserved before the gateway call: expected 999900, got {}", budget));
+            }
+            Ok(LeanVerificationResult {
+                outcome: LeanVerificationOutcome::KernelPass,
+                attempt_id: Uuid::new_v4(),
+                obligation_id: obligation.id,
+                theorem_name: obligation.theorem_name.clone(),
+                expected_statement_hash: obligation.statement_hash.clone(),
+                elaborated_statement_hash: None,
+                environment_hash: environment.to_string(),
+                proof_source_hash: "".to_string(),
+                compiled_artifact_hash: None,
+                proof_term_hash: None,
+                diagnostic: None,
+                all_diagnostics: vec![],
+                dependency_use_report: None,
+                wall_time_ms: 1,
+                lean_cpu_time_ms: 1,
+            })
+        }
+        fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> { Ok(()) }
+    }
+
+    #[tokio::test]
+    async fn test_budget_reserved_before_gateway_call_closes_toctou_window() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let gateway_episode_id: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(BudgetPeekingGateway { conn: conn_arc.clone(), episode_id: gateway_episode_id.clone() }),
+            lean_available: false,
+            lean_environment: None,
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "x", "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5, "cost_budget_micros": 1_000_000,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        *gateway_episode_id.lock().unwrap() = Some(episode_id.clone());
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "budget-toctou-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {"type": "solve", "proof_term": "norm_num"},
+            "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["disposition"], "accepted", "if the gateway's budget check failed, this surfaces as disposition=error: {:?}", step);
+        assert_eq!(step["accepted"], true, "{:?}", step);
+
+        let budget: i64 = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT cost_budget_micros FROM episodes WHERE id = ?1", [&episode_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(budget, 999_900, "budget must be exactly once-deducted after a successful step (no double-charge from prepare+finalize)");
     }
 
     /// The idempotency key on attempt_claim must be safe to retry: same key while
