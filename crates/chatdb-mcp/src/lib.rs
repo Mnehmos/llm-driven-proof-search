@@ -1191,9 +1191,15 @@ impl ServerHandler for ChatDbMcp {
                         {"type": "submit_module", "module_items": [
                             {"item_kind": "def", "name": "double", "type_signature": "Nat → Nat", "body": "fun n => n + n"}
                         ], "root_theorem": {"name": "root", "statement": "double 2 = 4", "proof_term": "  rfl"}},
+                        {"type": "submit_module", "module_items": [
+                            {"item_kind": "mutual_group", "members": [
+                                {"item_kind": "def", "name": "isEven", "type_signature": "Nat → Bool", "body": "fun n => match n with\n  | 0 => true\n  | (k+1) => isOdd k"},
+                                {"item_kind": "def", "name": "isOdd", "type_signature": "Nat → Bool", "body": "fun n => match n with\n  | 0 => false\n  | (k+1) => isEven k"}
+                            ]}
+                        ], "root_theorem": {"name": "root", "statement": "isEven 4 = true", "proof_term": "  rfl"}},
                         {"type": "give_up"}
                     ],
-                    "submit_module_boundary": "The server assembles the Lean file: it owns imports, the ChatDB.P_<problem> namespace, and server set_options. Clients send structured items only — never raw import/namespace/end/set_option lines, and never axiom/opaque/unsafe/instance declarations. Every name is sanitized to a single namespace-local identifier. The root_theorem.statement must canonical-hash to the problem's registered root_statement_hash. Either the whole module passes the kernel and is recorded, or nothing enters the trusted namespace.",
+                    "submit_module_boundary": "The server assembles the Lean file: it owns imports, the ChatDB.P_<problem> namespace, and server set_options. Clients send structured items only — never raw import/namespace/end/set_option lines, and never axiom/opaque/unsafe/instance declarations. Every name is sanitized to a single namespace-local identifier. The root_theorem.statement must canonical-hash to the problem's registered root_statement_hash. Either the whole module passes the kernel and is recorded, or nothing enters the trusted namespace. A `mutual_group` item groups 2+ def/theorem members that must forward-reference each other (e.g. mutually recursive functions) into one server-owned `mutual ... end` block — still never raw Lean from the client.",
                     "prover_loop": "problem_create -> problem_submit_fidelity_review (or unsafe_dev_attestation=true for dev use) -> episode_create -> episode_observe -> attempt_claim -> episode_step(action, expected_revision = action_request.episode_revision) -> repeat observe/claim/step until outcome is set",
                     "epistemic_rules": [
                         "An 'unknown_declaration'/'unknown identifier' result under the active import manifest establishes ONLY that the name didn't resolve under that exact import closure. It does NOT establish that the declaration is absent from the pinned library. Before concluding an API is unavailable, call lean_declaration_lookup — do not infer a global capability limit from one local elaboration failure.",

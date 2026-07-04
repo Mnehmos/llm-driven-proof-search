@@ -43,6 +43,35 @@ The **server** owns everything structural and renders the file itself
 Assembly order is: imports → server `set_option`s → open namespace → defs →
 helper theorems → root theorem → close namespace.
 
+### Mutual recursion
+
+A plain `def`/`theorem` item is rendered alone, so it can only reference
+declarations that came *before* it — no forward references. Some
+developments genuinely need two (or more) declarations to see each other,
+e.g. `isEven`/`isOdd` each calling the other. For that, submit a
+`mutual_group` item instead of a bare `def`/`theorem`:
+
+```jsonc
+{
+  "item_kind": "mutual_group",
+  "members": [
+    { "item_kind": "def", "name": "isEven", "type_signature": "Nat → Bool",
+      "body": "fun n => match n with\n  | 0 => true\n  | (k+1) => isOdd k" },
+    { "item_kind": "def", "name": "isOdd", "type_signature": "Nat → Bool",
+      "body": "fun n => match n with\n  | 0 => false\n  | (k+1) => isEven k" }
+  ]
+}
+```
+
+The server renders every member of the group together inside one
+server-owned `mutual ... end` block — the only way Lean lets a member see a
+sibling declared later in the group. Same trust boundary as everywhere else:
+the client still never writes `mutual`/`end` itself (both stay banned
+anywhere in client content); it supplies only the same per-member content a
+bare `def`/`theorem` item would. A group must have at least 2 members — one
+member has no forward-reference problem to solve, so submit it as a bare
+`def`/`theorem` instead. Members may mix `def` and `theorem`.
+
 ## What is rejected (before Lean is ever run)
 
 Policy checks are deterministic and run in `chatdb-core` before any compile:
@@ -160,7 +189,11 @@ just a compiled side effect — so module solves become first-class training dat
   order: kind (`def` / `theorem` / `root_theorem`), local name, statement-or-type
   and body hashes, dependency metadata, and policy result. The single
   `root_theorem` row is linked to the root obligation through its parent module
-  row.
+  row. A `mutual_group` item's members are still `def`/`theorem` rows — the
+  grouping is recorded in a `mutual_group` index column shared by every member
+  of the same block (`NULL` otherwise). Purely informational: replay/export
+  never key on it, since the exact source re-assembles from `module_items_json`
+  regardless.
 
 Both tables are created by `CREATE TABLE IF NOT EXISTS`, so a pre-existing
 v0.2.5 database gains them on the next init with no migration and no change to
