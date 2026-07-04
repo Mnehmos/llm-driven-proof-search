@@ -1,10 +1,10 @@
 [package]
 name = "chatdb-mcp"
-version = "0.2.5"
+version = "0.3.0"
 edition = "2024"
 
 [dependencies]
-chatdb_proof_core = { version = "0.2.5", path = "../chatdb-core" }
+chatdb_proof_core = { version = "0.3.0", path = "../chatdb-core" }
 rmcp = { version = "1.8.0", features = ["client", "server", "transport-streamable-http-server"] }
 rusqlite.workspace = true
 chrono.workspace = true
