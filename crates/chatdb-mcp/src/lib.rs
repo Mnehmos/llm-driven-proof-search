@@ -56,6 +56,210 @@ fn valid_lean_declaration_name(s: &str) -> bool {
         && s.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '\'' | '.' | '!' | '?'))
 }
 
+// -- Mathlib librarian (issue #25) -----------------------------------------
+//
+// A hint system, deliberately outside the trusted proof transaction: it can
+// suggest imports/names/declarations, but nothing here can mark anything
+// proved, certify a claim, or mutate an existing problem's import manifest.
+// Reads the REAL pinned Mathlib source tree directly (no precomputed offline
+// index — a live scan of ~111MB of .lean files takes a fraction of a second,
+// so a separately-maintained index would only add staleness risk between
+// itself and the actual pinned commit, for no real speed benefit).
+
+const MATHLIB_DECLARATION_KEYWORDS: &[&str] = &[
+    "theorem", "lemma", "def", "abbrev", "instance", "structure", "inductive", "class",
+];
+
+/// Modifiers Lean allows immediately before a declaration keyword on the same
+/// line (e.g. `protected theorem foo`, `private noncomputable def bar`).
+/// Mirrors the modifier list `crates/chatdb-core/src/lean/module.rs` bans a
+/// CLIENT from writing (there, closing an injection escape); here the
+/// direction is reversed — this is real Mathlib source the server only
+/// reads, and skipping past a modifier is required to find the keyword at
+/// all, not a security boundary.
+const MATHLIB_DECLARATION_MODIFIERS: &[&str] = &[
+    "protected", "private", "scoped", "local", "noncomputable", "partial", "unsafe",
+];
+
+/// Self-review finding: a first pass only recognized a keyword as the VERY
+/// FIRST token on a line, missing every modifier-prefixed
+/// (`protected theorem ...`) or attribute-prefixed (`@[simp] theorem ...`)
+/// declaration — confirmed empirically against the real Mathlib checkout to
+/// affect roughly 80% of files, and worse than a mere gap: a query that
+/// should hit a modifier-prefixed declaration could instead confidently
+/// return an unrelated `exact_match` elsewhere, a false-confidence result.
+/// Strips at most one leading attribute list and any number of leading
+/// modifiers so the real keyword underneath is what gets matched.
+fn strip_mathlib_declaration_prefix(mut line: &str) -> &str {
+    if let Some(after_at) = line.strip_prefix('@') {
+        if let Some(after_bracket) = after_at.strip_prefix('[') {
+            if let Some(close) = after_bracket.find(']') {
+                line = after_bracket[close + 1..].trim_start();
+            }
+        }
+    }
+    loop {
+        let mut advanced = false;
+        for modifier in MATHLIB_DECLARATION_MODIFIERS {
+            if let Some(rest) = line.strip_prefix(modifier) {
+                if rest.starts_with(|c: char| c.is_whitespace()) {
+                    line = rest.trim_start();
+                    advanced = true;
+                    break;
+                }
+            }
+        }
+        if !advanced {
+            break;
+        }
+    }
+    line
+}
+
+/// A single declaration hit from scanning the real Mathlib source tree.
+#[derive(Debug, Clone, serde::Serialize)]
+struct MathlibDeclarationHit {
+    declaration_name: String,
+    keyword: String,
+    import_module: String,
+    file_relative_path: String,
+    signature_snippet: String,
+    confidence: &'static str,
+}
+
+/// Locates the real Mathlib source tree under a Lake project, supporting
+/// both the current (`.lake/packages/`) and legacy (`lake-packages/`) Lake
+/// dependency layouts. `None` if lean-checker isn't set up at all — the
+/// librarian degrades to "unavailable", never to a hard error.
+fn mathlib_source_dir(lean_project_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    for layout in [".lake/packages", "lake-packages"] {
+        let candidate = lean_project_path.join(layout).join("mathlib").join("Mathlib");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Extracts the identifier immediately following a declaration keyword at the
+/// start of a trimmed line, e.g. `"theorem foo_bar (n : Nat) : ..."` with
+/// `keyword = "theorem"` yields `Some("foo_bar")`. Returns the FILE-LOCAL name
+/// only — a known MVP limitation: a declaration nested in `namespace Foo ...
+/// end Foo` is written here as `bar`, not `Foo.bar`; the caller can infer the
+/// qualified name from nearby `namespace`/`end` lines in the same file if
+/// needed, but this tool does not resolve that automatically.
+fn extract_declaration_name<'a>(trimmed_line: &'a str, keyword: &str) -> Option<&'a str> {
+    let rest = trimmed_line.strip_prefix(keyword)?;
+    if !rest.starts_with(|c: char| c.is_whitespace()) {
+        return None; // e.g. "theorem_like_helper" must not match keyword "theorem"
+    }
+    let name_start = rest.trim_start();
+    // Bug found via playtest.rs against the real Mathlib source (not caught by
+    // the synthetic-tree unit test, which used ASCII-only names): real
+    // declaration names can contain multi-byte Unicode characters (e.g. `₂`
+    // subscripts). `.chars().take_while(...).count()` counts CHARACTERS, but
+    // `name_start[..n]` slices BYTES — using the char count as a byte index
+    // panics ("byte index N is not a char boundary") the instant a matched
+    // name contains any non-ASCII character. `char_indices()` yields the byte
+    // offset of each character, which is always a valid boundary to slice at.
+    let end_byte = name_start.char_indices()
+        .find(|(_, c)| !(c.is_alphanumeric() || matches!(c, '_' | '\'')))
+        .map(|(i, _)| i)
+        .unwrap_or(name_start.len());
+    if end_byte == 0 {
+        return None;
+    }
+    Some(&name_start[..end_byte])
+}
+
+/// Recursively scans every `.lean` file under `mathlib_dir` for declarations
+/// whose name contains `query` (case-insensitive substring). Read-only,
+/// synchronous filesystem I/O — matches this codebase's existing convention
+/// of calling `std::fs` directly rather than via a blocking-pool wrapper
+/// (`crates/chatdb-core/src/lean/mod.rs` does the same for its own checks).
+/// Collects every match (no early cutoff at `limit`) so exact matches
+/// encountered later in the scan aren't silently dropped in favor of
+/// nearby-name matches found earlier, then sorts and truncates.
+fn scan_mathlib_declarations(mathlib_dir: &std::path::Path, query: &str, limit: usize) -> Vec<MathlibDeclarationHit> {
+    let query_lower = query.to_lowercase();
+    let mathlib_parent = mathlib_dir.parent().unwrap_or(mathlib_dir);
+    let mut hits = Vec::new();
+    let mut stack = vec![mathlib_dir.to_path_buf()];
+    // Hard collection cap: protects against a degenerate 1-character query
+    // matching a huge fraction of the library. Independent of the caller's
+    // requested `limit`, which is applied only after sorting below.
+    const MAX_RAW_HITS: usize = 2000;
+    // Self-review finding: no protection against a symlink cycle under a
+    // misconfigured project path (Lake's dependency cache doesn't create one
+    // in practice, confirmed against the real checkout, but this is cheap
+    // defense-in-depth against a hang on some other layout). Real Mathlib is
+    // ~8200 files; this cap is an order of magnitude above that.
+    const MAX_DIRS_VISITED: usize = 100_000;
+    let mut dirs_visited = 0usize;
+
+    while let Some(dir) = stack.pop() {
+        dirs_visited += 1;
+        if dirs_visited > MAX_DIRS_VISITED {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("lean") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            for line in content.lines() {
+                let trimmed = strip_mathlib_declaration_prefix(line.trim_start());
+                for keyword in MATHLIB_DECLARATION_KEYWORDS {
+                    let Some(name) = extract_declaration_name(trimmed, keyword) else { continue };
+                    if !name.to_lowercase().contains(&query_lower) {
+                        continue;
+                    }
+                    let rel_path = path.strip_prefix(mathlib_parent).unwrap_or(&path);
+                    let import_module = rel_path.with_extension("")
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    let confidence = if name == query { "exact_match" } else { "nearby_name" };
+                    hits.push(MathlibDeclarationHit {
+                        declaration_name: name.to_string(),
+                        keyword: keyword.to_string(),
+                        import_module,
+                        file_relative_path: rel_path.to_string_lossy().replace('\\', "/"),
+                        signature_snippet: line.trim().to_string(),
+                        confidence,
+                    });
+                    break; // one keyword match per line is enough
+                }
+                if hits.len() >= MAX_RAW_HITS {
+                    break;
+                }
+            }
+            if hits.len() >= MAX_RAW_HITS {
+                break;
+            }
+        }
+        if hits.len() >= MAX_RAW_HITS {
+            break;
+        }
+    }
+
+    hits.sort_by(|a, b| {
+        let rank = |c: &str| if c == "exact_match" { 0 } else { 1 };
+        rank(a.confidence).cmp(&rank(b.confidence))
+            .then_with(|| a.declaration_name.len().cmp(&b.declaration_name.len()))
+            .then_with(|| a.declaration_name.cmp(&b.declaration_name))
+    });
+    hits.truncate(limit);
+    hits
+}
+
 /// Shared by formalization_plan_create's seeding path and
 /// formalization_plan_add_item — the only two sites that construct a
 /// formalization_plan_items row.
@@ -448,6 +652,53 @@ pub struct FormalizationPlanPromoteItemToObligationArgs {
     /// episode_step) and belong to episode_id. This tool only records the
     /// link — it never creates the obligation itself.
     pub obligation_id: String,
+}
+
+// -- Mathlib librarian (issue #25) -----------------------------------------
+
+#[derive(JsonSchema, Deserialize)]
+pub struct MathlibSearchDeclarationsArgs {
+    /// Case-insensitive substring to search for in Mathlib declaration names
+    /// (theorem/lemma/def/abbrev/instance/structure/inductive/class).
+    pub query: String,
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct MathlibSearchLocalArtifactsArgs {
+    /// Case-insensitive substring to search for among this ChatDB instance's
+    /// OWN previously-verified theorem/def names — a local precedent, not a
+    /// Mathlib-library result.
+    pub query: String,
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub enum LibrarianConfidence {
+    /// The suggested name matches exactly.
+    #[serde(rename = "exact_match")] ExactMatch,
+    /// A similarly-named declaration was found; not confirmed as the right one.
+    #[serde(rename = "nearby_name")] NearbyName,
+    /// Matched by type signature rather than name (not produced by the
+    /// current search tools — reserved for a future type-aware search).
+    #[serde(rename = "type_match")] TypeMatch,
+    /// Found via a prior local ChatDB artifact using this or a similar name.
+    #[serde(rename = "usage_example")] UsageExample,
+    /// No useful signal either way.
+    #[serde(rename = "unknown")] Unknown,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct FormalizationPlanAttachLibrarianResultArgs {
+    pub plan_item_id: String,
+    pub declaration_name: String,
+    pub confidence: LibrarianConfidence,
+    #[serde(default)]
+    pub import_module: Option<String>,
+    #[serde(default)]
+    pub snippet: Option<String>,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -1420,6 +1671,11 @@ pub struct ChatDbMcp {
     /// toolchain. `None` when lean-checker isn't set up (`lean_available == false`
     /// implies this is `None`, but the manifest can also be absent independently).
     pub lean_environment: Option<chatdb_proof_core::lean::LeanEnvironmentInfo>,
+    /// Stored independently of `gateway` (a trait object with no filesystem
+    /// accessor) so the Mathlib librarian (issue #25) can scan the real
+    /// pinned Mathlib source tree at `<lean_project_path>/.lake/packages/mathlib/Mathlib`
+    /// (or the legacy `lake-packages/` layout) — read-only, no Lean invocation.
+    pub lean_project_path: PathBuf,
 }
 
 impl ChatDbMcp {
@@ -1427,8 +1683,9 @@ impl ChatDbMcp {
         let lean_available = elan_bin_path.join("lake.exe").exists()
             && (lean_project_path.join("lakefile.toml").exists() || lean_project_path.join("lakefile.lean").exists());
         let lean_environment = chatdb_proof_core::lean::detect_environment(&lean_project_path);
+        let stored_lean_project_path = lean_project_path.clone();
         let gateway = Box::new(RealLeanGateway::new(lean_project_path, elan_bin_path));
-        Self { conn, gateway, lean_available, lean_environment }
+        Self { conn, gateway, lean_available, lean_environment, lean_project_path: stored_lean_project_path }
     }
 }
 
@@ -1439,7 +1696,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.3"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.4"))
     }
 
     async fn list_tools(
@@ -1477,6 +1734,9 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<FormalizationPlanAddItemArgs>("formalization_plan_add_item", "Add a planning item (concept, missing_definition, missing_lemma, planned_module, or external_citation) to an existing formalization plan"),
             make_tool::<FormalizationPlanAttachLookupArgs>("formalization_plan_attach_lookup", "Attach a lean_declaration_lookup result to a plan item, updating its Mathlib coverage status (found/not_found/partial/unknown). A hint attachment, not a re-check — never changes proof status"),
             make_tool::<FormalizationPlanPromoteItemToObligationArgs>("formalization_plan_promote_item_to_obligation", "Link a plan item to an episode_obligation that ALREADY EXISTS (created through a normal Decompose action via episode_step). Records the link only — this tool never creates the obligation itself, so it can never bypass the episode's budget/CAS accounting"),
+            make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
+            make_tool::<MathlibSearchLocalArtifactsArgs>("mathlib_search_local_artifacts", "Search THIS ChatDB instance's own previously-verified theorem/def names for a substring match — a local usage_example precedent, not a Mathlib-library result"),
+            make_tool::<FormalizationPlanAttachLibrarianResultArgs>("formalization_plan_attach_librarian_result", "Attach a mathlib_search_declarations/mathlib_search_local_artifacts result to a formalization plan item, updating its Mathlib coverage status. A hint attachment, not a re-check — never changes proof status"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -1493,7 +1753,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.3",
+                    "environment_version": "0.3.4",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -3107,6 +3367,153 @@ impl ServerHandler for ChatDbMcp {
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
+            "mathlib_search_declarations" => {
+                let args: MathlibSearchDeclarationsArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.query.trim().is_empty() {
+                    return Err(mcp_invalid_params("query must be non-empty"));
+                }
+                let limit = args.limit.unwrap_or(20).clamp(1, 200) as usize;
+
+                // Pure filesystem scan — no DB lock held, matching this
+                // codebase's convention of not holding the connection Mutex
+                // during a slow (here: filesystem-bound, not Lean-bound)
+                // operation other concurrent tool calls shouldn't stall on.
+                let Some(mathlib_dir) = mathlib_source_dir(&self.lean_project_path) else {
+                    let res = serde_json::json!({
+                        "mathlib_available": false,
+                        "hits": [],
+                    });
+                    return Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]));
+                };
+                // Found via real end-to-end testing (playtest.rs against the
+                // actual Mathlib source): scanned names are file-local only
+                // (this tool's documented namespace-resolution limitation),
+                // so a natural dotted query like "Nat.factorization" — the
+                // form a declaration is actually REFERENCED by, not how it's
+                // WRITTEN in source — would otherwise match nothing at all.
+                // Strip any dotted prefix and search on the last segment.
+                // Self-review finding: a trailing-dot query (e.g. "Nat.")
+                // would otherwise strip to an EMPTY string, which then
+                // matches every declaration name — an unintended
+                // match-everything scan. Fall back to the original query
+                // whenever the stripped segment is empty.
+                let bare_query = args.query.rsplit('.').next()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(&args.query);
+                let hits = scan_mathlib_declarations(&mathlib_dir, bare_query, limit);
+                let res = serde_json::json!({
+                    "mathlib_available": true,
+                    "hits": hits.into_iter().map(|h| serde_json::json!({
+                        "declaration_name": h.declaration_name,
+                        "keyword": h.keyword,
+                        "import_module": h.import_module,
+                        "file_relative_path": h.file_relative_path,
+                        "signature_snippet": h.signature_snippet,
+                        "confidence": h.confidence,
+                    })).collect::<Vec<_>>(),
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "mathlib_search_local_artifacts" => {
+                let args: MathlibSearchLocalArtifactsArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.query.trim().is_empty() {
+                    return Err(mcp_invalid_params("query must be non-empty"));
+                }
+                let limit = args.limit.unwrap_or(20).clamp(1, 200);
+                let like = format!("%{}%", args.query);
+
+                let conn = self.conn.lock().await;
+                let mut lstmt = conn.prepare(
+                    "SELECT theorem_name FROM episode_verified_lemmas WHERE theorem_name LIKE ?1 ORDER BY verified_at DESC LIMIT ?2"
+                ).map_err(rs)?;
+                let lemma_hits: Vec<String> = lstmt.query_map((&like, limit), |row| row.get(0))
+                    .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+                let mut mstmt = conn.prepare(
+                    "SELECT lean_name FROM episode_verified_module_items WHERE lean_name LIKE ?1 ORDER BY id DESC LIMIT ?2"
+                ).map_err(rs)?;
+                let module_hits: Vec<String> = mstmt.query_map((&like, limit), |row| row.get(0))
+                    .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+
+                let mut names: Vec<String> = lemma_hits.into_iter().chain(module_hits).collect();
+                names.sort();
+                names.dedup();
+                names.truncate(limit as usize);
+
+                let res = serde_json::json!({
+                    "hits": names.into_iter().map(|name| serde_json::json!({
+                        "declaration_name": name,
+                        "confidence": "usage_example",
+                    })).collect::<Vec<_>>(),
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "formalization_plan_attach_librarian_result" => {
+                let args: FormalizationPlanAttachLibrarianResultArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let row: Option<(String, String)> = conn.query_row(
+                    "SELECT status, mathlib_candidate_names_json FROM formalization_plan_items WHERE id = ?1",
+                    [&args.plan_item_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).optional().map_err(rs)?;
+                let Some((item_status, candidate_names_json)) = row else {
+                    return Err(mcp_invalid_params(format!("unknown plan_item_id: {}", args.plan_item_id)));
+                };
+                if item_status != "open" {
+                    return Err(mcp_invalid_params(format!("plan_item {} is not open (status={}) — cannot attach a librarian result to a promoted/dropped item", args.plan_item_id, item_status)));
+                }
+
+                let confidence_str = match args.confidence {
+                    LibrarianConfidence::ExactMatch => "exact_match",
+                    LibrarianConfidence::NearbyName => "nearby_name",
+                    LibrarianConfidence::TypeMatch => "type_match",
+                    LibrarianConfidence::UsageExample => "usage_example",
+                    LibrarianConfidence::Unknown => "unknown",
+                };
+                // Same vocabulary formalization_plan_attach_lookup writes into
+                // mathlib_coverage_status, so a plan item's coverage reads
+                // consistently regardless of which tool populated it.
+                let coverage_status = match args.confidence {
+                    LibrarianConfidence::ExactMatch => "found",
+                    LibrarianConfidence::NearbyName | LibrarianConfidence::TypeMatch | LibrarianConfidence::UsageExample => "partial",
+                    LibrarianConfidence::Unknown => "unknown",
+                };
+
+                // Accumulate candidate names across multiple attached results
+                // (deduped) rather than overwriting — a plan item can
+                // reasonably collect several librarian suggestions before one
+                // is chosen. The full latest result (confidence/import/snippet)
+                // still overwrites lookup_result_json — see the doc comment on
+                // formalization_plan_attach_lookup for the same "latest wins"
+                // convention on that field.
+                let mut candidate_names: Vec<String> = serde_json::from_str(&candidate_names_json).unwrap_or_default();
+                if !candidate_names.contains(&args.declaration_name) {
+                    candidate_names.push(args.declaration_name.clone());
+                }
+                let candidate_names_json = serde_json::to_string(&candidate_names).unwrap();
+                let lookup_result_json = serde_json::json!({
+                    "source": "librarian",
+                    "declaration_name": args.declaration_name,
+                    "confidence": confidence_str,
+                    "import_module": args.import_module,
+                    "snippet": args.snippet,
+                }).to_string();
+
+                conn.execute(
+                    "UPDATE formalization_plan_items SET mathlib_coverage_status = ?1, mathlib_candidate_names_json = ?2, lookup_result_json = ?3 WHERE id = ?4",
+                    (coverage_status, &candidate_names_json, &lookup_result_json, &args.plan_item_id),
+                ).map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "plan_item_id": args.plan_item_id,
+                    "mathlib_coverage_status": coverage_status,
+                    "mathlib_candidate_names": candidate_names,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
             _ => Err(McpError::new(ErrorCode::METHOD_NOT_FOUND, format!("Method not found: {}", request.name), None)),
         }
     }
@@ -3206,6 +3613,7 @@ mod tests {
             gateway: Box::new(gateway),
             lean_available: false,
             lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
         }
     }
 
@@ -3239,7 +3647,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 29);
+        assert_eq!(list_res.tools.len(), 32);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -3565,6 +3973,7 @@ mod tests {
             gateway: Box::new(LockCheckingGateway { conn: conn_arc }),
             lean_available: false,
             lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -3616,6 +4025,7 @@ mod tests {
             gateway: Box::new(LockCheckingGateway { conn: conn_arc }),
             lean_available: false,
             lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -3967,6 +4377,7 @@ mod tests {
             gateway: Box::new(MockGateway),
             lean_available: false,
             lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -4136,6 +4547,7 @@ mod tests {
             gateway: Box::new(MockGateway),
             lean_available: false,
             lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -4229,6 +4641,7 @@ mod tests {
             gateway: Box::new(MockGateway),
             lean_available: false,
             lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -4306,6 +4719,7 @@ mod tests {
             gateway: Box::new(FailingGateway),
             lean_available: false,
             lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -4407,6 +4821,7 @@ mod tests {
             gateway: Box::new(BudgetPeekingGateway { conn: conn_arc.clone(), episode_id: gateway_episode_id.clone() }),
             lean_available: false,
             lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -4897,7 +5312,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -5085,7 +5500,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -5285,7 +5700,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -5402,7 +5817,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -5504,5 +5919,388 @@ mod tests {
         assert!(md1.contains("informal sketch here"), "{md1}");
         assert!(md1.contains("## Formalization plans (advisory — not part of the verified proof)"), "{md1}");
         assert!(md1.contains("Plan E"), "{md1}");
+    }
+
+    // -- Mathlib librarian (issue #25) ---------------------------------------
+
+    /// Builds a synthetic Mathlib-shaped source tree under a temp directory
+    /// (not the real, multi-GB Mathlib checkout) so the scanning/parsing
+    /// logic is tested hermetically — no dependency on lean-checker being set
+    /// up on whatever machine runs `cargo test`. The real toolchain path is
+    /// verified separately via the playtest.rs harness, per this session's
+    /// established practice for anything that needs the actual pinned Mathlib.
+    struct SyntheticMathlib {
+        root: std::path::PathBuf,
+    }
+    impl SyntheticMathlib {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("chatdb_test_mathlib_{}", Uuid::new_v4()));
+            let mathlib_dir = root.join(".lake").join("packages").join("mathlib").join("Mathlib").join("Algebra").join("Group");
+            std::fs::create_dir_all(&mathlib_dir).unwrap();
+            std::fs::write(mathlib_dir.join("Basic.lean"), concat!(
+                "-- synthetic fixture, not real Mathlib\n",
+                "theorem add_comm_synthetic (a b : Nat) : a + b = b + a := by ring\n",
+                "\n",
+                "lemma add_comm_synthetic_helper (a b : Nat) : a + b = b + a := add_comm_synthetic a b\n",
+                "\n",
+                "def not_a_theorem_like_prefix (n : Nat) : Nat := n\n",
+                "\n",
+                "protected theorem protected_synthetic_decl (a : Nat) : a = a := rfl\n",
+                "\n",
+                "@[simp] theorem attribute_prefixed_synthetic_decl (a : Nat) : a = a := rfl\n",
+                "\n",
+                "private noncomputable def stacked_modifier_synthetic_decl (n : Nat) : Nat := n\n",
+            )).unwrap();
+            SyntheticMathlib { root }
+        }
+    }
+    impl Drop for SyntheticMathlib {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// Regression test for a real bug found via playtest.rs against the
+    /// actual Mathlib source (not caught by the ASCII-only synthetic-tree
+    /// test above): `extract_declaration_name` used to count characters but
+    /// slice bytes, panicking on any declaration name containing a
+    /// multi-byte Unicode character (e.g. Mathlib's `cast_add_comm`-adjacent
+    /// forms reference `ℕ`/`α` nearby, and some real names carry subscripts
+    /// like `₂`). A panic inside the tokio-spawned server task silently
+    /// killed it, which looked like an indefinite hang to any client
+    /// awaiting a response — not a clean error. This test exercises the
+    /// exact multi-byte case directly, without needing the real 111MB
+    /// Mathlib checkout.
+    #[test]
+    fn test_extract_declaration_name_handles_multibyte_unicode() {
+        assert_eq!(extract_declaration_name("theorem foo₂ (n : Nat)", "theorem"), Some("foo₂"));
+        assert_eq!(extract_declaration_name("theorem α_comm : True", "theorem"), Some("α_comm"));
+        assert_eq!(extract_declaration_name("def bar' (x : α) : Nat", "def"), Some("bar'"));
+    }
+
+    #[tokio::test]
+    async fn test_mathlib_search_declarations_unavailable_without_lean_checker() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let res = tool_json(&peer.call_tool(CallToolRequestParams::new("mathlib_search_declarations").with_arguments(serde_json::json!({
+            "query": "add_comm",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(res["mathlib_available"], false, "{:?}", res);
+        assert_eq!(res["hits"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_mathlib_search_declarations_scans_synthetic_tree() {
+        let synthetic = SyntheticMathlib::new();
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let handler = ChatDbMcp {
+            conn: Arc::new(Mutex::new(conn)),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: synthetic.root.clone(),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let res = tool_json(&peer.call_tool(CallToolRequestParams::new("mathlib_search_declarations").with_arguments(serde_json::json!({
+            "query": "add_comm_synthetic",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(res["mathlib_available"], true, "{:?}", res);
+        let hits = res["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 2, "{:?}", hits);
+        // Exact match ranked first (shorter/exact name before the longer helper).
+        assert_eq!(hits[0]["declaration_name"], "add_comm_synthetic");
+        assert_eq!(hits[0]["confidence"], "exact_match");
+        assert_eq!(hits[0]["keyword"], "theorem");
+        assert_eq!(hits[0]["import_module"], "Mathlib.Algebra.Group.Basic");
+        assert!(hits[0]["signature_snippet"].as_str().unwrap().contains("add_comm_synthetic"));
+        assert_eq!(hits[1]["declaration_name"], "add_comm_synthetic_helper");
+        assert_eq!(hits[1]["confidence"], "nearby_name");
+
+        // A `def` whose NAME happens to contain the word "theorem" must still
+        // be found correctly by name, and reported with keyword "def" (the
+        // keyword actually starting its line), not confused with "theorem".
+        let res2 = tool_json(&peer.call_tool(CallToolRequestParams::new("mathlib_search_declarations").with_arguments(serde_json::json!({
+            "query": "not_a_theorem_like_prefix",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let hits2 = res2["hits"].as_array().unwrap();
+        assert_eq!(hits2.len(), 1, "{:?}", hits2);
+        assert_eq!(hits2[0]["declaration_name"], "not_a_theorem_like_prefix");
+        assert_eq!(hits2[0]["keyword"], "def");
+
+        // Found via real end-to-end testing against actual Mathlib: a dotted
+        // query (the form a declaration is REFERENCED by, not written) must
+        // still find the file-local name.
+        let res3 = tool_json(&peer.call_tool(CallToolRequestParams::new("mathlib_search_declarations").with_arguments(serde_json::json!({
+            "query": "Foo.Bar.add_comm_synthetic",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let hits3 = res3["hits"].as_array().unwrap();
+        assert!(hits3.iter().any(|h| h["declaration_name"] == "add_comm_synthetic"), "{:?}", hits3);
+    }
+
+    /// Self-review finding: a modifier (`protected`/`private noncomputable`)
+    /// or attribute (`@[simp]`) preceding a declaration keyword on the SAME
+    /// line used to make it entirely invisible — confirmed against the real
+    /// Mathlib checkout to affect ~80% of files. Each case here must still be
+    /// found, reported under the REAL keyword (not the modifier/attribute),
+    /// with the original (unstripped) line as its signature_snippet.
+    #[tokio::test]
+    async fn test_mathlib_search_declarations_sees_past_modifiers_and_attributes() {
+        let synthetic = SyntheticMathlib::new();
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let handler = ChatDbMcp {
+            conn: Arc::new(Mutex::new(conn)),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: synthetic.root.clone(),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let cases = [
+            ("protected_synthetic_decl", "theorem", "protected theorem protected_synthetic_decl"),
+            ("attribute_prefixed_synthetic_decl", "theorem", "@[simp] theorem attribute_prefixed_synthetic_decl"),
+            ("stacked_modifier_synthetic_decl", "def", "private noncomputable def stacked_modifier_synthetic_decl"),
+        ];
+        for (name, expected_keyword, expected_snippet_prefix) in cases {
+            let res = tool_json(&peer.call_tool(CallToolRequestParams::new("mathlib_search_declarations").with_arguments(serde_json::json!({
+                "query": name,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let hits = res["hits"].as_array().unwrap();
+            assert_eq!(hits.len(), 1, "{} not found: {:?}", name, hits);
+            assert_eq!(hits[0]["declaration_name"], name);
+            assert_eq!(hits[0]["keyword"], expected_keyword, "{} must be reported under its real keyword, not the modifier/attribute", name);
+            assert!(hits[0]["signature_snippet"].as_str().unwrap().starts_with(expected_snippet_prefix),
+                "{}: snippet should keep the original modifier/attribute visible: {:?}", name, hits[0]["signature_snippet"]);
+        }
+    }
+
+    /// Self-review finding: a dotted query that strips to an EMPTY segment
+    /// (e.g. a trailing dot) used to match every declaration name instead of
+    /// falling back to a safe (typically empty-result) search.
+    #[tokio::test]
+    async fn test_mathlib_search_declarations_trailing_dot_query_does_not_match_everything() {
+        let synthetic = SyntheticMathlib::new();
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let handler = ChatDbMcp {
+            conn: Arc::new(Mutex::new(conn)),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: synthetic.root.clone(),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let res = tool_json(&peer.call_tool(CallToolRequestParams::new("mathlib_search_declarations").with_arguments(serde_json::json!({
+            "query": "Nat.",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let hits = res["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 0, "a trailing-dot query must not degrade into a match-everything scan: {:?}", hits);
+    }
+
+    #[tokio::test]
+    async fn test_mathlib_search_declarations_rejects_empty_query() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let res = peer.call_tool(CallToolRequestParams::new("mathlib_search_declarations").with_arguments(serde_json::json!({
+            "query": "   ",
+        }).as_object().unwrap().clone())).await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_mathlib_search_local_artifacts_finds_verified_module_declarations() {
+        // NOTE: attested_module_step (used elsewhere) spins up its OWN
+        // isolated in-memory handler internally and returns only the JSON
+        // result — it shares no state with any outer client/peer. This test
+        // needs the verified module to land in the SAME database it searches
+        // afterward, so it drives problem_create -> episode_create ->
+        // attempt_claim -> episode_step directly against one shared peer.
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "local artifact search fixture", "root_formal_statement": "myUniqueSearchTarget 2 = 4",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "librarian-local-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {
+                "type": "submit_module",
+                "module_items": [
+                    {"item_kind": "def", "name": "myUniqueSearchTarget", "type_signature": "Nat → Nat", "body": "fun n => n * n"}
+                ],
+                "root_theorem": {"name": "root", "statement": "myUniqueSearchTarget 2 = 4", "proof_term": "rfl"}
+            },
+            "cost_micros": 10,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["outcome"], "kernel_verified", "{:?}", step);
+
+        let res = tool_json(&peer.call_tool(CallToolRequestParams::new("mathlib_search_local_artifacts").with_arguments(serde_json::json!({
+            "query": "myUniqueSearchTarget",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let hits = res["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 1, "{:?}", hits);
+        assert_eq!(hits[0]["declaration_name"], "myUniqueSearchTarget");
+        assert_eq!(hits[0]["confidence"], "usage_example");
+    }
+
+    #[tokio::test]
+    async fn test_formalization_plan_attach_librarian_result_maps_confidence_and_accumulates_candidates() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "Plan F",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let plan_id = plan["plan_id"].as_str().unwrap().to_string();
+        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            "plan_id": plan_id, "kind": "missing_lemma", "description": "need a sum-of-squares identity",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let item_id = item["plan_item_id"].as_str().unwrap().to_string();
+
+        let attached1 = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_attach_librarian_result").with_arguments(serde_json::json!({
+            "plan_item_id": item_id, "declaration_name": "Finset.sum_sq_le_sq_mul_sq", "confidence": "nearby_name",
+            "import_module": "Mathlib.Analysis.MeanInequalities",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(attached1["mathlib_coverage_status"], "partial");
+        assert_eq!(attached1["mathlib_candidate_names"].as_array().unwrap().len(), 1);
+
+        let attached2 = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_attach_librarian_result").with_arguments(serde_json::json!({
+            "plan_item_id": item_id, "declaration_name": "Finset.sq_sum_le_card_mul_sum_sq", "confidence": "exact_match",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(attached2["mathlib_coverage_status"], "found", "a later exact_match must update coverage_status");
+        assert_eq!(attached2["mathlib_candidate_names"].as_array().unwrap().len(), 2, "candidates must accumulate, not overwrite");
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_observe").with_arguments(serde_json::json!({
+            "plan_id": plan_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let observed_item = &observed["items"][0];
+        assert_eq!(observed_item["mathlib_coverage_status"], "found");
+        assert_eq!(observed_item["lookup_result"]["source"], "librarian");
+        assert_eq!(observed_item["lookup_result"]["declaration_name"], "Finset.sq_sum_le_card_mul_sum_sq");
+    }
+
+    #[tokio::test]
+    async fn test_formalization_plan_attach_librarian_result_rejects_non_open_item() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 10,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "librarian-reject-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {"type": "decompose", "sub_lemmas": ["a helper lemma"]},
+            "cost_micros": 10,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let obligation_id: String = { let c = conn_arc.lock().await; c.query_row(
+            "SELECT id FROM episode_obligations WHERE episode_id = ?1 AND created_by = 'decomposition' ORDER BY created_at DESC LIMIT 1",
+            [&episode_id], |row| row.get(0),
+        ).unwrap() };
+
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "Plan G",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            "plan_id": plan["plan_id"], "kind": "missing_lemma", "description": "a helper lemma",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let item_id = item["plan_item_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_promote_item_to_obligation").with_arguments(serde_json::json!({
+            "plan_item_id": item_id, "episode_id": episode_id, "obligation_id": obligation_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let res = peer.call_tool(CallToolRequestParams::new("formalization_plan_attach_librarian_result").with_arguments(serde_json::json!({
+            "plan_item_id": item_id, "declaration_name": "whatever", "confidence": "exact_match",
+        }).as_object().unwrap().clone())).await;
+        assert!(res.is_err(), "attaching a librarian result to an already-promoted item must be rejected");
+    }
+
+    /// Issue #25's core regression test: a librarian suggestion — search
+    /// results or an attached result — must never change proof/fidelity/
+    /// certification status. Snapshots every column of episodes and
+    /// episode_obligations before and after exercising every librarian tool,
+    /// asserting byte-identical.
+    #[tokio::test]
+    async fn test_librarian_suggestion_cannot_change_proof_status() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let _episode_id = ep["episode_id"].as_str().unwrap().to_string(); // exists only so the snapshot below has a non-empty episodes table row
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "Plan H",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            "plan_id": plan["plan_id"], "kind": "missing_lemma", "description": "x",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let item_id = item["plan_item_id"].as_str().unwrap().to_string();
+
+        let snapshot = |conn: &Connection| -> (String, String) {
+            let episodes: Vec<String> = conn.prepare("SELECT * FROM episodes ORDER BY id").unwrap()
+                .query_map([], |row| { let n = row.as_ref().column_count(); Ok((0..n).map(|i| format!("{:?}", row.get_ref(i).unwrap())).collect::<Vec<_>>().join(",")) }).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            let obligations: Vec<String> = conn.prepare("SELECT * FROM episode_obligations ORDER BY id").unwrap()
+                .query_map([], |row| { let n = row.as_ref().column_count(); Ok((0..n).map(|i| format!("{:?}", row.get_ref(i).unwrap())).collect::<Vec<_>>().join(",")) }).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            (episodes.join("|"), obligations.join("|"))
+        };
+        let before = { let c = conn_arc.lock().await; snapshot(&c) };
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("mathlib_search_declarations").with_arguments(serde_json::json!({
+            "query": "add_comm",
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("mathlib_search_local_artifacts").with_arguments(serde_json::json!({
+            "query": "root",
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_attach_librarian_result").with_arguments(serde_json::json!({
+            "plan_item_id": item_id, "declaration_name": "Nat.add_comm", "confidence": "exact_match",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let after = { let c = conn_arc.lock().await; snapshot(&c) };
+        assert_eq!(before, after, "no librarian tool call may change episodes or episode_obligations in any way");
     }
 }
