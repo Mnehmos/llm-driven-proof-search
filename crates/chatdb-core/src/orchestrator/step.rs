@@ -67,6 +67,16 @@ pub enum FinalizeContext {
         module_items_json: String,
         pv_id_str: String,
         pv_manifest_hash: String,
+        /// The item manifest `attempt_prepare` already computed (via
+        /// `assemble_module`, at policy-check time). Carried through instead of
+        /// re-derived by re-parsing `module_items_json` and re-running
+        /// `assemble_module` a second time in `attempt_finalize`: re-deriving
+        /// wasted a full policy re-check per successful module AND its failure
+        /// path was silently swallowed (`if let Ok(reassembled) = ...`), which
+        /// could persist a module row with zero corresponding item rows with
+        /// nothing surfaced. Carrying the original computation removes both
+        /// problems — there is nothing left that can fail.
+        item_manifest: Vec<crate::lean::module::AssembledItem>,
     },
 }
 
@@ -285,6 +295,7 @@ pub fn attempt_prepare(
                         "root_theorem": root_theorem,
                     }).to_string();
                     let namespace = assembled.namespace.clone();
+                    let item_manifest = assembled.item_manifest.clone();
                     // See the matching comment on the Solve path: reserve the cost
                     // now, atomically with the CAS check, since the gateway call
                     // (up to 120s for a module) runs with the DB lock released.
@@ -293,7 +304,7 @@ pub fn attempt_prepare(
                         request: GatewayRequest::SubmitModule { assembled, env_hash: pv_env_hash.clone() },
                         ctx: FinalizeContext::SubmitModule {
                             obl_id_str, stmt_hash, pv_env_hash, namespace,
-                            module_items_json, pv_id_str, pv_manifest_hash,
+                            module_items_json, pv_id_str, pv_manifest_hash, item_manifest,
                         },
                     })
                 }
@@ -466,7 +477,7 @@ pub fn attempt_finalize(
                 }
             }
         }
-        (FinalizeContext::SubmitModule { obl_id_str, stmt_hash, pv_env_hash, namespace, module_items_json: _, pv_id_str: _, pv_manifest_hash: _ }, GatewayResponse::SubmitModule(gw_result)) => {
+        (FinalizeContext::SubmitModule { obl_id_str, stmt_hash, pv_env_hash, namespace, module_items_json, pv_id_str, pv_manifest_hash, item_manifest }, GatewayResponse::SubmitModule(gw_result)) => {
             match gw_result {
                 Ok(result) => {
                     // Bumped here, not in attempt_prepare: this only runs once the
@@ -510,10 +521,68 @@ pub fn attempt_finalize(
                             "UPDATE episode_obligations SET status = 'proved', proved_lemma_id = ?1, closed_at = ?2 WHERE id = ?3",
                             (lemma_id.to_string(), Utc::now().to_rfc3339(), &obl_id_str),
                         )?;
-                        // Dedicated module-artifact persistence (episode_verified_modules /
-                        // episode_verified_module_items — issue #4) lands in a later branch;
-                        // this PR threads the module hashes through episode_verified_lemmas
-                        // so nothing is lost in the meantime.
+
+                        // Persist the verified module as a structured, replayable
+                        // artifact (issue #4). module_items_json holds the exact items
+                        // + root theorem, so the precise Lean source re-assembles
+                        // deterministically on export and replay. Shares this
+                        // transaction, so it is atomic with closing the root obligation.
+                        let module_row_id = Uuid::new_v4();
+                        let now_ts = Utc::now().to_rfc3339();
+                        tx.execute(
+                            "INSERT INTO episode_verified_modules (
+                                id, episode_id, problem_version_id, root_obligation_id,
+                                root_statement_hash, import_manifest_hash, environment_hash,
+                                module_source_hash, module_items_json, declaration_manifest_hash,
+                                kernel_result_hash, verified_at
+                            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                            (
+                                module_row_id.to_string(),
+                                &episode_id_str,
+                                &pv_id_str,
+                                &obl_id_str,
+                                &stmt_hash,
+                                &pv_manifest_hash,
+                                &pv_env_hash,
+                                &result.module_source_hash,
+                                &module_items_json,
+                                &result.declaration_manifest_hash,
+                                &result.kernel_result_hash,
+                                &now_ts,
+                            ),
+                        )?;
+                        // Item manifest is the ONE `attempt_prepare` already
+                        // computed via assemble_module at policy-check time —
+                        // carried through FinalizeContext rather than re-derived
+                        // by re-parsing module_items_json and re-running
+                        // assemble_module a second time. That re-derivation
+                        // wasted a full policy re-check per successful module
+                        // AND its failure path was silently swallowed (`if let
+                        // Ok(reassembled) = ...`), which could persist a module
+                        // row with zero item rows and nothing surfaced. Using
+                        // the original computation means there is nothing here
+                        // that can fail.
+                        for item in &item_manifest {
+                            let item_id = Uuid::new_v4();
+                            let depends_on_json = serde_json::to_string(&item.depends_on).unwrap_or_else(|_| "[]".to_string());
+                            tx.execute(
+                                "INSERT INTO episode_verified_module_items (
+                                    id, module_id, item_order, item_kind, lean_name,
+                                    statement_or_type_hash, body_hash, depends_on_json, policy_result_json
+                                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                                (
+                                    item_id.to_string(),
+                                    module_row_id.to_string(),
+                                    item.order as i64,
+                                    &item.kind,
+                                    &item.lean_name,
+                                    &item.statement_or_type_hash,
+                                    &item.body_hash,
+                                    &depends_on_json,
+                                    "{\"policy\":\"passed\"}",
+                                ),
+                            )?;
+                        }
                     } else {
                         let lesson = result.diagnostic.as_ref().map(|d| d.primary_message.clone());
                         tx.execute(

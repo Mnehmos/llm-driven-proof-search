@@ -205,7 +205,7 @@ pub fn replay_trajectory(
         let Some(action_type) = payload.get("action").and_then(|a| a.get("type")).and_then(|t| t.as_str()) else {
             continue;
         };
-        if action_type != "solve" {
+        if action_type != "solve" && action_type != "submit_module" {
             continue;
         }
 
@@ -218,6 +218,73 @@ pub fn replay_trajectory(
             continue;
         };
         if disposition != "accepted" {
+            continue;
+        }
+
+        // A verified module replays by re-assembling from its structured JSON
+        // (never an opaque saved file), re-hashing, and re-verifying — and it must
+        // FAIL if the current output differs from the recorded artifact.
+        if action_type == "submit_module" {
+            // Only successful modules carry a persisted artifact to round-trip.
+            let accepted = payload.get("accepted").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !accepted {
+                continue;
+            }
+            let problem_version_id_str = payload.get("problem_version_id").and_then(|s| s.as_str())
+                .ok_or_else(|| "module trajectory event missing problem_version_id".to_string())?;
+            let recorded_statement_hash = payload.get("statement_hash").and_then(|s| s.as_str())
+                .ok_or_else(|| "module trajectory event missing statement_hash".to_string())?;
+            let recorded_source_hash = payload.get("module_source_hash").and_then(|s| s.as_str())
+                .ok_or_else(|| "module trajectory event missing module_source_hash".to_string())?;
+            let recorded_decl_hash = payload.get("declaration_manifest_hash").and_then(|s| s.as_str())
+                .ok_or_else(|| "module trajectory event missing declaration_manifest_hash".to_string())?;
+
+            // Re-parse the structured action and re-assemble deterministically.
+            let action: crate::models::action::TypedAction = serde_json::from_value(
+                payload.get("action").cloned().unwrap_or(serde_json::Value::Null)
+            ).map_err(|e| format!("corrupt module action in trajectory: {}", e))?;
+            let crate::models::action::TypedAction::SubmitModule { module_items, root_theorem } = action else {
+                return Err("submit_module event did not deserialize to a SubmitModule action".to_string());
+            };
+
+            let import_manifest_json: String = conn.query_row(
+                "SELECT import_manifest_json FROM problem_versions WHERE id = ?1",
+                [problem_version_id_str],
+                |row| row.get(0),
+            ).map_err(|e| e.to_string())?;
+            let import_manifest: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
+
+            let ns16 = problem_version_id_str.replace('-', "");
+            let problem_namespace = format!("ChatDB.P_{}", &ns16[..16.min(ns16.len())]);
+
+            let assembled = crate::lean::module::assemble_module(
+                &problem_namespace, recorded_statement_hash, &module_items, &root_theorem, &import_manifest,
+            ).map_err(|e| format!("replay re-assembly failed (module no longer passes policy): {}", e))?;
+
+            if assembled.module_source_hash != recorded_source_hash {
+                return Err(format!(
+                    "replay detected changed module source: recorded module_source_hash={}, re-assembled={}",
+                    recorded_source_hash, assembled.module_source_hash
+                ));
+            }
+            if assembled.declaration_manifest_hash != recorded_decl_hash {
+                return Err(format!(
+                    "replay detected changed declaration manifest: recorded={}, re-assembled={}",
+                    recorded_decl_hash, assembled.declaration_manifest_hash
+                ));
+            }
+
+            let result = lean_gateway.verify_module(&assembled, &lean_environment_hash)
+                .map_err(|e| format!("replay module verification failed: {}", e))?;
+            let replayed_outcome = result.outcome.to_string();
+            if replayed_outcome != recorded_outcome {
+                return Err(format!(
+                    "replay mismatch on module for obligation {}: recorded={}, replayed={}",
+                    payload.get("obligation_id").and_then(|s| s.as_str()).unwrap_or("?"),
+                    recorded_outcome, replayed_outcome
+                ));
+            }
+            solve_events_checked += 1;
             continue;
         }
 
@@ -296,6 +363,108 @@ fn scrub_value(val: &mut serde_json::Value) {
         for v in arr.iter_mut() {
             scrub_value(v);
         }
+    }
+}
+
+#[cfg(test)]
+mod module_replay_tests {
+    use super::*;
+    use crate::lean::LeanGateway;
+    use crate::lean::module::{assemble_module, AssembledModule};
+    use crate::models::action::{LeanModuleItem, ModuleTheorem, TypedAction};
+    use crate::models::{LeanVerificationResult, LeanModuleVerificationResult, LeanVerificationOutcome, Obligation};
+
+    /// Minimal gateway: modules always kernel-pass (policy already ran in
+    /// assemble). Lets replay exercise the re-assembly + hash-compare logic
+    /// without a real Lean toolchain.
+    struct PassGw;
+    impl LeanGateway for PassGw {
+        fn verify_exact(&self, _o: &Obligation, _s: &str, _d: &[Uuid], _e: &str, _m: &[String]) -> Result<LeanVerificationResult, String> {
+            Err("not used".to_string())
+        }
+        fn verify_module(&self, assembled: &AssembledModule, environment: &str) -> Result<LeanModuleVerificationResult, String> {
+            Ok(LeanModuleVerificationResult {
+                outcome: LeanVerificationOutcome::KernelPass,
+                problem_namespace: assembled.namespace.clone(),
+                root_lean_name: assembled.root_lean_name.clone(),
+                module_source_hash: assembled.module_source_hash.clone(),
+                declaration_manifest_hash: assembled.declaration_manifest_hash.clone(),
+                environment_hash: environment.to_string(),
+                kernel_result_hash: "k".to_string(),
+                diagnostic: None,
+                all_diagnostics: vec![],
+                wall_time_ms: 1,
+            })
+        }
+    }
+
+    fn manifest() -> Vec<String> { vec!["Mathlib.Tactic.Ring".to_string()] }
+
+    /// Builds a DB with one committed module trajectory event. `source_hash_in_payload`
+    /// lets a caller record a WRONG module_source_hash to simulate tampering.
+    fn setup(conn: &Connection, source_hash_in_payload: Option<String>) -> (Uuid, String, String) {
+        crate::db::schema_v1::initialize_v1_db(conn).unwrap();
+        let pv_id = Uuid::new_v4();
+        let ns16 = pv_id.to_string().replace('-', "");
+        let namespace = format!("ChatDB.P_{}", &ns16[..16]);
+        let root_stmt = "True";
+        let root_hash = crate::hashing::canonical_hash(&root_stmt.to_string()).unwrap();
+        let manifest_json = serde_json::to_string(&manifest()).unwrap();
+
+        conn.execute(
+            "INSERT INTO problem_versions (id, source_problem_text, source_problem_hash, source_metadata_json,
+                root_formal_statement, root_statement_hash, normalized_root_rendering, environment_hash,
+                import_manifest_json, import_manifest_hash, fidelity_status, fidelity_method, state, created_at)
+             VALUES (?1,'t','h','{}',?2,?3,?2,'env',?4,'mh','unreviewed','manual','CREATED','now')",
+            (pv_id.to_string(), root_stmt, &root_hash, &manifest_json),
+        ).unwrap();
+        let ep_id = Uuid::new_v4();
+        conn.execute(
+            "INSERT INTO episodes (id, problem_version_id, state, current_revision, step_count, invalid_action_count, created_at)
+             VALUES (?1, ?2, 'awaiting_external_action', 0, 0, 0, 'now')",
+            (ep_id.to_string(), pv_id.to_string()),
+        ).unwrap();
+
+        let items = vec![LeanModuleItem::Def { name: "z".to_string(), type_signature: "Nat".to_string(), body: "0".to_string() }];
+        let root = ModuleTheorem { name: "root".to_string(), statement: root_stmt.to_string(), proof_term: "trivial".to_string() };
+        let asm = assemble_module(&namespace, &root_hash, &items, &root, &manifest()).unwrap();
+
+        let action = TypedAction::SubmitModule { module_items: items, root_theorem: root };
+        let recorded_source_hash = source_hash_in_payload.unwrap_or_else(|| asm.module_source_hash.clone());
+        let payload = serde_json::json!({
+            "obligation_id": Uuid::new_v4().to_string(),
+            "problem_version_id": pv_id.to_string(),
+            "statement_hash": root_hash,
+            "action": action,
+            "outcome": "kernel_pass",
+            "disposition": "accepted",
+            "accepted": true,
+            "module_source_hash": recorded_source_hash,
+            "declaration_manifest_hash": asm.declaration_manifest_hash,
+        });
+
+        let tx = conn.unchecked_transaction().unwrap();
+        record_event(&tx, ep_id, "action_committed", "GENESIS", "after", "env", &payload.to_string()).unwrap();
+        tx.commit().unwrap();
+        (ep_id, asm.module_source_hash, root_hash)
+    }
+
+    #[test]
+    fn replay_succeeds_for_successful_module() {
+        let conn = Connection::open_in_memory().unwrap();
+        let (ep_id, _src, _rh) = setup(&conn, None);
+        let status = replay_trajectory(&conn, ep_id, &PassGw).unwrap();
+        assert_eq!(status, ReplayStatus::Matched(1), "the module must re-assemble, re-hash, and re-verify");
+    }
+
+    #[test]
+    fn replay_detects_changed_module_source() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Record a module_source_hash that does NOT match what the action
+        // re-assembles to — as if the stored artifact were tampered with.
+        let (ep_id, _src, _rh) = setup(&conn, Some("deadbeef_tampered_hash".to_string()));
+        let err = replay_trajectory(&conn, ep_id, &PassGw).unwrap_err();
+        assert!(err.contains("changed module source"), "replay must fail on a source-hash mismatch, got: {}", err);
     }
 }
 

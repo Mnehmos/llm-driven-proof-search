@@ -99,11 +99,23 @@ pub fn export_rl(conn: &Connection, episode_id: Uuid) -> Result<Vec<RlTuple>, St
         let hash_after: String = row.get(1)?;
         let payload_str: String = row.get(2)?;
 
-        let payload: serde_json::Value = serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
+        let mut payload: serde_json::Value = serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
         let action = payload.get("action").cloned().unwrap_or(serde_json::Value::Null);
         let state = serde_json::json!({ "state_hash": hash_before });
         let next_state = serde_json::json!({ "state_hash": hash_after });
-        
+
+        // Make module solves first-class training data: tag each record so a
+        // consumer can distinguish a single-theorem solve from a verified-module
+        // solve without re-deriving it from the action shape (issue #4).
+        let solve_kind = match action.get("type").and_then(|t| t.as_str()) {
+            Some("submit_module") => Some("verified_module_solve"),
+            Some("solve") => Some("single_theorem_solve"),
+            _ => None,
+        };
+        if let (Some(kind), Some(obj)) = (solve_kind, payload.as_object_mut()) {
+            obj.insert("solve_kind".to_string(), serde_json::Value::String(kind.to_string()));
+        }
+
         // NOTE: the MCP runtime's action_committed payload does not currently carry
         // scalar_reward_micros/terminated/truncated fields (those live only in the
         // episode_step tool response, not the trajectory event) — this still
