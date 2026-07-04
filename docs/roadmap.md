@@ -265,12 +265,36 @@ last):
     importer being non-resumable (an unconditional `benchmark_suite_create`
     failed outright on any re-run against the same db, since suite names are
     unique) — both fixed and regression-tested.
+11. **#31 — PutnamBench pass@k runner.** ✅ Shipped in v0.3.10.
+    `examples/putnam_runner.rs` drives already-imported problems through
+    `episode_create` → `attempt_claim` → `episode_step` →
+    `benchmark_result_record`, never calling the Lean gateway directly
+    (issue #36). Candidate proofs come from a caller-supplied attempts plan
+    (ChatDB has no embedded model). Required a real supporting fix:
+    PutnamBench's named-binder declarations aren't valid standalone Lean
+    types, so `benchmark_problems` gained server-derived
+    `prover_ready_statement`/`_hash` columns (via the new
+    `chatdb_proof_core::putnambench::to_pi_form`, verified against 670/672
+    real problems), and `benchmark_result_record`'s cross-check now
+    COALESCEs to it. Verified against 22 real problems through the real
+    Lean/Mathlib toolchain — zero panics, zero unexpected errors. An
+    adversarial review caught two more real bugs before shipping: a severe
+    fabrication-vector regression (the first version accepted
+    `prover_ready_statement` from the client with no check it actually
+    corresponded to `root_formal_statement` — closed by making it always
+    server-derived, never client-supplied), and a crash that silently
+    abandoned every other queued problem in a batch (an `attempt_claim`
+    called before checking whether a planned attempt supplied what it
+    needed, leaving the action request stuck `'claimed'` and the next claim
+    call's error propagating out of `main()`). See
+    `docs/benchmarks/putnambench.md` for full detail.
 
 **Status:** Level 3 MVP complete. #24 shipped (v0.3.2). #23 + #10 shipped
 together (v0.3.3). #25 shipped (v0.3.4). #35 shipped (v0.3.5). #34+#38 core
 shipped (v0.3.6). #29+#30 schema shipped (v0.3.7). #33+#37 shipped (v0.3.8).
-#28 shipped, docs-only. #29 (importer) shipped (v0.3.9). Next: #31 (pass@k
-runner), #32 (smoke fixtures).
+#28 shipped, docs-only. #29 (importer) shipped (v0.3.9). #31 (runner) shipped
+(v0.3.10). Next: #32 (smoke fixtures), then the actual PutnamBench playtest
+attempt.
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a

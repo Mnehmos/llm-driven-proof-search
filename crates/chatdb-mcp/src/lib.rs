@@ -21,6 +21,7 @@ use chatdb_proof_core::lean::module::assemble_module;
 use chatdb_proof_core::models::episode::{EpisodeOutcome, TerminationReason, TruncationReason};
 use chatdb_proof_core::models::reward::{RewardComponent, RewardComponentId, RewardPolicy};
 use chatdb_proof_core::hashing::canonical_hash;
+use chatdb_proof_core::putnambench::to_pi_form;
 
 /// Every problem's import manifest starts with these two; problem_imports adds to
 /// them. Kept in one place so the "what does a bare problem_create get by
@@ -2128,7 +2129,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.9"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.10"))
     }
 
     async fn list_tools(
@@ -2175,7 +2176,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<RunEnvelopeAttachEpisodeArgs>("run_envelope_attach_episode", "Tag an existing episode with a run envelope. Metadata only — never changes the episode's outcome/state"),
             make_tool::<RunEnvelopeObserveArgs>("run_envelope_observe", "Read back a run envelope and every episode tagged with it"),
             make_tool::<BenchmarkSuiteCreateArgs>("benchmark_suite_create", "Register a benchmark suite (e.g. PutnamBench) — manual/structured registration, not automated parsing. Issue #29/#30"),
-            make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client"),
+            make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise"),
             make_tool::<BenchmarkRunCreateArgs>("benchmark_run_create", "Create a benchmark run against a suite. lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results"),
             make_tool::<BenchmarkResultRecordArgs>("benchmark_result_record", "Record (or update) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem"),
             make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric"),
@@ -2219,7 +2220,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.9",
+                    "environment_version": "0.3.10",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -4184,6 +4185,26 @@ impl ServerHandler for ChatDbMcp {
                 }
 
                 let root_statement_hash = canonical_hash(&args.root_formal_statement).map_err(mcp_internal_error)?;
+                // prover_ready_statement is ALWAYS server-derived, never
+                // accepted from the client — same principle as
+                // root_statement_hash/lean_version/mathlib_commit elsewhere
+                // in this schema. A client-supplied conversion would let a
+                // caller register an arbitrary (e.g. trivially easy)
+                // "prover-ready" text alongside a hard root_formal_statement
+                // and have benchmark_result_record's cross-check validate
+                // against the wrong one — exactly the fabrication issue #30
+                // was built to prevent. to_pi_form is a general Lean 4
+                // syntactic fact (named-binder declarations desugar to a
+                // Pi-type identically regardless of benchmark suite), so
+                // attempting it unconditionally is safe: it fails closed
+                // (returns Err, leaving both columns NULL) for any
+                // root_formal_statement that isn't a `theorem {theorem_name}
+                // (binders) : type` declaration — including a suite whose
+                // statements are already bare types needing no conversion.
+                let prover_ready_statement = to_pi_form(&args.root_formal_statement, &args.theorem_name)
+                    .ok().map(|form| form.root_theorem_statement);
+                let prover_ready_statement_hash = prover_ready_statement.as_ref()
+                    .map(|s| canonical_hash(s)).transpose().map_err(mcp_internal_error)?;
                 let import_manifest_json = serde_json::to_string(&args.import_manifest).unwrap();
                 let problem_id = Uuid::new_v4().to_string();
                 let now = Utc::now().to_rfc3339();
@@ -4191,10 +4212,11 @@ impl ServerHandler for ChatDbMcp {
                     "INSERT INTO benchmark_problems (
                         id, suite_id, upstream_problem_id, theorem_name, source_file_path,
                         root_formal_statement, root_statement_hash, import_manifest_json,
-                        context_hash, status, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'imported', ?10)",
+                        context_hash, prover_ready_statement, prover_ready_statement_hash, status, created_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'imported', ?12)",
                     (&problem_id, &args.suite_id, &args.upstream_problem_id, &args.theorem_name, &args.source_file_path,
-                     &args.root_formal_statement, &root_statement_hash, &import_manifest_json, &args.context_hash, &now),
+                     &args.root_formal_statement, &root_statement_hash, &import_manifest_json, &args.context_hash,
+                     &prover_ready_statement, &prover_ready_statement_hash, &now),
                 ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
                     mcp_invalid_params(format!("problem {:?} is already registered in this suite", args.upstream_problem_id))
                 } else {
@@ -4204,6 +4226,7 @@ impl ServerHandler for ChatDbMcp {
                 let res = serde_json::json!({
                     "benchmark_problem_id": problem_id,
                     "root_statement_hash": root_statement_hash,
+                    "prover_ready_statement_hash": prover_ready_statement_hash,
                     "status": "imported",
                     "created_at": now,
                 });
@@ -4280,8 +4303,17 @@ impl ServerHandler for ChatDbMcp {
                 let Some(run_suite_id) = run_suite_id else {
                     return Err(mcp_invalid_params(format!("unknown run_id: {}", args.run_id)));
                 };
+                // COALESCE to prover_ready_statement_hash when present: a
+                // benchmark suite's own faithful catalog text
+                // (root_formal_statement) is not always the same string a
+                // runner actually submits to problem_create/SubmitModule
+                // (e.g. PutnamBench's named-binder declaration syntax vs.
+                // the Pi-type form ChatDB's model requires) — comparing the
+                // wrong hash would reject every legitimate result for such a
+                // suite. See migrate_add_prover_ready_statement_columns.
                 let problem_row: Option<(String, String)> = conn.query_row(
-                    "SELECT suite_id, root_statement_hash FROM benchmark_problems WHERE id = ?1", [&args.benchmark_problem_id],
+                    "SELECT suite_id, COALESCE(prover_ready_statement_hash, root_statement_hash) FROM benchmark_problems WHERE id = ?1",
+                    [&args.benchmark_problem_id],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 ).optional().map_err(rs)?;
                 let Some((problem_suite_id, problem_root_hash)) = problem_row else {
@@ -7463,6 +7495,105 @@ mod tests {
             "root_formal_statement": "∀ n : ℕ, n = n",
         }).as_object().unwrap().clone())).await;
         assert!(dup.is_err(), "the same upstream_problem_id in the same suite must be rejected on re-registration");
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_problem_register_computes_prover_ready_statement_hash() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        // prover_ready_statement is ALWAYS server-derived (via to_pi_form),
+        // never a settable field on the wire — there is no
+        // "prover_ready_statement" argument to pass here at all.
+        let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1",
+            "root_formal_statement": "theorem p1 (n : ℕ) : n = n := sorry",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert!(!registered["prover_ready_statement_hash"].as_str().unwrap().is_empty());
+        assert_ne!(registered["root_statement_hash"], registered["prover_ready_statement_hash"],
+            "the catalog's faithful declaration text and the server-derived Pi-type form are different strings and must hash differently");
+
+        // A root_formal_statement that isn't a `theorem NAME (binders) : type`
+        // declaration (to_pi_form can't find "theorem p2" here) must leave
+        // both DB columns NULL, not error — this is the normal case for any
+        // benchmark suite/problem that needs no conversion.
+        let without = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "p2", "theorem_name": "p2",
+            "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert!(without["prover_ready_statement_hash"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_problem_register_ignores_any_client_supplied_prover_ready_statement() {
+        // Regression for a real fabrication bug an adversarial review found:
+        // an earlier version accepted prover_ready_statement directly from
+        // the client with no cross-check against root_formal_statement — a
+        // caller could register a hard theorem's root_formal_statement
+        // alongside an arbitrary, trivially-easy prover_ready_statement (or
+        // vice versa) and have benchmark_result_record's cross-check
+        // validate an episode against the WRONG statement. Confirm that
+        // even if a client tries to smuggle a "prover_ready_statement" field
+        // into the call, it has no effect — the stored hash is always the
+        // server's own to_pi_form derivation from root_formal_statement.
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1",
+            "root_formal_statement": "theorem p1 (n : ℕ) : n = n := sorry",
+            "prover_ready_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let expected_hash = canonical_hash(&"∀ (n : ℕ), n = n".to_string()).unwrap();
+        assert_eq!(registered["prover_ready_statement_hash"], expected_hash,
+            "a client-supplied prover_ready_statement must be silently ignored, never trusted: {:?}", registered);
+        assert_ne!(registered["prover_ready_statement_hash"], canonical_hash(&"True".to_string()).unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_result_record_cross_check_uses_prover_ready_statement_when_present() {
+        // The real bug this regression-tests: a benchmark suite (like
+        // PutnamBench) whose catalog root_formal_statement is NOT itself a
+        // valid problem_create statement (e.g. a named-binder declaration,
+        // not a bare Pi-type) must still be able to record a genuine result
+        // — the episode's problem_version is created against the PROVER-READY
+        // text, which necessarily differs from root_formal_statement, so the
+        // cross-check must compare against prover_ready_statement_hash, not
+        // root_statement_hash, whenever the former is present.
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1",
+            "root_formal_statement": "theorem p1 (n : ℕ) : n = n := sorry",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // The episode is created against the PROVER-READY text (what a real
+        // runner submits), NOT root_formal_statement.
+        let pv_id = create_problem(&peer, "∀ (n : ℕ), n = n").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "prover-ready-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "rfl"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let result = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await;
+        assert!(result.is_ok(), "an episode proving the PROVER-READY form must be accepted even though it doesn't hash-match root_formal_statement: {:?}", result.err());
     }
 
     #[tokio::test]
