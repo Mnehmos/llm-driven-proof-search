@@ -228,16 +228,51 @@ before shipping:
   a plan with a missing-`answer_value` problem followed by another problem
   now completes both, instead of crashing after the first.
 
-### Smoke vs. full suite (#32 — not yet built)
+### Smoke vs. full suite (#32 — shipped)
 
-A small (5–10 problem) fixture subset, checked into this repo's own test
-fixtures (not fetched from the live PutnamBench clone), lets CI and local
-dev exercise the full harness pipeline (`benchmark_suite_create` →
-`benchmark_problem_register` × N → `benchmark_run_create` → the runner loop
-→ `benchmark_result_record` → `benchmark_run_observe`) without needing
-`PUTNAM_BENCH_PATH` set up or without spending a full-suite Lean-verification
-budget. The full 640-theorem suite is a separate, explicitly-invoked mode —
-never run as part of the normal `cargo test` suite.
+`benchmarks/putnambench_smoke.json` — a small, checked-in fixture file (not
+fetched from a live PutnamBench clone) — embedded at compile time via
+`include_str!` in `crates/chatdb-mcp/src/lib.rs`, so the smoke tests run in
+every normal `cargo test` with no `CHATDB_PUTNAM_BENCH_PATH` needed. Two
+kinds of fixture, per the acceptance criteria:
+
+- **`import_fixtures`** (5 real, embedded PutnamBench problems — commit
+  `a23d8e6d4e9e3418fd78f76de7bfcb9414cbfd39` — mixing abbrev and non-abbrev
+  shapes, various subject tags and informal difficulty tags): verifies the
+  importer's hash computation (`root_statement_hash`, `prover_ready_statement_hash`)
+  is stable over time against hand-verified expected values —
+  `test_putnambench_smoke_import_fixtures_register_with_stable_hashes`.
+- **`canned_proof_fixtures`** (one `solve_only` success, one
+  `submit_module_allowed` success, one expected-failure): deliberately
+  *synthetic*, not real Putnam problems — real Putnam problems require
+  genuine multi-step mathematical argument, not a one-line tactic proof, so
+  plumbing tests use simple, deterministic statements instead (real
+  problem-solving is reserved for the actual playtest attempt, not test
+  infrastructure). Each is driven through the real `episode_step` path and
+  checked against its own `expected_status` —
+  `test_putnambench_smoke_canned_proof_fixtures_produce_expected_status`.
+  All 3 were also verified against the real Lean 4.32.0-rc1 + Mathlib
+  toolchain via `playtest.rs` (not just the fast `MockGateway` used by the
+  `cargo test` versions): the two success fixtures reach `kernel_verified`
+  (`termination_reason: "root_proved"`), the failure fixture is correctly
+  rejected with the real gateway's own `"declaration uses \`sorry\`"`
+  diagnostic.
+
+  An adversarial review caught a real bug in the expected-failure assertion
+  before this shipped: the first version only checked `outcome !=
+  "kernel_verified"`, but `outcome` is JSON `null` after ANY non-terminal
+  step — a genuine kernel rejection, an infra hiccup, or a malformed action
+  that still parsed would all satisfy that assertion identically, so the
+  committed `cargo test` regression coverage for the failure case was
+  effectively vacuous (the real-gateway rejection message check above only
+  ran manually via `playtest.rs`, never automatically). Fixed by asserting
+  `accepted == false` — the field that actually means the verification step
+  ran and was rejected — plus excluding both `"kernel_verified"` and
+  `"certified"` from the allowed outcome.
+
+The full 672-theorem suite (`import_putnambench`/`putnam_runner` against a
+real local clone) is a separate, explicitly-invoked mode — never run as part
+of the normal `cargo test` suite.
 
 ## Contamination policy (issue #33)
 

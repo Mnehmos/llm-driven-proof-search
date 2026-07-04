@@ -288,13 +288,25 @@ last):
     needed, leaving the action request stuck `'claimed'` and the next claim
     call's error propagating out of `main()`). See
     `docs/benchmarks/putnambench.md` for full detail.
+12. **#32 — PutnamBench smoke subset and golden fixtures.** ✅ Shipped in
+    v0.3.11. `benchmarks/putnambench_smoke.json` — 5 real, embedded
+    PutnamBench problems (import-fidelity fixtures, hash-verified stable
+    over time) plus 3 deliberately synthetic canned-proof fixtures (one
+    `solve_only` success, one `submit_module_allowed` success, one
+    expected-failure) — embedded at compile time via `include_str!`, so
+    `test_putnambench_smoke_import_fixtures_register_with_stable_hashes` and
+    `test_putnambench_smoke_canned_proof_fixtures_produce_expected_status`
+    run in every normal `cargo test` with no external clone needed. All 3
+    canned-proof fixtures separately verified against the real Lean
+    4.32.0-rc1 + Mathlib toolchain via `playtest.rs`.
 
 **Status:** Level 3 MVP complete. #24 shipped (v0.3.2). #23 + #10 shipped
 together (v0.3.3). #25 shipped (v0.3.4). #35 shipped (v0.3.5). #34+#38 core
 shipped (v0.3.6). #29+#30 schema shipped (v0.3.7). #33+#37 shipped (v0.3.8).
 #28 shipped, docs-only. #29 (importer) shipped (v0.3.9). #31 (runner) shipped
-(v0.3.10). Next: #32 (smoke fixtures), then the actual PutnamBench playtest
-attempt.
+(v0.3.10). #32 (smoke fixtures) shipped (v0.3.11). The full PutnamBench
+sprint is now complete. Next: the actual PutnamBench playtest attempt per
+the standing directive.
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
