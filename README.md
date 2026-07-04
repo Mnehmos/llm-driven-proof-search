@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  17 tools · typed schemas · JSON Schema 2020-12                 │
+│  20 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -73,6 +73,9 @@ terms of overall system capability and what's still ahead, see
 | `episode_replay` | Re-execute typed actions (`Solve` or `SubmitModule`) through Lean and verify trajectory integrity |
 | `proof_export` | Human-readable proof dossier: proof tree, assembled Lean source, full attempt history, proof/fidelity/promotion status, integrity line (`format: "markdown"` or `"lean"`) |
 | `lean_declaration_lookup` | Checks whether names resolve under a problem's import manifest (fast, default). Pass `deep_check=true` to also check under the full Mathlib umbrella and distinguish "not imported here" from "genuinely absent" (slow — loads all of Mathlib). Call this before concluding an API is unavailable |
+| `proof_pattern_create` | Register a reusable proof-pattern lesson (failure signature + recommended repair). Advisory only — never marks anything proved |
+| `proof_pattern_search` | Free-text search over the proof-pattern library, or list it whole. Call before repeating a failure another attempt already diagnosed |
+| `proof_pattern_record_application` | Record that a pattern was relevant to a real episode/attempt (failed example, repair example, or suggested hint). Insert-only metadata — never touches proof/fidelity/certification status |
 
 ## `Solve` vs. `SubmitModule`
 
@@ -391,7 +394,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 17 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 20 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records

@@ -402,6 +402,51 @@ CREATE TABLE IF NOT EXISTS episode_fidelity_reviews (
     created_at TEXT NOT NULL
 );
 
+-- Proof-pattern memory (issue #24): reusable repair doctrine mined from real
+-- attempts (Mathlib API drift, def-unfold-before-decide, well-founded
+-- recursion needing simp, mutual recursion needing MutualGroup, ...). Purely
+-- advisory — a pattern can inform what a client tries next, but nothing here
+-- can mark an obligation proved, change fidelity status, or affect
+-- certification; only a real Lean kernel pass does that. See
+-- docs/playtests/2026-07-04-v0.3.1-overnight-module-sprint.md for the seed
+-- patterns' provenance.
+CREATE TABLE IF NOT EXISTS proof_patterns (
+    id TEXT PRIMARY KEY,
+    pattern_key TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    failure_signature TEXT NOT NULL,
+    recommended_repair TEXT NOT NULL,
+    applicable_when_json TEXT NOT NULL,
+    avoid_when_json TEXT NOT NULL,
+    -- NULL for a seeded/hand-authored pattern with no single originating
+    -- episode (or when that episode was in a scratch/dev database and isn't
+    -- present here).
+    source_episode_id TEXT REFERENCES episodes(id),
+    source_attempt_ids_json TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK(confidence IN ('seed', 'mined', 'confirmed')),
+    CHECK(status IN ('active', 'deprecated'))
+);
+
+-- One row per real (episode[, attempt]) association with a pattern: a failing
+-- attempt the pattern's failure_signature matched, a repaired attempt that
+-- applied the recommended_repair, or an advisory hint surfaced to a client
+-- before it acted. Deliberately insert-only metadata: recording an
+-- application never writes to episodes/episode_obligations/action_attempts —
+-- see the regression test in chatdb-mcp's proof_pattern tests.
+CREATE TABLE IF NOT EXISTS proof_pattern_applications (
+    id TEXT PRIMARY KEY,
+    pattern_id TEXT NOT NULL REFERENCES proof_patterns(id),
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    action_attempt_id TEXT REFERENCES action_attempts(id),
+    role TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    CHECK(role IN ('failed_example', 'repair_example', 'suggested_hint'))
+);
+
 CREATE TABLE IF NOT EXISTS action_requests (
     id TEXT PRIMARY KEY,
     episode_id TEXT NOT NULL REFERENCES episodes(id),
@@ -524,7 +569,109 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     migrate_fidelity_status_vocabulary(conn)?;
     migrate_episode_outcome_vocabulary(conn)?;
     conn.execute_batch(V1_SCHEMA)?;
+    seed_proof_patterns(conn)?;
     conn.execute("PRAGMA foreign_keys = ON;", [])?;
+    Ok(())
+}
+
+/// Seeds `proof_patterns` with the reusable lessons documented in
+/// `docs/playtests/2026-07-04-v0.3.1-overnight-module-sprint.md` (issue #24).
+/// `INSERT OR IGNORE` keyed on the UNIQUE `pattern_key`: a no-op on a database
+/// that already has these rows (from a prior init), and additive on any other
+/// database — never overwrites a pattern a user has since edited or
+/// deprecated. Every seed pattern has `confidence = 'seed'` (hand-authored
+/// from a documented lesson, not mined from local attempt data) and
+/// `source_episode_id = NULL` (the originating episodes lived in a scratch
+/// playtest database, not this one).
+fn seed_proof_patterns(conn: &Connection) -> rusqlite::Result<()> {
+    struct Seed {
+        key: &'static str,
+        title: &'static str,
+        failure_signature: &'static str,
+        recommended_repair: &'static str,
+        applicable_when: &'static [&'static str],
+        avoid_when: &'static [&'static str],
+    }
+    const SEEDS: &[Seed] = &[
+        Seed {
+            key: "mathlib_api_drift_renamed_lemma",
+            title: "Mathlib API drift: lemma renamed in the pinned commit",
+            failure_signature: "unknown identifier for a lemma name that plausibly existed under a similar/older name (e.g. `le_div_iff` failing where `le_div_iff₀` is expected)",
+            recommended_repair: "Call lean_declaration_lookup on the exact name (deep_check=true if the fast path is inconclusive) before assuming a tactic-level fix is needed; renamed variants often add a `₀`/`'` suffix or move namespace",
+            applicable_when: &["unknown_declaration diagnostic on a lemma name you're confident exists in Mathlib", "the name resembles a known lemma but with a different suffix/namespace"],
+            avoid_when: &["the diagnostic is a genuine type mismatch or parse error, not an unresolved identifier"],
+        },
+        Seed {
+            key: "def_wrapped_decidable_needs_unfold",
+            title: "Def-wrapped decidable Prop: unfold before decide",
+            failure_signature: "`decide` fails or times out on a goal stated in terms of a client-defined `def` wrapping a `Decidable` proposition",
+            recommended_repair: "`unfold <def_name>` (or `simp only [<def_name>]`) before `decide`",
+            applicable_when: &["the goal's head symbol is a local def, not a Mathlib primitive", "decide alone fails with no reduction progress"],
+            avoid_when: &["the def is already reducible/marked @[reducible] and decide succeeds directly"],
+        },
+        Seed {
+            key: "well_founded_recursion_needs_simp_not_rfl",
+            title: "Well-founded recursion: rfl/decide may not reduce it — try simp [def_name]",
+            failure_signature: "`rfl` or `decide` fails to reduce a call to a def whose recursion is not structural (e.g. divides its argument, like `n / 2`) even though the definition is correct",
+            recommended_repair: "compiles to WellFounded.fix, not a structural fixpoint the kernel reduces through rfl/decide; try `simp [<def_name>]` to expose the auto-generated equation lemmas instead",
+            applicable_when: &["the def's recursive call does not obviously decrease by a Nat.succ/structural pattern (division, subtraction, custom measure)"],
+            avoid_when: &["the recursion is structural (matches on a constructor and recurses on a strict subterm) — rfl should already work there"],
+        },
+        Seed {
+            key: "structural_recursion_rfl_closes_directly",
+            title: "Structural (course-of-values) recursion: rfl closes it directly",
+            failure_signature: "(not a failure — a confirmed-working pattern) uncertainty about whether rfl scales to deeper structural recursion calls",
+            recommended_repair: "`rfl` closes course-of-values structural recursion (e.g. Fibonacci-style referencing n-1 and n-2) at both shallow and deeper call values — no special handling needed before trying it",
+            applicable_when: &["the def is expressed as `fun n => match n with | ... => ...` with structural (constructor-decreasing) recursive calls"],
+            avoid_when: &["the recursion is well-founded/division-based — see well_founded_recursion_needs_simp_not_rfl instead"],
+        },
+        Seed {
+            key: "mutual_recursion_needs_mutual_group",
+            title: "Mutual recursion: use MutualGroup, not two forward-referencing bare defs",
+            failure_signature: "unknown identifier when a Def's body references another Def declared later in module_items (e.g. isEven referencing isOdd before isOdd is declared)",
+            recommended_repair: "submit both as members of one LeanModuleItem::MutualGroup — module_items renders as a flat sequential list with no forward references, so a plain Def can only see declarations that came before it",
+            applicable_when: &["two or more helper defs/theorems in a SubmitModule action must reference each other"],
+            avoid_when: &["only one direction of reference is needed — reorder module_items instead of introducing a group"],
+        },
+        Seed {
+            key: "real_inequality_needs_linarith_imports",
+            title: "Real-number inequalities: import Linarith/Nlinarith and Real.Basic explicitly",
+            failure_signature: "unknown tactic (nlinarith/linarith) or failed to synthesize an arithmetic instance on ℝ under the base import manifest",
+            recommended_repair: "add Mathlib.Tactic.Linarith, Mathlib.Tactic.Nlinarith (as needed), and Mathlib.Data.Real.Basic via problem_create(problem_imports=[...]) — the base manifest is only Ring + NormNum",
+            applicable_when: &["the root or a helper statement quantifies over ℝ and uses an inequality"],
+            avoid_when: &["the goal is purely over ℕ/ℤ with no division — omega or the base manifest may already suffice"],
+        },
+        Seed {
+            key: "unsafe_dev_attestation_caps_at_kernel_verified",
+            title: "unsafe_dev_attestation is for fast iteration, not a shortcut to certified",
+            failure_signature: "(not a failure — a boundary to remember) confusion about why a proved episode under a dev-attested problem never reaches outcome=certified",
+            recommended_repair: "problem_create(unsafe_dev_attestation=true) sets fidelity_status='attested', which permanently caps every episode under that problem_version at kernel_verified and excludes it from default dataset exports (training_eligible=false) — use problem_submit_fidelity_review for a real, evidence-backed review if certified is needed",
+            applicable_when: &["play-testing or exploratory proof-search iteration where fidelity review would slow down the loop"],
+            avoid_when: &["the resulting proof needs to be certified or included in a default dataset export — create the problem_version through a real fidelity review instead"],
+        },
+    ];
+
+    for seed in SEEDS {
+        let applicable_when_json = serde_json::to_string(seed.applicable_when).unwrap();
+        let avoid_when_json = serde_json::to_string(seed.avoid_when).unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO proof_patterns (
+                id, pattern_key, title, failure_signature, recommended_repair,
+                applicable_when_json, avoid_when_json, source_episode_id,
+                source_attempt_ids_json, confidence, status, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, '[]', 'seed', 'active', ?8)",
+            (
+                uuid::Uuid::new_v4().to_string(),
+                seed.key,
+                seed.title,
+                seed.failure_signature,
+                seed.recommended_repair,
+                &applicable_when_json,
+                &avoid_when_json,
+                chrono::Utc::now().to_rfc3339(),
+            ),
+        )?;
+    }
     Ok(())
 }
 
