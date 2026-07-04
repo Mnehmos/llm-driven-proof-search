@@ -146,15 +146,32 @@ verifies.
 2 — module-aware fidelity is a prerequisite for planning around modules
 honestly).
 
-**Level 3 MVP** (minimum to call this level real, in dependency order):
-1. #23 — Draft artifacts (nothing to plan around without a place to put the
-   informal sketch first).
-2. #10 — Formalization plans (the planning artifact Draft moves promote into).
-3. #25 — Mathlib librarian (plans need real coverage data, not guesses).
-4. #24 — Proof-pattern memory (closes the loop: failed attempts feed future
-   plans).
+**Level 3 MVP** (in dependency order — revised from the original draft after
+reading all four issue bodies closely: #24 has no dependency on drafts or
+plans at all, since it hooks into data that already exists (episode
+obligations, failure lessons, attempt history), so it doesn't need to come
+last):
+1. **#24 — Proof-pattern memory.** ✅ Shipped in v0.3.2. Fully independent of
+   drafts/plans; a reusable failure_signature → recommended_repair library,
+   seeded from the v0.3.1 overnight sprint, surfaced via
+   `proof_pattern_search` and recorded via `proof_pattern_record_application`
+   (insert-only — never touches proof/fidelity/certification status). See
+   `docs/playtests/2026-07-04-v0.3.1-overnight-module-sprint.md` for the
+   seed provenance.
+2. #23 — Draft artifacts (nothing to plan around without a place to put the
+   informal sketch first). **Note:** `episode_drafts`/
+   `episode_formalization_candidates` already exist in `schema_v1.rs` from the
+   original pre-SubmitModule spec but are wired to zero code anywhere — see
+   the research comment on issue #23 before reusing or replacing them.
+3. #10 — Formalization plans (the planning artifact Draft moves promote
+   into). **Note:** #23 and #10 both want to own a `formalization_plans`/
+   `formalization_plan_items` schema (`formalization_plan_create_from_draft`
+   vs. `formalization_plan_create`) — design these two together, not
+   independently, or the second one implemented redefines a schema the first
+   already created.
+4. #25 — Mathlib librarian (plans need real coverage data, not guesses).
 
-**Status:** Not started. Fully open.
+**Status:** #24 shipped (v0.3.2). #23, #10, #25 open.
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
