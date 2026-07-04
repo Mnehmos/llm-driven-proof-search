@@ -425,8 +425,9 @@ pub enum BenchmarkSolveMode {
 #[derive(JsonSchema, Deserialize)]
 pub struct BenchmarkRunCreateArgs {
     pub suite_id: String,
-    #[serde(default)]
-    pub run_envelope_id: Option<String>,
+    /// Required (issue #34): "a benchmark run should not start unless a
+    /// run envelope exists." Call run_envelope_create first.
+    pub run_envelope_id: String,
     #[serde(default)]
     pub chatdb_commit: Option<String>,
     pub solve_mode: BenchmarkSolveMode,
@@ -2129,7 +2130,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.12"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.13"))
     }
 
     async fn list_tools(
@@ -2177,7 +2178,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<RunEnvelopeObserveArgs>("run_envelope_observe", "Read back a run envelope and every episode tagged with it"),
             make_tool::<BenchmarkSuiteCreateArgs>("benchmark_suite_create", "Register a benchmark suite (e.g. PutnamBench) — manual/structured registration, not automated parsing. Issue #29/#30"),
             make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise"),
-            make_tool::<BenchmarkRunCreateArgs>("benchmark_run_create", "Create a benchmark run against a suite. lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results"),
+            make_tool::<BenchmarkRunCreateArgs>("benchmark_run_create", "Create a benchmark run against a suite. Requires an existing run_envelope_id (call run_envelope_create first — a run should not start unassociated with host/mode/cost tracking). lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results"),
             make_tool::<BenchmarkResultRecordArgs>("benchmark_result_record", "Record (or update) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem"),
             make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric"),
         ];
@@ -2220,7 +2221,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.12",
+                    "environment_version": "0.3.13",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -4246,13 +4247,18 @@ impl ServerHandler for ChatDbMcp {
                 if suite_exists == 0 {
                     return Err(mcp_invalid_params(format!("unknown suite_id: {}", args.suite_id)));
                 }
-                if let Some(env_id) = &args.run_envelope_id {
-                    let env_exists: i64 = conn.query_row(
-                        "SELECT COUNT(*) FROM run_envelopes WHERE id = ?1", [env_id], |row| row.get(0),
-                    ).map_err(rs)?;
-                    if env_exists == 0 {
-                        return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", env_id)));
-                    }
+                // Issue #34's required behavior: "A benchmark run should not
+                // start unless a run envelope exists." Without one, a run's
+                // host/model identity and cost accounting have no home at
+                // all — required in the wire schema itself (run_envelope_id
+                // is a plain String, not Option<String>), not just checked
+                // here, so a client's own JSON schema tooling surfaces this
+                // before the call is even made.
+                let env_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM run_envelopes WHERE id = ?1", [&args.run_envelope_id], |row| row.get(0),
+                ).map_err(rs)?;
+                if env_exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
                 }
 
                 let solve_mode_str = match args.solve_mode {
@@ -7482,6 +7488,15 @@ mod tests {
         created["suite_id"].as_str().unwrap().to_string()
     }
 
+    /// benchmark_run_create requires an existing run_envelope_id (issue #34:
+    /// "a benchmark run should not start unless a run envelope exists").
+    async fn create_run_envelope(peer: &rmcp::service::Peer<rmcp::RoleClient>) -> String {
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "development", "host_name": "test-suite",
+        }).as_object().unwrap().clone())).await.unwrap());
+        created["run_envelope_id"].as_str().unwrap().to_string()
+    }
+
     #[tokio::test]
     async fn test_benchmark_suite_create_rejects_duplicate_name() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
@@ -7583,7 +7598,7 @@ mod tests {
             "root_formal_statement": "theorem p1 (n : ℕ) : n = n := sorry",
         }).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
-            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+            "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
 
         // The episode is created against the PROVER-READY text (what a real
@@ -7638,10 +7653,39 @@ mod tests {
         let suite_id = create_suite(&peer, "PutnamBench").await;
 
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
-            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+            "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(run["lean_version"], "leanprover/lean4:v4.32.0-rc1 + mathlib@360da6fa66c1273b76b6b2d8c5666fd5ac2e3b56");
         assert_eq!(run["mathlib_commit"], "360da6fa66c1273b76b6b2d8c5666fd5ac2e3b56");
+    }
+
+    /// Issue #34's required behavior: "A benchmark run should not start
+    /// unless a run envelope exists."
+    #[tokio::test]
+    async fn test_benchmark_run_create_requires_run_envelope() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+
+        // Omitted entirely: rejected (the field is required in the wire schema).
+        let missing = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await;
+        assert!(missing.is_err(), "run_envelope_id must be required, not optional");
+
+        // A nonexistent run_envelope_id: also rejected.
+        let bogus = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": "00000000-0000-0000-0000-000000000000",
+            "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await;
+        assert!(bogus.is_err(), "a nonexistent run_envelope_id must be rejected");
+
+        // A real run_envelope_id: accepted.
+        let run_envelope_id = create_run_envelope(&peer).await;
+        let ok = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await;
+        assert!(ok.is_ok(), "a real run_envelope_id must be accepted: {:?}", ok.err());
     }
 
     #[tokio::test]
@@ -7650,7 +7694,7 @@ mod tests {
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
         let res = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
-            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 0,
+            "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 0,
         }).as_object().unwrap().clone())).await;
         assert!(res.is_err());
     }
@@ -7665,7 +7709,7 @@ mod tests {
             "suite_id": suite_b, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
         let run_a = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
-            "suite_id": suite_a, "solve_mode": "solve_only", "attempt_budget": 5,
+            "suite_id": suite_a, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
 
         let res = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
@@ -7692,7 +7736,7 @@ mod tests {
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
-            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+            "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
 
         // No episode_id at all: both verified statuses must be rejected outright.
@@ -7729,7 +7773,7 @@ mod tests {
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
-            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+            "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
 
         // An episode that has NOT concluded (no Solve/GiveUp yet).
@@ -7787,7 +7831,7 @@ mod tests {
             "root_formal_statement": "putnam_1988_a1_real_statement",
         }).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
-            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+            "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
 
         // Drive a genuinely kernel_verified episode, but for a TRIVIAL, UNRELATED statement.
@@ -7830,7 +7874,7 @@ mod tests {
             "suite_id": suite_id, "upstream_problem_id": "p2", "theorem_name": "p2", "root_formal_statement": "1 + 1 = 2",
         }).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
-            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+            "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
         let run_id = run["run_id"].as_str().unwrap().to_string();
 
@@ -7899,7 +7943,7 @@ mod tests {
             problem_ids.push(p["benchmark_problem_id"].as_str().unwrap().to_string());
         }
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
-            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+            "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
         let run_id = run["run_id"].as_str().unwrap().to_string();
 
