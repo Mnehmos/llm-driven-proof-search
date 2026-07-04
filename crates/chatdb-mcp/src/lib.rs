@@ -219,6 +219,79 @@ pub struct ProofExportArgs {
 }
 
 #[derive(JsonSchema, Deserialize)]
+pub enum PatternConfidence {
+    /// Hand-authored from a documented lesson (e.g. a playtest report), not
+    /// mined from local attempt data.
+    #[serde(rename = "seed")]
+    Seed,
+    /// Extracted from real local attempts.
+    #[serde(rename = "mined")]
+    Mined,
+    /// Validated across multiple distinct problems.
+    #[serde(rename = "confirmed")]
+    Confirmed,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofPatternCreateArgs {
+    /// A unique, stable slug, e.g. "def_wrapped_decide_needs_unfold". Creating
+    /// with a pattern_key that already exists is rejected — patterns are not
+    /// silently overwritten by a second create call.
+    pub pattern_key: String,
+    pub title: String,
+    /// Free-text symptom this pattern recognizes, e.g. "decide fails on a
+    /// goal wrapped behind a def".
+    pub failure_signature: String,
+    /// Free-text recommended fix, e.g. "unfold <def_name> before decide".
+    pub recommended_repair: String,
+    #[serde(default)]
+    pub applicable_when: Vec<String>,
+    #[serde(default)]
+    pub avoid_when: Vec<String>,
+    #[serde(default)]
+    pub source_episode_id: Option<String>,
+    #[serde(default)]
+    pub source_attempt_ids: Vec<String>,
+    pub confidence: PatternConfidence,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofPatternSearchArgs {
+    /// Free-text search against pattern_key/title/failure_signature/
+    /// recommended_repair. Omit to list the whole active library. `%` and `_`
+    /// act as SQL LIKE wildcards rather than literal characters.
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub enum PatternApplicationRole {
+    /// This attempt is a real example of the pattern's failure_signature.
+    #[serde(rename = "failed_example")]
+    FailedExample,
+    /// This attempt applied the pattern's recommended_repair and succeeded.
+    #[serde(rename = "repair_example")]
+    RepairExample,
+    /// The pattern was surfaced to a client as a hint before it acted (no
+    /// outcome recorded yet).
+    #[serde(rename = "suggested_hint")]
+    SuggestedHint,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofPatternRecordApplicationArgs {
+    pub pattern_id: String,
+    pub episode_id: String,
+    #[serde(default)]
+    pub action_attempt_id: Option<String>,
+    pub role: PatternApplicationRole,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
 pub struct LeanDeclarationLookupArgs {
     pub problem_version_id: String,
     /// Fully-qualified names to check, e.g. "Nat.factorization", "padicValNat".
@@ -1095,6 +1168,31 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
         &last_hash[..last_hash.len().min(12)],
     ));
 
+    // Lessons applied (issue #24 proof-pattern memory): listed separately from
+    // the verified proof above, and never affects it — a pattern application
+    // is advisory metadata (see proof_pattern_record_application), not a proof
+    // status. Only rendered if at least one was actually recorded for this
+    // episode, so a dossier with no pattern activity stays exactly as before.
+    let mut pstmt = conn.prepare(
+        "SELECT p.title, p.recommended_repair, a.role, a.notes
+         FROM proof_pattern_applications a JOIN proof_patterns p ON p.id = a.pattern_id
+         WHERE a.episode_id = ?1 ORDER BY a.created_at ASC"
+    ).map_err(rs)?;
+    let lessons: Vec<(String, String, String, Option<String>)> = pstmt
+        .query_map([episode_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+        .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+    if !lessons.is_empty() {
+        md.push_str("\n## Lessons applied (advisory — not part of the verified proof)\n\n");
+        md.push_str("| role | pattern | recommended repair | notes |\n|---|---|---|---|\n");
+        for (title, repair, role, notes) in &lessons {
+            md.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                role, title.replace('|', "\\|"), repair.replace('|', "\\|"),
+                notes.as_deref().unwrap_or("—").replace('|', "\\|"),
+            ));
+        }
+    }
+
     Ok(md)
 }
 
@@ -1130,7 +1228,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.1"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.2"))
     }
 
     async fn list_tools(
@@ -1156,6 +1254,9 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EpisodeReplayArgs>("episode_replay", "Re-execute typed actions through canonical reducer with Lean re-verification"),
             make_tool::<ProofExportArgs>("proof_export", "Render an episode as a human-readable proof dossier: proof tree with statuses, assembled Lean source (dependencies before root), full attempt history including failures, and the hash-chain integrity line. format: \"markdown\" (default) | \"lean\" (bare assembled source)"),
             make_tool::<LeanDeclarationLookupArgs>("lean_declaration_lookup", "Check whether declaration names resolve — WITHOUT changing proof strategy first. An 'unknown identifier' error from episode_step only ever proves a name didn't resolve under the exact import manifest that attempt used; it never proves the name is absent from the pinned Mathlib. By default this only checks under the problem's own manifest (fast, a few seconds) and returns 'not_available_under_current_manifest' if it fails to resolve — that result alone does NOT mean the name is absent from the library, only that it needs an import. Pass deep_check=true to additionally check under the full Mathlib umbrella and distinguish 'not_in_current_import_scope' (add an import to problem_imports, see problem_create) from genuinely 'unknown_declaration' (misspelled, wrong namespace, or absent); deep_check loads all of Mathlib and reliably takes 15-40+ seconds. Epistemic rule: before concluding an API is unavailable, call this tool with deep_check=true — do not infer library capability from one elaboration failure or from a fast-path result alone"),
+            make_tool::<ProofPatternCreateArgs>("proof_pattern_create", "Register a reusable proof-pattern lesson (issue #24 proof-pattern memory) — a failure_signature + recommended_repair pair, e.g. \"decide fails on a def-wrapped goal\" -> \"unfold the def first\". Purely advisory: a pattern can never mark anything proved or change fidelity/certification status. Rejects a duplicate pattern_key rather than overwriting it"),
+            make_tool::<ProofPatternSearchArgs>("proof_pattern_search", "Search the proof-pattern library (free-text over pattern_key/title/failure_signature/recommended_repair, or omit query to list the active library). Call this before repeating a failure another attempt already diagnosed"),
+            make_tool::<ProofPatternRecordApplicationArgs>("proof_pattern_record_application", "Record that a pattern was relevant to a real (episode[, attempt]) — a failed_example, a repair_example, or a suggested_hint. Insert-only metadata: never writes to episodes/episode_obligations/action_attempts, so it can never change proof/fidelity/certification status"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -1172,7 +1273,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.1",
+                    "environment_version": "0.3.2",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -2213,6 +2314,144 @@ impl ServerHandler for ChatDbMcp {
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
+            "proof_pattern_create" => {
+                let args: ProofPatternCreateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let confidence_str = match args.confidence {
+                    PatternConfidence::Seed => "seed",
+                    PatternConfidence::Mined => "mined",
+                    PatternConfidence::Confirmed => "confirmed",
+                };
+                let applicable_when_json = serde_json::to_string(&args.applicable_when).unwrap();
+                let avoid_when_json = serde_json::to_string(&args.avoid_when).unwrap();
+                let source_attempt_ids_json = serde_json::to_string(&args.source_attempt_ids).unwrap();
+
+                let conn = self.conn.lock().await;
+                let pattern_id = Uuid::new_v4().to_string();
+                let created_at = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO proof_patterns (
+                        id, pattern_key, title, failure_signature, recommended_repair,
+                        applicable_when_json, avoid_when_json, source_episode_id,
+                        source_attempt_ids_json, confidence, status, created_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active', ?11)",
+                    (
+                        &pattern_id, &args.pattern_key, &args.title, &args.failure_signature,
+                        &args.recommended_repair, &applicable_when_json, &avoid_when_json,
+                        &args.source_episode_id, &source_attempt_ids_json, confidence_str, &created_at,
+                    ),
+                ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
+                    mcp_invalid_params(format!("pattern_key {:?} already exists — patterns are not overwritten by a second create call", args.pattern_key))
+                } else {
+                    rs(e)
+                })?;
+
+                let res = serde_json::json!({
+                    "pattern_id": pattern_id,
+                    "pattern_key": args.pattern_key,
+                    "status": "active",
+                    "created_at": created_at,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "proof_pattern_search" => {
+                let args: ProofPatternSearchArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                let limit = args.limit.unwrap_or(50).clamp(1, 500);
+
+                let conn = self.conn.lock().await;
+                let rows: Vec<(String, String, String, String, String, String, String, String, Option<String>, String)> = if let Some(q) = args.query.filter(|q| !q.trim().is_empty()) {
+                    let like = format!("%{}%", q);
+                    let mut stmt = conn.prepare(
+                        "SELECT id, pattern_key, title, failure_signature, recommended_repair,
+                                applicable_when_json, avoid_when_json, confidence, source_episode_id, created_at
+                         FROM proof_patterns
+                         WHERE status = 'active' AND (
+                             pattern_key LIKE ?1 ESCAPE '\\' OR title LIKE ?1 ESCAPE '\\' OR
+                             failure_signature LIKE ?1 ESCAPE '\\' OR recommended_repair LIKE ?1 ESCAPE '\\'
+                         )
+                         ORDER BY title ASC LIMIT ?2"
+                    ).map_err(rs)?;
+                    stmt.query_map((like, limit), |row| Ok((
+                        row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
+                        row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+                    ))).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?
+                } else {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, pattern_key, title, failure_signature, recommended_repair,
+                                applicable_when_json, avoid_when_json, confidence, source_episode_id, created_at
+                         FROM proof_patterns WHERE status = 'active' ORDER BY title ASC LIMIT ?1"
+                    ).map_err(rs)?;
+                    stmt.query_map([limit], |row| Ok((
+                        row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
+                        row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+                    ))).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?
+                };
+
+                let patterns: Vec<serde_json::Value> = rows.into_iter().map(|(id, key, title, sig, repair, aw_json, avw_json, confidence, source_ep, created_at)| {
+                    serde_json::json!({
+                        "pattern_id": id,
+                        "pattern_key": key,
+                        "title": title,
+                        "failure_signature": sig,
+                        "recommended_repair": repair,
+                        "applicable_when": serde_json::from_str::<serde_json::Value>(&aw_json).unwrap_or(serde_json::Value::Array(vec![])),
+                        "avoid_when": serde_json::from_str::<serde_json::Value>(&avw_json).unwrap_or(serde_json::Value::Array(vec![])),
+                        "confidence": confidence,
+                        "source_episode_id": source_ep,
+                        "created_at": created_at,
+                    })
+                }).collect();
+
+                let res = serde_json::json!({ "patterns": patterns });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "proof_pattern_record_application" => {
+                let args: ProofPatternRecordApplicationArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let role_str = match args.role {
+                    PatternApplicationRole::FailedExample => "failed_example",
+                    PatternApplicationRole::RepairExample => "repair_example",
+                    PatternApplicationRole::SuggestedHint => "suggested_hint",
+                };
+
+                let conn = self.conn.lock().await;
+                let pattern_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM proof_patterns WHERE id = ?1", [&args.pattern_id], |row| row.get(0),
+                ).map_err(rs)?;
+                if pattern_exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown pattern_id: {}", args.pattern_id)));
+                }
+                let episode_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM episodes WHERE id = ?1", [&args.episode_id], |row| row.get(0),
+                ).map_err(rs)?;
+                if episode_exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown episode_id: {}", args.episode_id)));
+                }
+
+                // Pure insert — this is the entire operation. Deliberately never
+                // touches episodes/episode_obligations/action_attempts: a pattern
+                // application is advisory metadata, not a proof-status change.
+                let application_id = Uuid::new_v4().to_string();
+                let created_at = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO proof_pattern_applications (
+                        id, pattern_id, episode_id, action_attempt_id, role, notes, created_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    (&application_id, &args.pattern_id, &args.episode_id, &args.action_attempt_id, role_str, &args.notes, &created_at),
+                ).map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "application_id": application_id,
+                    "pattern_id": args.pattern_id,
+                    "episode_id": args.episode_id,
+                    "role": role_str,
+                    "created_at": created_at,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
             _ => Err(McpError::new(ErrorCode::METHOD_NOT_FOUND, format!("Method not found: {}", request.name), None)),
         }
     }
@@ -2345,7 +2584,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 17);
+        assert_eq!(list_res.tools.len(), 20);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -3935,5 +4174,189 @@ mod tests {
             "problem_version_id": pv["problem_version_id"], "names": too_many,
         }).as_object().unwrap().clone())).await;
         assert!(res.is_err(), "more than 50 names must be rejected");
+    }
+
+    // -- Proof-pattern memory (issue #24) ------------------------------------
+
+    /// Issue #24 acceptance: the library is seeded from the v0.3.1 overnight
+    /// sprint on a fresh database, and proof_pattern_search's no-query path
+    /// lists the whole active library.
+    #[tokio::test]
+    async fn test_proof_pattern_library_is_seeded_on_fresh_db() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let res = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_search").with_arguments(serde_json::json!({}).as_object().unwrap().clone())).await.unwrap());
+        let patterns = res["patterns"].as_array().unwrap();
+        assert!(patterns.len() >= 7, "expected at least the 7 seeded patterns, got {}: {:?}", patterns.len(), patterns);
+        assert!(patterns.iter().any(|p| p["pattern_key"] == "mutual_recursion_needs_mutual_group"), "{:?}", patterns);
+        assert!(patterns.iter().all(|p| p["confidence"] == "seed" || p["pattern_key"].as_str().map(|k| !k.starts_with("test_")).unwrap_or(true)), "{:?}", patterns);
+    }
+
+    /// A pattern's failure_signature/recommended_repair must be findable by
+    /// free-text search, and search results carry a usable pattern_id.
+    #[tokio::test]
+    async fn test_proof_pattern_search_free_text() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let res = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_search").with_arguments(serde_json::json!({
+            "query": "well-founded",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let patterns = res["patterns"].as_array().unwrap();
+        assert!(patterns.iter().any(|p| p["pattern_key"] == "well_founded_recursion_needs_simp_not_rfl"), "{:?}", patterns);
+        for p in patterns {
+            assert!(p["pattern_id"].as_str().is_some_and(|s| !s.is_empty()), "{:?}", p);
+        }
+    }
+
+    /// A client can register a new pattern, and a duplicate pattern_key is
+    /// rejected rather than silently overwriting the existing one.
+    #[tokio::test]
+    async fn test_proof_pattern_create_and_reject_duplicate_key() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let create_args = serde_json::json!({
+            "pattern_key": "test_custom_pattern_xyz",
+            "title": "Custom test pattern",
+            "failure_signature": "some symptom",
+            "recommended_repair": "some fix",
+            "confidence": "mined",
+        });
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_create").with_arguments(create_args.as_object().unwrap().clone())).await.unwrap());
+        assert!(created["pattern_id"].as_str().is_some_and(|s| !s.is_empty()), "{:?}", created);
+
+        let dup = peer.call_tool(CallToolRequestParams::new("proof_pattern_create").with_arguments(create_args.as_object().unwrap().clone())).await;
+        assert!(dup.is_err(), "duplicate pattern_key must be rejected, not silently overwritten");
+    }
+
+    /// Issue #24's core boundary, verified as a real regression test (not just
+    /// asserted in a comment): recording a pattern application against a real
+    /// episode must not change that episode's or its obligations' state in ANY
+    /// way. Snapshots the full episodes + episode_obligations rows before and
+    /// after, and asserts byte-for-byte equality — the ONLY table allowed to
+    /// gain a row is proof_pattern_applications itself.
+    #[tokio::test]
+    async fn test_proof_pattern_application_cannot_change_proof_status() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "pattern-application boundary check", "root_formal_statement": "True",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let pattern = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_search").with_arguments(serde_json::json!({
+            "query": "unfold",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pattern_id = pattern["patterns"][0]["pattern_id"].as_str().unwrap().to_string();
+
+        // Snapshot every row (as raw JSON, columns and all) in the two tables a
+        // real proof-status change would touch, before recording the application.
+        let snapshot = |conn: &Connection| -> (String, String) {
+            let episodes: Vec<String> = conn.prepare("SELECT * FROM episodes ORDER BY id").unwrap()
+                .query_map([], |row| { let n = row.as_ref().column_count(); Ok((0..n).map(|i| format!("{:?}", row.get_ref(i).unwrap())).collect::<Vec<_>>().join(",")) }).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            let obligations: Vec<String> = conn.prepare("SELECT * FROM episode_obligations ORDER BY id").unwrap()
+                .query_map([], |row| { let n = row.as_ref().column_count(); Ok((0..n).map(|i| format!("{:?}", row.get_ref(i).unwrap())).collect::<Vec<_>>().join(",")) }).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            (episodes.join("|"), obligations.join("|"))
+        };
+        let before = { let c = conn_arc.lock().await; snapshot(&c) };
+
+        let app = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_record_application").with_arguments(serde_json::json!({
+            "pattern_id": pattern_id, "episode_id": episode_id, "role": "suggested_hint",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert!(app["application_id"].as_str().is_some_and(|s| !s.is_empty()), "{:?}", app);
+
+        let after = { let c = conn_arc.lock().await; snapshot(&c) };
+        assert_eq!(before, after, "recording a pattern application must not change episodes or episode_obligations at all");
+
+        // The application row itself DID get recorded (the tool did something).
+        let app_count: i64 = { let c = conn_arc.lock().await; c.query_row("SELECT COUNT(*) FROM proof_pattern_applications WHERE episode_id = ?1", [&episode_id], |r| r.get(0)).unwrap() };
+        assert_eq!(app_count, 1);
+    }
+
+    /// Recording an application against an unknown pattern_id or episode_id is
+    /// rejected before any row is written — never a silent no-op or a foreign
+    /// row pointing at nothing.
+    #[tokio::test]
+    async fn test_proof_pattern_record_application_rejects_unknown_ids() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "True", "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": create["problem_version_id"], "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let res = peer.call_tool(CallToolRequestParams::new("proof_pattern_record_application").with_arguments(serde_json::json!({
+            "pattern_id": "not-a-real-pattern-id", "episode_id": episode_id, "role": "suggested_hint",
+        }).as_object().unwrap().clone())).await;
+        assert!(res.is_err(), "unknown pattern_id must be rejected: {:?}", res);
+
+        let pattern = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_search").with_arguments(serde_json::json!({
+            "query": "unfold",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pattern_id = pattern["patterns"][0]["pattern_id"].as_str().unwrap().to_string();
+        let res = peer.call_tool(CallToolRequestParams::new("proof_pattern_record_application").with_arguments(serde_json::json!({
+            "pattern_id": pattern_id, "episode_id": "not-a-real-episode-id", "role": "suggested_hint",
+        }).as_object().unwrap().clone())).await;
+        assert!(res.is_err(), "unknown episode_id must be rejected: {:?}", res);
+    }
+
+    /// Issue #24 acceptance: proof_export's markdown dossier lists applied
+    /// lessons in their own section, separate from the verified-proof content,
+    /// and a dossier with NO recorded applications is completely unaffected
+    /// (no empty "Lessons" header appears).
+    #[tokio::test]
+    async fn test_proof_export_lists_lessons_separately_from_proof() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "lessons dossier check", "root_formal_statement": "True", "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        // No applications recorded yet: no Lessons section at all.
+        let md_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let md = md_res.content[0].as_text().unwrap().text.clone();
+        assert!(!md.contains("## Lessons applied"), "no Lessons section should appear with zero applications: {md}");
+
+        let pattern = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_search").with_arguments(serde_json::json!({
+            "query": "mutual recursion",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pattern_id = pattern["patterns"][0]["pattern_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_record_application").with_arguments(serde_json::json!({
+            "pattern_id": pattern_id, "episode_id": episode_id, "role": "suggested_hint", "notes": "tried mutual defs, hit unknown identifier",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let md_res2 = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let md2 = md_res2.content[0].as_text().unwrap().text.clone();
+        assert!(md2.contains("## Lessons applied (advisory — not part of the verified proof)"), "{md2}");
+        assert!(md2.contains("mutual_group") || md2.to_lowercase().contains("mutual"), "{md2}");
+        assert!(md2.contains("suggested_hint"), "{md2}");
     }
 }
