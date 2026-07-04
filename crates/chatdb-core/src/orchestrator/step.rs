@@ -182,11 +182,13 @@ pub fn attempt_prepare(
                 .map(|s| Uuid::parse_str(&s).unwrap())
                 .collect();
 
-            tx.execute(
-                "UPDATE episode_obligations SET attempt_count = attempt_count + 1 WHERE id = ?1",
-                [&obl_id_str],
-            )?;
-
+            // attempt_count is bumped in attempt_finalize, once the gateway
+            // actually returns a verdict — NOT here, before it's even called. A
+            // LeanGatewayError (spawn failure, timeout) carries no information
+            // about the prover's submission and must not count as an attempt;
+            // scheduler.rs feeds attempt_count into difficulty estimation and
+            // uses it as a tie-breaker, so counting bare infrastructure flakes
+            // would misrepresent how many real semantic attempts were made.
             let obl = Obligation {
                 id: Uuid::parse_str(&obl_id_str).unwrap(),
                 problem_version_id: Uuid::parse_str(&pv_id_str).unwrap(),
@@ -207,6 +209,18 @@ pub fn attempt_prepare(
                 created_at: Utc::now(),
                 closed_at: None,
             };
+
+            // Reserve `cost_micros` against the episode's budget NOW, atomically
+            // with the CAS check above — not after the gateway call returns. The
+            // gateway call runs with the DB lock released (see episode_step in
+            // chatdb-mcp), so a concurrent model_call_reserve reading
+            // cost_budget_micros during that window must see the post-reservation
+            // value, or it could grant a lease against budget this attempt is
+            // already about to spend (a TOCTOU overcommit past the configured
+            // cost_budget_micros). Refunded in attempt_finalize if the gateway
+            // call itself fails (LeanGatewayError carries no verdict and must not
+            // cost budget, matching the pre-split behavior).
+            reserve_cost_budget(tx, &episode_id_str, cost_micros)?;
 
             Ok(PrepOutcome::NeedsGateway {
                 request: GatewayRequest::Solve {
@@ -244,17 +258,19 @@ pub fn attempt_prepare(
             let ns16 = pv_id_str.replace('-', "");
             let problem_namespace = format!("ChatDB.P_{}", &ns16[..16.min(ns16.len())]);
 
-            tx.execute(
-                "UPDATE episode_obligations SET attempt_count = attempt_count + 1 WHERE id = ?1",
-                [&obl_id_str],
-            )?;
-
             match crate::lean::module::assemble_module(&problem_namespace, &stmt_hash, module_items, root_theorem, &import_manifest) {
                 Err(policy_err) => {
                     // Deterministic policy rejection (bad name, prohibited construct,
                     // root hash mismatch, ...). A normal rejected attempt — never a
                     // hard StepError, and no Lean invocation needed — so this is fully
-                    // resolved right here, in this transaction.
+                    // resolved right here, in this transaction. This IS counted as an
+                    // attempt (unlike a bare gateway/infra error): a policy rejection
+                    // is a genuine, deterministic verdict about the prover's
+                    // submission, the same kind of real signal a kernel_fail is.
+                    tx.execute(
+                        "UPDATE episode_obligations SET attempt_count = attempt_count + 1 WHERE id = ?1",
+                        [&obl_id_str],
+                    )?;
                     let lesson = format!("module rejected by policy: {}", policy_err);
                     tx.execute(
                         "UPDATE episode_obligations SET status = 'open', failure_lesson = ?1 WHERE id = ?2",
@@ -269,6 +285,10 @@ pub fn attempt_prepare(
                         "root_theorem": root_theorem,
                     }).to_string();
                     let namespace = assembled.namespace.clone();
+                    // See the matching comment on the Solve path: reserve the cost
+                    // now, atomically with the CAS check, since the gateway call
+                    // (up to 120s for a module) runs with the DB lock released.
+                    reserve_cost_budget(tx, &episode_id_str, cost_micros)?;
                     Ok(PrepOutcome::NeedsGateway {
                         request: GatewayRequest::SubmitModule { assembled, env_hash: pv_env_hash.clone() },
                         ctx: FinalizeContext::SubmitModule {
@@ -395,6 +415,13 @@ pub fn attempt_finalize(
         (FinalizeContext::Solve { obl_id_str, pv_env_hash }, GatewayResponse::Solve(gw_result)) => {
             match gw_result {
                 Ok(result) => {
+                    // Bumped here, not in attempt_prepare: this only runs once the
+                    // gateway has actually returned a verdict (pass or fail) — a
+                    // bare Err (infra failure) never reaches this arm at all.
+                    tx.execute(
+                        "UPDATE episode_obligations SET attempt_count = attempt_count + 1 WHERE id = ?1",
+                        [&obl_id_str],
+                    )?;
                     let is_valid = matches!(result.outcome, LeanVerificationOutcome::KernelPass);
                     if is_valid {
                         let lemma_id = Uuid::new_v4();
@@ -433,12 +460,24 @@ pub fn attempt_finalize(
                     }
                     (result.outcome, is_valid)
                 }
-                Err(e) => return Err(StepError::LeanGatewayError(e)),
+                Err(e) => {
+                    refund_cost_budget(tx, &episode_id_str, cost_micros)?;
+                    return Err(StepError::LeanGatewayError(e));
+                }
             }
         }
         (FinalizeContext::SubmitModule { obl_id_str, stmt_hash, pv_env_hash, namespace, module_items_json: _, pv_id_str: _, pv_manifest_hash: _ }, GatewayResponse::SubmitModule(gw_result)) => {
             match gw_result {
                 Ok(result) => {
+                    // Bumped here, not in attempt_prepare: this only runs once the
+                    // gateway has actually returned a verdict (pass or fail) — a
+                    // bare Err (infra failure) never reaches this arm at all. A
+                    // policy rejection (which never reaches the gateway) is counted
+                    // separately, at the point of rejection in attempt_prepare.
+                    tx.execute(
+                        "UPDATE episode_obligations SET attempt_count = attempt_count + 1 WHERE id = ?1",
+                        [&obl_id_str],
+                    )?;
                     let is_valid = matches!(result.outcome, LeanVerificationOutcome::KernelPass);
                     if is_valid {
                         let lemma_id = Uuid::new_v4();
@@ -484,21 +523,59 @@ pub fn attempt_finalize(
                     }
                     (result.outcome, is_valid)
                 }
-                Err(e) => return Err(StepError::LeanGatewayError(e)),
+                Err(e) => {
+                    refund_cost_budget(tx, &episode_id_str, cost_micros)?;
+                    return Err(StepError::LeanGatewayError(e));
+                }
             }
         }
         _ => return Err(StepError::Internal("gateway response variant did not match the finalize context".to_string())),
     };
 
-    finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, cost_micros, is_valid)?;
+    // cost_micros is NOT deducted here: attempt_prepare already reserved it
+    // atomically with the CAS check, before the gateway ran with the DB lock
+    // released (see reserve_cost_budget). Passing 0 means finalize_bookkeeping's
+    // revision/step_count/attempt-status writes still happen, without deducting
+    // budget a second time.
+    finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, 0, is_valid)?;
     Ok(outcome_result)
+}
+
+/// Pessimistically deducts `cost_micros` from the episode's budget BEFORE the
+/// Lean gateway call that's about to run with the DB lock released. Closes a
+/// TOCTOU window: without this, `cost_budget_micros` stays at its
+/// pre-deduction value for the whole gateway call (up to 60-120s), and a
+/// concurrent `model_call_reserve` reading it during that window could grant a
+/// lease against budget this attempt is already about to spend. Refunded by
+/// `refund_cost_budget` if the gateway call itself fails (an infra failure
+/// carries no verdict and must not cost budget). A no-op on a NULL
+/// (unbounded) `cost_budget_micros` — SQL NULL arithmetic stays NULL.
+fn reserve_cost_budget(tx: &Transaction, episode_id_str: &str, cost_micros: i128) -> Result<(), StepError> {
+    tx.execute(
+        "UPDATE episodes SET cost_budget_micros = cost_budget_micros - ?1 WHERE id = ?2",
+        (cost_micros as i64, episode_id_str),
+    )?;
+    Ok(())
+}
+
+/// Undoes a `reserve_cost_budget` reservation when the gateway call it was
+/// guarding against never produced a verdict (`LeanGatewayError`).
+fn refund_cost_budget(tx: &Transaction, episode_id_str: &str, cost_micros: i128) -> Result<(), StepError> {
+    tx.execute(
+        "UPDATE episodes SET cost_budget_micros = cost_budget_micros + ?1 WHERE id = ?2",
+        (cost_micros as i64, episode_id_str),
+    )?;
+    Ok(())
 }
 
 /// Episode revision/step/budget bump, attempt status (committed/rejected), and
 /// marking the fulfilling request — the shared tail every action variant writes
 /// once its outcome (`is_valid`) is known, whether that happened immediately
 /// (`attempt_prepare`'s Done branches) or after a deferred gateway call
-/// (`attempt_finalize`).
+/// (`attempt_finalize`). `cost_micros` here is the amount still to be deducted —
+/// pass 0 when `reserve_cost_budget` already deducted it (the
+/// `attempt_finalize` call sites); pass the real amount for a Done-immediate
+/// path that never went through a pessimistic reservation.
 fn finalize_bookkeeping(
     tx: &Transaction,
     attempt_id: Uuid,
