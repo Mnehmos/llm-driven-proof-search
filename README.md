@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  32 tools · typed schemas · JSON Schema 2020-12                 │
+│  33 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -54,8 +54,17 @@ terms of overall system capability and what's still ahead, see
 
 ## MCP Tools
 
+**Call `readme_first` before creating any episode.** It's the dedicated
+first-contact tool (issue #35): the required proof-search loop, the trust
+boundary (tracked MCP actions and Lean verdicts are evidence — your own
+reasoning is not), when to use `Solve` vs `SubmitModule`, why a proof check
+outside `episode_step` doesn't count as a valid attempt, and the cost/
+benchmark-mode boundary. Any agent host — Claude Code, Codex, Kilo Code,
+Antigravity, or a custom script — should call this first.
+
 | Tool | Description |
 |---|---|
+| `readme_first` | Call this first. The proof-search protocol: the loop, trust boundary, Solve/SubmitModule guidance, untracked-attempt warning, cost and benchmark-mode boundary |
 | `environment_describe` | Protocol version, capabilities, tool schemas, Lean gateway readiness |
 | `problem_create` | Register a new problem version (source text + root formal statement). `fidelity_status` starts `unreviewed` |
 | `problem_submit_fidelity_review` | Record an evidence-backed determination that a problem's formal statement represents its source text. The ONLY path to `fidelity_status='verified'` — required for `outcome='certified'` |
@@ -426,7 +435,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 32 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 33 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records
