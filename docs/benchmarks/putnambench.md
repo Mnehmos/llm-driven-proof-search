@@ -150,20 +150,83 @@ they read from data the schema already stores (`final_diagnostic_category`,
 — so they don't require new columns, just a new aggregation tool once #31
 exists to generate real runs to aggregate over.
 
-### The runner (#31 — not yet built, must satisfy #36)
+### The runner (#31 — shipped)
 
-Per issue #36's invariant ("a proof attempt that bypasses the ledger is not
-part of ChatDB evidence"), the runner's proof-search loop for each imported
-problem MUST be: `episode_create` → `episode_observe`/read
-`next_action_request` → `attempt_claim` → `episode_step` (repeat until
-terminated or budget exhausted) → `benchmark_result_record`. It must never
-call `RealLeanGateway`/`LeanGateway::verify_exact`/`verify_module` directly
-to pre-screen a candidate proof before submitting it through `episode_step`
-— that would let a "measured" attempt count that Lean never actually
-verified through the tracked path count as evidence. Declaration lookups
-during the search (checking whether a lemma name exists before trying it) are
-fine through the existing MCP lookup tools (`lean_declaration_lookup`,
-`mathlib_search_declarations`) — those aren't proof attempts.
+Built as `crates/chatdb-mcp/examples/putnam_runner.rs`. Per issue #36's
+invariant ("a proof attempt that bypasses the ledger is not part of ChatDB
+evidence"), its proof-search loop for each problem is exactly:
+`episode_create` → `attempt_claim` → `episode_step` (chained purely off each
+response's own `next_action_request`, up to `attempt_budget`, stopping at
+the first `kernel_verified`/`certified`) → a final `give_up` step if the
+budget is exhausted without a terminal outcome → `benchmark_result_record`.
+It never calls `RealLeanGateway`/`LeanGateway::verify_exact`/`verify_module`
+directly.
+
+The runner does not generate candidate proofs itself — ChatDB has no
+embedded model (see `readme_first`). Candidate `proof_term`/`answer_value`
+pairs come from a caller-supplied "attempts plan" JSON file, tried in order
+per problem. `solve_mode=solve_only` skips (status `skipped`) any problem
+needing `SubmitModule` (i.e. one with a solution abbrev).
+
+**A real supporting fix this required**: PutnamBench's named-binder
+declaration syntax (`theorem NAME (a : A) (b : B) : C`) is not itself a
+valid standalone Lean type expression — `problem_create`/`SubmitModule`
+require a single self-contained type (`∀ (a : A) (b : B), C`, Lean 4's own
+desugaring). `chatdb_proof_core::putnambench::to_pi_form` performs this
+conversion (bracket-depth-aware, not a naive first-colon split — binders
+themselves contain colons and nest brackets arbitrarily deep). Verified
+against the real 672-file corpus: 670/672 (99.7%) convert successfully; the
+2 failures (`putnam_1997_b5`, `putnam_2025_a6`) use Lean's pattern-matching
+equation syntax for recursive function definitions (`def f : T \n | pat =>
+body`), a different declaration shape not yet handled — registered anyway,
+loudly logged as unable to be attempted by a runner until fixed, not
+silently mis-registered. Ran the runner against 22 total real, diverse
+problems (multiple years, both abbrev and non-abbrev shapes) through the
+real Lean 4.32.0-rc1 + Mathlib toolchain with deliberate `sorry` attempts —
+zero panics, zero unexpected infra errors, every one correctly reached
+`status: "failed"` via the real gateway's own `hasSorry` diagnostic,
+confirming the Pi-type conversion produces genuinely well-formed Lean, not
+just something that happens to parse in unit-test fixtures.
+
+Because the catalog's faithful `root_formal_statement` and the Pi-type text
+actually submitted to `problem_create` are necessarily different strings,
+`benchmark_problems` gained two more columns: `prover_ready_statement`/
+`_hash`, populated by the SERVER (never the client — same principle as
+every other hash in this schema) via `to_pi_form` inside
+`benchmark_problem_register` itself. `benchmark_result_record`'s episode
+cross-check now compares against `COALESCE(prover_ready_statement_hash,
+root_statement_hash)`, so it validates against whatever text a runner
+actually submitted, falling back to the original behavior for any suite/
+problem needing no conversion.
+
+**Two real bugs an independent adversarial review found and this fixed**
+before shipping:
+- **A severe fabrication-vector regression.** The first version accepted
+  `prover_ready_statement` directly as a client-supplied argument, with zero
+  check that it actually corresponded to `root_formal_statement`. A caller
+  could have registered a hard theorem's `root_formal_statement` alongside
+  an arbitrary, trivially-easy `prover_ready_statement` (e.g. `"True"`),
+  proven the trivial one, and had `benchmark_result_record` accept it as
+  evidence for the hard one — precisely the fabrication scenario issue #30
+  was built to prevent, reopened by this fix's own first draft. Closed by
+  removing the client-supplied field entirely: `prover_ready_statement` is
+  now always derived server-side from `root_formal_statement` via
+  `to_pi_form`, exactly like `root_statement_hash`/`lean_version`/
+  `mathlib_commit` elsewhere in this schema. Regression test:
+  `test_benchmark_problem_register_ignores_any_client_supplied_prover_ready_statement`.
+- **A crash that abandoned every other queued problem.** The runner
+  originally called `attempt_claim` unconditionally, THEN checked whether
+  the planned attempt supplied the `answer_value` a solution-abbrev problem
+  needs — if missing, it skipped the attempt without ever calling
+  `episode_step`, leaving that action request stuck in `'claimed'` state.
+  The next `attempt_claim` call (on the next attempt, or the give-up
+  cleanup) then failed outright against the still-claimed request, and that
+  error propagated straight out of `main()`, silently abandoning every
+  other problem still queued in the batch. Fixed by checking
+  `answer_value`'s presence BEFORE claiming, so a skipped attempt leaves the
+  request untouched and claimable by the next real attempt. Verified live:
+  a plan with a missing-`answer_value` problem followed by another problem
+  now completes both, instead of crashing after the first.
 
 ### Smoke vs. full suite (#32 — not yet built)
 
