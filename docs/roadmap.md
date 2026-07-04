@@ -305,8 +305,13 @@ together (v0.3.3). #25 shipped (v0.3.4). #35 shipped (v0.3.5). #34+#38 core
 shipped (v0.3.6). #29+#30 schema shipped (v0.3.7). #33+#37 shipped (v0.3.8).
 #28 shipped, docs-only. #29 (importer) shipped (v0.3.9). #31 (runner) shipped
 (v0.3.10). #32 (smoke fixtures) shipped (v0.3.11). The full PutnamBench
-sprint is now complete. Next: the actual PutnamBench playtest attempt per
-the standing directive.
+sprint is complete, and the first real playtest attempt has run: 12 real
+problems, 1/12 (8.3%) pass@1 — see
+`docs/playtests/2026-07-04-putnambench-first-attempt.md`. Zero infra errors,
+zero panics, correct enforcement throughout; the constraint was genuine
+mathematical effort per problem, not the environment. One real environment
+finding from the attempt — a multi-line `proof_term` can silently break
+tactic-block parsing with a misleading error — filed as issue #41.
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
