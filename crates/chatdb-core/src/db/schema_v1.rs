@@ -557,6 +557,96 @@ CREATE TABLE IF NOT EXISTS run_envelopes (
     CHECK(host_cost_confidence IN ('exact_provider_receipt', 'exact_local_meter', 'estimated', 'attested', 'unknown'))
 );
 
+-- PutnamBench benchmark schema (issues #29, #30, designed together since
+-- benchmark_results references benchmark_problems and benchmark_runs
+-- references benchmark_suites -- one interlocking schema, not two
+-- independent ones). #30 ships all four tables plus manual suite/problem
+-- registration and the run/result tools; #29's real Lean-file-parsing
+-- importer (populating benchmark_problems automatically from a real
+-- PutnamBench checkout) is still unimplemented -- see the design note on
+-- issue #29.
+CREATE TABLE IF NOT EXISTS benchmark_suites (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    upstream_url TEXT,
+    upstream_commit TEXT,
+    language TEXT NOT NULL,
+    imported_at TEXT NOT NULL
+);
+
+-- root_statement_hash is server-computed (canonical_hash of
+-- root_formal_statement), never trusted from the client -- same "never
+-- trust a client-supplied hash for something the server can independently
+-- verify" principle problem_create already applies to its own root
+-- statement hash.
+CREATE TABLE IF NOT EXISTS benchmark_problems (
+    id TEXT PRIMARY KEY,
+    suite_id TEXT NOT NULL REFERENCES benchmark_suites(id),
+    upstream_problem_id TEXT NOT NULL,
+    theorem_name TEXT NOT NULL,
+    source_file_path TEXT,
+    root_formal_statement TEXT NOT NULL,
+    root_statement_hash TEXT NOT NULL,
+    import_manifest_json TEXT NOT NULL,
+    context_hash TEXT,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(suite_id, upstream_problem_id),
+    CHECK(status IN ('imported', 'skipped_ambiguous', 'deprecated'))
+);
+
+-- run_envelope_id links to the host/model/mode/cost tracking issues
+-- #34/#38 already added -- benchmark_runs does NOT duplicate host_name/
+-- host_model/mode fields, only what's genuinely benchmark-specific.
+-- lean_version/mathlib_commit are never accepted from the client (see
+-- benchmark_run_create) -- they're read from the server's OWN detected
+-- environment, the only trustworthy source, exactly like
+-- RealLeanGateway/lean_environment already is everywhere else in this repo.
+CREATE TABLE IF NOT EXISTS benchmark_runs (
+    id TEXT PRIMARY KEY,
+    suite_id TEXT NOT NULL REFERENCES benchmark_suites(id),
+    run_envelope_id TEXT REFERENCES run_envelopes(id),
+    chatdb_commit TEXT,
+    lean_version TEXT,
+    mathlib_commit TEXT,
+    solve_mode TEXT NOT NULL,
+    allowed_tools_json TEXT NOT NULL,
+    attempt_budget INTEGER NOT NULL,
+    wall_clock_budget_ms INTEGER,
+    lean_timeout_ms INTEGER,
+    created_at TEXT NOT NULL,
+    CHECK(solve_mode IN ('solve_only', 'submit_module_allowed', 'submit_module_plus_draft_planning', 'submit_module_plus_librarian'))
+);
+
+-- One row per (run, problem) -- UPSERT, not insert-only, since a live
+-- benchmark run naturally updates a result across pass@k retries before it
+-- finalizes. episode_id, when given, is cross-checked against that
+-- episode's ACTUAL recorded outcome (see benchmark_result_record) --
+-- issue #36's "a proof attempt that bypasses the ledger is not part of
+-- ChatDB evidence" principle applied concretely: a benchmark result cannot
+-- claim an outcome the referenced episode didn't actually reach.
+CREATE TABLE IF NOT EXISTS benchmark_results (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES benchmark_runs(id),
+    benchmark_problem_id TEXT NOT NULL REFERENCES benchmark_problems(id),
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    status TEXT NOT NULL,
+    outcome TEXT,
+    pass_at INTEGER,
+    attempts_used INTEGER NOT NULL,
+    time_to_first_success_ms INTEGER,
+    cost_micros INTEGER,
+    final_diagnostic_category TEXT,
+    proof_artifact_hash TEXT,
+    trajectory_export_hash TEXT,
+    replay_status TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(run_id, benchmark_problem_id),
+    CHECK(status IN ('kernel_verified', 'certified', 'failed', 'timeout', 'infra_error', 'formalization_gap', 'skipped'))
+);
+
 CREATE TABLE IF NOT EXISTS action_requests (
     id TEXT PRIMARY KEY,
     episode_id TEXT NOT NULL REFERENCES episodes(id),
