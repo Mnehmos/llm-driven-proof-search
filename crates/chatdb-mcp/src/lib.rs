@@ -708,6 +708,32 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
                 };
                 (format!("`{}`", proof.trim().replace('\n', " ; ")), verdict)
             }
+            "submit_module" => {
+                // A module has no single flat proof_term — the closest analogue
+                // for the theorem-by-theorem fallback rendering is the root
+                // theorem's own proof_term (helper defs/theorems aren't shown by
+                // this fallback path; a caller wanting the exact verified module
+                // should get it from the dedicated module rendering instead).
+                // Populating winning_proof here is a correctness requirement, not
+                // cosmetic: without it, the fallback render below embeds a
+                // fabricated `sorry` for an obligation the kernel actually
+                // verified — exactly the dishonest-receipt bug this export
+                // exists to prevent.
+                let proof = action["root_theorem"]["proof_term"].as_str().unwrap_or("").to_string();
+                if accepted && outcome == Some("kernel_pass") {
+                    if let Some(oid) = &obligation_id {
+                        winning_proof.insert(oid.clone(), proof.clone());
+                    }
+                }
+                let verdict = if disposition != "accepted" {
+                    format!("⚠️ {}", disposition)
+                } else if outcome == Some("kernel_pass") {
+                    "✅ kernel_pass (module)".to_string()
+                } else {
+                    format!("❌ {}", outcome.unwrap_or("kernel_fail"))
+                };
+                (format!("module root: `{}`", proof.trim().replace('\n', " ; ")), verdict)
+            }
             "decompose" => {
                 let subs: Vec<String> = action["sub_lemmas"].as_array().map(|a| {
                     a.iter().filter_map(|v| v.as_str()).map(|s| format!("`{}`", s)).collect()
@@ -2628,6 +2654,19 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(status["state"], "terminated");
         assert_eq!(status["outcome"], "kernel_verified");
+
+        // Self-review finding: proof_export's attempt-log renderer had no
+        // "submit_module" arm, so winning_proof was never populated for a
+        // module-proved obligation — the format="lean" fallback rendering then
+        // embedded a fabricated `sorry` for a theorem the kernel actually
+        // verified. Must never happen: the real root proof_term ("rfl") must
+        // appear, and "sorry" must not.
+        let lean_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "lean",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let lean = lean_res.content[0].as_text().unwrap().text.clone();
+        assert!(!lean.contains("sorry"), "a kernel-verified module theorem must never be exported with a fabricated sorry: {lean}");
+        assert!(lean.contains("rfl"), "the real root proof_term must appear in the export: {lean}");
     }
 
     /// A module whose root theorem statement does NOT hash-match the registered
