@@ -14,7 +14,7 @@ use rmcp::service::RoleServer;
 pub use rmcp::ErrorData as McpError;
 
 use chatdb_proof_core::db::schema_v1;
-use chatdb_proof_core::orchestrator::{lifecycle, attempts, step, trajectories};
+use chatdb_proof_core::orchestrator::{lifecycle, attempts, step, trajectories, dataset};
 use chatdb_proof_core::lean::{LeanGateway, RealLeanGateway};
 use chatdb_proof_core::models::action::{TypedAction, ActionRequest, ActionRole, StepDisposition, LeanModuleItem, ModuleTheorem};
 use chatdb_proof_core::lean::module::assemble_module;
@@ -635,14 +635,64 @@ pub struct EpisodeReplayArgs {
     pub episode_id: String,
 }
 
+#[derive(JsonSchema, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportMode {
+    /// Full human-readable dossier: proof tree, assembled Lean source, attempt
+    /// history, integrity line. Includes the completed proof body. (default)
+    Markdown,
+    /// Bare assembled Lean source only, ready to paste into a Mathlib project.
+    /// Includes the completed proof body.
+    Lean,
+    /// Redacted report safe for public disclosure: status, hashes, toolchain,
+    /// integrity, and — if this episode's problem is linked to a tracked
+    /// benchmark suite — suite/problem identification. NEVER includes the
+    /// completed proof body, proof tree detail, or attempt content, regardless
+    /// of `allow_putnambench_proof_export`.
+    PublicSummary,
+    /// Everything `markdown` has (full proof source, every attempt including
+    /// failures, verifier diagnostics), explicitly labeled as a private audit
+    /// artifact not meant for public disclosure.
+    AuditArchive,
+    /// Structured per-step (state, action, reward, next_state, terminated,
+    /// truncated, metadata) records suitable for SFT/RL/DPO training pipelines,
+    /// as a JSON array. Secrets (api_key, auth_token, credentials,
+    /// private_endpoint) are scrubbed; proof/tactic content is not.
+    TrainingExport,
+    /// Human-readable mathematical report: everything `audit_archive` has, plus
+    /// a written narrative section (proof strategy, key lemmas, unresolved
+    /// gaps) rather than only tables.
+    PaperDossier,
+    /// Same tier of content as `audit_archive`, packaged for private
+    /// communication with a benchmark suite's own maintainers — includes suite/
+    /// problem identification and an explicit non-public-disclosure notice.
+    MaintainerSubmission,
+}
+
+impl ExportMode {
+    /// Whether this mode's rendered output can contain the completed proof
+    /// body (assembled Lean source, per-step proof/tactic terms, or verified
+    /// module source) — the thing issue #33's contamination policy gates.
+    fn exposes_proof_body(self) -> bool {
+        matches!(self, ExportMode::Markdown | ExportMode::Lean | ExportMode::AuditArchive
+            | ExportMode::TrainingExport | ExportMode::PaperDossier | ExportMode::MaintainerSubmission)
+    }
+}
+
 #[derive(JsonSchema, Deserialize)]
 pub struct ProofExportArgs {
     pub episode_id: String,
-    /// "markdown" (default): full human-readable dossier — proof tree, assembled
-    /// Lean source, attempt history, integrity line. "lean": bare assembled Lean
-    /// source only, ready to paste into a Mathlib project.
     #[serde(default)]
-    pub format: Option<String>,
+    pub format: Option<ExportMode>,
+    /// Required (true) when this episode's problem is linked to a tracked
+    /// benchmark suite (e.g. PutnamBench) AND `format` is a mode that exposes
+    /// the completed proof body. Upstream benchmark maintainers ask that
+    /// completed formal proofs not be published without first engaging with
+    /// them, to avoid contaminating the public benchmark corpus — see
+    /// docs/benchmarks/putnambench.md. Has no effect for `public_summary`,
+    /// which never exposes a proof body regardless of this flag.
+    #[serde(default)]
+    pub allow_putnambench_proof_export: bool,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -1317,7 +1367,56 @@ fn status_marker(status: &str) -> &'static str {
     }
 }
 
-fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Result<String, McpError> {
+struct BenchmarkLink {
+    suite_name: String,
+    upstream_problem_id: Option<String>,
+}
+
+/// If this episode's problem_version's root_formal_statement matches (via
+/// root_statement_hash, the same server-computed comparison #30 uses to bind
+/// benchmark_results to episodes) a registered benchmark_problem, returns that
+/// suite's name and (when unambiguous) the upstream problem id. `None` means
+/// this episode has no known link to any tracked benchmark suite.
+///
+/// `root_statement_hash` has no uniqueness constraint on `benchmark_problems`
+/// — the identical statement text could in principle be registered under more
+/// than one suite (or more than once within a suite). Rather than silently
+/// picking an arbitrary match (nondeterministic, and could misattribute the
+/// WRONG suite name), an ambiguous match still gates — the safe default for a
+/// contamination policy is to over-restrict, never to under-restrict — but
+/// reports the ambiguity honestly instead of a specific, possibly-wrong name.
+fn benchmark_suite_name_for_episode(conn: &Connection, episode_id: &str) -> Result<Option<BenchmarkLink>, McpError> {
+    let pv_hash: Option<String> = conn.query_row(
+        "SELECT pv.root_statement_hash FROM episodes e JOIN problem_versions pv ON pv.id = e.problem_version_id WHERE e.id = ?1",
+        [episode_id], |row| row.get(0),
+    ).optional().map_err(rs)?;
+    let Some(pv_hash) = pv_hash else { return Ok(None) };
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT s.name, p.upstream_problem_id FROM benchmark_problems p JOIN benchmark_suites s ON s.id = p.suite_id \
+         WHERE p.root_statement_hash = ?1 ORDER BY s.name ASC, p.upstream_problem_id ASC"
+    ).map_err(rs)?;
+    let rows: Vec<(String, String)> = stmt.query_map([&pv_hash], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let distinct_suites: std::collections::BTreeSet<&str> = rows.iter().map(|(s, _)| s.as_str()).collect();
+    if distinct_suites.len() > 1 {
+        return Ok(Some(BenchmarkLink {
+            suite_name: format!("ambiguous — this statement matches {} distinct benchmark suites", distinct_suites.len()),
+            upstream_problem_id: None,
+        }));
+    }
+    // Exactly one suite name, but possibly more than one problem row within it
+    // sharing this hash — in that case the suite is unambiguous but the
+    // specific problem id is not, so omit it rather than guess.
+    Ok(Some(BenchmarkLink {
+        suite_name: rows[0].0.clone(),
+        upstream_problem_id: if rows.len() == 1 { Some(rows[0].1.clone()) } else { None },
+    }))
+}
+
+fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) -> Result<String, McpError> {
     let ep: Option<(String, String, Option<String>, Option<String>, i64, Option<i64>, String, Option<String>)> = conn.query_row(
         "SELECT problem_version_id, state, outcome, termination_reason, step_count, cost_budget_micros, created_at, completed_at
          FROM episodes WHERE id = ?1",
@@ -1594,7 +1693,7 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
         lean_src.push_str(&format!("theorem {} : {} := by\n{}\n\n", o.theorem_name, o.lean_statement, proof.trim_end()));
     }
 
-    if format == "lean" {
+    if mode == ExportMode::Lean {
         // A verified module is the exact, replayable artifact — prefer it over the
         // theorem-by-theorem reconstruction when one exists.
         if !rendered_modules.is_empty() || !broken_modules.is_empty() {
@@ -1621,6 +1720,56 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
         return Ok(lean_src);
     }
 
+    if mode == ExportMode::PublicSummary {
+        // Redacted by construction: never touches lean_src, winning_proof,
+        // attempts[].detail, rendered_modules, drafts, or plan content — only
+        // status, counts, hashes, and identification. This is the mode #33
+        // requires for any disclosure that might reach a benchmark's public
+        // corpus, so it must be safe to call unconditionally (no gate).
+        let link = benchmark_suite_name_for_episode(conn, episode_id)?;
+        let headline = match outcome.as_deref() {
+            Some("certified") => "CERTIFIED",
+            Some("kernel_verified") => "KERNEL_VERIFIED",
+            Some("refuted") => "REFUTED",
+            Some("gave_up") => "GAVE_UP",
+            Some(other) => other,
+            None => "IN_PROGRESS",
+        };
+        let mut counts: std::collections::BTreeMap<&str, i64> = std::collections::BTreeMap::new();
+        for o in &obligations {
+            *counts.entry(o.status.as_str()).or_insert(0) += 1;
+        }
+        let res = serde_json::json!({
+            "mode": "public_summary",
+            "episode_id": episode_id,
+            "root_formal_statement": root_statement,
+            "outcome": headline,
+            "fidelity_status": fidelity_status,
+            "benchmark_suite": link.as_ref().map(|l| l.suite_name.clone()),
+            "benchmark_upstream_problem_id": link.as_ref().and_then(|l| l.upstream_problem_id.clone()),
+            "obligation_counts_by_status": counts,
+            "step_count": step_count,
+            "created_at": created_at,
+            "completed_at": completed_at,
+            "environment_hash": env_hash,
+            "import_manifest_hash": manifest_hash,
+            "trajectory_event_count": event_count,
+            "trajectory_first_hash": first_hash,
+            "trajectory_last_hash": last_hash,
+        });
+        return Ok(serde_json::to_string_pretty(&res).unwrap());
+    }
+
+    if mode == ExportMode::TrainingExport {
+        let ep_uuid = Uuid::parse_str(episode_id).map_err(|e| mcp_invalid_params(format!("invalid episode_id: {}", e)))?;
+        let records = dataset::export_rl(conn, ep_uuid).map_err(mcp_internal_error)?;
+        let mut values: Vec<serde_json::Value> = records.iter().map(|r| serde_json::to_value(r).unwrap()).collect();
+        for v in values.iter_mut() {
+            trajectories::scrub_value(v);
+        }
+        return Ok(serde_json::to_string_pretty(&values).unwrap());
+    }
+
     // Markdown dossier. Proof soundness (did Lean verify this exact formal
     // statement?) and statement fidelity (does that formal statement represent
     // the source problem?) are independent claims — a kernel-verified root of a
@@ -1632,6 +1781,30 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
     let training_eligible = fidelity_status == "verified";
 
     let mut md = String::new();
+    match mode {
+        ExportMode::AuditArchive => md.push_str(
+            "> 🔒 **AUDIT ARCHIVE — private.** Includes the full proof source and every attempt, \
+             including failures. Not for public disclosure — see docs/benchmarks/putnambench.md if \
+             this problem is linked to a tracked benchmark suite.\n\n"
+        ),
+        ExportMode::MaintainerSubmission => {
+            let link = benchmark_suite_name_for_episode(conn, episode_id)?;
+            md.push_str(&format!(
+                "> 🔒 **MAINTAINER SUBMISSION — private.** Packaged for direct, private communication \
+                 with a benchmark suite's own maintainers. Includes the full proof source and every \
+                 attempt. Do not post this publicly. Suite: {}{}\n\n",
+                link.as_ref().map(|l| l.suite_name.as_str()).unwrap_or("(not linked to a tracked benchmark suite)"),
+                link.as_ref().and_then(|l| l.upstream_problem_id.as_deref())
+                    .map(|id| format!(" (upstream problem id: {})", id)).unwrap_or_default(),
+            ));
+        }
+        ExportMode::PaperDossier => md.push_str(
+            "> 📄 **PAPER DOSSIER — private.** Includes the full proof source. Not for public \
+             disclosure without maintainer coordination if this problem is linked to a tracked \
+             benchmark suite — see docs/benchmarks/putnambench.md.\n\n"
+        ),
+        _ => {}
+    }
     let headline_marker = match outcome.as_deref() {
         Some("certified") => "✅ CERTIFIED",
         Some("kernel_verified") if fidelity_status == "rejected" => "⚠️ FORMAL PROOF VALID, STATEMENT FIDELITY REJECTED",
@@ -1865,6 +2038,55 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
         }
     }
 
+    if mode == ExportMode::PaperDossier {
+        // A deterministic, templated narrative built from the same structured
+        // facts already computed above — not a model-generated summary (this
+        // function has no model access) — but still prose, not only tables, per
+        // #37's acceptance criterion.
+        let successful_attempts = attempts.iter().filter(|a| a.verdict.starts_with('✅')).count();
+        let failed_attempts = attempts.len().saturating_sub(successful_attempts);
+        let unresolved: Vec<&ExportObligation> = obligations.iter().filter(|o| o.status != "proved").collect();
+        md.push_str("\n## Narrative\n\n");
+        md.push_str(&format!(
+            "This is an attempt at: *{}*, formalized as `{}`. ",
+            source_text.trim(), root_statement,
+        ));
+        md.push_str(&match outcome.as_deref() {
+            Some("certified") => "The proof search concluded with the root goal kernel-verified, and the formal statement's fidelity to the source problem has been independently reviewed and confirmed. ".to_string(),
+            Some("kernel_verified") => format!(
+                "The proof search concluded with the root goal kernel-verified, but the formal statement's fidelity to the source problem is {} — this proof establishes the formal claim, not (yet, or not at all) the informal one. ",
+                if fidelity_status == "rejected" { "REJECTED" } else { "not yet independently reviewed" },
+            ),
+            Some("refuted") => "The proof search concluded that the root goal, as formalized, does not hold. ".to_string(),
+            Some("gave_up") => "The proof search was abandoned before reaching a verified or refuted conclusion. ".to_string(),
+            None => "The proof search is still in progress. ".to_string(),
+            Some(_) => String::new(),
+        });
+        md.push_str(&format!(
+            "Across {} obligation(s) and {} recorded attempt(s) ({} accepted by the kernel, {} rejected or otherwise unsuccessful), ",
+            obligations.len(), attempts.len(), successful_attempts, failed_attempts,
+        ));
+        if unresolved.is_empty() && !obligations.is_empty() {
+            md.push_str("every obligation reached a proved state — no gaps remain in this proof tree. ");
+        } else if !unresolved.is_empty() {
+            md.push_str(&format!(
+                "{} obligation(s) remain unresolved: {}. ",
+                unresolved.len(),
+                unresolved.iter().map(|o| format!("`{}` ({})", o.theorem_name, o.status)).collect::<Vec<_>>().join(", "),
+            ));
+        }
+        if !lessons.is_empty() {
+            md.push_str(&format!(
+                "{} proof-pattern lesson(s) from prior attempts were consulted during this search (see the Lessons applied section above). ",
+                lessons.len(),
+            ));
+        }
+        md.push_str(&format!(
+            "The trajectory is hash-chained end to end ({} events) and independently re-verifiable via `episode_replay`.\n",
+            event_count,
+        ));
+    }
+
     Ok(md)
 }
 
@@ -1906,7 +2128,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.7"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.8"))
     }
 
     async fn list_tools(
@@ -1931,7 +2153,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ModelCallSettleArgs>("model_call_settle", "Settle or release a lease without submitting an action (provider failure, cancellation)"),
             make_tool::<TrajectoryExportArgs>("trajectory_export", "Export trajectory with pagination (cursor + page_size)"),
             make_tool::<EpisodeReplayArgs>("episode_replay", "Re-execute typed actions through canonical reducer with Lean re-verification"),
-            make_tool::<ProofExportArgs>("proof_export", "Render an episode as a human-readable proof dossier: proof tree with statuses, assembled Lean source (dependencies before root), full attempt history including failures, and the hash-chain integrity line. format: \"markdown\" (default) | \"lean\" (bare assembled source)"),
+            make_tool::<ProofExportArgs>("proof_export", "Render an episode as a proof dossier. format: \"markdown\" (default, full dossier) | \"lean\" (bare assembled source) | \"public_summary\" (redacted, safe for public/benchmark disclosure — never includes the proof body) | \"audit_archive\" (full dossier, explicitly labeled private) | \"training_export\" (structured JSON records for SFT/RL/DPO) | \"paper_dossier\" (full dossier plus a written narrative section) | \"maintainer_submission\" (full dossier packaged for a benchmark suite's own maintainers). Modes that expose the completed proof body require allow_putnambench_proof_export=true when the episode's problem is linked to a tracked benchmark suite — see docs/benchmarks/putnambench.md"),
             make_tool::<LeanDeclarationLookupArgs>("lean_declaration_lookup", "Check whether declaration names resolve — WITHOUT changing proof strategy first. An 'unknown identifier' error from episode_step only ever proves a name didn't resolve under the exact import manifest that attempt used; it never proves the name is absent from the pinned Mathlib. By default this only checks under the problem's own manifest (fast, a few seconds) and returns 'not_available_under_current_manifest' if it fails to resolve — that result alone does NOT mean the name is absent from the library, only that it needs an import. Pass deep_check=true to additionally check under the full Mathlib umbrella and distinguish 'not_in_current_import_scope' (add an import to problem_imports, see problem_create) from genuinely 'unknown_declaration' (misspelled, wrong namespace, or absent); deep_check loads all of Mathlib and reliably takes 15-40+ seconds. Epistemic rule: before concluding an API is unavailable, call this tool with deep_check=true — do not infer library capability from one elaboration failure or from a fast-path result alone"),
             make_tool::<ProofPatternCreateArgs>("proof_pattern_create", "Register a reusable proof-pattern lesson (issue #24 proof-pattern memory) — a failure_signature + recommended_repair pair, e.g. \"decide fails on a def-wrapped goal\" -> \"unfold the def first\". Purely advisory: a pattern can never mark anything proved or change fidelity/certification status. Rejects a duplicate pattern_key rather than overwriting it"),
             make_tool::<ProofPatternSearchArgs>("proof_pattern_search", "Search the proof-pattern library (free-text over pattern_key/title/failure_signature/recommended_repair, or omit query to list the active library). Call this before repeating a failure another attempt already diagnosed"),
@@ -1997,7 +2219,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.7",
+                    "environment_version": "0.3.8",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -2980,12 +3202,26 @@ impl ServerHandler for ChatDbMcp {
             "proof_export" => {
                 let args: ProofExportArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                let format = args.format.as_deref().unwrap_or("markdown");
-                if !matches!(format, "markdown" | "lean") {
-                    return Err(mcp_invalid_params("format must be \"markdown\" or \"lean\""));
-                }
+                let mode = args.format.unwrap_or(ExportMode::Markdown);
                 let conn = self.conn.lock().await;
-                let doc = render_proof_export(&conn, &args.episode_id, format)?;
+
+                // Issue #33's contamination policy: a mode that can expose the
+                // completed proof body requires an explicit opt-in when this
+                // episode's problem is linked to a tracked benchmark suite —
+                // upstream maintainers (e.g. PutnamBench) ask that formal proofs
+                // not be published without first engaging with them.
+                if mode.exposes_proof_body() && !args.allow_putnambench_proof_export {
+                    if let Some(link) = benchmark_suite_name_for_episode(&conn, &args.episode_id)? {
+                        return Err(mcp_invalid_params(format!(
+                            "episode {} is linked to benchmark suite '{}' — exporting a completed proof body \
+                             requires allow_putnambench_proof_export=true (see docs/benchmarks/putnambench.md). \
+                             Use format=\"public_summary\" for a disclosure-safe report instead.",
+                            args.episode_id, link.suite_name
+                        )));
+                    }
+                }
+
+                let doc = render_proof_export(&conn, &args.episode_id, mode)?;
                 Ok(CallToolResult::success(vec![Content::text(doc)]))
             }
             "lean_declaration_lookup" => {
@@ -7485,5 +7721,227 @@ mod tests {
         assert_eq!(observed["metrics"]["solved_count"], 3);
         assert_eq!(observed["metrics"]["solved_rate"], 0.75);
         assert_eq!(observed["metrics"]["pass_at_1_rate"], 0.5, "only p2 and p3 count as genuine pass@1 out of 4 attempted");
+    }
+
+    #[tokio::test]
+    async fn test_proof_export_public_summary_never_contains_proof_body() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let statement = "putnam_export_secret_proof_statement";
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "e1", "theorem_name": "e1", "root_formal_statement": statement,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let pv_id = create_problem(&peer, statement).await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "pub-sum-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "my_super_secret_proof_tactic_xyz"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let text = res.content[0].as_text().unwrap().text.clone();
+        assert!(!text.contains("my_super_secret_proof_tactic_xyz"), "public_summary must never contain the proof body: {text}");
+        assert!(text.contains("PutnamBench"), "public_summary should identify the linked benchmark suite: {text}");
+        assert!(text.contains("KERNEL_VERIFIED") || text.contains("CERTIFIED"), "public_summary should report the outcome: {text}");
+    }
+
+    #[tokio::test]
+    async fn test_proof_export_gates_proof_body_for_benchmark_linked_problem() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let statement = "putnam_export_gate_statement";
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "g1", "theorem_name": "g1", "root_formal_statement": statement,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let pv_id = create_problem(&peer, statement).await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "gate-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // Without the flag: rejected for a proof-body-exposing mode.
+        let denied = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "markdown",
+        }).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "exporting a proof body for a benchmark-linked problem must be gated by default");
+
+        // With the flag: allowed.
+        let allowed = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "markdown", "allow_putnambench_proof_export": true,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let text = allowed.content[0].as_text().unwrap().text.clone();
+        assert!(text.contains("trivial"), "with the explicit opt-in, the proof body must be included: {text}");
+
+        // public_summary needs no opt-in, ever.
+        let summary = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await;
+        assert!(summary.is_ok(), "public_summary must never require the opt-in flag");
+    }
+
+    #[tokio::test]
+    async fn test_proof_export_ambiguous_suite_match_still_gates_without_misattribution() {
+        // If the identical root_formal_statement is registered under TWO
+        // distinct benchmark suites, the suite lookup must not silently pick
+        // an arbitrary one (nondeterministic, possibly wrong) — it must still
+        // gate (the safe default) but report the ambiguity honestly rather
+        // than a specific, possibly-incorrect suite name.
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let statement = "putnam_ambiguous_dup_statement";
+        let suite_a = create_suite(&peer, "SuiteA").await;
+        let suite_b = create_suite(&peer, "SuiteB").await;
+        for (suite_id, upstream_id) in [(&suite_a, "a1"), (&suite_b, "b1")] {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+                "suite_id": suite_id, "upstream_problem_id": upstream_id, "theorem_name": upstream_id,
+                "root_formal_statement": statement,
+            }).as_object().unwrap().clone())).await.unwrap());
+        }
+
+        let pv_id = create_problem(&peer, statement).await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "ambig-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // Still gated without the flag (safe default for an ambiguous match).
+        let denied = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "markdown",
+        }).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "an ambiguous suite match must still gate by default, not silently pick one");
+        let err_text = format!("{:?}", denied.unwrap_err());
+        assert!(err_text.contains("ambiguous") && !err_text.contains("SuiteA") && !err_text.contains("SuiteB"),
+            "the error must report ambiguity honestly, not a specific (possibly wrong) suite name: {err_text}");
+
+        // public_summary must not misattribute a specific suite either.
+        let summary = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let suite_field = summary["benchmark_suite"].as_str().unwrap_or("");
+        assert!(suite_field.contains("ambiguous"), "public_summary must not silently attribute one specific suite when the match is ambiguous: {summary}");
+        assert!(summary["benchmark_upstream_problem_id"].is_null(), "an ambiguous match must not report a specific upstream problem id either: {summary}");
+    }
+
+    #[tokio::test]
+    async fn test_proof_export_audit_archive_contains_failed_attempts() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "audit archive check").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "audit-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        // A failing attempt (contains "sorry" -> MockGateway returns KernelFail).
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "sorry"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "audit_archive", "allow_putnambench_proof_export": true,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let text = res.content[0].as_text().unwrap().text.clone();
+        assert!(text.contains("AUDIT ARCHIVE"), "audit_archive must carry its private banner: {text}");
+        assert!(text.contains("❌"), "audit_archive must show the failed attempt's diagnostic: {text}");
+    }
+
+    #[tokio::test]
+    async fn test_proof_export_training_export_produces_structured_records() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "training export check").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "train-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "norm_num"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "training_export", "allow_putnambench_proof_export": true,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let text = res.content[0].as_text().unwrap().text.clone();
+        let parsed: serde_json::Value = serde_json::from_str(&text).expect("training_export must be valid JSON");
+        let arr = parsed.as_array().expect("training_export must be a JSON array");
+        assert!(!arr.is_empty(), "training_export must contain at least one record");
+        assert!(arr[0].get("action").is_some(), "each record must carry an action field: {text}");
+        assert!(arr[0].get("reward").is_some(), "each record must carry a reward field: {text}");
+    }
+
+    #[tokio::test]
+    async fn test_proof_export_paper_dossier_contains_narrative() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "paper dossier check").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "paper-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "norm_num"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "paper_dossier", "allow_putnambench_proof_export": true,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let text = res.content[0].as_text().unwrap().text.clone();
+        assert!(text.contains("## Narrative"), "paper_dossier must include a written narrative section, not just tables: {text}");
+        assert!(text.contains("PAPER DOSSIER"), "paper_dossier must carry its private banner: {text}");
     }
 }

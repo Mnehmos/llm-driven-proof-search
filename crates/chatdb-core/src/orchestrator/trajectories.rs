@@ -350,7 +350,7 @@ pub fn replay_trajectory(
     Ok(ReplayStatus::Matched(solve_events_checked))
 }
 
-fn scrub_value(val: &mut serde_json::Value) {
+pub fn scrub_value(val: &mut serde_json::Value) {
     if let Some(obj) = val.as_object_mut() {
         obj.remove("api_key");
         obj.remove("private_endpoint");

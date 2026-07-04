@@ -80,7 +80,7 @@ Antigravity, or a custom script — should call this first.
 | `model_call_settle` | Settle or void a lease (provider failure, cancellation) |
 | `trajectory_export` | Paginated export of hash-chained trajectory events |
 | `episode_replay` | Re-execute typed actions (`Solve` or `SubmitModule`) through Lean and verify trajectory integrity |
-| `proof_export` | Human-readable proof dossier: proof tree, assembled Lean source, full attempt history, proof/fidelity/promotion status, integrity line (`format: "markdown"` or `"lean"`) |
+| `proof_export` | Proof dossier in one of 7 modes: `markdown` (default), `lean`, `public_summary` (redacted, never includes the proof body), `audit_archive`, `training_export` (structured JSON for SFT/RL/DPO), `paper_dossier` (adds a written narrative), `maintainer_submission`. Modes exposing the proof body require `allow_putnambench_proof_export=true` when the episode is linked to a tracked benchmark suite — see [docs/benchmarks/putnambench.md](docs/benchmarks/putnambench.md) |
 | `lean_declaration_lookup` | Checks whether names resolve under a problem's import manifest (fast, default). Pass `deep_check=true` to also check under the full Mathlib umbrella and distinguish "not imported here" from "genuinely absent" (slow — loads all of Mathlib). Call this before concluding an API is unavailable |
 | `proof_pattern_create` | Register a reusable proof-pattern lesson (failure signature + recommended repair). Advisory only — never marks anything proved |
 | `proof_pattern_search` | Free-text search over the proof-pattern library, or list it whole. Call before repeating a failure another attempt already diagnosed |
@@ -106,6 +106,12 @@ Antigravity, or a custom script — should call this first.
 | `benchmark_run_create` | Create a run against a suite. `lean_version`/`mathlib_commit` are read from the server's OWN detected Lean environment, never accepted from the client |
 | `benchmark_result_record` | Record (or upsert, for pass@k) one problem's result within a run. If `episode_id` is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as the benchmark problem (issue #36) |
 | `benchmark_run_observe` | Read back a run, its results, and aggregate metrics — `solved_rate` (solved at all) vs `pass_at_1_rate` (genuine first-attempt success) are reported separately |
+
+**Benchmark contamination policy:** upstream benchmarks like PutnamBench ask
+that completed formal proofs not be published without first coordinating with
+their maintainers. See [docs/benchmarks/putnambench.md](docs/benchmarks/putnambench.md)
+for how `proof_export`'s modes and `allow_putnambench_proof_export` flag
+enforce this.
 
 ## `Solve` vs. `SubmitModule`
 
