@@ -139,6 +139,93 @@ pub fn parse_problem_file(text: &str) -> Result<ParsedProblem, String> {
     Ok(ParsedProblem { name, root_formal_statement, has_solution_abbrev: abbrev_start.is_some() })
 }
 
+#[derive(Debug, PartialEq)]
+pub struct AbbrevFields {
+    pub name: String,
+    pub type_signature: String,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct PiForm {
+    /// A single, self-contained Lean type expression — suitable for
+    /// `problem_create`'s `root_formal_statement` or `SubmitModule`'s
+    /// `root_theorem.statement`, both of which splice this directly after a
+    /// colon (`theorem X : {this} := ...`) with no external binders.
+    pub root_theorem_statement: String,
+    pub solution_abbrev: Option<AbbrevFields>,
+}
+
+/// Converts a `theorem NAME (a : A) (b : B) : C` signature (everything AFTER
+/// "theorem NAME", i.e. starting at the first binder or the colon) into a
+/// single self-contained type expression `∀ (a : A) (b : B), C` — Lean 4's
+/// own desugaring of named-binder declaration syntax into a Pi type. Uses
+/// bracket-depth tracking (not a naive first-colon split) since binders
+/// themselves contain colons (`(S : Set (ℝ × ℝ))`) and can nest brackets
+/// arbitrarily deep.
+pub fn binders_to_pi_type(signature: &str) -> Result<String, String> {
+    let mut depth: i32 = 0;
+    let mut split_at: Option<usize> = None;
+    for (idx, ch) in signature.char_indices() {
+        match ch {
+            '(' | '{' | '[' => depth += 1,
+            ')' | '}' | ']' => depth -= 1,
+            ':' if depth == 0 && !signature[idx + 1..].starts_with('=') => {
+                split_at = Some(idx);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let split_at = split_at.ok_or_else(|| "no top-level ':' found separating binders from return type".to_string())?;
+    let binders = signature[..split_at].trim();
+    let return_type = signature[split_at + 1..].trim();
+    if binders.is_empty() {
+        Ok(return_type.to_string())
+    } else {
+        Ok(format!("∀ {}, {}", binders, return_type))
+    }
+}
+
+fn parse_abbrev_fields(abbrev_text: &str) -> Result<AbbrevFields, String> {
+    let rest = abbrev_text.trim_start().trim_start_matches("noncomputable ").trim_start();
+    let rest = rest.strip_prefix("abbrev ").or_else(|| rest.strip_prefix("def "))
+        .ok_or_else(|| format!("expected an 'abbrev'/'def' declaration, got: {:?}", abbrev_text))?;
+    let colon_idx = rest.find(':').ok_or_else(|| format!("no ':' found in abbrev declaration: {:?}", abbrev_text))?;
+    let name = rest[..colon_idx].trim().to_string();
+    let after_colon = &rest[colon_idx + 1..];
+    let assign_idx = after_colon.find(":=").ok_or_else(|| format!("no ':=' found in abbrev declaration: {:?}", abbrev_text))?;
+    let type_signature = after_colon[..assign_idx].trim().to_string();
+    Ok(AbbrevFields { name, type_signature })
+}
+
+/// Converts a `benchmark_problems.root_formal_statement` (the abbrev-if-
+/// present-plus-theorem text `parse_problem_file` registers, already comment-
+/// stripped) into the `PiForm` a runner needs to actually construct a
+/// `problem_create`/`SubmitModule` call: a bare Pi-type for the theorem
+/// (never the named-binder declaration syntax ChatDB's model can't accept as
+/// a single type expression), plus the solution abbrev's name/type if one
+/// is present.
+pub fn to_pi_form(root_formal_statement: &str, theorem_name: &str) -> Result<PiForm, String> {
+    let marker = format!("theorem {}", theorem_name);
+    let theorem_idx = root_formal_statement.find(&marker)
+        .ok_or_else(|| format!("could not find {:?} in root_formal_statement", marker))?;
+    let abbrev_part = root_formal_statement[..theorem_idx].trim();
+    let theorem_part = &root_formal_statement[theorem_idx + marker.len()..];
+
+    let sig_end = theorem_part.rfind(":=")
+        .ok_or_else(|| "no ':=' found in theorem block".to_string())?;
+    let signature = theorem_part[..sig_end].trim();
+    let root_theorem_statement = binders_to_pi_type(signature)?;
+
+    let solution_abbrev = if abbrev_part.is_empty() {
+        None
+    } else {
+        Some(parse_abbrev_fields(abbrev_part)?)
+    };
+
+    Ok(PiForm { root_theorem_statement, solution_abbrev })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,5 +318,66 @@ mod tests {
         let text = "import Mathlib\n\n/--\nProve this theorem is true.\n-/\ntheorem putnam_x\n: True :=\nsorry\n";
         let p = parse_problem_file(text).unwrap();
         assert_eq!(p.name, "putnam_x");
+    }
+
+    #[test]
+    fn test_binders_to_pi_type_no_binders() {
+        assert_eq!(binders_to_pi_type(": True").unwrap(), "True");
+    }
+
+    #[test]
+    fn test_binders_to_pi_type_simple_binders() {
+        // Real shape of putnam_1962_a1's signature (name already stripped).
+        let sig = "\n(S : Set (ℝ × ℝ))\n(hS : S.ncard = 5)\n(hnoncol : ∀ s ⊆ S, s.ncard = 3 → ¬Collinear ℝ s)\n: ∃ T ⊆ S, T.ncard = 4 ∧ ¬∃ t ∈ T, t ∈ convexHull ℝ (T \\ {t})";
+        let pi = binders_to_pi_type(sig).unwrap();
+        assert!(pi.starts_with("∀ (S : Set (ℝ × ℝ))"), "{}", pi);
+        assert!(pi.contains(", ∃ T ⊆ S"), "the return type must follow a comma after all binders: {}", pi);
+        // A colon nested inside a binder's own type (e.g. "Set (ℝ × ℝ)" has no
+        // colon, but "hS : S.ncard = 5" and "hnoncol : ..." each have their
+        // own colon) must never be mistaken for the top-level separator.
+        assert!(!pi.contains(", ∀ s ⊆ S"), "must not split at a colon nested inside a later binder: {}", pi);
+    }
+
+    #[test]
+    fn test_binders_to_pi_type_deeply_nested_binder_types() {
+        // Real shape of putnam_1963_a3's signature — binder types are
+        // themselves multi-argument function types with their own nested
+        // parens, and the LAST binder's type contains a colon-free arrow
+        // chain right before the top-level separator.
+        let sig = "\n    (P : ℕ → (ℝ → ℝ) → (ℝ → ℝ))\n    (hP : P 0 = id ∧ ∀ i y, P (i + 1) y = P i (fun x ↦ x * deriv y x - i * y x))\n    (n : ℕ)\n    (hn : 0 < n)\n    (f y : ℝ → ℝ)\n    (hf : ContinuousOn f (Ici 1))\n    (hy : ContDiffOn ℝ n y (Ici 1))\n    (hy1 : ContDiffAt ℝ n y 1) :\n    (∀ i < n, deriv^[i] y 1 = 0) ∧ (Ici 1).EqOn (P n y) f ↔\n    ∀ x ≥ 1, y x = ∫ t in (1 : ℝ)..x, putnam_1963_a3_solution f n x t";
+        let pi = binders_to_pi_type(sig).unwrap();
+        assert!(pi.starts_with("∀ (P : ℕ → (ℝ → ℝ) → (ℝ → ℝ))"), "{}", pi);
+        assert!(pi.contains("(hy1 : ContDiffAt ℝ n y 1)"), "the last binder must be included: {}", pi);
+        assert!(pi.trim_end().ends_with("putnam_1963_a3_solution f n x t"), "the return type must be preserved intact: {}", pi);
+    }
+
+    #[test]
+    fn test_to_pi_form_plain_proof_problem() {
+        let root_formal_statement = "theorem putnam_1962_a1\n(S : Set (ℝ × ℝ))\n(hS : S.ncard = 5)\n: ∃ T ⊆ S, T.ncard = 4 :=\nsorry";
+        let form = to_pi_form(root_formal_statement, "putnam_1962_a1").unwrap();
+        assert!(form.solution_abbrev.is_none());
+        assert!(form.root_theorem_statement.starts_with("∀ (S : Set (ℝ × ℝ))"), "{}", form.root_theorem_statement);
+        assert!(form.root_theorem_statement.contains("(hS : S.ncard = 5)"), "{}", form.root_theorem_statement);
+        assert!(form.root_theorem_statement.ends_with("∃ T ⊆ S, T.ncard = 4"), "{}", form.root_theorem_statement);
+        assert!(!form.root_theorem_statement.contains("sorry"), "the proof placeholder must not leak into the statement: {}", form.root_theorem_statement);
+    }
+
+    #[test]
+    fn test_to_pi_form_solution_abbrev_problem() {
+        let root_formal_statement = "abbrev putnam_1962_a5_solution : ℕ → ℕ := sorry\ntheorem putnam_1962_a5\n: ∀ n ≥ 2, putnam_1962_a5_solution n = 0 :=\nsorry";
+        let form = to_pi_form(root_formal_statement, "putnam_1962_a5").unwrap();
+        let abbrev = form.solution_abbrev.unwrap();
+        assert_eq!(abbrev.name, "putnam_1962_a5_solution");
+        assert_eq!(abbrev.type_signature, "ℕ → ℕ");
+        assert_eq!(form.root_theorem_statement, "∀ n ≥ 2, putnam_1962_a5_solution n = 0");
+    }
+
+    #[test]
+    fn test_to_pi_form_noncomputable_abbrev() {
+        let root_formal_statement = "noncomputable abbrev putnam_1963_a3_solution : (ℝ → ℝ) → ℕ → ℝ → ℝ → ℝ := sorry\ntheorem putnam_1963_a3\n(n : ℕ)\n: True :=\nsorry";
+        let form = to_pi_form(root_formal_statement, "putnam_1963_a3").unwrap();
+        let abbrev = form.solution_abbrev.unwrap();
+        assert_eq!(abbrev.name, "putnam_1963_a3_solution");
+        assert_eq!(abbrev.type_signature, "(ℝ → ℝ) → ℕ → ℝ → ℝ → ℝ");
     }
 }

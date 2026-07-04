@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "chatdb-mcp"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "axum",
  "chatdb_proof_core",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "chatdb_proof_core"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "chrono",
  "hex",

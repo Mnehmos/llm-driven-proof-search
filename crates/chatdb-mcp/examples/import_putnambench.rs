@@ -50,7 +50,7 @@ use rmcp::service::{serve_client, serve_server};
 use rmcp::transport::async_rw::AsyncRwTransport;
 
 use chatdb_mcp::{init_db, ChatDbMcp};
-use chatdb_proof_core::putnambench::{parse_problem_file, ParsedProblem};
+use chatdb_proof_core::putnambench::{parse_problem_file, to_pi_form, ParsedProblem};
 
 #[derive(serde::Deserialize)]
 struct InformalEntry {
@@ -219,9 +219,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut registered = 0usize;
     let mut register_failed: Vec<(String, String)> = Vec::new();
     let mut solution_abbrev_count = 0usize;
+    let mut pi_form_failed: Vec<(String, String)> = Vec::new();
     for (stem, p) in &parsed {
         if p.has_solution_abbrev {
             solution_abbrev_count += 1;
+        }
+        // benchmark_problem_register derives prover_ready_statement itself
+        // (via the same to_pi_form) — this pre-check exists purely to
+        // report, at import time, which problems a runner won't be able to
+        // attempt at all (root_formal_statement isn't a `theorem NAME
+        // (binders) : type` declaration to_pi_form can convert). See
+        // migrate_add_prover_ready_statement_columns.
+        if let Err(e) = to_pi_form(&p.root_formal_statement, &p.name) {
+            pi_form_failed.push((stem.clone(), e));
         }
         let args = serde_json::json!({
             "suite_id": suite_id,
@@ -246,9 +256,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("registered: {}", registered);
     eprintln!("parse-skipped: {}", skipped.len());
     eprintln!("register-failed: {}", register_failed.len());
+    eprintln!("pi-form-conversion-failed (registered without prover_ready_statement): {}", pi_form_failed.len());
     eprintln!("problems with a solution abbrev (need SubmitModule, not bare Solve): {}", solution_abbrev_count);
     for (stem, err) in &register_failed {
         eprintln!("  REGISTER FAILED {}: {}", stem, err);
+    }
+    for (stem, err) in &pi_form_failed {
+        eprintln!("  PI-FORM CONVERSION FAILED {}: {} (registered anyway, but a runner cannot attempt this problem until fixed)", stem, err);
     }
 
     Ok(())

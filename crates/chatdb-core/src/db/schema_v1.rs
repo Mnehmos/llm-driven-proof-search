@@ -591,6 +591,14 @@ CREATE TABLE IF NOT EXISTS benchmark_problems (
     context_hash TEXT,
     status TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    -- The exact text a runner actually submits to problem_create/SubmitModule
+    -- for this problem, when it differs from root_formal_statement (e.g.
+    -- PutnamBench's named-binder declaration syntax vs. the Pi-type ChatDB's
+    -- model requires as a single self-contained type expression). NULL when
+    -- root_formal_statement is already directly usable as-is. See
+    -- migrate_add_prover_ready_statement_columns for the full rationale.
+    prover_ready_statement TEXT,
+    prover_ready_statement_hash TEXT,
     UNIQUE(suite_id, upstream_problem_id),
     CHECK(status IN ('imported', 'skipped_ambiguous', 'deprecated'))
 );
@@ -757,6 +765,7 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     // query touching them would fail with "no such column".
     migrate_add_import_manifest_columns(conn)?;
     migrate_add_mutual_group_column(conn)?;
+    migrate_add_prover_ready_statement_columns(conn)?;
     // CHECK constraints are baked into a table at creation and CREATE TABLE IF
     // NOT EXISTS cannot update them on a table that already exists — a database
     // that predates the fidelity-vocabulary rewrite (docs/fix_plan_playtest_02.md)
@@ -1104,5 +1113,52 @@ fn migrate_add_mutual_group_column(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE episode_verified_module_items ADD COLUMN mutual_group INTEGER",
         [],
     )?;
+    Ok(())
+}
+
+/// Adds `benchmark_problems.prover_ready_statement`/`prover_ready_statement_hash`
+/// (issue #29/#31) to a pre-existing `benchmark_problems` table. Plain
+/// nullable `ALTER TABLE ADD COLUMN` — no existing row's meaning changes;
+/// every pre-existing row simply has no prover-ready form recorded (NULL),
+/// and `benchmark_result_record`'s cross-check falls back to
+/// `root_statement_hash` when it's absent.
+///
+/// Exists because `root_formal_statement` is a benchmark suite's own
+/// faithful catalog text — for PutnamBench, that's the raw named-binder
+/// declaration syntax (`theorem NAME (a : A) (b : B) : C`), which Lean 4
+/// treats as sugar for a Pi-type but which is NOT itself a valid standalone
+/// type expression. `problem_create`/`SubmitModule` require a single
+/// self-contained type (`∀ (a : A) (b : B), C`), so the text actually
+/// submitted for proving is NECESSARILY a different string than the
+/// catalog's `root_formal_statement` — and therefore hashes differently.
+/// Comparing `root_statement_hash` directly (as #30's original
+/// anti-fabrication check did) would reject every legitimate PutnamBench
+/// result. `prover_ready_statement`/`_hash` lets an importer register the
+/// SAME text a runner will actually submit, so the identity check compares
+/// like with like without requiring `benchmark_result_record` (suite-
+/// agnostic, generic enforcement) to know any suite-specific text
+/// convention.
+fn migrate_add_prover_ready_statement_columns(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='benchmark_problems'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+
+    let existing_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(benchmark_problems)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if !existing_columns.iter().any(|c| c == "prover_ready_statement") {
+        conn.execute("ALTER TABLE benchmark_problems ADD COLUMN prover_ready_statement TEXT", [])?;
+    }
+    if !existing_columns.iter().any(|c| c == "prover_ready_statement_hash") {
+        conn.execute("ALTER TABLE benchmark_problems ADD COLUMN prover_ready_statement_hash TEXT", [])?;
+    }
     Ok(())
 }
