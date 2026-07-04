@@ -87,6 +87,19 @@ module's declarations — **no partial commit**. On failure, nothing is written,
 the obligation stays open, and the structured diagnostic is preserved as a
 failure lesson.
 
+A rejected module (whether refused by policy or by the staged kernel) surfaces
+its reason directly on the `episode_step` response as `rejection_diagnostic`, so
+a client learns *why* the draft was refused without a second `episode_observe`
+round-trip. The same reason is stored as the obligation's failure lesson and
+shown by `proof_export`.
+
+Atomicity here is scoped precisely: everything through the point where results
+are written (obligation status, verified-lemma row, attempt/episode
+bookkeeping) happens in one transaction, so a rejected or kernel-failed module
+writes no partial state. It does **not** mean the whole `episode_step` call —
+including the Lean invocation itself — runs under one uninterrupted DB lock;
+see the next section for why that's deliberate.
+
 ## The DB lock is never held during a Lean call
 
 `episode_step` runs the Lean gateway call (`verify_exact` for `Solve`,

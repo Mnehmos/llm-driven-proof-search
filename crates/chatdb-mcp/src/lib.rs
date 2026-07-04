@@ -1743,6 +1743,25 @@ impl ServerHandler for ChatDbMcp {
                     serde_json::Value::Null
                 };
 
+                // A rejected verification action (a kernel-failed Solve, or a
+                // module refused by policy or the staged kernel) preserves its
+                // reason as the obligation's failure_lesson. Surface it directly on
+                // the step response so a client gets structured feedback about WHY
+                // the draft was rejected without a second observe round-trip — the
+                // module trust boundary demands the rejection be legible, not silent.
+                let rejection_diagnostic: Option<String> = if is_verification_action
+                    && disposition == StepDisposition::Accepted && !accepted {
+                    match &target_obligation_id {
+                        Some(oid) => conn.query_row(
+                            "SELECT failure_lesson FROM episode_obligations WHERE id = ?1",
+                            [oid], |row| row.get::<_, Option<String>>(0),
+                        ).optional().map_err(rs)?.flatten(),
+                        None => None,
+                    }
+                } else {
+                    None
+                };
+
                 let res = serde_json::json!({
                     "accepted": accepted,
                     "disposition": disposition,
@@ -1752,6 +1771,7 @@ impl ServerHandler for ChatDbMcp {
                     "termination_reason": term_reason,
                     "truncation_reason": trunc_reason,
                     "diagnostics": error_msg,
+                    "rejection_diagnostic": rejection_diagnostic,
                     "next_action_request": next_action_request,
                     "observation": observation
                 });
@@ -2721,6 +2741,142 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         assert_ne!(status["state"], "terminated", "{:?}", status);
         assert_eq!(status["invalid_action_count"], 1, "{:?}", status);
+    }
+
+    /// Drives one attested-problem episode all the way to a single submit_module
+    /// step and returns the step-result JSON. Keeps the rejection-matrix tests to
+    /// the essential difference — the module payload — instead of repeating the
+    /// whole observe/claim/step dance.
+    async fn attested_module_step(root_statement: &str, action: serde_json::Value) -> serde_json::Value {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": format!("staging test for: {}", root_statement),
+            "root_formal_statement": root_statement,
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "stage-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": action, "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap())
+    }
+
+    /// Issue #3 acceptance: a helper def passes and the root theorem uses it — the
+    /// whole module verifies together and the root obligation is proved.
+    #[tokio::test]
+    async fn test_submit_module_helper_def_used_by_root() {
+        let step = attested_module_step("triple 3 = 9", serde_json::json!({
+            "type": "submit_module",
+            "module_items": [
+                {"item_kind": "def", "name": "triple", "type_signature": "Nat → Nat", "body": "fun n => 3 * n"}
+            ],
+            "root_theorem": {"name": "triple_three", "statement": "triple 3 = 9", "proof_term": "rfl"}
+        })).await;
+        assert_eq!(step["accepted"], true, "{:?}", step);
+        assert_eq!(step["outcome"], "kernel_verified", "{:?}", step);
+    }
+
+    /// Issue #3 acceptance: the root theorem is fine, but a NON-root helper carries
+    /// a prohibited construct — the WHOLE module is rejected, atomically. Nothing is
+    /// committed, the episode does not terminate, and the rejection is legible.
+    /// Review feedback on #16/#17: extended beyond direct leading commands to also
+    /// cover attribute-prefixed and modifier-prefixed declaration escapes, which a
+    /// scanner checking only "is the line's first token a declaration keyword"
+    /// would miss (`@[simp] theorem cheat`, `private theorem cheat`).
+    #[tokio::test]
+    async fn test_submit_module_prohibited_construct_matrix() {
+        // Each case: a valid root theorem (`True`/`trivial`) plus one helper whose
+        // content smuggles a prohibited construct. The token the client tried to
+        // inject must appear in the surfaced rejection diagnostic.
+        let cases: Vec<(&str, serde_json::Value)> = vec![
+            ("import",     serde_json::json!({"item_kind":"def","name":"h","type_signature":"Nat","body":"0\nimport Mathlib"})),
+            ("namespace",  serde_json::json!({"item_kind":"def","name":"h","type_signature":"Nat","body":"0\nnamespace Evil"})),
+            ("end",        serde_json::json!({"item_kind":"def","name":"h","type_signature":"Nat","body":"0\nend"})),
+            ("set_option", serde_json::json!({"item_kind":"def","name":"h","type_signature":"Nat","body":"0\nset_option maxHeartbeats 0"})),
+            ("axiom",      serde_json::json!({"item_kind":"def","name":"h","type_signature":"Nat","body":"0\n\naxiom cheat : False"})),
+            ("opaque",     serde_json::json!({"item_kind":"theorem","name":"h","statement":"True","proof_term":"opaque trivial"})),
+            ("unsafe",     serde_json::json!({"item_kind":"theorem","name":"h","statement":"True","proof_term":"unsafe trivial"})),
+            ("sorry",      serde_json::json!({"item_kind":"theorem","name":"h","statement":"True","proof_term":"sorry"})),
+            ("@[",         serde_json::json!({"item_kind":"def","name":"h","type_signature":"Nat","body":"0\n\n@[simp] theorem cheat : False := by trivial"})),
+            ("private",    serde_json::json!({"item_kind":"def","name":"h","type_signature":"Nat","body":"0\n\nprivate theorem cheat : False := by trivial"})),
+            ("protected",  serde_json::json!({"item_kind":"def","name":"h","type_signature":"Nat","body":"0\n\nprotected theorem cheat : False := by trivial"})),
+        ];
+
+        for (token, bad_item) in cases {
+            let step = attested_module_step("True", serde_json::json!({
+                "type": "submit_module",
+                "module_items": [bad_item],
+                "root_theorem": {"name": "root", "statement": "True", "proof_term": "trivial"}
+            })).await;
+            assert_eq!(step["accepted"], false, "module smuggling `{}` must be rejected: {:?}", token, step);
+            assert!(step["termination_reason"].is_null(), "rejected `{}` module must not terminate the episode: {:?}", token, step);
+            let diag = step["rejection_diagnostic"].as_str().unwrap_or("");
+            assert!(diag.contains(token) || diag.contains("prohibited"),
+                "rejection for `{}` must be legible (got {:?})", token, step["rejection_diagnostic"]);
+        }
+    }
+
+    /// Issue #3 acceptance: a raw `import` (a helper theorem proof carrying its own
+    /// import line) is rejected — the client never writes import lines; the server
+    /// owns them. Also confirms the episode stays re-attemptable after rejection.
+    #[tokio::test]
+    async fn test_submit_module_raw_import_rejected_and_reattemptable() {
+        let step = attested_module_step("True", serde_json::json!({
+            "type": "submit_module",
+            "module_items": [],
+            "root_theorem": {"name": "root", "statement": "True", "proof_term": "trivial\nimport Mathlib.Tactic"}
+        })).await;
+        assert_eq!(step["accepted"], false, "{:?}", step);
+        assert!(step["rejection_diagnostic"].as_str().unwrap_or("").contains("import"), "{:?}", step);
+        // The obligation is still open: the step handed back a next_action_request
+        // targeting the same (still-unproved) root, so the prover can try again.
+        assert!(!step["next_action_request"].is_null(), "a rejected module must leave the obligation open for another attempt: {:?}", step);
+    }
+
+    /// Review feedback on #17: the existing no-write-on-failure test
+    /// (`verify_module_does_not_write_on_failure` in chatdb-core) only proves
+    /// filesystem no-write when the GATEWAY can't even spawn Lean. It never proves
+    /// no-write when a module is rejected by POLICY — and policy rejection never
+    /// reaches the gateway at all (a different code path entirely), so this
+    /// exercises a genuinely distinct policy violation (an invalid dotted name,
+    /// not the root-hash mismatch other tests already cover) through the actual
+    /// MCP path and asserts the same invariant: no verified lemma row (the
+    /// obligation stays open, re-attemptable), no episode termination, and no
+    /// reward for the rejected attempt.
+    #[tokio::test]
+    async fn test_submit_module_policy_rejection_writes_nothing_trusted() {
+        let step = attested_module_step("True", serde_json::json!({
+            "type": "submit_module",
+            "module_items": [
+                {"item_kind": "def", "name": "Mathlib.evil", "type_signature": "Nat", "body": "0"}
+            ],
+            "root_theorem": {"name": "root", "statement": "True", "proof_term": "trivial"}
+        })).await;
+        assert_eq!(step["accepted"], false, "{:?}", step);
+        assert!(step["termination_reason"].is_null(), "policy rejection must not terminate the episode: {:?}", step);
+        assert!(!step["next_action_request"].is_null(), "policy rejection must leave the obligation open for another attempt: {:?}", step);
+        // No kernel_pass reward — the reward list must not carry one for a rejected attempt.
+        let reward = step["reward"].as_array().unwrap();
+        assert!(!reward.iter().any(|r| r["id"] == "kernel_pass"), "a policy-rejected module must not earn kernel_pass: {:?}", step);
     }
 
     /// Review feedback on #15: a malformed stored `import_manifest_json` must not
