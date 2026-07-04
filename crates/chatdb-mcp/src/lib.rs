@@ -372,6 +372,124 @@ pub struct RunEnvelopeObserveArgs {
     pub run_envelope_id: String,
 }
 
+// -- PutnamBench benchmark schema (issues #29, #30) ------------------------
+//
+// benchmark_suite_create/benchmark_problem_register are MANUAL/structured
+// registration only — no Lean-file parsing. The real importer (issue #29:
+// automatically extracting theorem name/imports/statement from a real
+// PutnamBench checkout) is a separate, not-yet-built piece; these tools are
+// what it will call once it exists, and are independently useful for
+// hand-registering a problem in the meantime.
+
+#[derive(JsonSchema, Deserialize)]
+pub struct BenchmarkSuiteCreateArgs {
+    pub name: String,
+    #[serde(default)]
+    pub upstream_url: Option<String>,
+    #[serde(default)]
+    pub upstream_commit: Option<String>,
+    #[serde(default = "default_benchmark_language")]
+    pub language: String,
+}
+fn default_benchmark_language() -> String { "Lean4".to_string() }
+
+#[derive(JsonSchema, Deserialize)]
+pub struct BenchmarkProblemRegisterArgs {
+    pub suite_id: String,
+    /// The problem's own identifier in the upstream suite (e.g. PutnamBench's
+    /// own problem numbering), NOT a ChatDB-generated id.
+    pub upstream_problem_id: String,
+    pub theorem_name: String,
+    #[serde(default)]
+    pub source_file_path: Option<String>,
+    /// The exact, unmodified formal statement from the upstream suite. The
+    /// server computes root_statement_hash from this (never accepted from
+    /// the client) — same principle as problem_create's own root statement
+    /// hash.
+    pub root_formal_statement: String,
+    #[serde(default)]
+    pub import_manifest: Vec<String>,
+    #[serde(default)]
+    pub context_hash: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub enum BenchmarkSolveMode {
+    #[serde(rename = "solve_only")] SolveOnly,
+    #[serde(rename = "submit_module_allowed")] SubmitModuleAllowed,
+    #[serde(rename = "submit_module_plus_draft_planning")] SubmitModulePlusDraftPlanning,
+    #[serde(rename = "submit_module_plus_librarian")] SubmitModulePlusLibrarian,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct BenchmarkRunCreateArgs {
+    pub suite_id: String,
+    #[serde(default)]
+    pub run_envelope_id: Option<String>,
+    #[serde(default)]
+    pub chatdb_commit: Option<String>,
+    pub solve_mode: BenchmarkSolveMode,
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    pub attempt_budget: i64,
+    #[serde(default)]
+    pub wall_clock_budget_ms: Option<i64>,
+    #[serde(default)]
+    pub lean_timeout_ms: Option<i64>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub enum BenchmarkResultStatus {
+    #[serde(rename = "kernel_verified")] KernelVerified,
+    #[serde(rename = "certified")] Certified,
+    #[serde(rename = "failed")] Failed,
+    #[serde(rename = "timeout")] Timeout,
+    #[serde(rename = "infra_error")] InfraError,
+    #[serde(rename = "formalization_gap")] FormalizationGap,
+    #[serde(rename = "skipped")] Skipped,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct BenchmarkResultRecordArgs {
+    pub run_id: String,
+    pub benchmark_problem_id: String,
+    #[serde(default)]
+    pub problem_version_id: Option<String>,
+    /// When given, cross-checked against that episode's ACTUAL recorded
+    /// outcome (issue #36) — a result claiming "kernel_verified"/"certified"
+    /// must match the referenced episode's real outcome exactly, and any
+    /// referenced episode must have actually concluded (outcome set). A
+    /// benchmark result cannot claim an outcome the ledger doesn't back.
+    #[serde(default)]
+    pub episode_id: Option<String>,
+    pub status: BenchmarkResultStatus,
+    #[serde(default)]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub pass_at: Option<i64>,
+    /// Required (no default) — a benchmark result without a reported attempt
+    /// count is exactly the kind of unmeasured claim this schema exists to
+    /// prevent.
+    pub attempts_used: i64,
+    #[serde(default)]
+    pub time_to_first_success_ms: Option<i64>,
+    #[serde(default)]
+    pub cost_micros: Option<i64>,
+    #[serde(default)]
+    pub final_diagnostic_category: Option<String>,
+    #[serde(default)]
+    pub proof_artifact_hash: Option<String>,
+    #[serde(default)]
+    pub trajectory_export_hash: Option<String>,
+    #[serde(default)]
+    pub replay_status: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct BenchmarkRunObserveArgs {
+    pub run_id: String,
+}
+
 #[derive(JsonSchema, Deserialize)]
 pub struct ProblemCreateArgs {
     pub source_problem_text: String,
@@ -1788,7 +1906,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.6"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.7"))
     }
 
     async fn list_tools(
@@ -1834,6 +1952,11 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<RunEnvelopeUpdateArgs>("run_envelope_update", "Update a run envelope's host-side cost fields or notes after the fact"),
             make_tool::<RunEnvelopeAttachEpisodeArgs>("run_envelope_attach_episode", "Tag an existing episode with a run envelope. Metadata only — never changes the episode's outcome/state"),
             make_tool::<RunEnvelopeObserveArgs>("run_envelope_observe", "Read back a run envelope and every episode tagged with it"),
+            make_tool::<BenchmarkSuiteCreateArgs>("benchmark_suite_create", "Register a benchmark suite (e.g. PutnamBench) — manual/structured registration, not automated parsing. Issue #29/#30"),
+            make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client"),
+            make_tool::<BenchmarkRunCreateArgs>("benchmark_run_create", "Create a benchmark run against a suite. lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results"),
+            make_tool::<BenchmarkResultRecordArgs>("benchmark_result_record", "Record (or update) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem"),
+            make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -1874,7 +1997,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.6",
+                    "environment_version": "0.3.7",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -3786,6 +3909,336 @@ impl ServerHandler for ChatDbMcp {
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
+            "benchmark_suite_create" => {
+                let args: BenchmarkSuiteCreateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.name.trim().is_empty() {
+                    return Err(mcp_invalid_params("name must be non-empty"));
+                }
+
+                let conn = self.conn.lock().await;
+                let suite_id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO benchmark_suites (id, name, upstream_url, upstream_commit, language, imported_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    (&suite_id, &args.name, &args.upstream_url, &args.upstream_commit, &args.language, &now),
+                ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
+                    mcp_invalid_params(format!("a benchmark suite named {:?} already exists", args.name))
+                } else {
+                    rs(e)
+                })?;
+
+                let res = serde_json::json!({ "suite_id": suite_id, "name": args.name, "created_at": now });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "benchmark_problem_register" => {
+                let args: BenchmarkProblemRegisterArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.root_formal_statement.trim().is_empty() || args.theorem_name.trim().is_empty() {
+                    return Err(mcp_invalid_params("theorem_name and root_formal_statement must be non-empty"));
+                }
+
+                let conn = self.conn.lock().await;
+                let suite_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM benchmark_suites WHERE id = ?1", [&args.suite_id], |row| row.get(0),
+                ).map_err(rs)?;
+                if suite_exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown suite_id: {}", args.suite_id)));
+                }
+
+                let root_statement_hash = canonical_hash(&args.root_formal_statement).map_err(mcp_internal_error)?;
+                let import_manifest_json = serde_json::to_string(&args.import_manifest).unwrap();
+                let problem_id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO benchmark_problems (
+                        id, suite_id, upstream_problem_id, theorem_name, source_file_path,
+                        root_formal_statement, root_statement_hash, import_manifest_json,
+                        context_hash, status, created_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'imported', ?10)",
+                    (&problem_id, &args.suite_id, &args.upstream_problem_id, &args.theorem_name, &args.source_file_path,
+                     &args.root_formal_statement, &root_statement_hash, &import_manifest_json, &args.context_hash, &now),
+                ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
+                    mcp_invalid_params(format!("problem {:?} is already registered in this suite", args.upstream_problem_id))
+                } else {
+                    rs(e)
+                })?;
+
+                let res = serde_json::json!({
+                    "benchmark_problem_id": problem_id,
+                    "root_statement_hash": root_statement_hash,
+                    "status": "imported",
+                    "created_at": now,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "benchmark_run_create" => {
+                let args: BenchmarkRunCreateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.attempt_budget <= 0 {
+                    return Err(mcp_invalid_params("attempt_budget must be positive"));
+                }
+
+                let conn = self.conn.lock().await;
+                let suite_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM benchmark_suites WHERE id = ?1", [&args.suite_id], |row| row.get(0),
+                ).map_err(rs)?;
+                if suite_exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown suite_id: {}", args.suite_id)));
+                }
+                if let Some(env_id) = &args.run_envelope_id {
+                    let env_exists: i64 = conn.query_row(
+                        "SELECT COUNT(*) FROM run_envelopes WHERE id = ?1", [env_id], |row| row.get(0),
+                    ).map_err(rs)?;
+                    if env_exists == 0 {
+                        return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", env_id)));
+                    }
+                }
+
+                let solve_mode_str = match args.solve_mode {
+                    BenchmarkSolveMode::SolveOnly => "solve_only",
+                    BenchmarkSolveMode::SubmitModuleAllowed => "submit_module_allowed",
+                    BenchmarkSolveMode::SubmitModulePlusDraftPlanning => "submit_module_plus_draft_planning",
+                    BenchmarkSolveMode::SubmitModulePlusLibrarian => "submit_module_plus_librarian",
+                };
+                // lean_version/mathlib_commit are read from the server's OWN
+                // detected environment, never accepted from the client — the
+                // only trustworthy record of what actually checked any
+                // resulting proofs (a client-supplied value could silently
+                // misrepresent the toolchain a result was really verified
+                // against).
+                let (lean_version, mathlib_commit) = match &self.lean_environment {
+                    Some(env) => (Some(env.descriptor.clone()), Some(env.mathlib_rev.clone())),
+                    None => (None, None),
+                };
+                let allowed_tools_json = serde_json::to_string(&args.allowed_tools).unwrap();
+                let run_id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO benchmark_runs (
+                        id, suite_id, run_envelope_id, chatdb_commit, lean_version, mathlib_commit,
+                        solve_mode, allowed_tools_json, attempt_budget, wall_clock_budget_ms, lean_timeout_ms, created_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                    (&run_id, &args.suite_id, &args.run_envelope_id, &args.chatdb_commit, &lean_version, &mathlib_commit,
+                     solve_mode_str, &allowed_tools_json, args.attempt_budget, &args.wall_clock_budget_ms, &args.lean_timeout_ms, &now),
+                ).map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "run_id": run_id,
+                    "solve_mode": solve_mode_str,
+                    "lean_version": lean_version,
+                    "mathlib_commit": mathlib_commit,
+                    "created_at": now,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "benchmark_result_record" => {
+                let args: BenchmarkResultRecordArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let run_suite_id: Option<String> = conn.query_row(
+                    "SELECT suite_id FROM benchmark_runs WHERE id = ?1", [&args.run_id], |row| row.get(0),
+                ).optional().map_err(rs)?;
+                let Some(run_suite_id) = run_suite_id else {
+                    return Err(mcp_invalid_params(format!("unknown run_id: {}", args.run_id)));
+                };
+                let problem_row: Option<(String, String)> = conn.query_row(
+                    "SELECT suite_id, root_statement_hash FROM benchmark_problems WHERE id = ?1", [&args.benchmark_problem_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).optional().map_err(rs)?;
+                let Some((problem_suite_id, problem_root_hash)) = problem_row else {
+                    return Err(mcp_invalid_params(format!("unknown benchmark_problem_id: {}", args.benchmark_problem_id)));
+                };
+                if problem_suite_id != run_suite_id {
+                    return Err(mcp_invalid_params(format!(
+                        "benchmark_problem_id {} belongs to a different suite than run_id {}", args.benchmark_problem_id, args.run_id
+                    )));
+                }
+
+                let status_str = match args.status {
+                    BenchmarkResultStatus::KernelVerified => "kernel_verified",
+                    BenchmarkResultStatus::Certified => "certified",
+                    BenchmarkResultStatus::Failed => "failed",
+                    BenchmarkResultStatus::Timeout => "timeout",
+                    BenchmarkResultStatus::InfraError => "infra_error",
+                    BenchmarkResultStatus::FormalizationGap => "formalization_gap",
+                    BenchmarkResultStatus::Skipped => "skipped",
+                };
+
+                // Issue #36's core invariant, enforced concretely: a result
+                // cannot claim an outcome the episode ledger doesn't back.
+                if let Some(episode_id) = &args.episode_id {
+                    let episode_row: Option<(String, Option<String>)> = conn.query_row(
+                        "SELECT problem_version_id, outcome FROM episodes WHERE id = ?1", [episode_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    ).optional().map_err(rs)?;
+                    let Some((episode_pv_id, episode_outcome)) = episode_row else {
+                        return Err(mcp_invalid_params(format!("unknown episode_id: {}", episode_id)));
+                    };
+                    let Some(episode_outcome) = episode_outcome else {
+                        return Err(mcp_invalid_params(format!(
+                            "episode {} has not concluded yet (outcome is not set) — cannot record a benchmark result against an in-progress episode", episode_id
+                        )));
+                    };
+                    // An episode reaching e.g. kernel_verified only proves *something*
+                    // was verified — not that it was THIS benchmark problem's statement.
+                    // Compare root_statement_hash (server-computed on both sides) rather
+                    // than trusting the caller's episode/problem pairing.
+                    if let Some(declared_pv) = &args.problem_version_id {
+                        if *declared_pv != episode_pv_id {
+                            return Err(mcp_invalid_params(format!(
+                                "problem_version_id {} does not match episode {}'s actual problem_version_id {}",
+                                declared_pv, episode_id, episode_pv_id
+                            )));
+                        }
+                    }
+                    let episode_pv_hash: String = conn.query_row(
+                        "SELECT root_statement_hash FROM problem_versions WHERE id = ?1", [&episode_pv_id], |row| row.get(0),
+                    ).map_err(rs)?;
+                    if episode_pv_hash != problem_root_hash {
+                        return Err(mcp_invalid_params(format!(
+                            "episode {} proved a different statement (problem_version {}) than benchmark_problem_id {} — root_statement_hash mismatch",
+                            episode_id, episode_pv_id, args.benchmark_problem_id
+                        )));
+                    }
+                    if status_str == "kernel_verified" && episode_outcome != "kernel_verified" {
+                        return Err(mcp_invalid_params(format!(
+                            "status 'kernel_verified' claimed, but episode {} actually reached outcome '{}'", episode_id, episode_outcome
+                        )));
+                    }
+                    if status_str == "certified" && episode_outcome != "certified" {
+                        return Err(mcp_invalid_params(format!(
+                            "status 'certified' claimed, but episode {} actually reached outcome '{}'", episode_id, episode_outcome
+                        )));
+                    }
+                }
+
+                let existing_id: Option<String> = conn.query_row(
+                    "SELECT id FROM benchmark_results WHERE run_id = ?1 AND benchmark_problem_id = ?2",
+                    (&args.run_id, &args.benchmark_problem_id),
+                    |row| row.get(0),
+                ).optional().map_err(rs)?;
+                let now = Utc::now().to_rfc3339();
+                let result_id = existing_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+                if let Some(existing_id) = &existing_id {
+                    conn.execute(
+                        "UPDATE benchmark_results SET
+                            problem_version_id = ?1, episode_id = ?2, status = ?3, outcome = ?4, pass_at = ?5,
+                            attempts_used = ?6, time_to_first_success_ms = ?7, cost_micros = ?8,
+                            final_diagnostic_category = ?9, proof_artifact_hash = ?10, trajectory_export_hash = ?11,
+                            replay_status = ?12, updated_at = ?13
+                         WHERE id = ?14",
+                        (&args.problem_version_id, &args.episode_id, status_str, &args.outcome, &args.pass_at,
+                         args.attempts_used, &args.time_to_first_success_ms, &args.cost_micros,
+                         &args.final_diagnostic_category, &args.proof_artifact_hash, &args.trajectory_export_hash,
+                         &args.replay_status, &now, existing_id),
+                    ).map_err(rs)?;
+                } else {
+                    conn.execute(
+                        "INSERT INTO benchmark_results (
+                            id, run_id, benchmark_problem_id, problem_version_id, episode_id, status, outcome,
+                            pass_at, attempts_used, time_to_first_success_ms, cost_micros, final_diagnostic_category,
+                            proof_artifact_hash, trajectory_export_hash, replay_status, created_at, updated_at
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
+                        (&result_id, &args.run_id, &args.benchmark_problem_id, &args.problem_version_id, &args.episode_id,
+                         status_str, &args.outcome, &args.pass_at, args.attempts_used, &args.time_to_first_success_ms,
+                         &args.cost_micros, &args.final_diagnostic_category, &args.proof_artifact_hash,
+                         &args.trajectory_export_hash, &args.replay_status, &now),
+                    ).map_err(rs)?;
+                }
+
+                let res = serde_json::json!({
+                    "result_id": result_id,
+                    "run_id": args.run_id,
+                    "benchmark_problem_id": args.benchmark_problem_id,
+                    "status": status_str,
+                    "updated": existing_id.is_some(),
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "benchmark_run_observe" => {
+                let args: BenchmarkRunObserveArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let run_row: Option<(String, Option<String>, Option<String>, Option<String>, Option<String>, String, String, i64, Option<i64>, Option<i64>, String)> = conn.query_row(
+                    "SELECT suite_id, run_envelope_id, chatdb_commit, lean_version, mathlib_commit, solve_mode,
+                            allowed_tools_json, attempt_budget, wall_clock_budget_ms, lean_timeout_ms, created_at
+                     FROM benchmark_runs WHERE id = ?1",
+                    [&args.run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?)),
+                ).optional().map_err(rs)?;
+                let Some((suite_id, run_envelope_id, chatdb_commit, lean_version, mathlib_commit, solve_mode, allowed_tools_json, attempt_budget, wall_clock_budget_ms, lean_timeout_ms, created_at)) = run_row else {
+                    return Err(mcp_invalid_params(format!("unknown run_id: {}", args.run_id)));
+                };
+
+                let mut rstmt = conn.prepare(
+                    "SELECT r.benchmark_problem_id, p.theorem_name, r.status, r.outcome, r.pass_at, r.attempts_used,
+                            r.time_to_first_success_ms, r.cost_micros, r.final_diagnostic_category, r.replay_status
+                     FROM benchmark_results r JOIN benchmark_problems p ON p.id = r.benchmark_problem_id
+                     WHERE r.run_id = ?1 ORDER BY p.upstream_problem_id ASC"
+                ).map_err(rs)?;
+                let results: Vec<serde_json::Value> = rstmt.query_map([&args.run_id], |row| {
+                    Ok(serde_json::json!({
+                        "benchmark_problem_id": row.get::<_, String>(0)?,
+                        "theorem_name": row.get::<_, String>(1)?,
+                        "status": row.get::<_, String>(2)?,
+                        "outcome": row.get::<_, Option<String>>(3)?,
+                        "pass_at": row.get::<_, Option<i64>>(4)?,
+                        "attempts_used": row.get::<_, i64>(5)?,
+                        "time_to_first_success_ms": row.get::<_, Option<i64>>(6)?,
+                        "cost_micros": row.get::<_, Option<i64>>(7)?,
+                        "final_diagnostic_category": row.get::<_, Option<String>>(8)?,
+                        "replay_status": row.get::<_, Option<String>>(9)?,
+                    }))
+                }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+
+                let is_solved = |r: &serde_json::Value| matches!(r["status"].as_str(), Some("kernel_verified") | Some("certified"));
+                let solved = results.iter().filter(|r| is_solved(r)).count();
+                let total = results.len();
+                let total_attempts: i64 = results.iter().filter_map(|r| r["attempts_used"].as_i64()).sum();
+                // pass@1: solved AND the first attempt was the one that succeeded.
+                // `pass_at` (attempt index of first success) is the authoritative
+                // signal when the caller supplies it; fall back to attempts_used == 1
+                // when it's absent, since attempts_used is a required field. Distinct
+                // from `solved_count`/overall solve rate, which counts a problem solved
+                // within the run's attempt_budget regardless of how many tries it took.
+                let solved_on_first_attempt = results.iter().filter(|r| {
+                    is_solved(r) && match r["pass_at"].as_i64() {
+                        Some(p) => p == 1,
+                        None => r["attempts_used"].as_i64() == Some(1),
+                    }
+                }).count();
+                let metrics = serde_json::json!({
+                    "problems_attempted": total,
+                    "solved_count": solved,
+                    "solved_rate": if total > 0 { solved as f64 / total as f64 } else { 0.0 },
+                    "pass_at_1_rate": if total > 0 { solved_on_first_attempt as f64 / total as f64 } else { 0.0 },
+                    "kernel_verified_count": results.iter().filter(|r| r["status"] == "kernel_verified").count(),
+                    "certified_count": results.iter().filter(|r| r["status"] == "certified").count(),
+                    "average_attempts_per_result": if total > 0 { total_attempts as f64 / total as f64 } else { 0.0 },
+                });
+
+                let res = serde_json::json!({
+                    "run_id": args.run_id,
+                    "suite_id": suite_id,
+                    "run_envelope_id": run_envelope_id,
+                    "chatdb_commit": chatdb_commit,
+                    "lean_version": lean_version,
+                    "mathlib_commit": mathlib_commit,
+                    "solve_mode": solve_mode,
+                    "allowed_tools": serde_json::from_str::<serde_json::Value>(&allowed_tools_json).unwrap_or(serde_json::Value::Array(vec![])),
+                    "attempt_budget": attempt_budget,
+                    "wall_clock_budget_ms": wall_clock_budget_ms,
+                    "lean_timeout_ms": lean_timeout_ms,
+                    "created_at": created_at,
+                    "results": results,
+                    "metrics": metrics,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
             _ => Err(McpError::new(ErrorCode::METHOD_NOT_FOUND, format!("Method not found: {}", request.name), None)),
         }
     }
@@ -3937,7 +4390,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 37);
+        assert_eq!(list_res.tools.len(), 42);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -6735,5 +7188,302 @@ mod tests {
 
         let run_id: Option<String> = { let c = conn_arc.lock().await; c.query_row("SELECT run_id FROM episodes WHERE id = ?1", [&episode_id], |row| row.get(0)).unwrap() };
         assert_eq!(run_id.as_deref(), Some(envelope_id.as_str()), "run_id must actually be set to the envelope id");
+    }
+
+    // -- PutnamBench benchmark schema (issues #29, #30) ----------------------
+
+    async fn create_suite(peer: &rmcp::service::Peer<rmcp::RoleClient>, name: &str) -> String {
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
+            "name": name,
+        }).as_object().unwrap().clone())).await.unwrap());
+        created["suite_id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_suite_create_rejects_duplicate_name() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        create_suite(&peer, "PutnamBench").await;
+        let dup = peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
+            "name": "PutnamBench",
+        }).as_object().unwrap().clone())).await;
+        assert!(dup.is_err(), "duplicate suite name must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_problem_register_computes_hash_and_rejects_duplicate() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+
+        let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "putnam_1988_a1", "theorem_name": "putnam_1988_a1",
+            "root_formal_statement": "∀ n : ℕ, n = n", "import_manifest": ["Mathlib.Tactic.Ring"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert!(!registered["root_statement_hash"].as_str().unwrap().is_empty());
+
+        let dup = peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "putnam_1988_a1", "theorem_name": "putnam_1988_a1",
+            "root_formal_statement": "∀ n : ℕ, n = n",
+        }).as_object().unwrap().clone())).await;
+        assert!(dup.is_err(), "the same upstream_problem_id in the same suite must be rejected on re-registration");
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_run_create_reads_lean_environment_from_server_not_client() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let handler = ChatDbMcp {
+            conn: Arc::new(Mutex::new(conn)),
+            gateway: Box::new(MockGateway),
+            lean_available: true,
+            lean_environment: Some(chatdb_proof_core::lean::LeanEnvironmentInfo {
+                toolchain: "leanprover/lean4:v4.32.0-rc1".to_string(),
+                mathlib_rev: "360da6fa66c1273b76b6b2d8c5666fd5ac2e3b56".to_string(),
+                descriptor: "leanprover/lean4:v4.32.0-rc1 + mathlib@360da6fa66c1273b76b6b2d8c5666fd5ac2e3b56".to_string(),
+                // Deliberately distinct from mathlib_rev: in production `hash` is
+                // canonical_hash(descriptor) (a SHA-256 fingerprint of the whole
+                // descriptor string), never equal to the raw git commit. A fixture
+                // that set these equal previously masked a bug where
+                // benchmark_run_create stored `hash` into the `mathlib_commit`
+                // column instead of the real `mathlib_rev`.
+                hash: "deadbeefcafef00d0000000000000000000000000000000000000000000000".to_string(),
+            }),
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(run["lean_version"], "leanprover/lean4:v4.32.0-rc1 + mathlib@360da6fa66c1273b76b6b2d8c5666fd5ac2e3b56");
+        assert_eq!(run["mathlib_commit"], "360da6fa66c1273b76b6b2d8c5666fd5ac2e3b56");
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_run_create_rejects_nonpositive_attempt_budget() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let res = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 0,
+        }).as_object().unwrap().clone())).await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_result_record_rejects_cross_suite_problem() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_a = create_suite(&peer, "PutnamBench").await;
+        let suite_b = create_suite(&peer, "OtherBench").await;
+        let problem_b = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_b, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run_a = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_a, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let res = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run_a["run_id"], "benchmark_problem_id": problem_b["benchmark_problem_id"],
+            "status": "failed", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await;
+        assert!(res.is_err(), "a result must not reference a problem from a different suite than its run");
+    }
+
+    /// Issue #36's core invariant, enforced concretely: a benchmark result
+    /// cannot claim kernel_verified/certified unless the referenced episode
+    /// ACTUALLY reached that outcome, and cannot reference an episode that
+    /// hasn't concluded at all.
+    #[tokio::test]
+    async fn test_benchmark_result_record_enforces_episode_outcome_consistency() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // An episode that has NOT concluded (no Solve/GiveUp yet).
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let unconcluded = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await;
+        assert!(unconcluded.is_err(), "a result must not reference an episode that hasn't concluded");
+
+        // Conclude the episode with GiveUp (outcome = gave_up), then claim
+        // kernel_verified anyway — must be rejected as a mismatch.
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "bench-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "give_up"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let mismatched = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await;
+        assert!(mismatched.is_err(), "claiming kernel_verified for an episode that actually gave up must be rejected");
+
+        // The honest status (failed) for the same episode succeeds.
+        let honest = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "failed", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(honest["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_result_record_rejects_episode_problem_statement_mismatch() {
+        // A real, concluded, kernel_verified episode must NOT be usable as
+        // "proof" of a DIFFERENT benchmark problem's statement — only an
+        // episode that actually proved the SAME root_formal_statement
+        // (compared via root_statement_hash) may back a claimed result.
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        // Register a "hard" benchmark problem with a distinct statement.
+        let hard_problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "hard1", "theorem_name": "hard1",
+            "root_formal_statement": "putnam_1988_a1_real_statement",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // Drive a genuinely kernel_verified episode, but for a TRIVIAL, UNRELATED statement.
+        let trivial_pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": trivial_pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "mismatch-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["termination_reason"], "root_proved", "sanity check: the trivial episode really did conclude kernel_verified");
+
+        // Attempting to claim this UNRELATED, genuinely-verified episode as evidence
+        // for the hard benchmark problem must be rejected — the episode proved a
+        // different statement than benchmark_problem_id claims.
+        let res = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": hard_problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await;
+        assert!(res.is_err(), "an episode that verified a different statement must not back a result for this benchmark problem");
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_result_record_upserts_and_run_observe_computes_metrics() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let p1 = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let p2 = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "p2", "theorem_name": "p2", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run_id = run["run_id"].as_str().unwrap().to_string();
+
+        // First attempt for p1: failed, attempts_used=1.
+        let first = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run_id, "benchmark_problem_id": p1["benchmark_problem_id"], "status": "failed", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(first["updated"], false);
+        // Second attempt for the SAME problem: upserts to kernel_verified, attempts_used=2.
+        let second = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run_id, "benchmark_problem_id": p1["benchmark_problem_id"], "status": "kernel_verified", "attempts_used": 2,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(second["updated"], true);
+        // p2: skipped.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run_id, "benchmark_problem_id": p2["benchmark_problem_id"], "status": "skipped", "attempts_used": 0,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+            "run_id": run_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let results = observed["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2, "upserting the same problem twice must not create a duplicate result row: {:?}", results);
+        assert_eq!(observed["metrics"]["problems_attempted"], 2);
+        assert_eq!(observed["metrics"]["solved_count"], 1);
+        assert_eq!(observed["metrics"]["kernel_verified_count"], 1);
+        assert_eq!(observed["metrics"]["certified_count"], 0);
+        // p1 only reached kernel_verified on its SECOND attempt — must not count
+        // toward pass_at_1_rate even though it counts toward solved_count/solved_rate.
+        assert_eq!(observed["metrics"]["solved_rate"], 0.5, "1 of 2 problems solved at all");
+        assert_eq!(observed["metrics"]["pass_at_1_rate"], 0.0, "the only solve took 2 attempts, so pass@1 is 0");
+    }
+
+    #[tokio::test]
+    async fn test_benchmark_run_observe_pass_at_1_rate_distinguishes_first_try_from_eventual_solve() {
+        // pass_at_1_rate must reflect genuine first-attempt success, not merely
+        // "solved at all within the run's attempt budget" (which is solved_rate).
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let mut problem_ids = vec![];
+        for upstream_id in ["p1", "p2", "p3", "p4"] {
+            let p = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+                "suite_id": suite_id, "upstream_problem_id": upstream_id, "theorem_name": upstream_id,
+                "root_formal_statement": format!("stmt_{}", upstream_id),
+            }).as_object().unwrap().clone())).await.unwrap());
+            problem_ids.push(p["benchmark_problem_id"].as_str().unwrap().to_string());
+        }
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run_id = run["run_id"].as_str().unwrap().to_string();
+
+        // p1: solved, but attempts_used=2 and no explicit pass_at -- NOT pass@1.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run_id, "benchmark_problem_id": problem_ids[0], "status": "kernel_verified", "attempts_used": 2,
+        }).as_object().unwrap().clone())).await.unwrap());
+        // p2: solved, attempts_used=1, no explicit pass_at -- fallback counts as pass@1.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run_id, "benchmark_problem_id": problem_ids[1], "status": "kernel_verified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        // p3: solved, attempts_used=3 but explicit pass_at=1 (authoritative) -- pass@1.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run_id, "benchmark_problem_id": problem_ids[2], "status": "kernel_verified", "attempts_used": 3, "pass_at": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        // p4: not solved at all.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run_id, "benchmark_problem_id": problem_ids[3], "status": "failed", "attempts_used": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+            "run_id": run_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["metrics"]["problems_attempted"], 4);
+        assert_eq!(observed["metrics"]["solved_count"], 3);
+        assert_eq!(observed["metrics"]["solved_rate"], 0.75);
+        assert_eq!(observed["metrics"]["pass_at_1_rate"], 0.5, "only p2 and p3 count as genuine pass@1 out of 4 attempted");
     }
 }
