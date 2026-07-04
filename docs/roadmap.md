@@ -248,8 +248,8 @@ last):
 **Status:** Level 3 MVP complete. #24 shipped (v0.3.2). #23 + #10 shipped
 together (v0.3.3). #25 shipped (v0.3.4). #35 shipped (v0.3.5). #34+#38 core
 shipped (v0.3.6). #29+#30 schema shipped (v0.3.7). #33+#37 shipped (v0.3.8).
-Next: #28 (harness design doc), #29's real importer, #31 (pass@k runner),
-#32 (smoke fixtures).
+#28 (harness design doc) shipped, docs-only, no version bump. Next: #29's
+real importer, #31 (pass@k runner), #32 (smoke fixtures).
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
