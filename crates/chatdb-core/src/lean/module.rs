@@ -19,12 +19,16 @@ use serde::{Deserialize, Serialize};
 use crate::hashing::canonical_hash;
 use crate::models::action::{LeanModuleItem, ModuleTheorem};
 
-/// A leading token that must never begin a line inside any client-supplied
-/// string. Each would, at the start of a line, open a new top-level Lean command
-/// and so let a def body or proof term inject a declaration (e.g.
-/// `axiom cheat : False`) or reshape the module (`namespace`, `end`, `import`).
-/// The client submits helper declarations as their own structured items; it
-/// never writes these keywords itself.
+/// A token that must never appear (as a whole word) anywhere inside any
+/// client-supplied string. Each would open a fresh top-level Lean command and so
+/// let a def body or proof term inject a declaration (e.g. `axiom cheat :
+/// False`) or reshape the module (`namespace`, `end`, `import`) — banned
+/// ANYWHERE, not merely at the start of a line: Lean does not require a new
+/// top-level command to begin on its own line, only that the preceding term is
+/// syntactically complete, so `0 theorem cheat : True := trivial` on a single
+/// line opens a real `theorem` command exactly as `0\n\ntheorem cheat ...`
+/// does. The client submits helper declarations as their own structured items;
+/// it never writes these keywords itself.
 const PROHIBITED_LEADING_TOKENS: &[&str] = &[
     // structural / scope — the server owns these
     "import", "namespace", "end", "section", "open", "set_option", "attribute",
@@ -175,53 +179,47 @@ fn contains_word(haystack: &str, token: &str) -> bool {
 
 /// Scans one client-supplied string for prohibited constructs. `label`
 /// identifies the field for diagnostics (e.g. `def foo body`).
+///
+/// Every check here is position-independent — a whole-word or substring match
+/// ANYWHERE in `content`, never "only at the start of a line". Lean does not
+/// require a new top-level command to begin on its own line; it only requires
+/// the preceding term to be syntactically complete. A scan keyed on line-start
+/// position is bypassed by e.g. a def body of `0 theorem cheat : True :=
+/// trivial` on a single line — Lean parses `def evil := 0` as complete, then a
+/// fresh `theorem cheat : True := trivial` command, exactly as the newline-
+/// separated form `0\n\ntheorem cheat ...` does. Checking anywhere, not just at
+/// line-start, closes that bypass.
 fn check_content(label: &str, content: &str) -> Result<(), ModulePolicyError> {
-    // Whole-word bans anywhere (sorry/admit/axiom/...): these are never legitimate
-    // in a client string and several are silent soundness holes.
-    for token in PROHIBITED_ANYWHERE_TOKENS {
+    // Whole-word bans anywhere: structural/scope keywords, declaration keywords,
+    // declaration modifiers, metaprogramming commands (PROHIBITED_LEADING_TOKENS
+    // — misleadingly named for a now-removed line-start-only check, kept as one
+    // list since every one of these is a reserved Lean keyword with no
+    // legitimate non-declaration use), plus sorry/admit/axiom/unsafe/opaque/
+    // native_decide (PROHIBITED_ANYWHERE_TOKENS — silent soundness holes or
+    // trusted-construct smuggling). None of these can legitimately appear as a
+    // bare identifier in submitted math content (they're all reserved words),
+    // so banning them outright — anywhere — costs nothing but closes the gap.
+    for token in PROHIBITED_LEADING_TOKENS.iter().chain(PROHIBITED_ANYWHERE_TOKENS.iter()) {
         if contains_word(content, token) {
             return Err(ModulePolicyError::ProhibitedConstruct {
                 item: label.to_string(),
                 token: token.to_string(),
-                detail: format!("`{}` is not permitted anywhere in a submitted module", token),
+                detail: format!("`{}` is not permitted anywhere in a submitted module — the server owns scope/imports/declarations; submit any needed declaration as its own structured item", token),
             });
         }
     }
-    // Leading-token bans: a line that *starts* (after indentation) with a
-    // top-level command keyword would open a new declaration/scope. This is the
-    // injection boundary — a def body of `0\n\naxiom cheat : False` must be
-    // rejected, not compiled.
-    for line in content.lines() {
-        let trimmed = line.trim_start();
-        // Attribute syntax (`@[simp] theorem cheat : False := ...`) precedes a
-        // declaration exactly like a modifier does, and a first-token check
-        // alone would see `@[simp]`, not `theorem` — so it must be its own
-        // explicit ban, not just another entry in PROHIBITED_LEADING_TOKENS
-        // (attributes aren't a single fixed word). `@` alone (explicit-argument
-        // application, e.g. `@id Nat n`) is legitimate proof-term syntax and is
-        // deliberately NOT banned; only `@[` (an attribute LIST) is.
-        if trimmed.starts_with("@[") {
-            return Err(ModulePolicyError::ProhibitedConstruct {
-                item: label.to_string(),
-                token: "@[".to_string(),
-                detail: "a line may not begin with an attribute (`@[...]`) — attributes precede declarations, and every declaration must be its own structured item".to_string(),
-            });
-        }
-        let first_word: String = trimmed.chars().take_while(|c| !c.is_whitespace()).collect();
-        // Compare against the exact keyword (handles `#eval` etc. which aren't
-        // split on non-word chars the same way). This also catches STACKED
-        // modifiers (`private noncomputable def ...`, `protected theorem ...`):
-        // whichever modifier or keyword comes first is itself already in this
-        // list, so the line is rejected before whatever follows it matters.
-        for token in PROHIBITED_LEADING_TOKENS {
-            if &first_word == token || trimmed == *token {
-                return Err(ModulePolicyError::ProhibitedConstruct {
-                    item: label.to_string(),
-                    token: token.to_string(),
-                    detail: format!("a line may not begin with the top-level command or modifier `{}` — submit declarations as separate structured items and let the server own scope/imports", token),
-                });
-            }
-        }
+    // Attribute lists (`@[...]`) precede a declaration exactly like a modifier
+    // does, but aren't a single fixed word, so they can't be a token-list entry
+    // — banned as a literal substring anywhere in the content instead. Bare `@`
+    // (explicit-argument application, e.g. `@id Nat n`) is legitimate
+    // proof-term syntax and is deliberately untouched; only the 2-char `@[`
+    // prefix (an attribute LIST) is banned.
+    if content.contains("@[") {
+        return Err(ModulePolicyError::ProhibitedConstruct {
+            item: label.to_string(),
+            token: "@[".to_string(),
+            detail: "an attribute (`@[...]`) is not permitted anywhere in a submitted module — attributes precede declarations, and every declaration must be its own structured item".to_string(),
+        });
     }
     Ok(())
 }
@@ -457,27 +455,79 @@ mod tests {
         }
     }
 
+    /// Regression: Lean does not require a new top-level command to start on its
+    /// own line — only that the preceding term is syntactically complete. A
+    /// leading-token scan keyed on `content.lines()` never inspects this
+    /// same-line form (`def evil := 0 theorem cheat : True := trivial` parses as
+    /// `def evil := 0` followed by a fresh `theorem` command in real Lean).
+    /// Closed by scanning for banned tokens anywhere in the content, not just at
+    /// the start of a line.
+    #[test]
+    fn rejects_same_line_declaration_injection() {
+        let items = vec![LeanModuleItem::Def {
+            name: "evil".to_string(),
+            type_signature: "Nat".to_string(),
+            body: "0 theorem cheat : True := trivial".to_string(),
+        }];
+        let r = root("True", "trivial");
+        let err = assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).unwrap_err();
+        match err {
+            ModulePolicyError::ProhibitedConstruct { token, .. } => assert_eq!(token, "theorem"),
+            other => panic!("expected ProhibitedConstruct(theorem), got {:?}", other),
+        }
+    }
+
+    /// Same bypass class via a modifier instead of the bare keyword, still on
+    /// one line — must be caught too, not just the bare-keyword form.
+    #[test]
+    fn rejects_same_line_modifier_prefixed_injection() {
+        let items = vec![LeanModuleItem::Def {
+            name: "evil".to_string(),
+            type_signature: "Nat".to_string(),
+            body: "0 private theorem cheat : True := trivial".to_string(),
+        }];
+        let r = root("True", "trivial");
+        assert!(assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).is_err());
+    }
+
+    /// Same bypass class via an inline attribute, still on one line.
+    #[test]
+    fn rejects_same_line_attribute_injection() {
+        let items = vec![LeanModuleItem::Def {
+            name: "evil".to_string(),
+            type_signature: "Nat".to_string(),
+            body: "0 @[simp] theorem cheat : True := trivial".to_string(),
+        }];
+        let r = root("True", "trivial");
+        assert!(assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).is_err());
+    }
+
     /// Review feedback on #16: an attribute list (`@[simp]`) immediately before a
     /// declaration bypasses a scanner that only checks whether the first token IS
     /// the declaration keyword — the first token here is `@[simp]`, not `theorem`.
     #[test]
     fn rejects_attribute_prefixed_declaration_escape() {
+        // A realistic attribute-prefixed injection always pairs the attribute
+        // with its declaration keyword (`@[simp] theorem ...`), so the bare
+        // whole-word ban on `theorem` alone already rejects this too — the
+        // property under test is REJECTION, not which of the two independently-
+        // banned tokens gets reported first. Direct `@[`-only coverage (with no
+        // other violation present) lives in `rejects_same_line_attribute_injection`.
         let items = vec![LeanModuleItem::Def {
             name: "evil".to_string(),
             type_signature: "Nat".to_string(),
             body: "0\n\n@[simp] theorem cheat : False := by trivial".to_string(),
         }];
         let r = root("True", "trivial");
-        let err = assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).unwrap_err();
-        match err {
-            ModulePolicyError::ProhibitedConstruct { token, .. } => assert_eq!(token, "@["),
-            other => panic!("expected ProhibitedConstruct(@[), got {:?}", other),
-        }
+        assert!(assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).is_err());
     }
 
     /// Review feedback on #16: `private`/`protected`/`local`/`scoped` modifiers
     /// immediately before a declaration keyword are the same escape as an
     /// attribute — the first token is the modifier, not the declaration keyword.
+    /// As with the attribute case above, a realistic modifier-prefixed injection
+    /// always pairs the modifier with its declaration keyword, so this asserts
+    /// rejection rather than which specific token is reported.
     #[test]
     fn rejects_modifier_prefixed_declaration_escapes() {
         let cases = ["private", "protected", "local", "scoped"];
@@ -488,11 +538,10 @@ mod tests {
                 body: format!("0\n\n{} theorem cheat : False := by trivial", modifier),
             }];
             let r = root("True", "trivial");
-            let err = assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).unwrap_err();
-            match err {
-                ModulePolicyError::ProhibitedConstruct { token, .. } => assert_eq!(token, modifier, "modifier {} not caught", modifier),
-                other => panic!("expected ProhibitedConstruct({}), got {:?}", modifier, other),
-            }
+            assert!(
+                assemble_module("ChatDB.P_x", &root_hash("True"), &items, &r, &manifest()).is_err(),
+                "modifier {} not caught", modifier
+            );
         }
     }
 
