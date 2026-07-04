@@ -224,12 +224,32 @@ last):
    `pass_at_1_rate` (genuine first-attempt success) — an earlier version
    conflated the two. Still open: #29's actual importer (needs the real
    PutnamBench repo).
+8. **#33 + #37 — Contamination policy and rich `proof_export` modes.** ✅
+   Shipped in v0.3.8. Designed together since #33's redaction requirement
+   needed #37's export-mode mechanism to exist first. `proof_export` gained
+   an explicit `ExportMode` enum: `public_summary` (never includes the
+   completed proof body, regardless of any flag — status, hashes, toolchain,
+   obligation counts, and suite/problem identification if benchmark-linked),
+   `audit_archive` (everything `markdown` has, labeled private),
+   `training_export` (structured JSON records — wires up the existing but
+   previously-unused `chatdb_proof_core::orchestrator::dataset::export_rl`,
+   secret-scrubbed via the newly-public `trajectories::scrub_value`),
+   `paper_dossier` (adds a deterministic, templated narrative section — not
+   model-generated, this function has no model access), and
+   `maintainer_submission` (same tier as `audit_archive`, packaged for
+   private communication with a benchmark's own maintainers). Any mode that
+   can expose the completed proof body requires `allow_putnambench_proof_export=true`
+   when the episode's problem is linked to a tracked benchmark suite (matched
+   via `root_statement_hash`, the same comparison #30's fix uses) — see
+   `docs/benchmarks/putnambench.md`. `markdown`/`lean` are unchanged
+   (existing callers keep working; the field is still named `format` on the
+   wire).
 
 **Status:** Level 3 MVP complete. #24 shipped (v0.3.2). #23 + #10 shipped
 together (v0.3.3). #25 shipped (v0.3.4). #35 shipped (v0.3.5). #34+#38 core
-shipped (v0.3.6). #29+#30 schema shipped (v0.3.7). Next: #33+#37
-(contamination/redaction + export modes), #28 (harness design doc), #29's
-real importer, #31 (pass@k runner), #32 (smoke fixtures).
+shipped (v0.3.6). #29+#30 schema shipped (v0.3.7). #33+#37 shipped (v0.3.8).
+Next: #28 (harness design doc), #29's real importer, #31 (pass@k runner),
+#32 (smoke fixtures).
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
