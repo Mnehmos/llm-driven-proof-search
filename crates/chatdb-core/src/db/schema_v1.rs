@@ -447,6 +447,89 @@ CREATE TABLE IF NOT EXISTS proof_pattern_applications (
     CHECK(role IN ('failed_example', 'repair_example', 'suggested_hint'))
 );
 
+-- Draft artifacts (issue #23): informal reasoning/planning content, explicitly
+-- untrusted. A draft can NEVER mark anything proved and never itself creates
+-- an obligation — it exists purely so an informal sketch gets preserved and
+-- structured before formalization planning begins. episode_id is nullable: a
+-- draft may exist before any episode is created for the problem.
+CREATE TABLE IF NOT EXISTS drafts (
+    id TEXT PRIMARY KEY,
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    author TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- Formalization plans (issue #10 + #23, designed together: both issues wanted
+-- to own this schema — #23 as the promotion target for draft moves, #10 as
+-- the Mathlib-coverage-tracking roadmap). source_draft_id is nullable: a plan
+-- can be created directly, without going through a draft first.
+CREATE TABLE IF NOT EXISTS formalization_plans (
+    id TEXT PRIMARY KEY,
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    source_draft_id TEXT REFERENCES drafts(id),
+    title TEXT NOT NULL,
+    status TEXT NOT NULL,
+    risk_flags_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(status IN ('draft', 'active', 'completed', 'abandoned'))
+);
+
+-- One row per planned concept/definition/lemma/module/citation. Advisory —
+-- mathlib_coverage_status and lookup_result_json are hints from
+-- lean_declaration_lookup, never a proof authority; promoted_obligation_id is
+-- a metadata LINK to an obligation that already exists (created through the
+-- normal, budget-accounted Decompose action), never created by this table's
+-- own tools. An item is promotable exactly once (status transitions
+-- open -> promoted, never back), so a client can't silently double-link.
+CREATE TABLE IF NOT EXISTS formalization_plan_items (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL REFERENCES formalization_plans(id),
+    item_order INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    description TEXT NOT NULL,
+    mathlib_coverage_status TEXT NOT NULL,
+    mathlib_candidate_names_json TEXT NOT NULL,
+    lookup_result_json TEXT,
+    promoted_obligation_id TEXT REFERENCES episode_obligations(id),
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(plan_id, item_order),
+    CHECK(kind IN ('concept', 'missing_definition', 'missing_lemma', 'planned_module', 'external_citation')),
+    CHECK(mathlib_coverage_status IN ('unknown', 'found', 'not_found', 'partial')),
+    CHECK(status IN ('open', 'promoted', 'dropped'))
+);
+
+-- One row per extracted move within a draft, in the order the client
+-- identified them. The server never infers these itself (no inference code
+-- lives in ChatDB) — the external agent proposes structured moves the same
+-- way Decompose's sub_lemmas are client-proposed, and this table just
+-- persists them. promoted_plan_item_id links a move to the plan item it
+-- seeded, once promoted (nullable: most moves are metadata, never promoted).
+CREATE TABLE IF NOT EXISTS draft_moves (
+    id TEXT PRIMARY KEY,
+    draft_id TEXT NOT NULL REFERENCES drafts(id),
+    move_order INTEGER NOT NULL,
+    move_kind TEXT NOT NULL,
+    description TEXT NOT NULL,
+    promoted_plan_item_id TEXT REFERENCES formalization_plan_items(id),
+    created_at TEXT NOT NULL,
+    UNIQUE(draft_id, move_order),
+    CHECK(move_kind IN ('construction', 'auxiliary_lemma', 'case_split', 'induction', 'reduction', 'bijection', 'counterexample_search', 'asymptotic_step', 'external_citation', 'unknown'))
+);
+
+-- Self-review finding: without this, two different plan items (in the same
+-- plan or different ones) could both claim the same real obligation via
+-- formalization_plan_promote_item_to_obligation, silently "double-spending"
+-- one real obligation across multiple plan-tracking rows. A partial index
+-- (SQLite supports a WHERE clause on a UNIQUE index) since most rows have
+-- promoted_obligation_id = NULL and NULLs must stay unconstrained.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_formalization_plan_items_promoted_obligation
+    ON formalization_plan_items(promoted_obligation_id) WHERE promoted_obligation_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS action_requests (
     id TEXT PRIMARY KEY,
     episode_id TEXT NOT NULL REFERENCES episodes(id),

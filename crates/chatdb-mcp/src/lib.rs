@@ -56,6 +56,19 @@ fn valid_lean_declaration_name(s: &str) -> bool {
         && s.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '\'' | '.' | '!' | '?'))
 }
 
+/// Shared by formalization_plan_create's seeding path and
+/// formalization_plan_add_item — the only two sites that construct a
+/// formalization_plan_items row.
+fn plan_item_kind_str(kind: &PlanItemKind) -> &'static str {
+    match kind {
+        PlanItemKind::Concept => "concept",
+        PlanItemKind::MissingDefinition => "missing_definition",
+        PlanItemKind::MissingLemma => "missing_lemma",
+        PlanItemKind::PlannedModule => "planned_module",
+        PlanItemKind::ExternalCitation => "external_citation",
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tool argument schemas
 // ---------------------------------------------------------------------------
@@ -289,6 +302,152 @@ pub struct ProofPatternRecordApplicationArgs {
     pub role: PatternApplicationRole,
     #[serde(default)]
     pub notes: Option<String>,
+}
+
+// -- Draft artifacts + formalization planning (issues #23, #10) -----------
+//
+// Both explicitly advisory layers over the real trusted machinery: a draft or
+// a formalization plan item can never mark anything proved. Real obligations
+// are still created only through Decompose (via the normal, budget-accounted
+// episode_step flow); formalization_plan_promote_item_to_obligation only
+// records a metadata LINK to an obligation that already exists that way.
+
+#[derive(JsonSchema, Deserialize)]
+pub struct DraftCreateArgs {
+    pub problem_version_id: String,
+    /// A draft may exist before any episode is created for the problem.
+    #[serde(default)]
+    pub episode_id: Option<String>,
+    pub content: String,
+    /// Free text naming who/what produced this draft (a model identity, a
+    /// human reviewer, ...). Not policy-enforced.
+    pub author: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct DraftObserveArgs {
+    pub draft_id: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub enum DraftMoveKind {
+    #[serde(rename = "construction")] Construction,
+    #[serde(rename = "auxiliary_lemma")] AuxiliaryLemma,
+    #[serde(rename = "case_split")] CaseSplit,
+    #[serde(rename = "induction")] Induction,
+    #[serde(rename = "reduction")] Reduction,
+    #[serde(rename = "bijection")] Bijection,
+    #[serde(rename = "counterexample_search")] CounterexampleSearch,
+    #[serde(rename = "asymptotic_step")] AsymptoticStep,
+    #[serde(rename = "external_citation")] ExternalCitation,
+    #[serde(rename = "unknown")] Unknown,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct DraftMoveInput {
+    pub move_kind: DraftMoveKind,
+    pub description: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct DraftExtractMovesArgs {
+    pub draft_id: String,
+    /// The moves an external agent identified in this draft's content — the
+    /// server never infers these itself (no inference code lives in ChatDB).
+    /// Appended after any moves already recorded for this draft, not
+    /// replaced.
+    pub moves: Vec<DraftMoveInput>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub enum PlanItemKind {
+    #[serde(rename = "concept")] Concept,
+    #[serde(rename = "missing_definition")] MissingDefinition,
+    #[serde(rename = "missing_lemma")] MissingLemma,
+    #[serde(rename = "planned_module")] PlannedModule,
+    #[serde(rename = "external_citation")] ExternalCitation,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct SeedPlanItemFromMove {
+    pub draft_move_id: String,
+    /// What kind of plan item this move becomes — the client decides this,
+    /// since a draft move's proof-strategy kind (e.g. "bijection") and a plan
+    /// item's planning-target kind (e.g. "missing_lemma") are different
+    /// vocabularies with no automatic mapping between them.
+    pub kind: PlanItemKind,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct FormalizationPlanCreateArgs {
+    pub problem_version_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub source_draft_id: Option<String>,
+    /// Draft moves (each must belong to source_draft_id) to seed as the
+    /// plan's initial items. Each selected move is marked promoted.
+    #[serde(default)]
+    pub seed_items_from_draft_moves: Vec<SeedPlanItemFromMove>,
+    #[serde(default)]
+    pub risk_flags: Vec<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct FormalizationPlanObserveArgs {
+    pub plan_id: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub enum PlanStatus {
+    #[serde(rename = "draft")] Draft,
+    #[serde(rename = "active")] Active,
+    #[serde(rename = "completed")] Completed,
+    #[serde(rename = "abandoned")] Abandoned,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct FormalizationPlanUpdateArgs {
+    pub plan_id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub status: Option<PlanStatus>,
+    #[serde(default)]
+    pub risk_flags: Option<Vec<String>>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct FormalizationPlanAddItemArgs {
+    pub plan_id: String,
+    pub kind: PlanItemKind,
+    pub description: String,
+    #[serde(default)]
+    pub mathlib_candidate_names: Vec<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct FormalizationPlanAttachLookupArgs {
+    pub plan_item_id: String,
+    /// Mirrored verbatim from a lean_declaration_lookup result's `status`
+    /// field (e.g. "available", "not_available_under_current_manifest",
+    /// "not_in_current_import_scope", "unknown_declaration",
+    /// "environment_error"). This attaches that result as a hint; it is not
+    /// re-validated or re-run here.
+    pub lookup_status: String,
+    #[serde(default)]
+    pub matched_name: Option<String>,
+    #[serde(default)]
+    pub diagnostics: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct FormalizationPlanPromoteItemToObligationArgs {
+    pub plan_item_id: String,
+    pub episode_id: String,
+    /// Must already exist (created through a normal Decompose action via
+    /// episode_step) and belong to episode_id. This tool only records the
+    /// link — it never creates the obligation itself.
+    pub obligation_id: String,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -1193,6 +1352,58 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
         }
     }
 
+    // Drafts (issue #23): informal content explicitly tied to this episode, or
+    // created for this problem_version before any episode existed. Marked
+    // loudly as informal — a draft can never mark anything proved, and this
+    // listing never affects the proof tree above.
+    let mut dstmt = conn.prepare(
+        "SELECT content, author, created_at FROM drafts
+         WHERE episode_id = ?1 OR (episode_id IS NULL AND problem_version_id = ?2)
+         ORDER BY created_at ASC"
+    ).map_err(rs)?;
+    let drafts: Vec<(String, String, String)> = dstmt
+        .query_map((episode_id, &pv_id), |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+    if !drafts.is_empty() {
+        md.push_str("\n## Drafts (informal — not part of the verified proof)\n\n");
+        for (content, author, created_at) in &drafts {
+            md.push_str(&format!("**{}** ({}):\n\n> {}\n\n", author, created_at, content.replace('\n', "\n> ")));
+        }
+    }
+
+    // Formalization plans (issues #10, #23): problem-scoped planning
+    // scaffolding — required concepts/definitions/lemmas/modules and their
+    // Mathlib coverage status. Advisory: a plan's status/coverage never
+    // affects the proof tree above; only a real Lean kernel pass does.
+    let mut plstmt = conn.prepare(
+        "SELECT id, title, status FROM formalization_plans WHERE problem_version_id = ?1 ORDER BY created_at ASC"
+    ).map_err(rs)?;
+    let plans: Vec<(String, String, String)> = plstmt
+        .query_map([&pv_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+    if !plans.is_empty() {
+        md.push_str("\n## Formalization plans (advisory — not part of the verified proof)\n\n");
+        for (plan_id, title, status) in &plans {
+            md.push_str(&format!("**{}** (`{}`, status: {})\n\n", title, plan_id, status));
+            let mut istmt = conn.prepare(
+                "SELECT kind, description, mathlib_coverage_status, status FROM formalization_plan_items WHERE plan_id = ?1 ORDER BY item_order ASC"
+            ).map_err(rs)?;
+            let items: Vec<(String, String, String, String)> = istmt
+                .query_map([plan_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+                .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+            if !items.is_empty() {
+                md.push_str("| kind | description | Mathlib coverage | item status |\n|---|---|---|---|\n");
+                for (kind, description, coverage, item_status) in &items {
+                    md.push_str(&format!(
+                        "| {} | {} | {} | {} |\n",
+                        kind, description.replace('|', "\\|"), coverage, item_status,
+                    ));
+                }
+                md.push('\n');
+            }
+        }
+    }
+
     Ok(md)
 }
 
@@ -1228,7 +1439,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.2"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.3"))
     }
 
     async fn list_tools(
@@ -1257,6 +1468,15 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ProofPatternCreateArgs>("proof_pattern_create", "Register a reusable proof-pattern lesson (issue #24 proof-pattern memory) — a failure_signature + recommended_repair pair, e.g. \"decide fails on a def-wrapped goal\" -> \"unfold the def first\". Purely advisory: a pattern can never mark anything proved or change fidelity/certification status. Rejects a duplicate pattern_key rather than overwriting it"),
             make_tool::<ProofPatternSearchArgs>("proof_pattern_search", "Search the proof-pattern library (free-text over pattern_key/title/failure_signature/recommended_repair, or omit query to list the active library). Call this before repeating a failure another attempt already diagnosed"),
             make_tool::<ProofPatternRecordApplicationArgs>("proof_pattern_record_application", "Record that a pattern was relevant to a real (episode[, attempt]) — a failed_example, a repair_example, or a suggested_hint. Insert-only metadata: never writes to episodes/episode_obligations/action_attempts, so it can never change proof/fidelity/certification status"),
+            make_tool::<DraftCreateArgs>("draft_create", "Register an informal Draft artifact (issue #23) — untrusted planning/reasoning content preserved before formalization begins. A draft can never mark anything proved"),
+            make_tool::<DraftObserveArgs>("draft_observe", "Read back a draft's content and any moves recorded against it"),
+            make_tool::<DraftExtractMovesArgs>("draft_extract_moves", "Record structured moves (construction, auxiliary_lemma, case_split, induction, reduction, bijection, counterexample_search, asymptotic_step, external_citation, unknown) the external agent identified in a draft. Metadata only — moves are not obligations until explicitly promoted into a formalization plan item"),
+            make_tool::<FormalizationPlanCreateArgs>("formalization_plan_create", "Create a formalization plan (issue #10) for a problem, optionally seeded from selected moves of an existing draft. Tracks required concepts/definitions/lemmas/modules and their Mathlib coverage status — advisory scaffolding, not a proof authority"),
+            make_tool::<FormalizationPlanObserveArgs>("formalization_plan_observe", "Read back a formalization plan and all its items"),
+            make_tool::<FormalizationPlanUpdateArgs>("formalization_plan_update", "Update a formalization plan's title, status, or risk flags"),
+            make_tool::<FormalizationPlanAddItemArgs>("formalization_plan_add_item", "Add a planning item (concept, missing_definition, missing_lemma, planned_module, or external_citation) to an existing formalization plan"),
+            make_tool::<FormalizationPlanAttachLookupArgs>("formalization_plan_attach_lookup", "Attach a lean_declaration_lookup result to a plan item, updating its Mathlib coverage status (found/not_found/partial/unknown). A hint attachment, not a re-check — never changes proof status"),
+            make_tool::<FormalizationPlanPromoteItemToObligationArgs>("formalization_plan_promote_item_to_obligation", "Link a plan item to an episode_obligation that ALREADY EXISTS (created through a normal Decompose action via episode_step). Records the link only — this tool never creates the obligation itself, so it can never bypass the episode's budget/CAS accounting"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -1273,7 +1493,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.2",
+                    "environment_version": "0.3.3",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -2452,6 +2672,441 @@ impl ServerHandler for ChatDbMcp {
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
+            "draft_create" => {
+                let args: DraftCreateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let pv_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM problem_versions WHERE id = ?1", [&args.problem_version_id], |row| row.get(0),
+                ).map_err(rs)?;
+                if pv_exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id)));
+                }
+                if let Some(ep_id) = &args.episode_id {
+                    let ep_pv_id: Option<String> = conn.query_row(
+                        "SELECT problem_version_id FROM episodes WHERE id = ?1", [ep_id], |row| row.get(0),
+                    ).optional().map_err(rs)?;
+                    let Some(ep_pv_id) = ep_pv_id else {
+                        return Err(mcp_invalid_params(format!("unknown episode_id: {}", ep_id)));
+                    };
+                    if ep_pv_id != args.problem_version_id {
+                        return Err(mcp_invalid_params(format!("episode_id {} belongs to a different problem_version", ep_id)));
+                    }
+                }
+
+                let draft_id = Uuid::new_v4().to_string();
+                let content_hash = canonical_hash(&args.content).map_err(mcp_internal_error)?;
+                let created_at = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO drafts (id, problem_version_id, episode_id, content, content_hash, author, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    (&draft_id, &args.problem_version_id, &args.episode_id, &args.content, &content_hash, &args.author, &created_at),
+                ).map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "draft_id": draft_id,
+                    "content_hash": content_hash,
+                    "created_at": created_at,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "draft_observe" => {
+                let args: DraftObserveArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let draft: Option<(String, Option<String>, String, String, String, String)> = conn.query_row(
+                    "SELECT problem_version_id, episode_id, content, content_hash, author, created_at FROM drafts WHERE id = ?1",
+                    [&args.draft_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                ).optional().map_err(rs)?;
+                let Some((pv_id, ep_id, content, content_hash, author, created_at)) = draft else {
+                    return Err(mcp_invalid_params(format!("unknown draft_id: {}", args.draft_id)));
+                };
+
+                let mut stmt = conn.prepare(
+                    "SELECT id, move_order, move_kind, description, promoted_plan_item_id FROM draft_moves WHERE draft_id = ?1 ORDER BY move_order ASC"
+                ).map_err(rs)?;
+                let moves: Vec<serde_json::Value> = stmt.query_map([&args.draft_id], |row| {
+                    Ok(serde_json::json!({
+                        "move_id": row.get::<_, String>(0)?,
+                        "move_order": row.get::<_, i64>(1)?,
+                        "move_kind": row.get::<_, String>(2)?,
+                        "description": row.get::<_, String>(3)?,
+                        "promoted_plan_item_id": row.get::<_, Option<String>>(4)?,
+                    }))
+                }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "draft_id": args.draft_id,
+                    "problem_version_id": pv_id,
+                    "episode_id": ep_id,
+                    "content": content,
+                    "content_hash": content_hash,
+                    "author": author,
+                    "created_at": created_at,
+                    "moves": moves,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "draft_extract_moves" => {
+                let args: DraftExtractMovesArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.moves.is_empty() {
+                    return Err(mcp_invalid_params("moves must be non-empty"));
+                }
+
+                let mut conn = self.conn.lock().await;
+                let draft_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM drafts WHERE id = ?1", [&args.draft_id], |row| row.get(0),
+                ).map_err(rs)?;
+                if draft_exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown draft_id: {}", args.draft_id)));
+                }
+
+                let tx = conn.transaction().map_err(rs)?;
+                let next_order: i64 = tx.query_row(
+                    "SELECT COALESCE(MAX(move_order), -1) + 1 FROM draft_moves WHERE draft_id = ?1", [&args.draft_id], |row| row.get(0),
+                ).map_err(rs)?;
+
+                let mut created_move_ids = Vec::new();
+                let created_at = Utc::now().to_rfc3339();
+                for (i, m) in args.moves.iter().enumerate() {
+                    let move_kind_str = match m.move_kind {
+                        DraftMoveKind::Construction => "construction",
+                        DraftMoveKind::AuxiliaryLemma => "auxiliary_lemma",
+                        DraftMoveKind::CaseSplit => "case_split",
+                        DraftMoveKind::Induction => "induction",
+                        DraftMoveKind::Reduction => "reduction",
+                        DraftMoveKind::Bijection => "bijection",
+                        DraftMoveKind::CounterexampleSearch => "counterexample_search",
+                        DraftMoveKind::AsymptoticStep => "asymptotic_step",
+                        DraftMoveKind::ExternalCitation => "external_citation",
+                        DraftMoveKind::Unknown => "unknown",
+                    };
+                    let move_id = Uuid::new_v4().to_string();
+                    tx.execute(
+                        "INSERT INTO draft_moves (id, draft_id, move_order, move_kind, description, promoted_plan_item_id, created_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+                        (&move_id, &args.draft_id, next_order + i as i64, move_kind_str, &m.description, &created_at),
+                    ).map_err(rs)?;
+                    created_move_ids.push(move_id);
+                }
+                tx.commit().map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "draft_id": args.draft_id,
+                    "created_move_ids": created_move_ids,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "formalization_plan_create" => {
+                let args: FormalizationPlanCreateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let mut conn = self.conn.lock().await;
+                let pv_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM problem_versions WHERE id = ?1", [&args.problem_version_id], |row| row.get(0),
+                ).map_err(rs)?;
+                if pv_exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id)));
+                }
+                if let Some(draft_id) = &args.source_draft_id {
+                    let draft_pv_id: Option<String> = conn.query_row(
+                        "SELECT problem_version_id FROM drafts WHERE id = ?1", [draft_id], |row| row.get(0),
+                    ).optional().map_err(rs)?;
+                    let Some(draft_pv_id) = draft_pv_id else {
+                        return Err(mcp_invalid_params(format!("unknown source_draft_id: {}", draft_id)));
+                    };
+                    if draft_pv_id != args.problem_version_id {
+                        return Err(mcp_invalid_params(format!("source_draft_id {} belongs to a different problem_version", draft_id)));
+                    }
+                }
+                // Self-review finding: the same draft_move_id appearing twice in
+                // one call would pass per-move validation (each check sees the
+                // not-yet-committed state) and then get promoted into TWO
+                // separate plan items, silently orphaning the first — reject the
+                // whole batch up front instead.
+                {
+                    let mut seen = std::collections::HashSet::new();
+                    for seed in &args.seed_items_from_draft_moves {
+                        if !seen.insert(&seed.draft_move_id) {
+                            return Err(mcp_invalid_params(format!("draft_move_id {} appears more than once in seed_items_from_draft_moves", seed.draft_move_id)));
+                        }
+                    }
+                }
+                // Every seed move validated BEFORE any row is written, so a bad
+                // move in the batch never leaves a partially-seeded plan behind.
+                for seed in &args.seed_items_from_draft_moves {
+                    let owner: Option<(String, Option<String>)> = conn.query_row(
+                        "SELECT draft_id, promoted_plan_item_id FROM draft_moves WHERE id = ?1",
+                        [&seed.draft_move_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    ).optional().map_err(rs)?;
+                    let Some((owning_draft_id, already_promoted)) = owner else {
+                        return Err(mcp_invalid_params(format!("unknown draft_move_id: {}", seed.draft_move_id)));
+                    };
+                    if Some(&owning_draft_id) != args.source_draft_id.as_ref() {
+                        return Err(mcp_invalid_params(format!("draft_move {} does not belong to source_draft_id", seed.draft_move_id)));
+                    }
+                    if already_promoted.is_some() {
+                        return Err(mcp_invalid_params(format!("draft_move {} was already promoted into a plan item", seed.draft_move_id)));
+                    }
+                }
+
+                let tx = conn.transaction().map_err(rs)?;
+                let plan_id = Uuid::new_v4().to_string();
+                let risk_flags_json = serde_json::to_string(&args.risk_flags).unwrap();
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT INTO formalization_plans (id, problem_version_id, source_draft_id, title, status, risk_flags_json, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6, ?6)",
+                    (&plan_id, &args.problem_version_id, &args.source_draft_id, &args.title, &risk_flags_json, &now),
+                ).map_err(rs)?;
+
+                let mut created_item_ids = Vec::new();
+                for (i, seed) in args.seed_items_from_draft_moves.iter().enumerate() {
+                    let description: String = tx.query_row(
+                        "SELECT description FROM draft_moves WHERE id = ?1", [&seed.draft_move_id], |row| row.get(0),
+                    ).map_err(rs)?;
+                    let item_id = Uuid::new_v4().to_string();
+                    let kind_str = plan_item_kind_str(&seed.kind);
+                    tx.execute(
+                        "INSERT INTO formalization_plan_items (
+                            id, plan_id, item_order, kind, description, mathlib_coverage_status,
+                            mathlib_candidate_names_json, lookup_result_json, promoted_obligation_id, status, created_at
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, 'unknown', '[]', NULL, NULL, 'open', ?6)",
+                        (&item_id, &plan_id, i as i64, kind_str, &description, &now),
+                    ).map_err(rs)?;
+                    tx.execute(
+                        "UPDATE draft_moves SET promoted_plan_item_id = ?1 WHERE id = ?2",
+                        (&item_id, &seed.draft_move_id),
+                    ).map_err(rs)?;
+                    created_item_ids.push(item_id);
+                }
+                tx.commit().map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "plan_id": plan_id,
+                    "status": "draft",
+                    "seeded_item_ids": created_item_ids,
+                    "created_at": now,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "formalization_plan_observe" => {
+                let args: FormalizationPlanObserveArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let plan: Option<(String, Option<String>, String, String, String, String, String)> = conn.query_row(
+                    "SELECT problem_version_id, source_draft_id, title, status, risk_flags_json, created_at, updated_at
+                     FROM formalization_plans WHERE id = ?1",
+                    [&args.plan_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+                ).optional().map_err(rs)?;
+                let Some((pv_id, source_draft_id, title, status, risk_flags_json, created_at, updated_at)) = plan else {
+                    return Err(mcp_invalid_params(format!("unknown plan_id: {}", args.plan_id)));
+                };
+
+                let mut stmt = conn.prepare(
+                    "SELECT id, item_order, kind, description, mathlib_coverage_status, mathlib_candidate_names_json,
+                            lookup_result_json, promoted_obligation_id, status
+                     FROM formalization_plan_items WHERE plan_id = ?1 ORDER BY item_order ASC"
+                ).map_err(rs)?;
+                let items: Vec<serde_json::Value> = stmt.query_map([&args.plan_id], |row| {
+                    let lookup_result_json: Option<String> = row.get(6)?;
+                    Ok(serde_json::json!({
+                        "plan_item_id": row.get::<_, String>(0)?,
+                        "item_order": row.get::<_, i64>(1)?,
+                        "kind": row.get::<_, String>(2)?,
+                        "description": row.get::<_, String>(3)?,
+                        "mathlib_coverage_status": row.get::<_, String>(4)?,
+                        "mathlib_candidate_names": serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(5)?).unwrap_or(serde_json::Value::Array(vec![])),
+                        "lookup_result": lookup_result_json.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+                        "promoted_obligation_id": row.get::<_, Option<String>>(7)?,
+                        "status": row.get::<_, String>(8)?,
+                    }))
+                }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "plan_id": args.plan_id,
+                    "problem_version_id": pv_id,
+                    "source_draft_id": source_draft_id,
+                    "title": title,
+                    "status": status,
+                    "risk_flags": serde_json::from_str::<serde_json::Value>(&risk_flags_json).unwrap_or(serde_json::Value::Array(vec![])),
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "items": items,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "formalization_plan_update" => {
+                let args: FormalizationPlanUpdateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let current: Option<(String, String, String)> = conn.query_row(
+                    "SELECT title, status, risk_flags_json FROM formalization_plans WHERE id = ?1",
+                    [&args.plan_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                ).optional().map_err(rs)?;
+                let Some((cur_title, cur_status, cur_risk_flags_json)) = current else {
+                    return Err(mcp_invalid_params(format!("unknown plan_id: {}", args.plan_id)));
+                };
+
+                let new_title = args.title.unwrap_or(cur_title);
+                let new_status = match args.status {
+                    Some(PlanStatus::Draft) => "draft".to_string(),
+                    Some(PlanStatus::Active) => "active".to_string(),
+                    Some(PlanStatus::Completed) => "completed".to_string(),
+                    Some(PlanStatus::Abandoned) => "abandoned".to_string(),
+                    None => cur_status,
+                };
+                let new_risk_flags_json = match args.risk_flags {
+                    Some(flags) => serde_json::to_string(&flags).unwrap(),
+                    None => cur_risk_flags_json,
+                };
+                let now = Utc::now().to_rfc3339();
+
+                conn.execute(
+                    "UPDATE formalization_plans SET title = ?1, status = ?2, risk_flags_json = ?3, updated_at = ?4 WHERE id = ?5",
+                    (&new_title, &new_status, &new_risk_flags_json, &now, &args.plan_id),
+                ).map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "plan_id": args.plan_id,
+                    "title": new_title,
+                    "status": new_status,
+                    "updated_at": now,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "formalization_plan_add_item" => {
+                let args: FormalizationPlanAddItemArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let plan_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM formalization_plans WHERE id = ?1", [&args.plan_id], |row| row.get(0),
+                ).map_err(rs)?;
+                if plan_exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown plan_id: {}", args.plan_id)));
+                }
+
+                let next_order: i64 = conn.query_row(
+                    "SELECT COALESCE(MAX(item_order), -1) + 1 FROM formalization_plan_items WHERE plan_id = ?1", [&args.plan_id], |row| row.get(0),
+                ).map_err(rs)?;
+                let kind_str = plan_item_kind_str(&args.kind);
+                let candidate_names_json = serde_json::to_string(&args.mathlib_candidate_names).unwrap();
+                let item_id = Uuid::new_v4().to_string();
+                let created_at = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO formalization_plan_items (
+                        id, plan_id, item_order, kind, description, mathlib_coverage_status,
+                        mathlib_candidate_names_json, lookup_result_json, promoted_obligation_id, status, created_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, 'unknown', ?6, NULL, NULL, 'open', ?7)",
+                    (&item_id, &args.plan_id, next_order, kind_str, &args.description, &candidate_names_json, &created_at),
+                ).map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "plan_item_id": item_id,
+                    "item_order": next_order,
+                    "kind": kind_str,
+                    "created_at": created_at,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "formalization_plan_attach_lookup" => {
+                let args: FormalizationPlanAttachLookupArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let item_status: Option<String> = conn.query_row(
+                    "SELECT status FROM formalization_plan_items WHERE id = ?1", [&args.plan_item_id], |row| row.get(0),
+                ).optional().map_err(rs)?;
+                let Some(item_status) = item_status else {
+                    return Err(mcp_invalid_params(format!("unknown plan_item_id: {}", args.plan_item_id)));
+                };
+                if item_status != "open" {
+                    return Err(mcp_invalid_params(format!("plan_item {} is not open (status={}) — cannot attach a lookup to a promoted/dropped item", args.plan_item_id, item_status)));
+                }
+
+                // Mirrors lean_declaration_lookup's status vocabulary: a hint
+                // mapping, not a re-check — the raw status/diagnostics are
+                // stored verbatim too, in lookup_result_json.
+                let coverage_status = match args.lookup_status.as_str() {
+                    "available" => "found",
+                    "unknown_declaration" => "not_found",
+                    "not_available_under_current_manifest" | "not_in_current_import_scope" => "partial",
+                    _ => "unknown",
+                };
+                let lookup_result_json = serde_json::json!({
+                    "lookup_status": args.lookup_status,
+                    "matched_name": args.matched_name,
+                    "diagnostics": args.diagnostics,
+                }).to_string();
+
+                conn.execute(
+                    "UPDATE formalization_plan_items SET mathlib_coverage_status = ?1, lookup_result_json = ?2 WHERE id = ?3",
+                    (coverage_status, &lookup_result_json, &args.plan_item_id),
+                ).map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "plan_item_id": args.plan_item_id,
+                    "mathlib_coverage_status": coverage_status,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "formalization_plan_promote_item_to_obligation" => {
+                let args: FormalizationPlanPromoteItemToObligationArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let conn = self.conn.lock().await;
+                let item_status: Option<String> = conn.query_row(
+                    "SELECT status FROM formalization_plan_items WHERE id = ?1", [&args.plan_item_id], |row| row.get(0),
+                ).optional().map_err(rs)?;
+                let Some(item_status) = item_status else {
+                    return Err(mcp_invalid_params(format!("unknown plan_item_id: {}", args.plan_item_id)));
+                };
+                if item_status != "open" {
+                    return Err(mcp_invalid_params(format!("plan_item {} is not open (status={}) — already promoted or dropped", args.plan_item_id, item_status)));
+                }
+                // The obligation must be real (created through a normal
+                // Decompose action via episode_step) and belong to the given
+                // episode — this tool only records the link, never creates it.
+                let obligation_episode: Option<String> = conn.query_row(
+                    "SELECT episode_id FROM episode_obligations WHERE id = ?1", [&args.obligation_id], |row| row.get(0),
+                ).optional().map_err(rs)?;
+                let Some(obligation_episode) = obligation_episode else {
+                    return Err(mcp_invalid_params(format!("unknown obligation_id: {}", args.obligation_id)));
+                };
+                if obligation_episode != args.episode_id {
+                    return Err(mcp_invalid_params(format!("obligation {} does not belong to episode {}", args.obligation_id, args.episode_id)));
+                }
+
+                // Self-review finding: a partial UNIQUE index on
+                // promoted_obligation_id (schema_v1.rs) stops two plan items
+                // from both claiming the same real obligation — enforced at
+                // the DB layer, not just by this handler's own logic.
+                conn.execute(
+                    "UPDATE formalization_plan_items SET status = 'promoted', promoted_obligation_id = ?1 WHERE id = ?2",
+                    (&args.obligation_id, &args.plan_item_id),
+                ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
+                    mcp_invalid_params(format!("obligation_id {} is already linked to a different plan item", args.obligation_id))
+                } else {
+                    rs(e)
+                })?;
+
+                let res = serde_json::json!({
+                    "plan_item_id": args.plan_item_id,
+                    "obligation_id": args.obligation_id,
+                    "status": "promoted",
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
             _ => Err(McpError::new(ErrorCode::METHOD_NOT_FOUND, format!("Method not found: {}", request.name), None)),
         }
     }
@@ -2584,7 +3239,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 20);
+        assert_eq!(list_res.tools.len(), 29);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -4358,5 +5013,496 @@ mod tests {
         assert!(md2.contains("## Lessons applied (advisory — not part of the verified proof)"), "{md2}");
         assert!(md2.contains("mutual_group") || md2.to_lowercase().contains("mutual"), "{md2}");
         assert!(md2.contains("suggested_hint"), "{md2}");
+    }
+
+    // -- Draft artifacts + formalization planning (issues #23, #10) ---------
+
+    async fn create_problem(peer: &rmcp::service::Peer<rmcp::RoleClient>, statement: &str) -> String {
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": format!("draft/plan test for: {}", statement),
+            "root_formal_statement": statement,
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        create["problem_version_id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn test_draft_create_and_observe_roundtrip() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "content": "Sketch: use a bijection between A and B.", "author": "model-x",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let draft_id = created["draft_id"].as_str().unwrap().to_string();
+        assert!(!created["content_hash"].as_str().unwrap().is_empty());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_observe").with_arguments(serde_json::json!({
+            "draft_id": draft_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["content"], "Sketch: use a bijection between A and B.");
+        assert_eq!(observed["author"], "model-x");
+        assert_eq!(observed["moves"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_draft_extract_moves_appends_across_calls() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "content": "x", "author": "model-x",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let draft_id = created["draft_id"].as_str().unwrap().to_string();
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("draft_extract_moves").with_arguments(serde_json::json!({
+            "draft_id": draft_id,
+            "moves": [{"move_kind": "bijection", "description": "map A to B"}],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("draft_extract_moves").with_arguments(serde_json::json!({
+            "draft_id": draft_id,
+            "moves": [{"move_kind": "induction", "description": "induct on n"}],
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_observe").with_arguments(serde_json::json!({
+            "draft_id": draft_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let moves = observed["moves"].as_array().unwrap();
+        assert_eq!(moves.len(), 2, "{:?}", moves);
+        assert_eq!(moves[0]["move_kind"], "bijection");
+        assert_eq!(moves[0]["move_order"], 0);
+        assert_eq!(moves[1]["move_kind"], "induction");
+        assert_eq!(moves[1]["move_order"], 1, "second call must append, not overwrite move_order");
+    }
+
+    /// Issue #23's core regression test, verified as a real byte-level
+    /// snapshot (not just a comment asserting the boundary): a draft
+    /// containing an outright false proof claim, plus extracting moves from
+    /// it, must not change episodes or episode_obligations in any way.
+    #[tokio::test]
+    async fn test_draft_with_false_claim_cannot_mark_obligation_proved() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "draft false-claim boundary check", "root_formal_statement": "True", "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let snapshot = |conn: &Connection| -> (String, String) {
+            let episodes: Vec<String> = conn.prepare("SELECT * FROM episodes ORDER BY id").unwrap()
+                .query_map([], |row| { let n = row.as_ref().column_count(); Ok((0..n).map(|i| format!("{:?}", row.get_ref(i).unwrap())).collect::<Vec<_>>().join(",")) }).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            let obligations: Vec<String> = conn.prepare("SELECT * FROM episode_obligations ORDER BY id").unwrap()
+                .query_map([], |row| { let n = row.as_ref().column_count(); Ok((0..n).map(|i| format!("{:?}", row.get_ref(i).unwrap())).collect::<Vec<_>>().join(",")) }).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            (episodes.join("|"), obligations.join("|"))
+        };
+        let before = { let c = conn_arc.lock().await; snapshot(&c) };
+
+        let draft = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "episode_id": episode_id,
+            "content": "Claim: this theorem is trivially true by inspection, no further work needed. QED.",
+            "author": "adversarial-model",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let draft_id = draft["draft_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("draft_extract_moves").with_arguments(serde_json::json!({
+            "draft_id": draft_id,
+            "moves": [{"move_kind": "unknown", "description": "asserted trivially true, no actual argument given"}],
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let after = { let c = conn_arc.lock().await; snapshot(&c) };
+        assert_eq!(before, after, "a draft (even one containing a false proof claim) must never change episodes or episode_obligations");
+    }
+
+    #[tokio::test]
+    async fn test_formalization_plan_create_seeded_from_draft_moves() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let draft = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "content": "x", "author": "model-x",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let draft_id = draft["draft_id"].as_str().unwrap().to_string();
+        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_extract_moves").with_arguments(serde_json::json!({
+            "draft_id": draft_id,
+            "moves": [
+                {"move_kind": "auxiliary_lemma", "description": "need: sum of first n squares"},
+                {"move_kind": "external_citation", "description": "cites a known bound from a paper"},
+            ],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let move_ids: Vec<String> = extracted["created_move_ids"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "Plan A", "source_draft_id": draft_id,
+            "seed_items_from_draft_moves": [
+                {"draft_move_id": move_ids[0], "kind": "missing_lemma"},
+                {"draft_move_id": move_ids[1], "kind": "external_citation"},
+            ],
+            "risk_flags": ["relies on an uncited external bound"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let plan_id = plan["plan_id"].as_str().unwrap().to_string();
+        assert_eq!(plan["seeded_item_ids"].as_array().unwrap().len(), 2);
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_observe").with_arguments(serde_json::json!({
+            "plan_id": plan_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["title"], "Plan A");
+        assert_eq!(observed["status"], "draft");
+        let items = observed["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2, "{:?}", items);
+        assert_eq!(items[0]["kind"], "missing_lemma");
+        assert_eq!(items[0]["description"], "need: sum of first n squares");
+        assert_eq!(items[1]["kind"], "external_citation");
+
+        // The seeded draft moves are now marked promoted.
+        let draft_after = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_observe").with_arguments(serde_json::json!({
+            "draft_id": draft_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        for m in draft_after["moves"].as_array().unwrap() {
+            assert!(!m["promoted_plan_item_id"].is_null(), "{:?}", m);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_formalization_plan_create_rejects_double_promotion_and_wrong_draft() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+
+        let draft_a = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "content": "a", "author": "model-x",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let draft_a_id = draft_a["draft_id"].as_str().unwrap().to_string();
+        let draft_b = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "content": "b", "author": "model-x",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let draft_b_id = draft_b["draft_id"].as_str().unwrap().to_string();
+
+        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_extract_moves").with_arguments(serde_json::json!({
+            "draft_id": draft_a_id, "moves": [{"move_kind": "unknown", "description": "m1"}],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let move_id = extracted["created_move_ids"][0].as_str().unwrap().to_string();
+
+        // Wrong draft: move belongs to draft_a, not draft_b.
+        let bad = peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "P", "source_draft_id": draft_b_id,
+            "seed_items_from_draft_moves": [{"draft_move_id": move_id, "kind": "concept"}],
+        }).as_object().unwrap().clone())).await;
+        assert!(bad.is_err(), "seeding from a move that belongs to a different draft must be rejected");
+
+        // Correct draft, first promotion succeeds.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "P", "source_draft_id": draft_a_id,
+            "seed_items_from_draft_moves": [{"draft_move_id": move_id, "kind": "concept"}],
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // Second promotion of the SAME move must be rejected.
+        let dup = peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "P2", "source_draft_id": draft_a_id,
+            "seed_items_from_draft_moves": [{"draft_move_id": move_id, "kind": "concept"}],
+        }).as_object().unwrap().clone())).await;
+        assert!(dup.is_err(), "a move already promoted into a plan item must not be promotable again");
+    }
+
+    /// Self-review finding: the SAME draft_move_id appearing twice in one
+    /// seed_items_from_draft_moves batch used to pass per-move validation
+    /// (each check saw the not-yet-committed state) and then get promoted
+    /// into two separate plan items, silently orphaning the first.
+    #[tokio::test]
+    async fn test_formalization_plan_create_rejects_duplicate_move_id_in_same_batch() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let draft = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "content": "x", "author": "model-x",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let draft_id = draft["draft_id"].as_str().unwrap().to_string();
+        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_extract_moves").with_arguments(serde_json::json!({
+            "draft_id": draft_id, "moves": [{"move_kind": "unknown", "description": "m1"}],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let move_id = extracted["created_move_ids"][0].as_str().unwrap().to_string();
+
+        let res = peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "P", "source_draft_id": draft_id,
+            "seed_items_from_draft_moves": [
+                {"draft_move_id": move_id, "kind": "concept"},
+                {"draft_move_id": move_id, "kind": "missing_lemma"},
+            ],
+        }).as_object().unwrap().clone())).await;
+        assert!(res.is_err(), "the same draft_move_id twice in one batch must be rejected, not silently create two items from one move");
+    }
+
+    /// Self-review finding: draft_create never verified that episode_id's OWN
+    /// problem_version_id matches the given problem_version_id, and
+    /// formalization_plan_create never verified that source_draft_id's OWN
+    /// problem_version_id matches either — both would silently accept a
+    /// cross-problem mismatch.
+    #[tokio::test]
+    async fn test_draft_and_plan_create_reject_cross_problem_mismatch() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_a = create_problem(&peer, "True").await;
+        let pv_b = create_problem(&peer, "1 + 1 = 2").await;
+
+        let ep_b = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_b, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_b_id = ep_b["episode_id"].as_str().unwrap().to_string();
+
+        // episode_b belongs to problem B, not problem A.
+        let bad_draft = peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_a, "episode_id": episode_b_id, "content": "x", "author": "model-x",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_draft.is_err(), "a draft's problem_version_id must match its episode_id's own problem_version_id");
+
+        let draft_b = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_b, "content": "x", "author": "model-x",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let draft_b_id = draft_b["draft_id"].as_str().unwrap().to_string();
+
+        // draft_b belongs to problem B, not problem A.
+        let bad_plan = peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_a, "title": "P", "source_draft_id": draft_b_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_plan.is_err(), "a plan's problem_version_id must match its source_draft_id's own problem_version_id");
+    }
+
+    /// Self-review finding: promoting two different plan items to the SAME
+    /// real obligation used to succeed silently — nothing stopped two
+    /// plan-tracking rows from both "claiming" one obligation.
+    #[tokio::test]
+    async fn test_formalization_plan_promote_rejects_obligation_double_claim() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 10,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "dup-claim-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {"type": "decompose", "sub_lemmas": ["a helper lemma"]},
+            "cost_micros": 10,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let obligation_id: String = { let c = conn_arc.lock().await; c.query_row(
+            "SELECT id FROM episode_obligations WHERE episode_id = ?1 AND created_by = 'decomposition' ORDER BY created_at DESC LIMIT 1",
+            [&episode_id], |row| row.get(0),
+        ).unwrap() };
+
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "Plan",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let plan_id = plan["plan_id"].as_str().unwrap().to_string();
+        let item1 = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            "plan_id": plan_id, "kind": "missing_lemma", "description": "item 1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let item2 = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            "plan_id": plan_id, "kind": "missing_lemma", "description": "item 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_promote_item_to_obligation").with_arguments(serde_json::json!({
+            "plan_item_id": item1["plan_item_id"], "episode_id": episode_id, "obligation_id": obligation_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // A second, DIFFERENT plan item claiming the SAME obligation must be rejected.
+        let dup = peer.call_tool(CallToolRequestParams::new("formalization_plan_promote_item_to_obligation").with_arguments(serde_json::json!({
+            "plan_item_id": item2["plan_item_id"], "episode_id": episode_id, "obligation_id": obligation_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(dup.is_err(), "two plan items must not both be allowed to claim the same real obligation");
+    }
+
+    #[tokio::test]
+    async fn test_formalization_plan_add_item_and_update() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "Plan B",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let plan_id = plan["plan_id"].as_str().unwrap().to_string();
+
+        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            "plan_id": plan_id, "kind": "missing_definition", "description": "need padicValNat",
+            "mathlib_candidate_names": ["padicValNat"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let item_id = item["plan_item_id"].as_str().unwrap().to_string();
+
+        let updated = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_update").with_arguments(serde_json::json!({
+            "plan_id": plan_id, "status": "active", "risk_flags": ["needs a fresh construction"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(updated["status"], "active");
+        assert_eq!(updated["title"], "Plan B", "omitted title must be left unchanged, not cleared");
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_observe").with_arguments(serde_json::json!({
+            "plan_id": plan_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["status"], "active");
+        assert_eq!(observed["risk_flags"][0], "needs a fresh construction");
+        assert_eq!(observed["items"][0]["plan_item_id"], item_id);
+        assert_eq!(observed["items"][0]["mathlib_candidate_names"][0], "padicValNat");
+    }
+
+    #[tokio::test]
+    async fn test_formalization_plan_attach_lookup_maps_status_and_rejects_non_open() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "Plan C",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let plan_id = plan["plan_id"].as_str().unwrap().to_string();
+
+        let cases = [
+            ("available", "found"),
+            ("unknown_declaration", "not_found"),
+            ("not_available_under_current_manifest", "partial"),
+            ("not_in_current_import_scope", "partial"),
+            ("environment_error", "unknown"),
+        ];
+        for (lookup_status, expected_coverage) in cases {
+            let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+                "plan_id": plan_id, "kind": "missing_lemma", "description": format!("case for {lookup_status}"),
+            }).as_object().unwrap().clone())).await.unwrap());
+            let item_id = item["plan_item_id"].as_str().unwrap().to_string();
+
+            let attached = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_attach_lookup").with_arguments(serde_json::json!({
+                "plan_item_id": item_id, "lookup_status": lookup_status, "matched_name": "Nat.foo",
+            }).as_object().unwrap().clone())).await.unwrap());
+            assert_eq!(attached["mathlib_coverage_status"], expected_coverage, "lookup_status {lookup_status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_formalization_plan_promote_item_to_obligation() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 10,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "plan-promote-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        // A real obligation, created through the normal budget-accounted
+        // Decompose action — NOT through any plan tool.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {"type": "decompose", "sub_lemmas": ["a helper lemma"]},
+            "cost_micros": 10,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let obligation_id: String = { let c = conn_arc.lock().await; c.query_row(
+            "SELECT id FROM episode_obligations WHERE episode_id = ?1 AND created_by = 'decomposition' ORDER BY created_at DESC LIMIT 1",
+            [&episode_id], |row| row.get(0),
+        ).unwrap() };
+
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "Plan D",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let plan_id = plan["plan_id"].as_str().unwrap().to_string();
+        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            "plan_id": plan_id, "kind": "missing_lemma", "description": "a helper lemma",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let item_id = item["plan_item_id"].as_str().unwrap().to_string();
+
+        // Wrong episode_id must be rejected.
+        let bad = peer.call_tool(CallToolRequestParams::new("formalization_plan_promote_item_to_obligation").with_arguments(serde_json::json!({
+            "plan_item_id": item_id, "episode_id": "not-a-real-episode", "obligation_id": obligation_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(bad.is_err());
+
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_promote_item_to_obligation").with_arguments(serde_json::json!({
+            "plan_item_id": item_id, "episode_id": episode_id, "obligation_id": obligation_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(promoted["status"], "promoted");
+
+        // Re-promoting the same (now-promoted) item must be rejected.
+        let dup = peer.call_tool(CallToolRequestParams::new("formalization_plan_promote_item_to_obligation").with_arguments(serde_json::json!({
+            "plan_item_id": item_id, "episode_id": episode_id, "obligation_id": obligation_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(dup.is_err(), "an already-promoted item must not be promotable again");
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_observe").with_arguments(serde_json::json!({
+            "plan_id": plan_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["items"][0]["status"], "promoted");
+        assert_eq!(observed["items"][0]["promoted_obligation_id"], obligation_id);
+    }
+
+    /// proof_export shows Drafts and Formalization plans in their own
+    /// sections, separate from the verified proof, and shows neither when
+    /// there is no draft/plan activity for the episode.
+    #[tokio::test]
+    async fn test_proof_export_shows_drafts_and_plans_separately() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let md0 = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let md0 = md0.content[0].as_text().unwrap().text.clone();
+        assert!(!md0.contains("## Drafts"), "no Drafts section with zero drafts: {md0}");
+        assert!(!md0.contains("## Formalization plans"), "no plans section with zero plans: {md0}");
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "episode_id": episode_id, "content": "informal sketch here", "author": "model-x",
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "Plan E",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let md1 = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let md1 = md1.content[0].as_text().unwrap().text.clone();
+        assert!(md1.contains("## Drafts (informal — not part of the verified proof)"), "{md1}");
+        assert!(md1.contains("informal sketch here"), "{md1}");
+        assert!(md1.contains("## Formalization plans (advisory — not part of the verified proof)"), "{md1}");
+        assert!(md1.contains("Plan E"), "{md1}");
     }
 }
