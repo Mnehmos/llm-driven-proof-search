@@ -67,6 +67,16 @@ pub enum FinalizeContext {
         module_items_json: String,
         pv_id_str: String,
         pv_manifest_hash: String,
+        /// The item manifest `attempt_prepare` already computed (via
+        /// `assemble_module`, at policy-check time). Carried through instead of
+        /// re-derived by re-parsing `module_items_json` and re-running
+        /// `assemble_module` a second time in `attempt_finalize`: re-deriving
+        /// wasted a full policy re-check per successful module AND its failure
+        /// path was silently swallowed (`if let Ok(reassembled) = ...`), which
+        /// could persist a module row with zero corresponding item rows with
+        /// nothing surfaced. Carrying the original computation removes both
+        /// problems — there is nothing left that can fail.
+        item_manifest: Vec<crate::lean::module::AssembledItem>,
     },
 }
 
@@ -285,6 +295,7 @@ pub fn attempt_prepare(
                         "root_theorem": root_theorem,
                     }).to_string();
                     let namespace = assembled.namespace.clone();
+                    let item_manifest = assembled.item_manifest.clone();
                     // See the matching comment on the Solve path: reserve the cost
                     // now, atomically with the CAS check, since the gateway call
                     // (up to 120s for a module) runs with the DB lock released.
@@ -293,7 +304,7 @@ pub fn attempt_prepare(
                         request: GatewayRequest::SubmitModule { assembled, env_hash: pv_env_hash.clone() },
                         ctx: FinalizeContext::SubmitModule {
                             obl_id_str, stmt_hash, pv_env_hash, namespace,
-                            module_items_json, pv_id_str, pv_manifest_hash,
+                            module_items_json, pv_id_str, pv_manifest_hash, item_manifest,
                         },
                     })
                 }
@@ -466,7 +477,7 @@ pub fn attempt_finalize(
                 }
             }
         }
-        (FinalizeContext::SubmitModule { obl_id_str, stmt_hash, pv_env_hash, namespace, module_items_json, pv_id_str, pv_manifest_hash }, GatewayResponse::SubmitModule(gw_result)) => {
+        (FinalizeContext::SubmitModule { obl_id_str, stmt_hash, pv_env_hash, namespace, module_items_json, pv_id_str, pv_manifest_hash, item_manifest }, GatewayResponse::SubmitModule(gw_result)) => {
             match gw_result {
                 Ok(result) => {
                     // Bumped here, not in attempt_prepare: this only runs once the
@@ -540,40 +551,37 @@ pub fn attempt_finalize(
                                 &now_ts,
                             ),
                         )?;
-                        // Item manifest is re-derivable from module_items_json via
-                        // assemble_module (import_manifest doesn't affect per-item
-                        // hashes, only the rendered `source`, so an empty manifest here
-                        // is sufficient and avoids another DB round trip).
-                        if let Ok(stored) = serde_json::from_str::<serde_json::Value>(&module_items_json) {
-                            let parsed_items = stored.get("module_items")
-                                .and_then(|v| serde_json::from_value::<Vec<crate::models::action::LeanModuleItem>>(v.clone()).ok());
-                            let parsed_root = stored.get("root_theorem")
-                                .and_then(|v| serde_json::from_value::<crate::models::action::ModuleTheorem>(v.clone()).ok());
-                            if let (Some(items), Some(root)) = (parsed_items, parsed_root) {
-                                if let Ok(reassembled) = crate::lean::module::assemble_module(&namespace, &stmt_hash, &items, &root, &Vec::<String>::new()) {
-                                    for item in &reassembled.item_manifest {
-                                        let item_id = Uuid::new_v4();
-                                        let depends_on_json = serde_json::to_string(&item.depends_on).unwrap_or_else(|_| "[]".to_string());
-                                        tx.execute(
-                                            "INSERT INTO episode_verified_module_items (
-                                                id, module_id, item_order, item_kind, lean_name,
-                                                statement_or_type_hash, body_hash, depends_on_json, policy_result_json
-                                            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                                            (
-                                                item_id.to_string(),
-                                                module_row_id.to_string(),
-                                                item.order as i64,
-                                                &item.kind,
-                                                &item.lean_name,
-                                                &item.statement_or_type_hash,
-                                                &item.body_hash,
-                                                &depends_on_json,
-                                                "{\"policy\":\"passed\"}",
-                                            ),
-                                        )?;
-                                    }
-                                }
-                            }
+                        // Item manifest is the ONE `attempt_prepare` already
+                        // computed via assemble_module at policy-check time —
+                        // carried through FinalizeContext rather than re-derived
+                        // by re-parsing module_items_json and re-running
+                        // assemble_module a second time. That re-derivation
+                        // wasted a full policy re-check per successful module
+                        // AND its failure path was silently swallowed (`if let
+                        // Ok(reassembled) = ...`), which could persist a module
+                        // row with zero item rows and nothing surfaced. Using
+                        // the original computation means there is nothing here
+                        // that can fail.
+                        for item in &item_manifest {
+                            let item_id = Uuid::new_v4();
+                            let depends_on_json = serde_json::to_string(&item.depends_on).unwrap_or_else(|_| "[]".to_string());
+                            tx.execute(
+                                "INSERT INTO episode_verified_module_items (
+                                    id, module_id, item_order, item_kind, lean_name,
+                                    statement_or_type_hash, body_hash, depends_on_json, policy_result_json
+                                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                                (
+                                    item_id.to_string(),
+                                    module_row_id.to_string(),
+                                    item.order as i64,
+                                    &item.kind,
+                                    &item.lean_name,
+                                    &item.statement_or_type_hash,
+                                    &item.body_hash,
+                                    &depends_on_json,
+                                    "{\"policy\":\"passed\"}",
+                                ),
+                            )?;
                         }
                     } else {
                         let lesson = result.diagnostic.as_ref().map(|d| d.primary_message.clone());

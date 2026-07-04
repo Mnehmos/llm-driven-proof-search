@@ -663,8 +663,26 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
     // proof tree.
     #[derive(Deserialize)]
     struct StoredModule { module_items: Vec<LeanModuleItem>, root_theorem: ModuleTheorem }
-    struct RenderedModule { source: String, source_hash: String, items: Vec<(i64, String, String)> }
+    struct RenderedModule {
+        source: String,
+        source_hash: String,
+        items: Vec<(i64, String, String)>,
+        /// True if re-assembling `module_items_json` (against the problem's
+        /// CURRENT import_manifest_json — the same one this whole export
+        /// already uses) produced source that does NOT hash to the recorded
+        /// `module_source_hash`. This is a real, surfaced-not-swallowed signal
+        /// that the receipt may no longer describe what was actually verified
+        /// (e.g. the manifest was extended after this module verified).
+        hash_mismatch: bool,
+    }
     let mut rendered_modules: Vec<RenderedModule> = Vec::new();
+    // Every module row that failed to re-render — parse failure or policy
+    // re-check failure — surfaced as a loud warning instead of silently
+    // vanishing from the export (the same discipline already applied to a
+    // corrupted import_manifest_json above). A module that verified but can no
+    // longer be reconstructed is exactly the kind of receipt failure this
+    // export exists to catch, not hide.
+    let mut broken_modules: Vec<(String, String)> = Vec::new();
     {
         let ns16 = pv_id.replace('-', "");
         let problem_namespace = format!("ChatDB.P_{}", &ns16[..16.min(ns16.len())]);
@@ -678,8 +696,14 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
             .collect::<Result<Vec<_>, _>>()
             .map_err(rs)?;
         for (mod_id, root_hash, items_json, src_hash) in rows {
-            let Ok(stored) = serde_json::from_str::<StoredModule>(&items_json) else { continue };
-            let Ok(asm) = assemble_module(&problem_namespace, &root_hash, &stored.module_items, &stored.root_theorem, &import_manifest) else { continue };
+            let stored = match serde_json::from_str::<StoredModule>(&items_json) {
+                Ok(s) => s,
+                Err(e) => { broken_modules.push((mod_id, format!("stored module_items_json failed to parse: {}", e))); continue; }
+            };
+            let asm = match assemble_module(&problem_namespace, &root_hash, &stored.module_items, &stored.root_theorem, &import_manifest) {
+                Ok(a) => a,
+                Err(e) => { broken_modules.push((mod_id, format!("re-assembly no longer passes policy: {}", e))); continue; }
+            };
             let mut istmt = conn.prepare(
                 "SELECT item_order, item_kind, lean_name FROM episode_verified_module_items WHERE module_id = ?1 ORDER BY item_order ASC",
             ).map_err(rs)?;
@@ -688,7 +712,8 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
                 .map_err(rs)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(rs)?;
-            rendered_modules.push(RenderedModule { source: asm.source, source_hash: src_hash, items });
+            let hash_mismatch = asm.module_source_hash != src_hash;
+            rendered_modules.push(RenderedModule { source: asm.source, source_hash: src_hash, items, hash_mismatch });
         }
     }
 
@@ -879,8 +904,26 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
     if format == "lean" {
         // A verified module is the exact, replayable artifact — prefer it over the
         // theorem-by-theorem reconstruction when one exists.
-        if !rendered_modules.is_empty() {
-            return Ok(rendered_modules.iter().map(|m| m.source.clone()).collect::<Vec<_>>().join("\n\n"));
+        if !rendered_modules.is_empty() || !broken_modules.is_empty() {
+            let mut out = String::new();
+            for (mod_id, reason) in &broken_modules {
+                out.push_str(&format!(
+                    "-- WARNING: verified module {} could not be re-rendered ({}) — this export is INCOMPLETE, not a full receipt.\n",
+                    mod_id, reason
+                ));
+            }
+            for m in &rendered_modules {
+                if m.hash_mismatch {
+                    out.push_str(&format!(
+                        "-- WARNING: re-assembled source below does NOT hash-match the recorded module_source_hash ({}) — \
+                         the problem's import manifest or policy may have changed since this module verified. This is NOT a trustworthy receipt.\n",
+                        m.source_hash
+                    ));
+                }
+                out.push_str(&m.source);
+                out.push_str("\n\n");
+            }
+            return Ok(out);
         }
         return Ok(lean_src);
     }
@@ -976,11 +1019,25 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
     // A verified module is a structured development, not a single proof term —
     // show its declaration manifest and the exact assembled source, so the dossier
     // reflects the module, not only a proof tree.
-    if !rendered_modules.is_empty() {
+    if !rendered_modules.is_empty() || !broken_modules.is_empty() {
         md.push_str("\n## Verified module\n\n");
+        for (mod_id, reason) in &broken_modules {
+            md.push_str(&format!(
+                "> ⚠️ **WARNING: incomplete receipt.** Verified module `{}` could not be re-rendered ({}). \
+                 This episode has a verified module that is NOT shown below — do not treat this export as complete.\n\n",
+                mod_id, reason.replace('|', "\\|"),
+            ));
+        }
         for (mi, m) in rendered_modules.iter().enumerate() {
             if rendered_modules.len() > 1 {
                 md.push_str(&format!("### Module {}\n\n", mi + 1));
+            }
+            if m.hash_mismatch {
+                md.push_str(
+                    "> ⚠️ **WARNING: hash mismatch.** The re-assembled source below does NOT hash-match the \
+                     recorded `module_source_hash` — the problem's import manifest or policy may have changed \
+                     since this module verified. Do not treat this as a trustworthy receipt.\n\n"
+                );
             }
             md.push_str(&format!("`module_source_hash: {}`\n\n", m.source_hash));
             md.push_str("| # | kind | name |\n|---|---|---|\n");
@@ -992,7 +1049,7 @@ fn render_proof_export(conn: &Connection, episode_id: &str, format: &str) -> Res
     }
 
     md.push_str("\n## The proof, assembled\n\n");
-    if !rendered_modules.is_empty() {
+    if !rendered_modules.is_empty() || !broken_modules.is_empty() {
         md.push_str("*(see Verified module above — this episode was proved as a structured module)*\n");
     } else if lean_order.iter().any(|o| o.status == "proved") {
         md.push_str(&format!("```lean\n{}```\n", lean_src));
@@ -2990,6 +3047,79 @@ mod tests {
         assert!(md.contains("module_source_hash:"), "{md}");
         assert!(md.contains("root_theorem"), "the manifest must mark the root theorem item: {md}");
         assert!(md.contains("`quad`"), "the manifest must list the helper def: {md}");
+    }
+
+    /// Self-review finding: proof_export's module rendering paired freshly
+    /// re-assembled source with the STORED module_source_hash unconditionally —
+    /// if re-assembly (against the problem's CURRENT import manifest) ever
+    /// produces source that no longer hashes to what was actually verified, the
+    /// export would silently claim a hash for source it didn't compute the hash
+    /// from. Directly corrupts the stored hash (simulating drift — no tool can
+    /// produce this through normal use) and asserts BOTH export formats loudly
+    /// flag the mismatch instead of silently presenting a receipt that lies.
+    #[tokio::test]
+    async fn test_proof_export_flags_module_hash_mismatch() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "hash mismatch check", "root_formal_statement": "True",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "hash-mismatch-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+        let claim_token = claim["claim_token"].as_str().unwrap().to_string();
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": attempt_id,
+            "expected_revision": revision, "claim_token": claim_token,
+            "action": {
+                "type": "submit_module", "module_items": [],
+                "root_theorem": {"name": "root", "statement": "True", "proof_term": "trivial"}
+            },
+            "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["outcome"], "kernel_verified", "{:?}", step);
+
+        {
+            let conn = conn_arc.lock().await;
+            conn.execute(
+                "UPDATE episode_verified_modules SET module_source_hash = 'deadbeef_tampered' WHERE episode_id = ?1",
+                [&episode_id],
+            ).unwrap();
+        }
+
+        let lean_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "lean",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let lean = lean_res.content[0].as_text().unwrap().text.clone();
+        assert!(lean.contains("WARNING") && lean.contains("hash"), "lean export must flag the hash mismatch: {lean}");
+
+        let md_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let md = md_res.content[0].as_text().unwrap().text.clone();
+        assert!(md.contains("WARNING") && md.contains("hash mismatch"), "dossier must flag the hash mismatch: {md}");
     }
 
     /// Issue #3 acceptance: a helper def passes and the root theorem uses it — the
