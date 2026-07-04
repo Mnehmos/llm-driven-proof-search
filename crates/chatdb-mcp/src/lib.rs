@@ -2128,7 +2128,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.8"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.9"))
     }
 
     async fn list_tools(
@@ -2219,7 +2219,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.8",
+                    "environment_version": "0.3.9",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {

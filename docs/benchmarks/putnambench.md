@@ -38,27 +38,87 @@ Every PutnamBench concept has a home in the schema shipped in v0.3.7:
 The still-open pieces below (#29's importer, #31's runner, #32's fixtures)
 are about *populating and driving* this schema, not designing new schema.
 
-### Import shape (#29 — not yet built)
+### Import shape (#29 — shipped)
 
-The importer's job: for each selected PutnamBench Lean problem file, extract
-the problem id, the root theorem statement (as Lean source, `sorry`d out —
-PutnamBench ships the statements, not solutions, in its public problem set),
-and the file's own import list, then call `benchmark_problem_register` once
-per problem. The upstream repo commit that was checked out goes into
-`benchmark_suites.upstream_commit` (via `benchmark_suite_create`), once per
-import run — not per problem.
+Built as `crates/chatdb-mcp/examples/import_putnambench.rs`, with the
+parsing logic in the library at `chatdb_proof_core::putnambench` (shared
+with the future #31 runner — see below).
+
+```
+cargo run --release --example import_putnambench -- <db_path> <putnambench_repo_path> [problem_name ...]
+```
 
 Per this session's established convention for external toolchains (the same
-pattern already used for `lean-checker`): a local clone is a documented,
-one-time developer setup referenced by an environment variable (e.g.
-`PUTNAM_BENCH_PATH`), never vendored into this repo's own git history. The
-importer reads from that path; it does not fetch anything at MCP-tool-call
-time.
+pattern already used for `lean-checker`): a local clone of
+https://github.com/trishullab/PutnamBench is a documented, one-time
+developer action, never vendored into this repo's own git history. The
+importer reads from that local path and does not fetch anything itself.
 
-Deliberately **not** attempted by the importer: parsing or reusing PutnamBench's
-own (frequently `sorry`-only) proof placeholders as anything but a
+Verified against the real corpus at commit
+`a23d8e6d4e9e3418fd78f76de7bfcb9414cbfd39` (672 `lean4/src/*.lean` files):
+every file is `import Mathlib` (the whole umbrella, not curated per-module
+imports — so `import_manifest` is registered as `["Mathlib"]` for every
+PutnamBench problem, not a fine-grained list), followed by an optional
+`open ...` line, an optional docstring, an optional
+`abbrev`/`noncomputable abbrev` declaration, and exactly one
+`theorem NAME ... := sorry` (zero files have more than one `theorem`
+declaration). 350/672 (52%) define a companion `_solution`-style abbrev the
+theorem references — those need `SubmitModule` (the abbrev's real body plus
+the theorem's proof), not a bare `Solve`, since the theorem's own type
+still depends on an unresolved `sorry` otherwise. The importer classifies
+this per problem (`has_solution_abbrev`) so a runner can pick the right
+`solve_mode`.
+
+**A real contamination finding, caught before it shipped:** PutnamBench's
+own convention for those 350 "find the answer" problems is
+`abbrev X_solution := sorry` immediately followed by a `-- <the actual
+closed-form answer>` line — the correct answer, spelled out as a source
+comment, right next to the placeholder the prover is supposed to fill in.
+PutnamBench's own extractor (`lean4/scripts/extract_to_json.py`) captures
+this comment verbatim into its `lean4_statement` field, since its regex has
+no notion of Lean comment syntax. A first version of this importer mirrored
+that regex faithfully and would have registered the answer key directly
+into `benchmark_problems.root_formal_statement` for 356/672 files — handing
+any prover reading it the answer for free, the opposite of what a benchmark
+import should do. Fixed: `chatdb_proof_core::putnambench::parse_problem_file`
+strips both `--` line comments and `/- ... -/` block/doc comments before
+storing the statement, verified against all 672 real files with zero
+comment leakage (one apparent leak on manual spot-check turned out to be a
+false positive — the flagged phrase, `Real.pi / 2`, is coincidentally also
+part of that problem's own legitimate hypothesis, not the stripped
+comment). See `test_strips_answer_key_comment_and_docstring_from_solution_abbrev_problems`.
+
+Deliberately **not** attempted by the importer: parsing or reusing
+PutnamBench's own (always `sorry`-only) proof placeholders as anything but a
 statement source, and importing the non-Lean (Isabelle/Coq) formalizations —
-ChatDB only verifies Lean.
+ChatDB only verifies Lean. Files that don't match the expected shape are
+skipped and reported, never silently mis-registered (none of the 672 real
+files were actually skipped, but the importer is written to handle a future
+PutnamBench update that adds an unexpected shape without crashing or
+mis-registering it).
+
+Two more real bugs an independent adversarial review found before this
+shipped, both fixed and regression-tested against the real corpus:
+
+- **Name extraction on a colon-adjacent theorem line.** `putnam_1993_b5.lean`
+  writes `theorem putnam_1993_b5:` with no space before the colon — a naive
+  `split_whitespace()` extracted `"putnam_1993_b5:"` (colon included) as the
+  theorem name, silently diverging from the file-stem-derived
+  `upstream_problem_id`. Fixed by splitting on any non-identifier character
+  (whitespace, `:`, `(`, `{`, `[`), not just whitespace. Verified: zero
+  `upstream_problem_id`/`theorem_name` mismatches across all 672 real files
+  after the fix (there was exactly one before it).
+- **Non-resumable batch import.** `benchmark_suites.name` is `UNIQUE`
+  server-side, and the importer unconditionally called
+  `benchmark_suite_create` on every invocation — a second run against the
+  same db (e.g. recovering from a crash partway through a 672-problem batch)
+  failed immediately at suite creation, before ever reaching the per-problem
+  loop where duplicates are already handled gracefully. Fixed: the importer
+  now looks up an existing `benchmark_suites` row by name directly on the
+  raw connection before standing up the MCP client, reusing that `suite_id`
+  if found. Verified live: running the importer twice against the same db
+  with disjoint problem subsets registers both subsets under the same suite,
+  with no error.
 
 ### Evaluation protocol / run manifest
 
