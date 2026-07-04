@@ -1,0 +1,141 @@
+{
+  "$schema_note": "PutnamBench smoke subset (issue #32). import_fixtures are real PutnamBench Lean 4 problems (commit a23d8e6d4e9e3418fd78f76de7bfcb9414cbfd39), embedded verbatim so import-fidelity can be checked without CHATDB_PUTNAM_BENCH_PATH set up. canned_proof_fixtures are DELIBERATELY SYNTHETIC, not real Putnam problems -- real Putnam problems require genuine multi-step mathematical argument, not one-line tactic proofs, so plumbing tests use simple, deterministic statements instead. See docs/benchmarks/putnambench.md.",
+  "suite_upstream_commit": "a23d8e6d4e9e3418fd78f76de7bfcb9414cbfd39",
+  "import_fixtures": [
+    {
+      "upstream_problem_id": "putnam_1962_a1",
+      "source_file_path": "lean4/src/putnam_1962_a1.lean",
+      "theorem_name": "putnam_1962_a1",
+      "root_formal_statement": "theorem putnam_1962_a1\n(S : Set (ℝ × ℝ))\n(hS : S.ncard = 5)\n(hnoncol : ∀ s ⊆ S, s.ncard = 3 → ¬Collinear ℝ s)\n: ∃ T ⊆ S, T.ncard = 4 ∧ ¬∃ t ∈ T, t ∈ convexHull ℝ (T \\ {t}) :=\nsorry",
+      "root_statement_hash": "ea18fba335de0cbfcd2a458122974712f270b639630227da3485b4e6cb0af807",
+      "prover_ready_statement_hash": "dccf6749c7d11612eb1043aa893994ba1e77bb03a35def9d8c18edb6d654c706",
+      "import_manifest": [
+        "Mathlib"
+      ],
+      "difficulty_tag": "easy",
+      "subject_tags": [
+        "geometry"
+      ],
+      "has_known_proof": false
+    },
+    {
+      "upstream_problem_id": "putnam_1962_a5",
+      "source_file_path": "lean4/src/putnam_1962_a5.lean",
+      "theorem_name": "putnam_1962_a5",
+      "root_formal_statement": "abbrev putnam_1962_a5_solution : ℕ → ℕ := sorry\ntheorem putnam_1962_a5\n: ∀ n ≥ 2, putnam_1962_a5_solution n = ∑ k ∈ Finset.Icc 1 n, Nat.choose n k * k^2 :=\nsorry",
+      "root_statement_hash": "4bbee1d6d622d95bfde1440c2eb97ba3ed5c5865bbed9afc0454f0dd7d71777a",
+      "prover_ready_statement_hash": "bd99b5ffe1d805abe7c1f5574af8f0e6faccfb1e8587ba2ec0dcffe8cc9ddef1",
+      "import_manifest": [
+        "Mathlib"
+      ],
+      "difficulty_tag": "hard",
+      "subject_tags": [
+        "algebra",
+        "combinatorics"
+      ],
+      "has_known_proof": false
+    },
+    {
+      "upstream_problem_id": "putnam_1974_a4",
+      "source_file_path": "lean4/src/putnam_1974_a4.lean",
+      "theorem_name": "putnam_1974_a4",
+      "root_formal_statement": "noncomputable abbrev putnam_1974_a4_solution : ℕ → ℚ := sorry\n\ntheorem putnam_1974_a4\n(n : ℕ)\n(hn : 0 < n) :\n(1 : ℚ) / (2 ^ (n - 1)) * ∑ k ∈ Finset.Icc 0 ⌊n / 2⌋₊, (n - 2 * k) * (n.choose k) =\nputnam_1974_a4_solution n :=\nsorry",
+      "root_statement_hash": "f3b84e17230eb4b7bc943d5f04b83cf67252bb01d0b5facc061fccce9463d49f",
+      "prover_ready_statement_hash": "2fbab4f7599c2a7a30f296c97734c187ec70318939250a8ece994688e23b9548",
+      "import_manifest": [
+        "Mathlib"
+      ],
+      "difficulty_tag": "hard",
+      "subject_tags": [
+        "algebra"
+      ],
+      "has_known_proof": false
+    },
+    {
+      "upstream_problem_id": "putnam_2000_a1",
+      "source_file_path": "lean4/src/putnam_2000_a1.lean",
+      "theorem_name": "putnam_2000_a1",
+      "root_formal_statement": "abbrev putnam_2000_a1_solution : ℝ → Set ℝ := sorry\ntheorem putnam_2000_a1\n(A : ℝ)\n(Apos : A > 0)\n: {S : ℝ |\n∃ x : ℕ → ℝ,\n(∀ j : ℕ, x j > 0) ∧\n(∑' j : ℕ, x j) = A ∧\n(∑' j : ℕ, (x j) ^ 2) = S}\n= putnam_2000_a1_solution A :=\nsorry",
+      "root_statement_hash": "0a47cfb98cb7191b0f794f9cf56ceda06f671f6d3e76b00f1473dae65a0626e1",
+      "prover_ready_statement_hash": "9f0d3e4a7eadd95ba4c12977738c1ba3680e0565d0ecf99c6e0cf50d26b30af9",
+      "import_manifest": [
+        "Mathlib"
+      ],
+      "difficulty_tag": "easy",
+      "subject_tags": [
+        "analysis"
+      ],
+      "has_known_proof": false
+    },
+    {
+      "upstream_problem_id": "putnam_2022_b1",
+      "source_file_path": "lean4/src/putnam_2022_b1.lean",
+      "theorem_name": "putnam_2022_b1",
+      "root_formal_statement": "theorem putnam_2022_b1\n(P : Polynomial ℤ)\n(b : ℕ → ℝ)\n(Pconst : P.coeff 0 = 0)\n(Podd : Odd (P.coeff 1))\n(hB : ∀ x : ℝ, HasSum (fun i => b i * x ^ i) (Real.exp (aeval x P))) :\n∀ k : ℕ, b k ≠ 0 :=\nsorry",
+      "root_statement_hash": "dfc1aa54c2d112196d76540df33edd22c8c616fd712206c9c997bb8017a92a9e",
+      "prover_ready_statement_hash": "e8b4223c773150814f41553986a289172b3eb3e5f27466245e64e825be099553",
+      "import_manifest": [
+        "Mathlib"
+      ],
+      "difficulty_tag": "easy",
+      "subject_tags": [
+        "analysis",
+        "algebra"
+      ],
+      "has_known_proof": false
+    }
+  ],
+  "canned_proof_fixtures": [
+    {
+      "fixture_id": "smoke_solve_success",
+      "kind": "solve_only",
+      "root_formal_statement": "1 + 1 = 2",
+      "import_manifest": [
+        "Mathlib.Tactic.NormNum"
+      ],
+      "attempt": {
+        "type": "solve",
+        "proof_term": "norm_num"
+      },
+      "expected_status": "kernel_verified"
+    },
+    {
+      "fixture_id": "smoke_submit_module_success",
+      "kind": "submit_module_allowed",
+      "root_formal_statement": "double 2 = 4",
+      "import_manifest": [
+        "Mathlib.Tactic.NormNum"
+      ],
+      "attempt": {
+        "type": "submit_module",
+        "module_items": [
+          {
+            "item_kind": "def",
+            "name": "double",
+            "type_signature": "Nat → Nat",
+            "body": "fun n => n + n"
+          }
+        ],
+        "root_theorem": {
+          "name": "root",
+          "statement": "double 2 = 4",
+          "proof_term": "rfl"
+        }
+      },
+      "expected_status": "kernel_verified"
+    },
+    {
+      "fixture_id": "smoke_expected_fail",
+      "kind": "solve_only",
+      "root_formal_statement": "1 + 1 = 2",
+      "import_manifest": [
+        "Mathlib.Tactic.NormNum"
+      ],
+      "attempt": {
+        "type": "solve",
+        "proof_term": "sorry"
+      },
+      "expected_status": "failed"
+    }
+  ]
+}
