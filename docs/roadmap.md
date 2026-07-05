@@ -306,9 +306,10 @@ shipped (v0.3.6). #29+#30 schema shipped (v0.3.7). #33+#37 shipped (v0.3.8).
 #28 shipped, docs-only. #29 (importer) shipped (v0.3.9). #31 (runner) shipped
 (v0.3.10). #32 (smoke fixtures) shipped (v0.3.11). #36 shipped (v0.3.12).
 #34 partial shipped (v0.3.13). #38 partial (cost-completeness) shipped
-(v0.3.14). #38 partial (real verifier_cost wiring) shipped (v0.3.15). The
-full PutnamBench sprint is complete, and the first real playtest attempt has
-run: 12 real
+(v0.3.14). #38 partial (real verifier_cost wiring) shipped (v0.3.15). #34
+partial (bounded 13/42-tool classification audit, found and fixed a real
+trajectory_export contamination gap) shipped (v0.3.16). The full PutnamBench
+sprint is complete, and the first real playtest attempt has run: 12 real
 problems, 1/12 (8.3%) pass@1 — see
 `docs/playtests/2026-07-04-putnambench-first-attempt.md`. Zero infra errors,
 zero panics, correct enforcement throughout; the constraint was genuine
@@ -351,6 +352,32 @@ trust level, cost surface, benchmark safety, replayability), and
 benchmark-mode guardrails against source-code mutation (moot for ChatDB's
 actual tool surface today — there is no MCP tool that edits source files —
 but worth revisiting if one is ever added).
+
+**#34 (partial, follow-up) — bounded tool-classification audit slice.** ✅
+Shipped in v0.3.16: a genuine (not padded) per-tool classification, across
+the issue's 8 dimensions (side_effect, trust_level, cost_surface,
+benchmark_safety, replayability, source_code_impact, artifact_risk,
+required_run_mode), for 13 of the 42 tools — surfaced in
+`environment_describe`'s new `tool_classification` field, explicit that a
+tool's absence from the map is "not yet classified," never "safe by
+omission." Doing this analysis found and fixed a real, live bug:
+`trajectory_export` returns each event's raw `payload_json`, which for a
+`solve`/`submit_module` action includes the exact completed-proof-body
+content issue #33's contamination policy gates in `proof_export` — but
+`trajectory_export` had no equivalent gate at all, an ungated side channel
+around that policy for any benchmark-linked episode. Fixed by adding the
+same `allow_putnambench_proof_export` flag and the same
+`benchmark_suite_name_for_episode` check `proof_export` already uses.
+Verified against the real Lean 4.32.0-rc1 + Mathlib toolchain via
+`playtest.rs`. An adversarial review found no code bugs and independently
+confirmed two other findings recorded in the classification itself as open
+questions rather than fixes: `benchmark_result_record` cross-checks
+statement identity but not a problem's `fidelity_status`, and
+`unsafe_dev_attestation`'s dev-only naming isn't actually enforced against a
+run's declared mode — both deliberately left as documented, undecided
+boundaries rather than silently patched. Still open on #34: 29 of 42 tools
+remain unclassified, and the benchmark-mode source-mutation guardrail
+remains moot as before.
 
 **#38 (partial) — cost-completeness marking for benchmark reports.** ✅
 Shipped in v0.3.14, one small bounded slice of #38's larger 7-bucket ask

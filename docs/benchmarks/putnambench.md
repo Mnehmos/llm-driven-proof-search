@@ -461,6 +461,17 @@ PutnamBench problem and want to report it upstream, use this mode, gate it
 with `allow_putnambench_proof_export=true`, and reach out to the PutnamBench
 maintainers directly rather than publishing the artifact yourself.
 
+**`trajectory_export` is gated the same way (issue #34 follow-up, v0.3.16).**
+A real gap found while doing #34's tool-classification audit: `trajectory_export`
+returns the raw, hash-chained event log for an episode, including each event's
+full `payload_json` — which for a `solve` action's `proof_term` or a
+`submit_module` action's `module_items` is exactly the completed-proof-body
+content this policy exists to gate, but `trajectory_export` had no equivalent
+check at all until now. It now requires `allow_putnambench_proof_export=true`
+for a benchmark-linked episode, using the identical `benchmark_suite_name_for_episode`
+lookup `proof_export` uses, and errors with the same guidance (use `proof_export`
+with `format="public_summary"` for a disclosure-safe report instead).
+
 ## What "public" safely includes
 
 Aggregate metrics, problem identifiers (`upstream_problem_id`, `theorem_name`),
