@@ -1134,6 +1134,128 @@ fn rs(e: impl std::fmt::Display) -> McpError {
     mcp_internal_error(e.to_string())
 }
 
+fn reserve_episode_budget_for_model_call(
+    tx: &Transaction,
+    episode_id: &str,
+    reserved_cost_micros: i64,
+) -> Result<(), McpError> {
+    if reserved_cost_micros < 0 {
+        return Err(mcp_invalid_params("invalid_cost: reserved_cost_micros must be >= 0"));
+    }
+    let updated = tx.execute(
+        "UPDATE episodes
+         SET cost_budget_micros = cost_budget_micros - ?1
+         WHERE id = ?2
+           AND (cost_budget_micros IS NULL OR cost_budget_micros >= ?1)",
+        (reserved_cost_micros, episode_id),
+    ).map_err(rs)?;
+    if updated == 0 {
+        let remaining: Option<i64> = tx.query_row(
+            "SELECT cost_budget_micros FROM episodes WHERE id = ?1",
+            [episode_id],
+            |row| row.get(0),
+        ).optional().map_err(rs)?.flatten();
+        if let Some(remaining) = remaining {
+            return Err(mcp_invalid_params(format!(
+                "budget_denied: reserved_cost_micros {} exceeds remaining budget {}",
+                reserved_cost_micros, remaining
+            )));
+        }
+        return Err(mcp_invalid_params(format!("unknown episode_id: {}", episode_id)));
+    }
+    Ok(())
+}
+
+fn refund_episode_budget(tx: &Transaction, episode_id: &str, amount_micros: i64) -> Result<(), McpError> {
+    if amount_micros < 0 {
+        return Err(mcp_invalid_params("invalid_cost: refund amount must be >= 0"));
+    }
+    tx.execute(
+        "UPDATE episodes SET cost_budget_micros = cost_budget_micros + ?1 WHERE id = ?2",
+        (amount_micros, episode_id),
+    ).map_err(rs)?;
+    Ok(())
+}
+
+fn settle_model_call_lease(
+    tx: &Transaction,
+    lease_id: &str,
+    actual_cost_micros: i64,
+    status: &str,
+) -> Result<(), McpError> {
+    if actual_cost_micros < 0 {
+        return Err(mcp_invalid_params("invalid_cost: actual_cost_micros must be >= 0"));
+    }
+    if !matches!(status, "settled" | "voided") {
+        return Err(mcp_invalid_params("status must be 'settled' or 'voided'"));
+    }
+
+    let lease: Option<(String, String, i64)> = tx.query_row(
+        "SELECT episode_id, status, reserved_cost_micros FROM model_call_leases WHERE id = ?1",
+        [lease_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).optional().map_err(rs)?;
+
+    let Some((episode_id, lease_status, reserved_cost_micros)) = lease else {
+        return Err(mcp_invalid_params(format!("unknown lease_id: {}", lease_id)));
+    };
+    if lease_status != "reserved" {
+        return Err(mcp_invalid_params(format!("lease {} is already {}", lease_id, lease_status)));
+    }
+    if reserved_cost_micros < 0 {
+        return Err(mcp_invalid_params("invalid_cost: reserved_cost_micros must be >= 0"));
+    }
+
+    if status == "settled" {
+        let delta = actual_cost_micros - reserved_cost_micros;
+        if delta > 0 {
+            reserve_episode_budget_for_model_call(tx, &episode_id, delta)?;
+        } else if delta < 0 {
+            refund_episode_budget(tx, &episode_id, -delta)?;
+        }
+
+        tx.execute(
+            "UPDATE model_call_leases
+             SET status = 'settled', actual_cost_micros = ?1, settled_at = ?2
+             WHERE id = ?3",
+            (actual_cost_micros, Utc::now().to_rfc3339(), lease_id),
+        ).map_err(rs)?;
+    } else {
+        refund_episode_budget(tx, &episode_id, reserved_cost_micros)?;
+        tx.execute(
+            "UPDATE model_call_leases
+             SET status = 'voided', actual_cost_micros = NULL, settled_at = ?1
+             WHERE id = ?2",
+            (Utc::now().to_rfc3339(), lease_id),
+        ).map_err(rs)?;
+    }
+
+    Ok(())
+}
+
+fn settle_reserved_model_call_leases_for_attempt(
+    tx: &Transaction,
+    episode_id: &str,
+    action_attempt_id: &str,
+    actual_cost_micros: i64,
+) -> Result<(), McpError> {
+    let mut stmt = tx.prepare(
+        "SELECT id FROM model_call_leases
+         WHERE episode_id = ?1 AND action_attempt_id = ?2 AND status = 'reserved'
+         ORDER BY created_at ASC, id ASC",
+    ).map_err(rs)?;
+    let lease_ids: Vec<String> = stmt.query_map((episode_id, action_attempt_id), |row| row.get(0))
+        .map_err(rs)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(rs)?;
+    drop(stmt);
+
+    for lease_id in lease_ids {
+        settle_model_call_lease(tx, &lease_id, actual_cost_micros, "settled")?;
+    }
+    Ok(())
+}
+
 /// Issue #38's mode-enforcement policy: unsafe_dev_attestation ("attested"
 /// fidelity_status) means development playtest, never a measured claim.
 /// Blocked outright (no override possible) for benchmark/evaluation/
@@ -1261,6 +1383,17 @@ fn run_step_post_processing(
         Err(step::StepError::InvalidAttempt) => (
             StepDisposition::InvalidResponse, false,
             Some("Invalid attempt claim or status".to_string()),
+        ),
+        Err(step::StepError::InvalidCost { cost_micros }) => (
+            StepDisposition::InvalidResponse, false,
+            Some(format!("invalid_cost: cost_micros must be >= 0 and fit in i64 (got {})", cost_micros)),
+        ),
+        Err(step::StepError::BudgetExceeded { requested_cost_micros, remaining_cost_micros }) => (
+            StepDisposition::Error, false,
+            Some(format!(
+                "budget_denied: cost_micros {} exceeds remaining budget {}",
+                requested_cost_micros, remaining_cost_micros
+            )),
         ),
         Err(e) => (StepDisposition::Error, false, Some(format!("{:?}", e))),
     };
@@ -2270,8 +2403,8 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EpisodeStepArgs>("episode_step", "Submit a typed action against a claimed attempt. `action` is internally tagged — exactly one of: {\"type\":\"solve\",\"proof_term\":\"  norm_num\"} (Lean tactic block proving the target obligation), {\"type\":\"decompose\",\"sub_lemmas\":[\"<lean statement>\", ...]} (split the obligation into child lemmas), {\"type\":\"give_up\"} (terminate the episode). `expected_revision` must equal the episode_revision advertised on the action_request. Settles any lease attached to the attempt atomically"),
             make_tool::<EpisodeStatusArgs>("episode_status", "Retrieve current episode state, revision, budget, step count"),
             make_tool::<EpisodeCloseArgs>("episode_close", "Gracefully truncate an episode"),
-            make_tool::<ModelCallReserveArgs>("model_call_reserve", "Reserve a budget lease for a model call"),
-            make_tool::<ModelCallSettleArgs>("model_call_settle", "Settle or release a lease without submitting an action (provider failure, cancellation)"),
+            make_tool::<ModelCallReserveArgs>("model_call_reserve", "Reserve a model-call budget lease and immediately debit bounded episode budget"),
+            make_tool::<ModelCallSettleArgs>("model_call_settle", "Settle or void a lease, applying only the reserved-vs-actual budget delta"),
             make_tool::<TrajectoryExportArgs>("trajectory_export", "Export trajectory with pagination (cursor + page_size). Raw event payload_json can expose a completed proof body (proof_term/module_items) — for a benchmark-linked episode this requires allow_putnambench_proof_export=true, same contamination policy as proof_export (issue #33)"),
             make_tool::<EpisodeReplayArgs>("episode_replay", "Re-execute typed actions through canonical reducer with Lean re-verification"),
             make_tool::<ProofExportArgs>("proof_export", "Render an episode as a proof dossier. format: \"markdown\" (default, full dossier) | \"lean\" (bare assembled source) | \"public_summary\" (redacted, safe for public/benchmark disclosure — never includes the proof body) | \"audit_archive\" (full dossier, explicitly labeled private) | \"training_export\" (structured JSON records for SFT/RL/DPO) | \"paper_dossier\" (full dossier plus a written narrative section) | \"maintainer_submission\" (full dossier packaged for a benchmark suite's own maintainers). Modes that expose the completed proof body require allow_putnambench_proof_export=true when the episode's problem is linked to a tracked benchmark suite — see docs/benchmarks/putnambench.md"),
@@ -2360,7 +2493,7 @@ impl ServerHandler for ChatDbMcp {
                         "why_this_matters": "A proof attempt checked some OTHER way (e.g. a bare `lake env lean` invocation outside this episode, or an internal LeanGateway call bypassed around episode_step) and then only submitted as a final winning SubmitModule/Solve loses every failed attempt, every Lean diagnostic, every repair step — the data this environment exists to preserve. Untracked checks do not count as valid benchmark or training attempts, and a run built that way should be reported as incomplete, not as a clean success."
                     },
                     "lookup_and_planning_tools": "Use lean_declaration_lookup, mathlib_search_declarations, mathlib_search_local_artifacts, proof_pattern_search, draft_create/draft_extract_moves, and formalization_plan_* tools rather than an external side channel for the same job during a tracked run — that keeps the reasoning trail inside the environment's own ledger, replayable and auditable later.",
-                    "cost_boundary": "cost_micros (episode_step), model_call_reserve/model_call_settle, and the episode budget ledger track ONLY this environment's own MCP-visible accounting — Lean invocation time and ChatDB's own bookkeeping. They are NOT the total cost of running you (the external host/model). Host-side reasoning cost (tokens spent thinking, editing, or calling other tools before or around an MCP call) is invisible to ChatDB entirely unless you report it through model_call_reserve/model_call_settle. Never present MCP-visible cost_micros as if it were the complete cost of a run.",
+                    "cost_boundary": "cost_micros (episode_step), model_call_reserve/model_call_settle, and the episode budget ledger are enforcement/accounting mechanisms for this environment's MCP-visible budget, not proof-soundness claims. episode_step.cost_micros is reserved before a step executes; model_call_reserve immediately reserves bounded episode budget; model_call_settle adjusts only the reserved-vs-actual delta or refunds a voided reservation. They are NOT the total cost of running you (the external host/model). Host-side reasoning cost (tokens spent thinking, editing, or calling other tools before or around an MCP call) is invisible to ChatDB entirely unless you report it through model_call_reserve/model_call_settle. Never present MCP-visible cost_micros as if it were the complete cost of a run.",
                     "benchmark_mode": "Development/exploratory use and a frozen benchmark run (e.g. PutnamBench) are different modes with different rules. In benchmark mode: every candidate attempt must flow through episode_step (see proof_attempts above) so the run counts as valid evidence, not just a trophy case; and public reports of benchmark results follow a redaction policy — a public summary must not contain completed proof source by default, only aggregate status/hashes/replay information. Check the benchmark documentation (docs/benchmarks/) for the exact export mode to use before publishing any benchmark result.",
                     "forbidden_or_discouraged": [
                         "Do not infer that a declaration is absent from the pinned Mathlib from one 'unknown_declaration' result — call lean_declaration_lookup(deep_check=true) first.",
@@ -2546,18 +2679,18 @@ impl ServerHandler for ChatDbMcp {
                                 "required_run_mode": "any"
                             },
                             "model_call_reserve": {
-                                "side_effect": "mutating — inserts a model_call_leases row, checked-out against an episode's remaining cost_budget_micros",
+                                "side_effect": "mutating — conditionally reserves bounded episode budget immediately, then inserts a model_call_leases row only if that reservation succeeds; NULL episode budget is unbounded",
                                 "trust_level": "untrusted_input — declared_model/runner_id/max_input_tokens/max_output_tokens are entirely client-asserted, not independently verified by ChatDB",
-                                "cost_surface": "host_side — reserves budget for what will become a HOST-reported model-call cost, distinct from run_envelopes.host_side_cost_micros (one aggregate figure per run) and from verifier_side cost (real, ChatDB-measured Lean timing). Now (v0.3.20) folded into benchmark_run_observe's cost_summary as model_call_reported_cost_micros, always at 'attested' confidence, never merged into an exact total",
+                                "cost_surface": "host_side — reserves budget for what will become a HOST-reported model-call cost, distinct from run_envelopes.host_side_cost_micros (one aggregate figure per run) and from verifier_side cost (real, ChatDB-measured Lean timing). Settled actual model-call costs are folded into benchmark_run_observe's cost_summary as model_call_reported_cost_micros, always at 'attested' confidence, never merged into an exact total",
                                 "benchmark_safety": "safe_public_output — a budget reservation, no proof content",
                                 "replayability": "deterministic given recorded state, but the reservation itself has no external effect to replay (no real model call happens through this tool — it only manages ChatDB's own ledger)",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
                                 "required_run_mode": "any",
-                                "note": "a REAL, non-obvious interaction found while writing the regression test for the aggregation above (not a bug — a genuine, pre-existing step.rs::attempt_finalize behavior): calling episode_step for the SAME (episode_id, action_attempt_id) this lease is reserved against auto-settles it, using that step's OWN cost_micros argument as actual_cost_micros — a lease is NOT guaranteed to stay 'reserved' until an explicit model_call_settle call; the very next episode_step on that attempt settles it implicitly, using a value the caller may not have intended as the model-call cost specifically (episode_step's cost_micros is the episode's own general bookkeeping figure, reused here for lease settlement too). A lease only stays genuinely unsettled if its attempt is never stepped at all (e.g. the episode is instead terminated via episode_close, which does not touch model_call_leases)."
+                                "note": "calling episode_step for the SAME (episode_id, action_attempt_id) this lease is reserved against auto-settles it, using that step's OWN cost_micros argument as actual_cost_micros. That implicit settlement now uses the same delta rule as model_call_settle: lower actual refunds the reserved difference, higher actual requires remaining budget for only the delta, and the step preparation rolls back if the delta cannot be covered."
                             },
                             "model_call_settle": {
-                                "side_effect": "mutating — updates the lease's status/actual_cost_micros/settled_at, and (if status='settled') decrements the episode's cost_budget_micros. Note: this is not the ONLY way a lease reaches 'settled' — see model_call_reserve's note on episode_step's own auto-settle behavior for the same (episode_id, action_attempt_id) pair",
+                                "side_effect": "mutating — settles or voids an open lease. status='settled' adjusts the episode budget only by actual_cost_micros - reserved_cost_micros (refunds if lower, conditionally debits only the delta if higher); status='voided' refunds the reserved amount and leaves actual_cost_micros NULL. Already-settled/voided leases are rejected clearly rather than charged twice. Note: this is not the ONLY way a lease reaches 'settled' — see model_call_reserve's note on episode_step's own auto-settle behavior for the same (episode_id, action_attempt_id) pair",
                                 "trust_level": "untrusted_input — actual_cost_micros is exactly as self-reported as the reservation was; nothing here upgrades it to verifier_backed or measured",
                                 "cost_surface": "host_side — now (v0.3.20) aggregated into benchmark_run_observe's cost_summary as model_call_reported_cost_micros, always at 'attested' confidence",
                                 "benchmark_safety": "safe_public_output",
@@ -3326,7 +3459,7 @@ impl ServerHandler for ChatDbMcp {
                     )))?;
 
                 if args.cost_micros < 0 {
-                    return Err(mcp_invalid_params("cost_micros must be >= 0"));
+                    return Err(mcp_invalid_params("invalid_cost: cost_micros must be >= 0"));
                 }
 
                 let ep_uuid = Uuid::parse_str(&args.episode_id)
@@ -3375,13 +3508,6 @@ impl ServerHandler for ChatDbMcp {
                         None => "GENESIS".to_string(),
                     };
 
-                    // Deduct or settle leases if any exist
-                    tx1.execute(
-                        "UPDATE model_call_leases SET status = 'settled', actual_cost_micros = ?1, settled_at = ?2
-                         WHERE episode_id = ?3 AND action_attempt_id = ?4 AND status = 'reserved'",
-                        (args.cost_micros, Utc::now().to_rfc3339(), args.episode_id.clone(), args.action_attempt_id.clone()),
-                    ).map_err(rs)?;
-
                     // Two-phase commit: `attempt_prepare` validates the attempt/claim/CAS
                     // and either (a) fully executes a non-Lean action (Decompose / GiveUp /
                     // ExternalResponseRejected / a policy-rejected SubmitModule) within
@@ -3404,6 +3530,12 @@ impl ServerHandler for ChatDbMcp {
                             Prepared::Resolved(post)
                         }
                         Ok(step::PrepOutcome::Done { outcome, .. }) => {
+                            settle_reserved_model_call_leases_for_attempt(
+                                &tx1,
+                                &args.episode_id,
+                                &args.action_attempt_id,
+                                args.cost_micros,
+                            )?;
                             let post = run_step_post_processing(
                                 &tx1, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
                                 Ok(outcome), &target_obligation_id, &state_hash_before,
@@ -3412,6 +3544,12 @@ impl ServerHandler for ChatDbMcp {
                             Prepared::Resolved(post)
                         }
                         Ok(step::PrepOutcome::NeedsGateway { request, ctx }) => {
+                            settle_reserved_model_call_leases_for_attempt(
+                                &tx1,
+                                &args.episode_id,
+                                &args.action_attempt_id,
+                                args.cost_micros,
+                            )?;
                             tx1.commit().map_err(rs)?; // commit prepare-only writes (mark-executing, attempt_count)
                             Prepared::NeedsGateway { request, ctx }
                         }
@@ -3625,7 +3763,7 @@ impl ServerHandler for ChatDbMcp {
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
 
                 if args.reserved_cost_micros < 0 {
-                    return Err(mcp_invalid_params("reserved_cost_micros must be >= 0"));
+                    return Err(mcp_invalid_params("invalid_cost: reserved_cost_micros must be >= 0"));
                 }
 
                 let mut conn = self.conn.lock().await;
@@ -3640,17 +3778,7 @@ impl ServerHandler for ChatDbMcp {
                     return Err(mcp_invalid_params(format!("unknown action_attempt_id {} for episode {}", args.action_attempt_id, args.episode_id)));
                 }
 
-                let remaining: Option<i64> = tx.query_row(
-                    "SELECT cost_budget_micros FROM episodes WHERE id = ?1", [&args.episode_id], |row| row.get(0)
-                ).optional().map_err(rs)?.flatten();
-                if let Some(remaining) = remaining {
-                    if args.reserved_cost_micros > remaining {
-                        return Err(mcp_invalid_params(format!(
-                            "budget_denied: reserved_cost_micros {} exceeds remaining budget {}",
-                            args.reserved_cost_micros, remaining
-                        )));
-                    }
-                }
+                reserve_episode_budget_for_model_call(&tx, &args.episode_id, args.reserved_cost_micros)?;
 
                 let lease_id = Uuid::new_v4();
                 let descriptor = serde_json::json!({
@@ -3685,7 +3813,7 @@ impl ServerHandler for ChatDbMcp {
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
 
                 if args.actual_cost_micros < 0 {
-                    return Err(mcp_invalid_params("actual_cost_micros must be >= 0"));
+                    return Err(mcp_invalid_params("invalid_cost: actual_cost_micros must be >= 0"));
                 }
                 if !matches!(args.status.as_str(), "settled" | "voided") {
                     return Err(mcp_invalid_params("status must be 'settled' or 'voided'"));
@@ -3694,30 +3822,7 @@ impl ServerHandler for ChatDbMcp {
                 let mut conn = self.conn.lock().await;
                 let tx = conn.transaction().map_err(rs)?;
 
-                let lease: Option<(String, String)> = tx.query_row(
-                    "SELECT episode_id, status FROM model_call_leases WHERE id = ?1",
-                    [args.lease_id.clone()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                ).optional().map_err(rs)?;
-
-                let Some((episode_id, lease_status)) = lease else {
-                    return Err(mcp_invalid_params(format!("unknown lease_id: {}", args.lease_id)));
-                };
-                if lease_status != "reserved" {
-                    return Err(mcp_invalid_params(format!("lease {} is already {}", args.lease_id, lease_status)));
-                }
-
-                tx.execute(
-                    "UPDATE model_call_leases SET status = ?1, actual_cost_micros = ?2, settled_at = ?3 WHERE id = ?4",
-                    (args.status.clone(), args.actual_cost_micros, Utc::now().to_rfc3339(), args.lease_id.clone()),
-                ).map_err(rs)?;
-
-                if args.status == "settled" {
-                    tx.execute(
-                        "UPDATE episodes SET cost_budget_micros = cost_budget_micros - ?1 WHERE id = ?2",
-                        (args.actual_cost_micros, &episode_id),
-                    ).map_err(rs)?;
-                }
+                settle_model_call_lease(&tx, &args.lease_id, args.actual_cost_micros, &args.status)?;
 
                 tx.commit().map_err(rs)?;
 
@@ -6861,6 +6966,483 @@ mod tests {
             conn.query_row("SELECT cost_budget_micros FROM episodes WHERE id = ?1", [&episode_id], |row| row.get(0)).unwrap()
         };
         assert_eq!(budget, 999_900, "budget must be exactly once-deducted after a successful step (no double-charge from prepare+finalize)");
+    }
+
+    struct CountingMcpGateway {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl LeanGateway for CountingMcpGateway {
+        fn verify_exact(
+            &self,
+            obligation: &Obligation,
+            _p: &str,
+            _d: &[Uuid],
+            environment: &str,
+            _m: &[String],
+        ) -> Result<LeanVerificationResult, String> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(LeanVerificationResult {
+                outcome: LeanVerificationOutcome::KernelPass,
+                attempt_id: Uuid::new_v4(),
+                obligation_id: obligation.id,
+                theorem_name: obligation.theorem_name.clone(),
+                expected_statement_hash: obligation.statement_hash.clone(),
+                elaborated_statement_hash: None,
+                environment_hash: environment.to_string(),
+                proof_source_hash: "".to_string(),
+                compiled_artifact_hash: None,
+                proof_term_hash: None,
+                diagnostic: None,
+                all_diagnostics: vec![],
+                dependency_use_report: None,
+                wall_time_ms: 1,
+                lean_cpu_time_ms: 1,
+            })
+        }
+        fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> { Ok(()) }
+    }
+
+    async fn create_claimed_episode(
+        peer: &rmcp::service::Peer<rmcp::RoleClient>,
+        cost_budget_micros: Option<i64>,
+        idempotency_key: &str,
+    ) -> (String, i64, String, String) {
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "budget regression",
+            "root_formal_statement": "True",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let mut episode_args = serde_json::json!({
+            "problem_version_id": create["problem_version_id"],
+            "max_steps": 5,
+        });
+        if let Some(cost_budget_micros) = cost_budget_micros {
+            episode_args["cost_budget_micros"] = serde_json::json!(cost_budget_micros);
+        }
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(
+            episode_args.as_object().unwrap().clone()
+        )).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let revision = req["episode_revision"].as_i64().unwrap();
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+            "action_request_id": req["id"],
+            "idempotency_key": idempotency_key,
+            "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        (
+            episode_id,
+            revision,
+            claim["action_attempt_id"].as_str().unwrap().to_string(),
+            claim["claim_token"].as_str().unwrap().to_string(),
+        )
+    }
+
+    async fn reserve_model_call(
+        peer: &rmcp::service::Peer<rmcp::RoleClient>,
+        episode_id: &str,
+        action_attempt_id: &str,
+        reserved_cost_micros: i64,
+    ) -> String {
+        let lease = tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_reserve").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+            "action_attempt_id": action_attempt_id,
+            "runner_id": "budget-test-runner",
+            "declared_model": "budget-test-model",
+            "max_input_tokens": 100,
+            "max_output_tokens": 100,
+            "reserved_cost_micros": reserved_cost_micros,
+        }).as_object().unwrap().clone())).await.unwrap());
+        lease["lease_id"].as_str().unwrap().to_string()
+    }
+
+    fn episode_budget(conn: &Connection, episode_id: &str) -> Option<i64> {
+        conn.query_row(
+            "SELECT cost_budget_micros FROM episodes WHERE id = ?1",
+            [episode_id],
+            |row| row.get(0),
+        ).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_episode_step_rejects_negative_cost_at_mcp_boundary_without_budget_credit() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        let (episode_id, revision, attempt_id, claim_token) =
+            create_claimed_episode(&peer, Some(100), "negative-mcp-boundary").await;
+
+        let rejected = peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id.clone(),
+            "action_attempt_id": attempt_id,
+            "expected_revision": revision,
+            "claim_token": claim_token,
+            "action": {"type": "solve", "proof_term": "trivial"},
+            "cost_micros": -1,
+        }).as_object().unwrap().clone())).await;
+
+        assert!(rejected.is_err(), "negative MCP cost must be rejected: {:?}", rejected);
+        let budget = {
+            let conn = conn_arc.lock().await;
+            episode_budget(&conn, &episode_id)
+        };
+        assert_eq!(budget, Some(100), "rejected negative cost must not credit the budget");
+    }
+
+    #[tokio::test]
+    async fn test_episode_step_over_budget_denied_before_gateway_execution() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(CountingMcpGateway { calls: calls.clone() }),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        let (episode_id, revision, attempt_id, claim_token) =
+            create_claimed_episode(&peer, Some(100), "over-budget-step").await;
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id.clone(),
+            "action_attempt_id": attempt_id,
+            "expected_revision": revision,
+            "claim_token": claim_token,
+            "action": {"type": "solve", "proof_term": "trivial"},
+            "cost_micros": 101,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        assert_eq!(step["disposition"], "error", "{:?}", step);
+        assert!(step["diagnostics"].as_str().unwrap_or("").contains("budget_denied"), "{:?}", step);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0, "gateway must not run after budget denial");
+        let budget = {
+            let conn = conn_arc.lock().await;
+            episode_budget(&conn, &episode_id)
+        };
+        assert_eq!(budget, Some(100), "denied step must leave budget unchanged");
+    }
+
+    #[tokio::test]
+    async fn test_model_call_reserve_debits_budget_and_prevents_over_reservation() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        let (episode_id, _, attempt_id, _) =
+            create_claimed_episode(&peer, Some(100), "reserve-debits").await;
+
+        let first_lease = reserve_model_call(&peer, &episode_id, &attempt_id, 60).await;
+        assert!(!first_lease.is_empty());
+        {
+            let conn = conn_arc.lock().await;
+            assert_eq!(episode_budget(&conn, &episode_id), Some(40));
+        }
+
+        let denied = peer.call_tool(CallToolRequestParams::new("model_call_reserve").with_arguments(serde_json::json!({
+            "episode_id": episode_id.clone(),
+            "action_attempt_id": attempt_id.clone(),
+            "runner_id": "budget-test-runner",
+            "declared_model": "budget-test-model",
+            "max_input_tokens": 100,
+            "max_output_tokens": 100,
+            "reserved_cost_micros": 41,
+        }).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "second lease must not over-reserve same remaining budget");
+        let conn = conn_arc.lock().await;
+        assert_eq!(episode_budget(&conn, &episode_id), Some(40));
+        let lease_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM model_call_leases WHERE episode_id = ?1",
+            [&episode_id],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(lease_count, 1, "denied reservation must not insert a lease");
+    }
+
+    #[tokio::test]
+    async fn test_model_call_reserve_rejects_negative_reserved_cost_without_budget_credit() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        let (episode_id, _, attempt_id, _) =
+            create_claimed_episode(&peer, Some(100), "negative-model-reserve").await;
+
+        let rejected = peer.call_tool(CallToolRequestParams::new("model_call_reserve").with_arguments(serde_json::json!({
+            "episode_id": episode_id.clone(),
+            "action_attempt_id": attempt_id,
+            "runner_id": "budget-test-runner",
+            "declared_model": "budget-test-model",
+            "max_input_tokens": 100,
+            "max_output_tokens": 100,
+            "reserved_cost_micros": -1,
+        }).as_object().unwrap().clone())).await;
+
+        assert!(rejected.is_err(), "negative reserved cost must be rejected");
+        let conn = conn_arc.lock().await;
+        assert_eq!(episode_budget(&conn, &episode_id), Some(100));
+        let lease_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM model_call_leases WHERE episode_id = ?1",
+            [&episode_id],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(lease_count, 0, "negative reservation must not insert a lease");
+    }
+
+    #[tokio::test]
+    async fn test_model_call_settle_lower_actual_refunds_delta() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        let (episode_id, _, attempt_id, _) =
+            create_claimed_episode(&peer, Some(100), "settle-lower").await;
+        let lease_id = reserve_model_call(&peer, &episode_id, &attempt_id, 60).await;
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_settle").with_arguments(serde_json::json!({
+            "lease_id": lease_id,
+            "actual_cost_micros": 25,
+            "status": "settled",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let conn = conn_arc.lock().await;
+        assert_eq!(episode_budget(&conn, &episode_id), Some(75), "settlement must refund reserved - actual");
+    }
+
+    #[tokio::test]
+    async fn test_model_call_settle_rejects_negative_actual_without_budget_change() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        let (episode_id, _, attempt_id, _) =
+            create_claimed_episode(&peer, Some(100), "negative-model-settle").await;
+        let lease_id = reserve_model_call(&peer, &episode_id, &attempt_id, 40).await;
+
+        let rejected = peer.call_tool(CallToolRequestParams::new("model_call_settle").with_arguments(serde_json::json!({
+            "lease_id": lease_id.clone(),
+            "actual_cost_micros": -1,
+            "status": "settled",
+        }).as_object().unwrap().clone())).await;
+
+        assert!(rejected.is_err(), "negative actual cost must be rejected");
+        let conn = conn_arc.lock().await;
+        assert_eq!(episode_budget(&conn, &episode_id), Some(60));
+        let status: String = conn.query_row(
+            "SELECT status FROM model_call_leases WHERE id = ?1",
+            [&lease_id],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(status, "reserved", "negative settlement must leave the lease open");
+    }
+
+    #[tokio::test]
+    async fn test_model_call_settle_higher_actual_charges_only_delta() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        let (episode_id, _, attempt_id, _) =
+            create_claimed_episode(&peer, Some(100), "settle-higher").await;
+        let lease_id = reserve_model_call(&peer, &episode_id, &attempt_id, 40).await;
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_settle").with_arguments(serde_json::json!({
+            "lease_id": lease_id,
+            "actual_cost_micros": 70,
+            "status": "settled",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let conn = conn_arc.lock().await;
+        assert_eq!(episode_budget(&conn, &episode_id), Some(30), "settlement must charge only actual - reserved");
+    }
+
+    #[tokio::test]
+    async fn test_model_call_settle_higher_actual_denied_when_delta_exceeds_remaining_budget() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        let (episode_id, _, attempt_id, _) =
+            create_claimed_episode(&peer, Some(50), "settle-higher-denied").await;
+        let lease_id = reserve_model_call(&peer, &episode_id, &attempt_id, 40).await;
+
+        let denied = peer.call_tool(CallToolRequestParams::new("model_call_settle").with_arguments(serde_json::json!({
+            "lease_id": lease_id.clone(),
+            "actual_cost_micros": 55,
+            "status": "settled",
+        }).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "higher actual must be denied if the delta is not covered");
+
+        let conn = conn_arc.lock().await;
+        assert_eq!(episode_budget(&conn, &episode_id), Some(10));
+        let status: String = conn.query_row(
+            "SELECT status FROM model_call_leases WHERE id = ?1",
+            [&lease_id],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(status, "reserved", "denied settlement must leave the lease open");
+    }
+
+    #[tokio::test]
+    async fn test_model_call_settle_voided_refunds_reserved_amount() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        let (episode_id, _, attempt_id, _) =
+            create_claimed_episode(&peer, Some(100), "settle-voided").await;
+        let lease_id = reserve_model_call(&peer, &episode_id, &attempt_id, 60).await;
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_settle").with_arguments(serde_json::json!({
+            "lease_id": lease_id.clone(),
+            "actual_cost_micros": 0,
+            "status": "voided",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let conn = conn_arc.lock().await;
+        assert_eq!(episode_budget(&conn, &episode_id), Some(100));
+        let (status, actual): (String, Option<i64>) = conn.query_row(
+            "SELECT status, actual_cost_micros FROM model_call_leases WHERE id = ?1",
+            [&lease_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(status, "voided");
+        assert_eq!(actual, None);
+    }
+
+    #[tokio::test]
+    async fn test_model_call_double_settlement_rejected_without_second_budget_change() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        let (episode_id, _, attempt_id, _) =
+            create_claimed_episode(&peer, Some(100), "double-settle").await;
+        let lease_id = reserve_model_call(&peer, &episode_id, &attempt_id, 40).await;
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_settle").with_arguments(serde_json::json!({
+            "lease_id": lease_id.clone(),
+            "actual_cost_micros": 30,
+            "status": "settled",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let rejected = peer.call_tool(CallToolRequestParams::new("model_call_settle").with_arguments(serde_json::json!({
+            "lease_id": lease_id.clone(),
+            "actual_cost_micros": 10,
+            "status": "settled",
+        }).as_object().unwrap().clone())).await;
+
+        assert!(rejected.is_err(), "already-settled lease must be clearly rejected");
+        let conn = conn_arc.lock().await;
+        assert_eq!(episode_budget(&conn, &episode_id), Some(70));
+    }
+
+    #[tokio::test]
+    async fn test_null_episode_budget_remains_unbounded_for_model_reserve_and_settle() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        let (episode_id, _, attempt_id, _) =
+            create_claimed_episode(&peer, None, "null-budget-model-call").await;
+
+        let lease_id = reserve_model_call(&peer, &episode_id, &attempt_id, 10_000_000).await;
+        {
+            let conn = conn_arc.lock().await;
+            assert_eq!(episode_budget(&conn, &episode_id), None);
+        }
+        tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_settle").with_arguments(serde_json::json!({
+            "lease_id": lease_id,
+            "actual_cost_micros": 20_000_000,
+            "status": "settled",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let conn = conn_arc.lock().await;
+        assert_eq!(episode_budget(&conn, &episode_id), None, "NULL budget must remain unbounded across reserve/settle");
     }
 
     /// The idempotency key on attempt_claim must be safe to retry: same key while

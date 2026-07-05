@@ -107,6 +107,29 @@ Antigravity, or a custom script — should call this first.
 | `benchmark_result_record` | Record (or upsert, for pass@k) one problem's result within a run. If `episode_id` is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as the benchmark problem (issue #36) |
 | `benchmark_run_observe` | Read back a run, its results, and aggregate metrics — `solved_rate` (solved at all) vs `pass_at_1_rate` (genuine first-attempt success) are reported separately |
 
+## Budget Accounting
+
+Episode budgets are enforcement/accounting controls, not proof-soundness
+claims. A `NULL` `episodes.cost_budget_micros` is unbounded; bounded budgets
+are debited only by conditional reservations that must fit the current
+remaining budget.
+
+- `episode_step.cost_micros` is the environment step charge. It must be
+  non-negative and is reserved before the step executes; over-budget steps are
+  denied before any Lean gateway call.
+- `model_call_reserve.reserved_cost_micros` is a host/model-call budget lease.
+  It must be non-negative and immediately reserves bounded episode budget. The
+  lease row is inserted only if that budget reservation succeeds.
+- `model_call_settle(actual_cost_micros, status="settled")` records the
+  caller-reported actual model-call cost. Settlement adjusts only the delta
+  from the reservation: lower actual cost refunds the difference, higher actual
+  cost conditionally debits only the extra amount.
+- `model_call_settle(status="voided")` cancels a lease and refunds the full
+  reserved amount; no actual model-call cost is reported for a voided lease.
+- Reserved-but-unsettled costs remain reservations. Benchmark cost summaries
+  continue to include only settled `actual_cost_micros` as attested
+  `model_call_reported_cost_micros`, never as exact cost.
+
 **Benchmark contamination policy:** upstream benchmarks like PutnamBench ask
 that completed formal proofs not be published without first coordinating with
 their maintainers. See [docs/benchmarks/putnambench.md](docs/benchmarks/putnambench.md)
