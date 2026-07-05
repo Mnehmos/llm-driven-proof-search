@@ -308,8 +308,11 @@ shipped (v0.3.6). #29+#30 schema shipped (v0.3.7). #33+#37 shipped (v0.3.8).
 #34 partial shipped (v0.3.13). #38 partial (cost-completeness) shipped
 (v0.3.14). #38 partial (real verifier_cost wiring) shipped (v0.3.15). #34
 partial (bounded 13/42-tool classification audit, found and fixed a real
-trajectory_export contamination gap) shipped (v0.3.16). The full PutnamBench
-sprint is complete, and the first real playtest attempt has run: 12 real
+trajectory_export contamination gap) shipped (v0.3.16). #34 partial (14 more
+tools classified, 27/42 total, found the model_call_leases cost-aggregation
+gap and left it as an open design question) shipped (v0.3.17). The full
+PutnamBench sprint is complete, and the first real playtest attempt has run:
+12 real
 problems, 1/12 (8.3%) pass@1 — see
 `docs/playtests/2026-07-04-putnambench-first-attempt.md`. Zero infra errors,
 zero panics, correct enforcement throughout; the constraint was genuine
@@ -378,6 +381,39 @@ run's declared mode — both deliberately left as documented, undecided
 boundaries rather than silently patched. Still open on #34: 29 of 42 tools
 remain unclassified, and the benchmark-mode source-mutation guardrail
 remains moot as before.
+
+**#34 (partial, second follow-up slice) — 14 more tools classified.** ✅
+Shipped in v0.3.17: `model_call_reserve`, `model_call_settle`,
+`run_envelope_update`, `run_envelope_attach_episode`, `run_envelope_observe`,
+all 7 `formalization_plan_*` tools, and `mathlib_search_declarations`/
+`mathlib_search_local_artifacts` — bringing the classified total from 13 to
+27 of 42. This slice's most notable finding, deliberately left as a
+documented `unresolved_design_question` rather than silently wired in:
+`model_call_leases` (populated by `model_call_reserve`/`model_call_settle`)
+already stores a granular, per-attempt, self-reported cost figure
+(`reserved_cost_micros`/`actual_cost_micros`) that `benchmark_run_observe`'s
+`cost_summary` never aggregates or surfaces at all today — structurally
+similar to the `verifier_cost_ms` gap v0.3.15 fixed, but NOT the same kind of
+fix: that data is `untrusted_input` (self-reported by the caller, never
+measured by ChatDB), so folding it into `cost_summary` first requires
+deciding how its trust tier interacts with `host_cost_confidence`'s existing
+exact/estimated/attested/unknown vocabulary — a real design question, not a
+mechanical copy of the verifier_cost pattern. Two more `NOT replayable in
+the audit sense` findings noted (mirroring `run_envelope_update`'s from the
+first slice): `formalization_plan_update` also overwrites title/status/
+risk_flags in place with no history. The single giant `environment_describe`
+`serde_json::json!` literal exceeded the default macro recursion limit once
+this many tool entries were added — fixed with `#![recursion_limit = "512"]`
+at the crate root (an adversarial review bisected the actual requirement at
+128–192 and found 512 comfortably headroomed, not arbitrary, given the audit
+isn't done growing this literal yet). The `environment_describe` test was
+also strengthened from a 5-tool spot-check to asserting all 8 dimensions
+non-empty across every classified entry. Verified against the real Lean
+4.32.0-rc1 + Mathlib toolchain via `playtest.rs`. Adversarial review found no
+code bugs and independently re-verified five of the new entries' claims
+directly against handler/schema code. Still open on #34: 15 of 42 tools
+remain unclassified, plus everything already noted as open from the first
+slice.
 
 **#38 (partial) — cost-completeness marking for benchmark reports.** ✅
 Shipped in v0.3.14, one small bounded slice of #38's larger 7-bucket ask
