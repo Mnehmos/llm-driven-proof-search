@@ -371,6 +371,15 @@ pub struct RunEnvelopeUpdateArgs {
 pub struct RunEnvelopeAttachEpisodeArgs {
     pub run_envelope_id: String,
     pub episode_id: String,
+    /// Required (true) to attach an episode built from an
+    /// unsafe_dev_attestation ("attested", never independently reviewed)
+    /// problem to a `private_audit`-mode run envelope. Has NO effect for
+    /// `benchmark`/`evaluation`/`public_report` modes — those always reject
+    /// an attested-problem episode outright, no override possible. That flag
+    /// means development playtest; it must never leak into a measured
+    /// benchmark/evaluation/public claim (issue #38's mode-enforcement policy).
+    #[serde(default)]
+    pub allow_dev_attested: bool,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -503,6 +512,26 @@ pub struct BenchmarkResultRecordArgs {
     pub trajectory_export_hash: Option<String>,
     #[serde(default)]
     pub replay_status: Option<String>,
+    /// Silences the mode-enforcement rejection for an unsafe_dev_attestation
+    /// ("attested") problem claim when this run's envelope mode is
+    /// `private_audit` — but does NOT by itself make such a claim succeed
+    /// for an UNTRUSTED suite: the separate, pre-existing fidelity-basis
+    /// policy still independently rejects an "attested" (not "verified")
+    /// problem's kernel_verified/certified claim against an untrusted suite
+    /// regardless of this flag, in every mode including private_audit — an
+    /// adversarial review of this exact flag caught that its original doc
+    /// comment overclaimed here. In practice this flag only changes which of
+    /// the two rejection messages you see for an untrusted suite; it has a
+    /// real effect only for a TRUSTED suite in private_audit mode (where the
+    /// fidelity-basis policy already accepts the claim via
+    /// canonical_statement_hash_match regardless of mode, so this flag's
+    /// mode-enforcement check is the only thing that could otherwise block
+    /// it). Making this flag genuinely bypass the fidelity-basis rejection
+    /// for an untrusted suite would need a real design decision (e.g. a
+    /// fifth benchmark_fidelity_basis value for an explicitly-supervised
+    /// private-audit override) — left undecided rather than guessed at.
+    #[serde(default)]
+    pub allow_dev_attested: bool,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -1102,6 +1131,30 @@ fn mcp_internal_error(msg: impl Into<std::borrow::Cow<'static, str>>) -> McpErro
 
 fn rs(e: impl std::fmt::Display) -> McpError {
     mcp_internal_error(e.to_string())
+}
+
+/// Issue #38's mode-enforcement policy: unsafe_dev_attestation ("attested"
+/// fidelity_status) means development playtest, never a measured claim.
+/// Blocked outright (no override possible) for benchmark/evaluation/
+/// public_report run-envelope modes; allowed for private_audit only with an
+/// explicit allow_dev_attested=true; always allowed for development (or any
+/// other mode, since only these three are "measured" in the sense this
+/// policy cares about) and for any fidelity_status other than "attested"
+/// (a "verified" problem is fine in any mode; episode_create's own gate
+/// already rejects "unreviewed"/"rejected" before an episode can exist at all).
+fn enforce_dev_attestation_mode_policy(fidelity_status: &str, mode: &str, allow_dev_attested: bool) -> Result<(), McpError> {
+    if fidelity_status != "attested" {
+        return Ok(());
+    }
+    match mode {
+        "benchmark" | "evaluation" | "public_report" => Err(mcp_invalid_params(
+            "attested/dev-bypass problems are not valid for benchmark/evaluation/public_report runs"
+        )),
+        "private_audit" if !allow_dev_attested => Err(mcp_invalid_params(
+            "attested/dev-bypass problems require allow_dev_attested=true for private_audit runs"
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// The problem version's environment hash, joined through an episode.
@@ -2157,7 +2210,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.21"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.22"))
     }
 
     async fn list_tools(
@@ -2248,7 +2301,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.21",
+                    "environment_version": "0.3.22",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -2336,7 +2389,7 @@ impl ServerHandler for ChatDbMcp {
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "aggregate_metric",
                                 "required_run_mode": "benchmark",
-                                "note": "benchmark_fidelity_basis is deliberately distinct from problem_versions.fidelity_status: the latter asks whether the formal statement faithfully represents the INFORMAL source problem (independent human/reviewer judgment); the former asks what evidence backs THIS benchmark claim specifically, which for a trusted suite can be satisfied by hash-matching alone without ever requiring that separate review. Public/report-facing consumers should describe basis='canonical_statement_hash_match' as e.g. 'matched the suite's own canonical formal statement', never as 'statement-fidelity certified by ChatDB' — ChatDB performed a hash comparison, not an independent fidelity review, in that case."
+                                "note": "benchmark_fidelity_basis is deliberately distinct from problem_versions.fidelity_status: the latter asks whether the formal statement faithfully represents the INFORMAL source problem (independent human/reviewer judgment); the former asks what evidence backs THIS benchmark claim specifically, which for a trusted suite can be satisfied by hash-matching alone without ever requiring that separate review. Public/report-facing consumers should describe basis='canonical_statement_hash_match' as e.g. 'matched the suite's own canonical formal statement', never as 'statement-fidelity certified by ChatDB' — ChatDB performed a hash comparison, not an independent fidelity review, in that case. Since v0.3.22 (mode-enforcement policy), an UNTRUSTED suite's kernel_verified/certified claim backed by an 'attested' problem is rejected with the specific 'attested/dev-bypass problems are not valid for benchmark/evaluation/public_report runs' message when the run's envelope mode is benchmark/evaluation/public_report — checked before the fidelity-basis logic, though for an untrusted suite the fidelity-basis check would reject it in EVERY mode anyway, so this mostly changes rejection wording, not outcome, in this specific handler (the real new restriction lives in run_envelope_attach_episode). Deliberately SKIPPED when the suite is trusted_canonical_source, to avoid contradicting that flag's own purpose and breaking putnam_runner.rs's real, already-shipped workflow (mode='benchmark' + unsafe_dev_attestation import, with no per-problem review step) — a real conflict found and resolved this way, not guessed at silently."
                             },
                             "benchmark_run_observe": {
                                 "side_effect": "read_only — aggregates existing benchmark_results/action_attempts rows, writes nothing",
@@ -2377,7 +2430,7 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
-                                "required_run_mode": "development is the honest expectation for unsafe_dev_attestation=true (the name says so), but NOTHING currently enforces that a problem created this way can't be used in a benchmark/evaluation-mode run — this is a real, undocumented-until-now gap, distinct from the benchmark_result_record fidelity_status question above, and worth a deliberate mode-enforcement decision rather than relying on the flag's honest naming alone"
+                                "required_run_mode": "development is the honest expectation for unsafe_dev_attestation=true (the name says so); since v0.3.22 this is now actively enforced downstream at the point an episode built from such a problem is USED in a measured run, not at problem_create itself (which has no run/mode context to check against) — see run_envelope_attach_episode and benchmark_result_record's mode-enforcement policy"
                             },
                             "episode_create": {
                                 "side_effect": "mutating — inserts an episodes row and its first action_request",
@@ -2458,7 +2511,7 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
-                                "required_run_mode": "any — same undocumented mode-enforcement gap already noted for problem_create's unsafe_dev_attestation applies here too: nothing stops attaching an episode built from an unreviewed/attested problem to a 'benchmark' or 'evaluation' mode envelope"
+                                "required_run_mode": "since v0.3.22 (issue #38's mode-enforcement policy, resolving the gap this entry used to note), unconditionally rejects attaching an 'attested' (unsafe_dev_attestation) episode to a benchmark/evaluation/public_report-mode envelope — no override possible, no suite-trust exception here (unlike benchmark_result_record, this tool has no suite concept to reason about at all). 'development' is always allowed; 'private_audit' requires the new allow_dev_attested=true argument"
                             },
                             "run_envelope_observe": {
                                 "side_effect": "read_only — reads run_envelopes plus every episodes row with matching run_id, writes nothing",
@@ -4555,18 +4608,20 @@ impl ServerHandler for ChatDbMcp {
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
 
                 let conn = self.conn.lock().await;
-                let envelope_exists: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM run_envelopes WHERE id = ?1", [&args.run_envelope_id], |row| row.get(0),
-                ).map_err(rs)?;
-                if envelope_exists == 0 {
+                let envelope_mode: Option<String> = conn.query_row(
+                    "SELECT mode FROM run_envelopes WHERE id = ?1", [&args.run_envelope_id], |row| row.get(0),
+                ).optional().map_err(rs)?;
+                let Some(envelope_mode) = envelope_mode else {
                     return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
-                }
-                let episode_exists: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM episodes WHERE id = ?1", [&args.episode_id], |row| row.get(0),
-                ).map_err(rs)?;
-                if episode_exists == 0 {
+                };
+                let episode_fidelity: Option<String> = conn.query_row(
+                    "SELECT pv.fidelity_status FROM episodes e JOIN problem_versions pv ON e.problem_version_id = pv.id WHERE e.id = ?1",
+                    [&args.episode_id], |row| row.get(0),
+                ).optional().map_err(rs)?;
+                let Some(episode_fidelity) = episode_fidelity else {
                     return Err(mcp_invalid_params(format!("unknown episode_id: {}", args.episode_id)));
-                }
+                };
+                enforce_dev_attestation_mode_policy(&episode_fidelity, &envelope_mode, args.allow_dev_attested)?;
 
                 // Sets episodes.run_id only — never touches outcome/state/
                 // current_revision or any other proof-status column.
@@ -4779,11 +4834,22 @@ impl ServerHandler for ChatDbMcp {
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
 
                 let conn = self.conn.lock().await;
-                let run_suite_id: Option<String> = conn.query_row(
-                    "SELECT suite_id FROM benchmark_runs WHERE id = ?1", [&args.run_id], |row| row.get(0),
+                let run_row: Option<(String, Option<String>)> = conn.query_row(
+                    "SELECT suite_id, run_envelope_id FROM benchmark_runs WHERE id = ?1", [&args.run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 ).optional().map_err(rs)?;
-                let Some(run_suite_id) = run_suite_id else {
+                let Some((run_suite_id, run_envelope_id)) = run_row else {
                     return Err(mcp_invalid_params(format!("unknown run_id: {}", args.run_id)));
+                };
+                // Issue #38's mode-enforcement policy needs the run's own
+                // envelope mode. run_envelope_id has been required since
+                // issue #34's fix (v0.3.13), so this is always Some in
+                // practice, but query defensively rather than assume.
+                let run_envelope_mode: Option<String> = match &run_envelope_id {
+                    Some(env_id) => conn.query_row(
+                        "SELECT mode FROM run_envelopes WHERE id = ?1", [env_id], |row| row.get(0),
+                    ).optional().map_err(rs)?,
+                    None => None,
                 };
                 // COALESCE to prover_ready_statement_hash when present: a
                 // benchmark suite's own faithful catalog text
@@ -4897,6 +4963,24 @@ impl ServerHandler for ChatDbMcp {
                         let suite_trusted: bool = conn.query_row(
                             "SELECT trusted_canonical_source FROM benchmark_suites WHERE id = ?1", [&run_suite_id], |row| row.get(0),
                         ).map_err(rs)?;
+                        // Issue #38's mode-enforcement policy: unsafe_dev_attestation
+                        // means development playtest, never a measured claim for an
+                        // UNTRUSTED suite. Deliberately NOT enforced when the suite
+                        // is trusted_canonical_source: that flag exists precisely so
+                        // a real, externally-curated corpus (PutnamBench) can accept
+                        // hash-matched problems imported via unsafe_dev_attestation
+                        // (there is no per-problem human review step for an automated
+                        // import of hundreds of problems) — putnam_runner.rs's real,
+                        // already-shipped workflow does exactly this. Blocking it here
+                        // too would contradict trusted_canonical_source's whole
+                        // purpose and break real, already-verified functionality; a
+                        // trusted suite's hash-match already IS the fidelity evidence
+                        // this policy cares about, whatever mode the run happens to be.
+                        if !suite_trusted {
+                            if let Some(mode) = &run_envelope_mode {
+                                enforce_dev_attestation_mode_policy(&problem_fidelity_status, mode, args.allow_dev_attested)?;
+                            }
+                        }
                         if suite_trusted {
                             Some("canonical_statement_hash_match")
                         } else if problem_fidelity_status == "verified" {
@@ -8889,6 +8973,113 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(accepted["benchmark_fidelity_basis"], "problem_fidelity_verified",
             "an untrusted suite backed by a REAL independent review must be accepted with the problem_fidelity_verified basis, not canonical_statement_hash_match: {accepted:?}");
+    }
+
+    /// Issue #38's mode-enforcement policy, the exact wording it specifies:
+    /// an untrusted suite's kernel_verified claim backed by an
+    /// unsafe_dev_attestation problem, recorded against a "benchmark"-mode
+    /// run envelope, must be rejected with the specific boring message —
+    /// not the longer fidelity-basis message this same scenario would
+    /// otherwise also independently trigger. Confirms the mode check fires
+    /// FIRST (a mode violation is a harder rejection than a missing
+    /// fidelity basis).
+    #[tokio::test]
+    async fn test_benchmark_result_record_reports_exact_mode_enforcement_message_for_untrusted_suite() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
+            "name": "UntrustedBenchmarkModeSuite",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let suite_id = suite["suite_id"].as_str().unwrap().to_string();
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "m1", "theorem_name": "m1", "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "benchmark", "host_name": "test-host",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let pv_id = create_problem(&peer, "True").await; // unsafe_dev_attestation -> fidelity_status='attested'
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "mode-enforce-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let rejected = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await;
+        let err_text = format!("{:?}", rejected.unwrap_err());
+        assert!(err_text.contains("attested/dev-bypass problems are not valid for benchmark/evaluation/public_report runs"),
+            "must report the exact specified boring rejection message, not a different one: {err_text}");
+    }
+
+    /// Issue #38's mode-enforcement policy where it has real behavioral
+    /// bite: run_envelope_attach_episode has no suite/trust concept at all,
+    /// so an attested-fidelity episode is unconditionally blocked from
+    /// benchmark/evaluation/public_report envelopes (development is always
+    /// fine; private_audit needs the explicit allow_dev_attested override).
+    #[tokio::test]
+    async fn test_run_envelope_attach_episode_blocks_attested_episode_from_measured_modes() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await; // unsafe_dev_attestation -> fidelity_status='attested'
+
+        async fn new_episode(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv_id: &str) -> String {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv_id, "max_steps": 5,
+            }).as_object().unwrap().clone())).await.unwrap())["episode_id"].as_str().unwrap().to_string()
+        }
+
+        for mode in ["benchmark", "evaluation", "public_report"] {
+            let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+                "mode": mode, "host_name": "test-host",
+            }).as_object().unwrap().clone())).await.unwrap());
+            let episode_id = new_episode(&peer, &pv_id).await;
+            let rejected = peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+                "run_envelope_id": envelope["run_envelope_id"], "episode_id": episode_id,
+            }).as_object().unwrap().clone())).await;
+            assert!(rejected.is_err(), "an attested episode must be blocked from a {mode:?}-mode envelope, no override possible");
+            let err_text = format!("{:?}", rejected.unwrap_err());
+            assert!(err_text.contains("attested/dev-bypass problems are not valid for benchmark/evaluation/public_report runs"),
+                "mode={mode:?}: {err_text}");
+        }
+
+        // development: always allowed, no flag needed.
+        let dev_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "development", "host_name": "test-host",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dev_episode_id = new_episode(&peer, &pv_id).await;
+        let dev_ok = peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+            "run_envelope_id": dev_envelope["run_envelope_id"], "episode_id": dev_episode_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(dev_ok.is_ok(), "development mode must always allow an attested episode: {:?}", dev_ok.err());
+
+        // private_audit: blocked without the explicit override, allowed with it.
+        let audit_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "private_audit", "host_name": "test-host",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let audit_episode_id = new_episode(&peer, &pv_id).await;
+        let audit_denied = peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+            "run_envelope_id": audit_envelope["run_envelope_id"], "episode_id": audit_episode_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(audit_denied.is_err(), "private_audit must require the explicit allow_dev_attested override, not allow it silently");
+        let audit_allowed = peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+            "run_envelope_id": audit_envelope["run_envelope_id"], "episode_id": audit_episode_id, "allow_dev_attested": true,
+        }).as_object().unwrap().clone())).await;
+        assert!(audit_allowed.is_ok(), "private_audit + allow_dev_attested=true must succeed: {:?}", audit_allowed.err());
     }
 
     /// Issue #38's fidelity-basis policy: a TRUSTED suite's own canonical

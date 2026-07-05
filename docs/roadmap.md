@@ -324,8 +324,12 @@ exact total) shipped (v0.3.20), including a real auto-settle-on-episode_step
 behavior found while fixing an adversarial-review-caught vacuous test.
 #34/#38's fidelity-basis policy (benchmark_fidelity_basis split from
 problem_fidelity_status, trusted_canonical_source suite flag, untrusted
-suites now require a real independent review) shipped (v0.3.21). The full
-PutnamBench sprint is complete, and the first real playtest attempt has run:
+suites now require a real independent review) shipped (v0.3.21). #38's
+mode-enforcement policy (unsafe_dev_attestation blocked from
+benchmark/evaluation/public_report runs, with a real conflict against the
+already-shipped putnam_runner.rs found and resolved via a
+trusted_canonical_source exception) shipped (v0.3.22). The full PutnamBench
+sprint is complete, and the first real playtest attempt has run:
 12 real
 problems, 1/12 (8.3%) pass@1 — see
 `docs/playtests/2026-07-04-putnambench-first-attempt.md`. Zero infra errors,
@@ -625,6 +629,32 @@ the identical setup against an untrusted suite was correctly rejected
 outright with the expected error. An adversarial review found no bugs,
 independently confirmed there's no suite-trust "laundering" path, and traced
 the exhaustive if/else enforcement logic directly.
+
+**#38 (mode-enforcement policy) — unsafe_dev_attestation blocked from
+measured runs.** ✅ Shipped in v0.3.22, per the same explicit product
+direction. Full policy and the real conflict it surfaced in
+`docs/benchmarks/putnambench.md`'s "Mode-enforcement policy" section.
+`run_envelope_attach_episode` unconditionally rejects attaching an
+`"attested"`-fidelity episode to a `benchmark`/`evaluation`/`public_report`-
+mode envelope (`development` always allowed; `private_audit` needs a new
+`allow_dev_attested=true` argument). A literal, exception-free version of
+this rule would have broken the real, already-shipped `putnam_runner.rs`
+(which runs in `benchmark` mode and imports every problem via
+`unsafe_dev_attestation`, with no per-problem human review step) — resolved
+by exempting `trusted_canonical_source` suites from `benchmark_result_record`'s
+mode check specifically, since that flag already means "this suite's own
+hash-match is sufficient fidelity evidence, independent of mode." Verified
+against the real toolchain that this exception genuinely preserves the real
+PutnamBench pipeline while still rejecting an untrusted suite. An
+adversarial review specifically scrutinized this exception (not just
+ordinary bugs) and judged it defensible, and separately caught that
+`benchmark_result_record`'s new `allow_dev_attested` flag's doc comment
+overclaimed what it does for an untrusted suite (it only changes rejection
+wording there, not the outcome — the pre-existing fidelity-basis policy
+independently still rejects "attested" content regardless of this flag in
+that case) — corrected to document this honestly rather than expand
+`benchmark_fidelity_basis`'s enum unilaterally to make the flag "fully"
+functional, which would be a genuine design decision left undecided.
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
