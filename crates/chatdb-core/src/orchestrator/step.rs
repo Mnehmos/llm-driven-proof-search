@@ -422,7 +422,7 @@ pub fn attempt_finalize(
         return Err(StepError::InvalidAttempt);
     }
 
-    let (outcome_result, is_valid) = match (ctx, response) {
+    let (outcome_result, is_valid, lean_result_json) = match (ctx, response) {
         (FinalizeContext::Solve { obl_id_str, pv_env_hash }, GatewayResponse::Solve(gw_result)) => {
             match gw_result {
                 Ok(result) => {
@@ -469,7 +469,17 @@ pub fn attempt_finalize(
                             (lesson, &obl_id_str),
                         )?;
                     }
-                    (result.outcome, is_valid)
+                    // Captured here, before `result` goes out of scope and
+                    // everything but `.outcome` would otherwise be discarded:
+                    // the real Lean invocation timing (wall_time_ms,
+                    // lean_cpu_time_ms) this session's #38 cost-accounting
+                    // work found was computed on every single verification
+                    // call but never persisted anywhere. `action_attempts`
+                    // already has a `lean_result_json` column that (per a
+                    // full-repo grep) nothing has ever written to — reused
+                    // here rather than adding new columns.
+                    let lean_result_json = serde_json::to_string(&result).ok();
+                    (result.outcome, is_valid, lean_result_json)
                 }
                 Err(e) => {
                     refund_cost_budget(tx, &episode_id_str, cost_micros)?;
@@ -592,7 +602,17 @@ pub fn attempt_finalize(
                             (lesson, &obl_id_str),
                         )?;
                     }
-                    (result.outcome, is_valid)
+                    // Captured here, before `result` goes out of scope and
+                    // everything but `.outcome` would otherwise be discarded:
+                    // the real Lean invocation timing (wall_time_ms,
+                    // lean_cpu_time_ms) this session's #38 cost-accounting
+                    // work found was computed on every single verification
+                    // call but never persisted anywhere. `action_attempts`
+                    // already has a `lean_result_json` column that (per a
+                    // full-repo grep) nothing has ever written to — reused
+                    // here rather than adding new columns.
+                    let lean_result_json = serde_json::to_string(&result).ok();
+                    (result.outcome, is_valid, lean_result_json)
                 }
                 Err(e) => {
                     refund_cost_budget(tx, &episode_id_str, cost_micros)?;
@@ -602,6 +622,18 @@ pub fn attempt_finalize(
         }
         _ => return Err(StepError::Internal("gateway response variant did not match the finalize context".to_string())),
     };
+
+    // Persist the raw verification result (issue #38's verifier_cost
+    // groundwork) — None for a GiveUp/Decompose action (never reaches the
+    // gateway at all) or an infra failure (returns Err above before this
+    // point), which is the correct, honest absence: no verification ran, so
+    // there is no verifier timing to report for this attempt.
+    if let Some(json) = &lean_result_json {
+        tx.execute(
+            "UPDATE action_attempts SET lean_result_json = ?1 WHERE id = ?2",
+            (json, attempt_id.to_string()),
+        )?;
+    }
 
     // cost_micros is NOT deducted here: attempt_prepare already reserved it
     // atomically with the CAS check, before the gateway ran with the DB lock
