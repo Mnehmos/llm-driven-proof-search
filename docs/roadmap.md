@@ -313,14 +313,61 @@ tools classified, 27/42 total, found the model_call_leases cost-aggregation
 gap and left it as an open design question) shipped (v0.3.17). #34's
 tool-classification audit reached 42/42 COMPLETE (found the episode_observe
 non-idempotence and problem_submit_fidelity_review/benchmark_results
-staleness findings) shipped (v0.3.18). The full PutnamBench sprint is
-complete, and the first real playtest attempt has run: 12 real
+staleness findings) shipped (v0.3.18). #41 (multi-line proof_term tactic-
+block splicing, found via the playtest below) fixed at the source and
+CLOSED, including a real gap an adversarial review caught in the first pass
+(the SubmitModule root theorem was still exposed to the bug) shipped
+(v0.3.19). The full PutnamBench sprint is complete, and the first real
+playtest attempt has run: 12 real
 problems, 1/12 (8.3%) pass@1 — see
 `docs/playtests/2026-07-04-putnambench-first-attempt.md`. Zero infra errors,
 zero panics, correct enforcement throughout; the constraint was genuine
 mathematical effort per problem, not the environment. One real environment
 finding from the attempt — a multi-line `proof_term` can silently break
 tactic-block parsing with a misleading error — filed as issue #41.
+
+**#41 — fix multi-line `proof_term` tactic-block splicing.** ✅ Shipped in
+v0.3.19, CLOSED. Root cause (confirmed empirically against the real Lean
+4.32.0-rc1 + Mathlib toolchain, both before and after): Lean 4's tactic-block
+parser is whitespace-sensitive — every line at the SAME column as a block's
+first tactic is a sequential sibling; a line indented MORE than that is
+parsed as NESTED under the preceding tactic, not as its sibling.
+`crates/chatdb-core/src/lean/mod.rs` (the `Solve` path) and
+`crates/chatdb-core/src/lean/module.rs` (the `SubmitModule` path) both took a
+client-supplied multi-line string and blindly prepended a fixed 2-space
+indent to EVERY line regardless of the client's own per-line indentation —
+so a naturally-formatted proof ("first tactic flush, rest indented" — a very
+common human/LLM style) ended up with its later lines parsed as nested under
+the first, not sequential after it, producing the exact misleading
+"introN failed" error from the original report. A proof whose lines were
+ALREADY uniformly indented worked fine even before this fix (uniform +
+uniform offset stays uniform) — confirmed empirically as the control case.
+Fix: a new `normalize_and_indent` function in `module.rs` — if a proof
+term's lines already share one indentation level, preserve it exactly
+(byte-for-byte identical to the old behavior for this case); otherwise,
+flatten every line to one level before applying the base indent, since a
+non-uniformly-indented multi-line term had a 0% success rate before this fix
+regardless, so flattening can only ever help. The old `indent()` function is
+deliberately kept for the ONE remaining call site that re-indents an
+already-assembled, intentionally non-uniform multi-declaration `mutual`-group
+block by a further structural level — applying the new normalization there
+would wrongly flatten real, correct nesting. An adversarial review of the
+first pass of this fix found a real, missed instance: `assemble_module`'s
+root-theorem rendering still called the old, unfixed `indent()` directly
+instead of going through `render_theorem`/`normalize_and_indent` like every
+other item — meaning a `SubmitModule` action's root theorem (the actual goal
+being proved) was still exposed to the bug. Fixed by routing it through
+`render_theorem` like everything else, with a dedicated regression test
+(`assemble_module_normalizes_root_theorem_proof_term_indentation`) added to
+catch a repeat. Verified against the real toolchain for all three paths
+(`Solve` repro, `Solve` uniform control, `SubmitModule` repro) via a new
+checked-in fixture,
+`crates/chatdb-mcp/examples/regression_scripts/issue41_multiline_proof_term.json` —
+all three reach `kernel_verified`. 4 new unit tests directly exercise
+`normalize_and_indent`'s uniform/non-uniform/single-line/blank-line
+behavior. A second adversarial review pass, specifically re-checking the
+root-theorem fix, confirmed it correct and independently re-ran the fixture
+against the real toolchain.
 
 **#36 — require measured proof attempts to flow through `episode_step`.** ✅
 Shipped in v0.3.12. Found and closed a real gap while formalizing this
