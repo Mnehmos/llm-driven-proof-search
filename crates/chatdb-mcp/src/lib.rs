@@ -2144,7 +2144,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.17"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.18"))
     }
 
     async fn list_tools(
@@ -2235,7 +2235,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.17",
+                    "environment_version": "0.3.18",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -2270,8 +2270,8 @@ impl ServerHandler for ChatDbMcp {
                         "A prior model's proof (from another session, another model, a paper, etc.) is a candidate artifact, not evidence of correctness, until it passes THIS pinned verifier. Do not skip verification because a candidate 'looks complete'."
                     ],
                     "tool_classification": {
-                        "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied as a bounded, real per-tool slice, done in two passes so far — the highest-risk/highest-signal tools first, not a blanket pass over every tool yet. A tool's ABSENCE from this map is not a safety claim; it means not yet classified, not 'nothing to worry about'.",
-                        "classified_tool_count": 27,
+                        "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of ChatDB's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
+                        "classified_tool_count": 42,
                         "total_tool_count": 42,
                         "tools": {
                             "episode_step": {
@@ -2543,6 +2543,156 @@ impl ServerHandler for ChatDbMcp {
                                 "cost_surface": "none",
                                 "benchmark_safety": "safe_public_output — declaration names only, not full proof bodies",
                                 "replayability": "deterministic given current DB state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "readme_first": {
+                                "side_effect": "read_only — a static informational response, no DB access at all",
+                                "trust_level": "mcp_generated — fixed documentation text ChatDB itself asserts about its own rules, not client input",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic (constant across calls until the environment version changes)",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "environment_describe": {
+                                "side_effect": "read_only — reads self.lean_available/self.lean_environment (in-memory state set once at startup) plus static schema/documentation text; no DB access",
+                                "trust_level": "mcp_generated — this IS the tool whose own tool_classification field this audit populates",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic given the same running server version",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "problem_submit_fidelity_review": {
+                                "side_effect": "mutating — inserts a problem_fidelity_reviews row, updates problem_versions.fidelity_status/state, and — a real, non-obvious effect worth flagging — can RETROACTIVELY upgrade an already-terminal episode's outcome from kernel_verified to certified (and the problem's state to COMPLETE) for every episode on this problem_version with outcome='kernel_verified', when the review lands 'verified' after the fact",
+                                "trust_level": "human_attested for the review decision itself (approver_id/method/evidence_json are asserted by whoever calls this), but the anti-staleness check is verifier_backed in spirit: source_problem_hash/root_statement_hash/rendering_hash are independently recomputed server-side and the review is rejected outright if they don't match the problem's CURRENT text — a review can only ever authorize the exact text it reviewed, never a stale or substituted one",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output; the retroactive outcome upgrade is a real interaction worth noting for benchmark_result_record specifically — a benchmark_results row recorded when the episode's outcome was still 'kernel_verified' does NOT automatically update to 'certified' when a later fidelity review upgrades the underlying episode; the two can go quietly out of sync unless benchmark_result_record is called again after the review lands. Not a fabrication risk (nothing false is ever recorded), but a real staleness gap worth documenting rather than assuming away",
+                                "replayability": "deterministic given recorded state, though the retroactive episode-outcome mutation means an episode's outcome is not fully write-once the way trajectory_events are — episode_replay verifies the ORIGINAL kernel verdict, not this later status promotion",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none directly (a review decision, not a proof body)",
+                                "required_run_mode": "any"
+                            },
+                            "problem_list": {
+                                "side_effect": "read_only",
+                                "trust_level": "untrusted_input pass-through for root_formal_statement (whatever was asserted at problem_create), verifier_backed for state/fidelity_status (both server-controlled transitions)",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic given current DB state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "episode_reset": {
+                                "side_effect": "mutating — creates a genuinely NEW episode row (parent_episode_id linkage) and its first action_request; explicitly nondestructive, never touches the original episode's own rows",
+                                "trust_level": "mcp_generated — copies the original episode's config, asserts nothing new",
+                                "cost_surface": "none directly",
+                                "benchmark_safety": "safe_public_output — no proof content, just scaffolding for a fresh attempt",
+                                "replayability": "deterministic; the original episode remains independently replayable/auditable since episode_reset never mutates it",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "episode_observe": {
+                                "side_effect": "mutating, despite looking like a pure read: it recovers expired attempt claims and expired action requests (attempt_recover_expired/request_recover_expired), and — if the only pending request just lapsed — mints a FRESH action_request via lifecycle::advance before returning. A caller expecting 'observe' to be side-effect-free would be wrong; two calls in a row can legitimately return different action_request ids",
+                                "trust_level": "mcp_generated — the recovery/advance logic is ChatDB's own bookkeeping, not client-asserted",
+                                "cost_surface": "none directly",
+                                "benchmark_safety": "safe_public_output — surfaces the current action_request/observation, never proof content beyond what episode_step already recorded",
+                                "replayability": "NOT purely deterministic call-to-call in the trivial sense (see side_effect) — but the underlying episode state it reads and the recovery rules it applies are themselves deterministic and replayable",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "episode_status": {
+                                "side_effect": "read_only",
+                                "trust_level": "verifier_backed for outcome/termination_reason/truncation_reason (server-controlled terminal fields); mcp_generated for step_count/current_revision/invalid_action_count (ChatDB's own bookkeeping counters)",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic given current DB state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "episode_close": {
+                                "side_effect": "mutating — force-terminates a non-terminal episode (state='terminated', outcome='gave_up', termination_reason='human_cancelled'); idempotent no-op ('already_closed') for an episode that's already terminated/truncated rather than erroring or double-recording a termination event",
+                                "trust_level": "mcp_generated — the caller supplies only a free-text reason (stored, never interpreted); the outcome/termination_reason values are fixed by this handler, not client-suppliable",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output — forces a gave_up outcome, can never produce a false kernel_verified/certified claim",
+                                "replayability": "replayable_with_hashes — records a real episode_terminated trajectory event like any other terminal transition",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "proof_pattern_search": {
+                                "side_effect": "read_only — queries proof_patterns WHERE status='active'",
+                                "trust_level": "untrusted_input pass-through — returns exactly what proof_pattern_create asserted, no re-verification",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output — lessons, not problem-specific proof content",
+                                "replayability": "deterministic given current DB state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "proof_pattern_record_application": {
+                                "side_effect": "append_only — inserts a proof_pattern_applications row; confirmed by reading the handler that it deliberately never touches episodes/episode_obligations/action_attempts, so a pattern application can never itself change proof/fidelity/certification status",
+                                "trust_level": "mcp_generated linkage between two things that separately already exist (a real pattern_id, a real episode_id) — independently checked to exist before the insert, though the role (failed_example/repair_example/suggested_hint) is the caller's own untrusted_input characterization of the relationship",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "draft_observe": {
+                                "side_effect": "read_only",
+                                "trust_level": "untrusted_input pass-through — reads back exactly what draft_create/draft_extract_moves asserted",
+                                "cost_surface": "none",
+                                "benchmark_safety": "private_artifact framing, same caveat as draft_create: informal reasoning content, not export-gated the way proof_export/trajectory_export are, though lower risk since it can't contain a completed formal proof",
+                                "replayability": "deterministic given current DB state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "draft_extract_moves": {
+                                "side_effect": "mutating — inserts one or more draft_moves rows in a single transaction",
+                                "trust_level": "untrusted_input — a move's kind/description is the caller's own characterization of the draft content, not independently checked",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output — structured metadata about informal reasoning, not itself a proof artifact",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none — moves are not obligations until explicitly promoted, and promotion itself never creates an obligation, only links to one that already exists",
+                                "required_run_mode": "any"
+                            },
+                            "benchmark_suite_create": {
+                                "side_effect": "mutating — inserts a benchmark_suites row; rejects a duplicate name rather than silently creating a second suite with the same identity",
+                                "trust_level": "human_attested — a suite's name/upstream_url/upstream_commit/language are exactly what the caller declares; ChatDB does not itself fetch or verify the upstream repository",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output — suite metadata, no proof content",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "lean_declaration_lookup": {
+                                "side_effect": "read_only — no DB write; the DB mutex is deliberately released BEFORE the real (potentially 15-40+ second) Lean invocation, matching this codebase's convention of not stalling other concurrent tool calls on a slow operation",
+                                "trust_level": "verifier_backed — this is a REAL Lean toolchain query (self.gateway.lookup_declarations), not a heuristic guess; the result reflects what the pinned Lean/Mathlib environment actually resolves under the given import manifest",
+                                "cost_surface": "verifier_side — a real Lean process invocation, currently uncounted anywhere in cost_summary.verifier_cost_ms (which only sums attempt_finalize's episode_step writes, not this tool's independent lookups)",
+                                "benchmark_safety": "safe_public_output — declaration name/status/diagnostics only, never a proof body",
+                                "replayability": "deterministic given a pinned Lean/Mathlib toolchain and import manifest; explicitly scoped to only the queried problem's own manifest by default (deep_check=true trades speed for a conclusive full-Mathlib-umbrella verdict) — a fast negative result does not by itself prove the declaration is absent from the library, a documented epistemic caveat surfaced in environment_describe's own epistemic_rules",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "diagnostic_only",
+                                "required_run_mode": "any"
+                            },
+                            "benchmark_problem_register": {
+                                "side_effect": "mutating — inserts a benchmark_problems row; rejects a duplicate upstream_problem_id within the same suite",
+                                "trust_level": "human_attested for root_formal_statement/theorem_name/import_manifest (exactly what the caller declares — ChatDB doesn't itself parse an upstream benchmark repo), but root_statement_hash and prover_ready_statement/prover_ready_statement_hash are ALWAYS server-derived (canonical_hash / to_pi_form), never accepted from the client — the same anti-fabrication principle as root_statement_hash elsewhere, since a client-supplied prover-ready text could otherwise register an easy proxy statement alongside a hard root statement and have benchmark_result_record's cross-check validate against the wrong one",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output — problem metadata (not yet an episode, not yet a proof)",
+                                "replayability": "deterministic; to_pi_form fails closed (returns Err, leaving prover_ready_statement/hash NULL) for any statement that isn't a theorem-with-binders declaration, rather than guessing at a conversion",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
@@ -5084,16 +5234,18 @@ mod tests {
         assert!(json["action_schema"].is_object(), "environment_describe must expose the TypedAction schema");
         assert_eq!(json["action_examples"][0]["type"], "solve");
 
-        // Issue #34's tool-classification audit: a bounded, honest slice —
-        // the classified count must match what's actually in the map (no
-        // silently-inflated claim), and absence from the map must not be
-        // conflated with "nothing to worry about".
+        // Issue #34's tool-classification audit: an honest count, tied to the
+        // REAL number of registered tools (list_res.tools.len(), asserted
+        // above) rather than a hand-maintained figure that could silently
+        // drift out of sync with the actual tool surface as tools are added.
         let classification = &json["tool_classification"];
         let classified = classification["tools"].as_object().unwrap();
         assert_eq!(classification["classified_tool_count"].as_u64().unwrap() as usize, classified.len(),
             "classified_tool_count must match the real number of entries in the map: {classification}");
-        assert!(classification["total_tool_count"].as_u64().unwrap() as usize > classified.len(),
-            "total_tool_count must honestly exceed classified_tool_count while the audit remains partial: {classification}");
+        assert_eq!(classification["total_tool_count"].as_u64().unwrap(), list_res.tools.len() as u64,
+            "total_tool_count must match the real, registered tool count, not a hand-maintained figure that can drift: {classification}");
+        assert_eq!(classification["classified_tool_count"], classification["total_tool_count"],
+            "as of this audit pass, every registered tool has a classification entry — if a new tool is added without one, this must fail rather than silently under-count");
         // Every classified tool, not just a spot-check sample — catches a
         // future edit that adds a tool entry missing one of the 8 dimensions,
         // or that drops a dimension while editing an existing entry.
