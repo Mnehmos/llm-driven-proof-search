@@ -630,6 +630,15 @@ pub struct TrajectoryExportArgs {
     pub cursor: Option<i64>,
     #[serde(default)]
     pub page_size: Option<i64>,
+    /// Required (true) when this episode's problem is linked to a tracked
+    /// benchmark suite (e.g. PutnamBench). Every event's raw `payload_json` —
+    /// including a `solve` action's `proof_term` or a `submit_module`
+    /// action's `module_items` — is exactly the completed-proof-body content
+    /// issue #33's contamination policy gates in `proof_export`; without this
+    /// flag, trajectory_export would otherwise be an ungated side channel
+    /// around that same policy. See docs/benchmarks/putnambench.md.
+    #[serde(default)]
+    pub allow_putnambench_proof_export: bool,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -2130,7 +2139,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.15"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.16"))
     }
 
     async fn list_tools(
@@ -2153,7 +2162,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EpisodeCloseArgs>("episode_close", "Gracefully truncate an episode"),
             make_tool::<ModelCallReserveArgs>("model_call_reserve", "Reserve a budget lease for a model call"),
             make_tool::<ModelCallSettleArgs>("model_call_settle", "Settle or release a lease without submitting an action (provider failure, cancellation)"),
-            make_tool::<TrajectoryExportArgs>("trajectory_export", "Export trajectory with pagination (cursor + page_size)"),
+            make_tool::<TrajectoryExportArgs>("trajectory_export", "Export trajectory with pagination (cursor + page_size). Raw event payload_json can expose a completed proof body (proof_term/module_items) — for a benchmark-linked episode this requires allow_putnambench_proof_export=true, same contamination policy as proof_export (issue #33)"),
             make_tool::<EpisodeReplayArgs>("episode_replay", "Re-execute typed actions through canonical reducer with Lean re-verification"),
             make_tool::<ProofExportArgs>("proof_export", "Render an episode as a proof dossier. format: \"markdown\" (default, full dossier) | \"lean\" (bare assembled source) | \"public_summary\" (redacted, safe for public/benchmark disclosure — never includes the proof body) | \"audit_archive\" (full dossier, explicitly labeled private) | \"training_export\" (structured JSON records for SFT/RL/DPO) | \"paper_dossier\" (full dossier plus a written narrative section) | \"maintainer_submission\" (full dossier packaged for a benchmark suite's own maintainers). Modes that expose the completed proof body require allow_putnambench_proof_export=true when the episode's problem is linked to a tracked benchmark suite — see docs/benchmarks/putnambench.md"),
             make_tool::<LeanDeclarationLookupArgs>("lean_declaration_lookup", "Check whether declaration names resolve — WITHOUT changing proof strategy first. An 'unknown identifier' error from episode_step only ever proves a name didn't resolve under the exact import manifest that attempt used; it never proves the name is absent from the pinned Mathlib. By default this only checks under the problem's own manifest (fast, a few seconds) and returns 'not_available_under_current_manifest' if it fails to resolve — that result alone does NOT mean the name is absent from the library, only that it needs an import. Pass deep_check=true to additionally check under the full Mathlib umbrella and distinguish 'not_in_current_import_scope' (add an import to problem_imports, see problem_create) from genuinely 'unknown_declaration' (misspelled, wrong namespace, or absent); deep_check loads all of Mathlib and reliably takes 15-40+ seconds. Epistemic rule: before concluding an API is unavailable, call this tool with deep_check=true — do not infer library capability from one elaboration failure or from a fast-path result alone"),
@@ -2221,7 +2230,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.15",
+                    "environment_version": "0.3.16",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -2254,7 +2263,146 @@ impl ServerHandler for ChatDbMcp {
                         "An 'unknown_declaration'/'unknown identifier' result under the active import manifest establishes ONLY that the name didn't resolve under that exact import closure. It does NOT establish that the declaration is absent from the pinned library. Before concluding an API is unavailable, call lean_declaration_lookup — do not infer a global capability limit from one local elaboration failure.",
                         "lean_declaration_lookup defaults to a fast (few-second) check against only the problem's own import manifest, returning 'not_available_under_current_manifest' on failure — that status by itself does not prove absence from the library. Pass deep_check=true (15-40+ seconds, loads the full Mathlib umbrella) to get a conclusive 'not_in_current_import_scope' vs 'unknown_declaration' verdict before concluding a declaration is genuinely unavailable.",
                         "A prior model's proof (from another session, another model, a paper, etc.) is a candidate artifact, not evidence of correctness, until it passes THIS pinned verifier. Do not skip verification because a candidate 'looks complete'."
-                    ]
+                    ],
+                    "tool_classification": {
+                        "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied as a bounded, real per-tool slice — the highest-risk/highest-signal tools first, not a blanket pass over every tool yet. A tool's ABSENCE from this map is not a safety claim; it means not yet classified, not 'nothing to worry about'.",
+                        "classified_tool_count": 13,
+                        "total_tool_count": 42,
+                        "tools": {
+                            "episode_step": {
+                                "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
+                                "trust_level": "mixed: the action payload (proof_term/module_items) is untrusted_input — client-authored and adversarial by default — but the recorded outcome is verifier_backed, since the real Lean kernel, not the client, decides kernel_verified/kernel_fail",
+                                "cost_surface": "verifier_side (real wall_time_ms/lean_cpu_time_ms now persisted and aggregated into benchmark_run_observe's cost_summary) + mcp_side (request-handling overhead, still unmeasured)",
+                                "benchmark_safety": "contamination_risk at the source: a solve action's raw proof_term for a benchmark-linked problem is exactly the content proof_export's and trajectory_export's redaction gates exist to keep out of public exports. episode_step itself never exports anything — it's the origin of the content those two gates must catch, not a gate itself",
+                                "replayability": "replayable_with_hashes — episode_replay re-executes the same typed actions through the same reducer plus real Lean re-verification",
+                                "source_code_impact": "no_source_change — no MCP tool edits ChatDB's own source files; assembled Lean text is ephemeral verifier input, never a repo mutation",
+                                "artifact_risk": "proof_body",
+                                "required_run_mode": "any — enforcement belongs at export time, not attempt time"
+                            },
+                            "proof_export": {
+                                "side_effect": "read_only — renders a document from already-recorded state, writes nothing (confirmed by reading the handler: no INSERT/UPDATE anywhere in this path)",
+                                "trust_level": "verifier_backed — every field it can render was already recorded by episode_step/attempt_finalize",
+                                "cost_surface": "none directly; storage_side if the caller persists the exported document, which is outside ChatDB's own accounting",
+                                "benchmark_safety": "THE gate for this concern: public_summary is always safe_public_output; markdown/lean/audit_archive/training_export/paper_dossier/maintainer_submission are private_artifact by default and become contamination_risk only if allow_putnambench_proof_export=true is set for a benchmark-linked episode (issue #33)",
+                                "replayability": "deterministic given the same recorded episode state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body (gated modes) or public_summary (ungated mode) depending on format",
+                                "required_run_mode": "private_audit for proof-body-exposing formats on a benchmark-linked episode; any otherwise"
+                            },
+                            "trajectory_export": {
+                                "side_effect": "read_only",
+                                "trust_level": "verifier_backed — hash-chained (event_hash/previous_event_hash) recorded events, not client-reconstructable",
+                                "cost_surface": "none",
+                                "benchmark_safety": "contamination_risk — REAL GAP FOUND AND FIXED in this same audit pass: raw payload_json can carry a solve action's proof_term or a submit_module's module_items, the same completed-proof-body content proof_export's #33 redaction gate exists for, but this tool had no equivalent gate at all until now. It now requires allow_putnambench_proof_export=true for a benchmark-linked episode, mirroring proof_export exactly",
+                                "replayability": "replayable_with_hashes — this IS the hash chain episode_replay verifies against",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body (now gated) for a benchmark-linked episode; diagnostic_only otherwise",
+                                "required_run_mode": "private_audit for a benchmark-linked episode; any otherwise"
+                            },
+                            "episode_replay": {
+                                "side_effect": "read_only — re-executes the reducer in-memory against recorded events, writes nothing new",
+                                "trust_level": "verifier_backed — re-runs the SAME real Lean verification the original attempt used, doesn't trust the stored outcome blindly",
+                                "cost_surface": "verifier_side — a real second Lean invocation per replayed verification step, currently uncounted in cost_summary.verifier_cost_ms (which only sums the ORIGINAL attempt_finalize writes, not replay re-verifications)",
+                                "benchmark_safety": "safe_public_output — returns only audit_passed/events_replayed/replay_status, never proof content",
+                                "replayability": "deterministic given a pinned Lean/Mathlib toolchain; a toolchain upgrade could change the outcome, which is itself the point (detecting drift)",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "diagnostic_only",
+                                "required_run_mode": "any"
+                            },
+                            "benchmark_result_record": {
+                                "side_effect": "mutating — upserts benchmark_results",
+                                "trust_level": "verifier_backed cross-check, not bare client assertion: since issue #36, a kernel_verified/certified claim is rejected outright without a real episode_id, and since issue #30 the episode's actual recorded outcome and root_statement_hash (via COALESCE(prover_ready_statement_hash, root_statement_hash)) must both match what's claimed",
+                                "cost_surface": "none directly",
+                                "benchmark_safety": "safe_public_output — records status/metrics/attempts_used, never a proof body",
+                                "replayability": "replayable_with_hashes via the referenced episode_id",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "aggregate_metric",
+                                "required_run_mode": "benchmark",
+                                "unresolved_design_question": "the cross-check validates statement identity (same root_statement_hash) but not the problem_version's fidelity_status — a result can currently be backed by an 'attested' (unsafe_dev_attestation, never independently reviewed) problem_version just as validly as a 'verified' one. For PutnamBench-imported problems this is arguably correct (the hash-match against the suite's own canonical statement IS the fidelity guarantee, not human review of an informal-to-formal translation) but it's a real, not-yet-explicitly-documented boundary worth a deliberate decision rather than an accident"
+                            },
+                            "benchmark_run_observe": {
+                                "side_effect": "read_only — aggregates existing benchmark_results/action_attempts rows, writes nothing",
+                                "trust_level": "verifier_backed — every number reported is derived from already-recorded, already-cross-checked state, not recomputed trust",
+                                "cost_surface": "mcp_side (the query/aggregation work itself, unmeasured) while its OUTPUT surfaces host_side/verifier_side cost data for other surfaces",
+                                "benchmark_safety": "safe_public_output — per-problem status and aggregate metrics, never proof bodies; this is a materially different exposure than proof_export/trajectory_export precisely because it never touches payload_json/proof content",
+                                "replayability": "deterministic given the same DB state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "aggregate_metric",
+                                "required_run_mode": "any (meaningful mainly in benchmark mode, but nothing depends on the caller's declared mode)"
+                            },
+                            "benchmark_run_create": {
+                                "side_effect": "mutating — inserts a benchmark_runs row",
+                                "trust_level": "mcp_generated for lean_version/mathlib_commit specifically — read from the SERVER's own detected toolchain, never accepted from the client, so a run can't misreport what verifier it actually used",
+                                "cost_surface": "none directly",
+                                "benchmark_safety": "safe_public_output — creates a container, no proof content",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "benchmark",
+                                "note": "since issue #34's first bounded slice (v0.3.13), run_envelope_id is REQUIRED, not optional — a benchmark run cannot exist unassociated with host/mode/cost tracking"
+                            },
+                            "run_envelope_create": {
+                                "side_effect": "append_only — inserts a run_envelopes row",
+                                "trust_level": "human_attested for host_name/host_model/mode (self-declared by the caller) with an explicit, honest confidence tier (host_cost_confidence: exact_provider_receipt/exact_local_meter/estimated/attested/unknown) rather than pretending self-declaration is verifier-grade",
+                                "cost_surface": "host_side — this tool IS the host-side cost declaration surface",
+                                "benchmark_safety": "safe_public_output — metadata only",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any — creates the envelope FOR whichever mode is declared"
+                            },
+                            "problem_create": {
+                                "side_effect": "mutating — inserts a problem_versions row",
+                                "trust_level": "untrusted_input by design — root_formal_statement is entirely client-authored, and fidelity_status starts 'unreviewed' until either a real problem_submit_fidelity_review or the honestly-named unsafe_dev_attestation=true (capped at kernel_verified, never certified)",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output at creation time; the statement itself becomes contamination-relevant only once an episode proves it and that proof is later exported",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "development is the honest expectation for unsafe_dev_attestation=true (the name says so), but NOTHING currently enforces that a problem created this way can't be used in a benchmark/evaluation-mode run — this is a real, undocumented-until-now gap, distinct from the benchmark_result_record fidelity_status question above, and worth a deliberate mode-enforcement decision rather than relying on the flag's honest naming alone"
+                            },
+                            "episode_create": {
+                                "side_effect": "mutating — inserts an episodes row and its first action_request",
+                                "trust_level": "verifier_backed gate — requires the problem_version's fidelity_status to already be 'verified' or 'attested'; rejects 'unreviewed'/'rejected' outright",
+                                "cost_surface": "none directly",
+                                "benchmark_safety": "safe_public_output — no proof content yet, just episode scaffolding",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "attempt_claim": {
+                                "side_effect": "mutating — inserts/updates an action_attempts row with a claim_token, idempotent on idempotency_key",
+                                "trust_level": "mcp_generated — the claim_token itself is server-issued and is what makes episode_step's compare-and-swap safe against concurrent/duplicate submission",
+                                "cost_surface": "none directly",
+                                "benchmark_safety": "safe_public_output — no proof content, just a claim handshake",
+                                "replayability": "deterministic (idempotent replay of the same idempotency_key returns the same claim)",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "draft_create": {
+                                "side_effect": "append_only — inserts a drafts row",
+                                "trust_level": "untrusted_input, explicitly — issue #23's whole point is preserving informal planning content WITHOUT letting it masquerade as evidence; a draft can never mark anything proved",
+                                "cost_surface": "none",
+                                "benchmark_safety": "private_artifact by default framing (informal reasoning, not a public metric), though not currently export-gated the way proof_export/trajectory_export are — lower risk since it never contains a completed formal proof, but worth noting it's a different exposure category, not a proven-safe one",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none (advisory scaffolding only)",
+                                "required_run_mode": "any"
+                            },
+                            "proof_pattern_create": {
+                                "side_effect": "append_only — inserts a proof_patterns row, rejects a duplicate pattern_key rather than overwriting",
+                                "trust_level": "untrusted_input — a pattern is a free-text failure_signature/recommended_repair pair the caller asserts, never independently checked against real proof state",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output — a lesson, not a proof or a problem-specific artifact",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none — purely advisory, can never mark anything proved or change fidelity/certification status",
+                                "required_run_mode": "any"
+                            }
+                        }
+                    }
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
@@ -3149,6 +3297,25 @@ impl ServerHandler for ChatDbMcp {
                 let cursor = args.cursor.unwrap_or(0);
 
                 let conn = self.conn.lock().await;
+
+                // Issue #33's contamination policy again, closing a real gap found
+                // during #34's tool-classification audit: trajectory_export's raw
+                // payload_json carries the exact same completed-proof-body content
+                // (proof_term, module_items) that proof_export's redaction gate
+                // exists to keep out of public exports for benchmark-linked
+                // episodes — this tool had no equivalent gate at all.
+                if !args.allow_putnambench_proof_export {
+                    if let Some(link) = benchmark_suite_name_for_episode(&conn, &args.episode_id)? {
+                        return Err(mcp_invalid_params(format!(
+                            "episode {} is linked to benchmark suite '{}' — trajectory_export's raw payload_json \
+                             can expose the completed proof body (proof_term/module_items), so it requires \
+                             allow_putnambench_proof_export=true (see docs/benchmarks/putnambench.md). \
+                             Use proof_export with format=\"public_summary\" for a disclosure-safe report instead.",
+                            args.episode_id, link.suite_name
+                        )));
+                    }
+                }
+
                 let mut stmt = conn.prepare(
                     "SELECT id, event_sequence_number, event_type, event_hash, previous_event_hash,
                             state_hash_before, state_hash_after, lean_environment_hash, payload_json, created_at
@@ -4770,6 +4937,24 @@ mod tests {
         assert!(json["lean_environment"].is_null(), "no lean-checker at the dummy test path -> no environment to report");
         assert!(json["action_schema"].is_object(), "environment_describe must expose the TypedAction schema");
         assert_eq!(json["action_examples"][0]["type"], "solve");
+
+        // Issue #34's tool-classification audit: a bounded, honest slice —
+        // the classified count must match what's actually in the map (no
+        // silently-inflated claim), and absence from the map must not be
+        // conflated with "nothing to worry about".
+        let classification = &json["tool_classification"];
+        let classified = classification["tools"].as_object().unwrap();
+        assert_eq!(classification["classified_tool_count"].as_u64().unwrap() as usize, classified.len(),
+            "classified_tool_count must match the real number of entries in the map: {classification}");
+        assert!(classification["total_tool_count"].as_u64().unwrap() as usize > classified.len(),
+            "total_tool_count must honestly exceed classified_tool_count while the audit remains partial: {classification}");
+        for tool in ["episode_step", "proof_export", "trajectory_export", "benchmark_result_record", "problem_create"] {
+            let entry = &classified[tool];
+            for dim in ["side_effect", "trust_level", "cost_surface", "benchmark_safety", "replayability", "source_code_impact", "artifact_risk", "required_run_mode"] {
+                assert!(entry[dim].is_string() && !entry[dim].as_str().unwrap().is_empty(),
+                    "tool_classification.{tool}.{dim} must be a real, non-empty classification: {entry}");
+            }
+        }
     }
 
     /// Full MCP-level playthrough: this is the scenario the live playtest against
@@ -8259,6 +8444,22 @@ mod tests {
             "episode_id": episode_id, "format": "public_summary",
         }).as_object().unwrap().clone())).await;
         assert!(summary.is_ok(), "public_summary must never require the opt-in flag");
+
+        // Issue #34's tool-classification audit found a real gap:
+        // trajectory_export's raw payload_json carries the exact same
+        // completed proof body content (the solve action's proof_term) but
+        // originally had no equivalent gate at all — an ungated side channel
+        // around the #33 contamination policy proof_export enforces.
+        let traj_denied = peer.call_tool(CallToolRequestParams::new("trajectory_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(traj_denied.is_err(), "trajectory_export of a benchmark-linked episode must be gated by default, same as proof_export");
+
+        let traj_allowed = tool_json(&peer.call_tool(CallToolRequestParams::new("trajectory_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "allow_putnambench_proof_export": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let traj_text = serde_json::to_string(&traj_allowed).unwrap();
+        assert!(traj_text.contains("trivial"), "with the explicit opt-in, trajectory_export must still include the real payload: {traj_text}");
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 [package]
 name = "chatdb_proof_core"
-version = "0.3.15"
+version = "0.3.16"
 edition = "2024"
 
 [dependencies]
