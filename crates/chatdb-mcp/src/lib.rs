@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension, Transaction};
 use uuid::Uuid;
@@ -1157,6 +1158,44 @@ fn enforce_dev_attestation_mode_policy(fidelity_status: &str, mode: &str, allow_
     }
 }
 
+/// Issue #38's TRUSTED CANONICAL HASH EXEMPTION, formalized as its own
+/// named, explicit, tested policy — not an ad hoc PutnamBench workaround.
+///
+/// The rule: `unsafe_dev_attestation` is forbidden in benchmark/evaluation/
+/// public_report runs UNLESS the problem belongs to a benchmark suite
+/// marked `trusted_canonical_source` AND the resulting
+/// `benchmark_fidelity_basis` will be `canonical_statement_hash_match`
+/// (trusted hash alignment against that suite's own registered canonical/
+/// prover-ready formal statement — the cross-check `benchmark_result_record`
+/// already performs, unconditionally, before a fidelity basis is ever
+/// computed at all: a hash MISMATCH is rejected outright earlier in the
+/// same handler, so reaching this exemption check at all already implies
+/// the hash matched).
+///
+/// `suite_trusted` alone is a sound, complete proxy for "this claim's basis
+/// will be `canonical_statement_hash_match`": `benchmark_result_record`'s
+/// fidelity-basis logic assigns that value whenever the suite is trusted,
+/// unconditionally (never falling through to `problem_fidelity_verified`
+/// for a trusted suite even if the problem also happens to be
+/// independently reviewed) — so the two conditions are equivalent at this
+/// call site by construction, not by coincidence.
+///
+/// Why this exemption exists at all: a literal, exception-free mode block
+/// would reject `putnam_runner.rs` — the real, already-shipped, real-
+/// toolchain-verified automated PutnamBench pass@k runner, which runs in
+/// `mode: "benchmark"` and imports every problem via
+/// `unsafe_dev_attestation: true` (there is no per-problem human fidelity
+/// review step for an automated ~600-problem import). A trusted suite's
+/// own canonical statement-hash match is independently sufficient fidelity
+/// evidence for issue #38's mode-enforcement policy's own underlying
+/// concern ("don't let uncertified dev-bypass content leak into a measured
+/// claim") — the claim being certified there is "this hash matches the
+/// suite's own canonical statement," not "a human reviewed this," and that
+/// evidence doesn't depend on which mode the run happens to be.
+fn trusted_canonical_hash_exemption_applies(suite_trusted: bool) -> bool {
+    suite_trusted
+}
+
 /// The problem version's environment hash, joined through an episode.
 fn episode_env_hash(conn: &Connection, episode_id: &str) -> rusqlite::Result<String> {
     conn.query_row(
@@ -2210,7 +2249,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.22"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.23"))
     }
 
     async fn list_tools(
@@ -2260,7 +2299,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise"),
             make_tool::<BenchmarkRunCreateArgs>("benchmark_run_create", "Create a benchmark run against a suite. Requires an existing run_envelope_id (call run_envelope_create first — a run should not start unassociated with host/mode/cost tracking). lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results"),
             make_tool::<BenchmarkResultRecordArgs>("benchmark_result_record", "Record (or update) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem"),
-            make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric. cost_summary separates real metrics (verifier_wall_time_ms/verifier_cpu_time_ms/mcp_action_count — always attempted, never null when data exists) from monetary cost (*_cost_micros fields, null unless real money data or a rate card exists). cost_completeness is 'total_cost_known' only when every material cost surface is exact (currently unreachable: mcp_side/storage_export costs have no instrumentation at all), 'reported_total_not_exact' when some real monetary signal exists (exact/attested/estimated) but not a complete exact total, else 'total_cost_incomplete'"),
+            make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric. cost_summary separates real metrics (verifier_wall_time_ms/verifier_cpu_time_ms/mcp_action_count/mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms — all real, measured data, null only when genuinely no correlated activity exists yet) from monetary cost (*_cost_micros fields, null unless real money data or a rate card exists — mcp_side_cost_micros/storage_export_cost_micros stay null with no pricing profile decided for either surface). cost_completeness is 'total_cost_known' only when every material cost surface is exact (currently unreachable: mcp_side/storage_export have real metrics but no pricing), 'reported_total_not_exact' when some real monetary signal exists (exact/attested/estimated) but not a complete exact total, else 'total_cost_incomplete'"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -2270,10 +2309,44 @@ impl ServerHandler for ChatDbMcp {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        // Issue #38's MCP handler wall-time instrumentation: real wall-clock
+        // time for THIS call, logged for every tool regardless of success or
+        // failure (an honest total of real handler time spent, not just
+        // successful calls). Correlation IDs are duck-typed out of the
+        // call's own args before they're consumed below — episode_id/run_id/
+        // run_envelope_id are common field names across many, but not all,
+        // tool schemas; whichever are present (if any) let
+        // benchmark_run_observe aggregate this call's time into a specific
+        // episode/benchmark run/run envelope later, with no per-tool special
+        // casing needed here.
+        let call_start = Instant::now();
+        let tool_name = request.name.to_string();
+        let (corr_episode_id, corr_run_id, corr_run_envelope_id) = match &request.arguments {
+            Some(m) => (
+                m.get("episode_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                m.get("run_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                m.get("run_envelope_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            ),
+            None => (None, None, None),
+        };
+
         let args_map = request.arguments.unwrap_or_default();
         let args_val = serde_json::Value::Object(args_map);
 
-        match request.name.as_ref() {
+        // Issue #38's MCP handler timing must capture EVERY call, including
+        // ones that end in a validation/policy rejection — but the vast
+        // majority of arms below use `?`/`return Err(...)`, which target the
+        // nearest enclosing FUNCTION, not just this match: without this
+        // `async move { ... }.await` wrapper, every such early return would
+        // bypass the metrics-logging code after this match entirely,
+        // silently undercounting mcp_handler_wall_time_ms for any run with
+        // even one rejected call (a real bug an adversarial review caught).
+        // Wrapping the match in its own async block gives `?`/`return` a
+        // closer boundary to target — THIS block's own Result — instead of
+        // escaping all the way out of call_tool, with zero changes needed
+        // to any of the arms themselves.
+        let result: Result<CallToolResult, McpError> = async move {
+            match request.name.as_ref() {
             "readme_first" => {
                 let res = serde_json::json!({
                     "what_this_is": "ChatDB is a verifier-backed RL ENVIRONMENT, not a prover. It contains no provider SDKs, no API keys, no model routing, no inference calls. The external agent host (you, or whatever is calling this tool) IS the policy — you choose what to try. ChatDB assembles Lean source under a strict trust boundary, the real Lean 4 kernel verifies it, and the ledger records what happened. If you have not read anything else in this environment, read this response before calling problem_create or episode_create.",
@@ -2301,7 +2374,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.22",
+                    "environment_version": "0.3.23",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -4963,20 +5036,13 @@ impl ServerHandler for ChatDbMcp {
                         let suite_trusted: bool = conn.query_row(
                             "SELECT trusted_canonical_source FROM benchmark_suites WHERE id = ?1", [&run_suite_id], |row| row.get(0),
                         ).map_err(rs)?;
-                        // Issue #38's mode-enforcement policy: unsafe_dev_attestation
-                        // means development playtest, never a measured claim for an
-                        // UNTRUSTED suite. Deliberately NOT enforced when the suite
-                        // is trusted_canonical_source: that flag exists precisely so
-                        // a real, externally-curated corpus (PutnamBench) can accept
-                        // hash-matched problems imported via unsafe_dev_attestation
-                        // (there is no per-problem human review step for an automated
-                        // import of hundreds of problems) — putnam_runner.rs's real,
-                        // already-shipped workflow does exactly this. Blocking it here
-                        // too would contradict trusted_canonical_source's whole
-                        // purpose and break real, already-verified functionality; a
-                        // trusted suite's hash-match already IS the fidelity evidence
-                        // this policy cares about, whatever mode the run happens to be.
-                        if !suite_trusted {
+                        // Issue #38's mode-enforcement policy, with the
+                        // trusted-canonical-hash exemption formalized as its
+                        // own named, documented policy function (not an
+                        // inline, accidental PutnamBench-shaped special
+                        // case) — see trusted_canonical_hash_exemption_applies's
+                        // own doc comment for the exact rule and why it exists.
+                        if !trusted_canonical_hash_exemption_applies(suite_trusted) {
                             if let Some(mode) = &run_envelope_mode {
                                 enforce_dev_attestation_mode_policy(&problem_fidelity_status, mode, args.allow_dev_attested)?;
                             }
@@ -5146,6 +5212,71 @@ impl ServerHandler for ChatDbMcp {
                 let model_call_reported_cost_micros: Option<i64> = if model_call_cost_found { Some(model_call_cost_total) } else { None };
                 let model_call_cost_confidence: Option<&str> = if model_call_cost_found { Some("attested") } else { None };
 
+                // storage_bytes_written: real byte length (Rust String::len(),
+                // never SQLite's character-counting LENGTH()) of the
+                // lean_result_json actually persisted per attempt (see
+                // step.rs::attempt_finalize), summed across every attempt on
+                // every episode this run's results reference — the same
+                // per-episode iteration pattern as verifier_wall_time_ms above.
+                let mut storage_bytes_total: i64 = 0;
+                let mut storage_bytes_found = false;
+                for episode_id in rows.iter().filter_map(|(_, ep)| ep.as_ref()) {
+                    let mut bstmt = conn.prepare(
+                        "SELECT lean_result_bytes FROM action_attempts WHERE episode_id = ?1 AND lean_result_bytes IS NOT NULL"
+                    ).map_err(rs)?;
+                    let amounts: Vec<i64> = bstmt.query_map([episode_id], |row| row.get(0))
+                        .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+                    for b in amounts {
+                        storage_bytes_total += b;
+                        storage_bytes_found = true;
+                    }
+                }
+                let storage_bytes_written: Option<i64> = if storage_bytes_found { Some(storage_bytes_total) } else { None };
+
+                // Issue #38's MCP-side/storage-export observability:
+                // mcp_call_metrics (populated generically for every tool call
+                // in call_tool's wrapper) is correlated to this run three
+                // ways at once — by episode_id (any of this run's episodes),
+                // by run_id (a call that referenced this benchmark run
+                // directly, e.g. benchmark_result_record/benchmark_run_observe
+                // itself), or by run_envelope_id (a call tied to this run's
+                // own envelope, e.g. model_call_reserve/settle). A call
+                // matching more than one of these criteria is only counted
+                // once (DISTINCT id via UNION, not summed per-criterion).
+                // storage_export_bytes/storage_export_wall_time_ms further
+                // restrict to proof_export/trajectory_export specifically —
+                // the actual "export" surface.
+                let episode_ids: Vec<&String> = rows.iter().filter_map(|(_, ep)| ep.as_ref()).collect();
+                let episode_placeholders = if episode_ids.is_empty() { "''".to_string() } else {
+                    episode_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",")
+                };
+                let correlation_sql = format!(
+                    "episode_id IN ({episode_placeholders}) OR run_id = ? OR run_envelope_id = ?"
+                );
+                let mut mcp_params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+                for eid in &episode_ids { mcp_params.push(*eid as &dyn rusqlite::ToSql); }
+                mcp_params.push(&args.run_id as &dyn rusqlite::ToSql);
+                let run_envelope_id_param: &dyn rusqlite::ToSql = &run_envelope_id;
+                mcp_params.push(run_envelope_id_param);
+
+                let mut mcp_time_stmt = conn.prepare(
+                    &format!("SELECT wall_time_ms FROM mcp_call_metrics WHERE {correlation_sql}")
+                ).map_err(rs)?;
+                let mcp_wall_times: Vec<i64> = mcp_time_stmt.query_map(mcp_params.as_slice(), |row| row.get(0))
+                    .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+                let mcp_handler_wall_time_ms: Option<i64> = if mcp_wall_times.is_empty() { None } else { Some(mcp_wall_times.iter().sum()) };
+
+                let mut export_stmt = conn.prepare(
+                    &format!("SELECT wall_time_ms, response_bytes FROM mcp_call_metrics WHERE tool_name IN ('proof_export', 'trajectory_export') AND ({correlation_sql})")
+                ).map_err(rs)?;
+                let export_rows: Vec<(i64, Option<i64>)> = export_stmt.query_map(mcp_params.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))
+                    .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+                let storage_export_wall_time_ms: Option<i64> = if export_rows.is_empty() { None } else { Some(export_rows.iter().map(|(w, _)| w).sum()) };
+                let storage_export_bytes: Option<i64> = {
+                    let found: Vec<i64> = export_rows.iter().filter_map(|(_, b)| *b).collect();
+                    if found.is_empty() { None } else { Some(found.iter().sum()) }
+                };
+
                 let is_solved = |r: &serde_json::Value| matches!(r["status"].as_str(), Some("kernel_verified") | Some("certified"));
                 let solved = results.iter().filter(|r| is_solved(r)).count();
                 let total = results.len();
@@ -5249,18 +5380,18 @@ impl ServerHandler for ChatDbMcp {
                     "verifier_wall_time_ms": verifier_wall_time_ms,
                     "verifier_cpu_time_ms": verifier_cpu_time_ms,
                     "mcp_action_count": mcp_action_count,
-                    "mcp_handler_wall_time_ms": serde_json::Value::Null,
+                    "mcp_handler_wall_time_ms": mcp_handler_wall_time_ms,
                     "mcp_side_cost_micros": mcp_side_cost_micros,
-                    "storage_bytes_written": serde_json::Value::Null,
-                    "storage_export_bytes": serde_json::Value::Null,
-                    "storage_export_wall_time_ms": serde_json::Value::Null,
+                    "storage_bytes_written": storage_bytes_written,
+                    "storage_export_bytes": storage_export_bytes,
+                    "storage_export_wall_time_ms": storage_export_wall_time_ms,
                     "storage_export_cost_micros": storage_export_cost_micros,
                     "known_exact_cost_micros": known_exact_cost_micros,
                     "reported_attested_cost_micros": reported_attested_cost_micros,
                     "estimated_cost_micros": estimated_cost_micros,
                     "unknown_cost_present": unknown_cost_present,
                     "cost_completeness": cost_completeness,
-                    "not_yet_instrumented": "mcp_handler_wall_time_ms, storage_bytes_written, storage_export_bytes, storage_export_wall_time_ms, mcp_side_cost_micros, storage_export_cost_micros are not yet instrumented — never reported as zero. model_call_reported_cost_micros is real per-attempt data from model_call_leases but always self-reported (attested), never independently measured by ChatDB.",
+                    "not_yet_instrumented": "mcp_side_cost_micros/storage_export_cost_micros are not yet instrumented — never reported as zero; there is no pricing/rate-card decision yet for either surface. mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms are now real, measured metrics (v0.3.23) — null only when this run genuinely has no correlated mcp_call_metrics/action_attempts rows yet, never fabricated as zero. model_call_reported_cost_micros is real per-attempt data from model_call_leases but always self-reported (attested), never independently measured by ChatDB.",
                 });
 
                 let res = serde_json::json!({
@@ -5283,13 +5414,75 @@ impl ServerHandler for ChatDbMcp {
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
             _ => Err(McpError::new(ErrorCode::METHOD_NOT_FOUND, format!("Method not found: {}", request.name), None)),
+            }
+        }.await;
+
+        // Persist this call's real wall-clock time (and, for a successful
+        // call, the real byte length of its returned content) — best-effort:
+        // a metrics-logging failure must never affect the actual tool
+        // response the caller receives, so errors here are swallowed, never
+        // propagated or allowed to overwrite `result`.
+        let wall_time_ms = call_start.elapsed().as_millis() as i64;
+        let (is_error, response_bytes): (bool, Option<i64>) = match &result {
+            Ok(r) => (
+                r.is_error.unwrap_or(false),
+                r.content.first().and_then(|c| c.as_text()).map(|t| t.text.len() as i64),
+            ),
+            Err(_) => (true, None),
+        };
+        {
+            let conn = self.conn.lock().await;
+            let _ = conn.execute(
+                "INSERT INTO mcp_call_metrics (id, tool_name, episode_id, run_id, run_envelope_id, wall_time_ms, response_bytes, is_error, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    Uuid::new_v4().to_string(), &tool_name, &corr_episode_id, &corr_run_id, &corr_run_envelope_id,
+                    wall_time_ms, response_bytes, is_error, Utc::now().to_rfc3339(),
+                ],
+            );
         }
+
+        result
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #38's trusted-canonical-hash exemption, unit-tested directly as
+    /// its own named policy (not just incidentally exercised through the
+    /// larger benchmark_result_record integration tests below).
+    #[test]
+    fn test_trusted_canonical_hash_exemption_applies() {
+        assert!(trusted_canonical_hash_exemption_applies(true),
+            "a trusted_canonical_source suite's claim always resolves to canonical_statement_hash_match, so the exemption must apply");
+        assert!(!trusted_canonical_hash_exemption_applies(false),
+            "an untrusted suite gets no exemption — mode-enforcement must still run for it");
+    }
+
+    /// Issue #38's mode-enforcement policy function, unit-tested directly.
+    #[test]
+    fn test_enforce_dev_attestation_mode_policy() {
+        // Any fidelity_status other than "attested" is allowed in any mode.
+        assert!(enforce_dev_attestation_mode_policy("verified", "benchmark", false).is_ok());
+        assert!(enforce_dev_attestation_mode_policy("unreviewed", "public_report", false).is_ok());
+
+        // "attested" is unconditionally blocked for these three modes, flag or not.
+        for mode in ["benchmark", "evaluation", "public_report"] {
+            assert!(enforce_dev_attestation_mode_policy("attested", mode, false).is_err());
+            assert!(enforce_dev_attestation_mode_policy("attested", mode, true).is_err(),
+                "allow_dev_attested must NOT override benchmark/evaluation/public_report, per the policy's own spec");
+        }
+
+        // development: always allowed.
+        assert!(enforce_dev_attestation_mode_policy("attested", "development", false).is_ok());
+
+        // private_audit: blocked without the flag, allowed with it.
+        assert!(enforce_dev_attestation_mode_policy("attested", "private_audit", false).is_err());
+        assert!(enforce_dev_attestation_mode_policy("attested", "private_audit", true).is_ok());
+    }
+
     use rmcp::service::{serve_client, serve_server};
     use rmcp::model::CallToolRequestParams;
     use rmcp::transport::async_rw::AsyncRwTransport;
@@ -8613,6 +8806,155 @@ mod tests {
             "verifier_cpu_time_ms must sum real persisted cpu timing across every attempt on the episode: {:?}", observed["cost_summary"]);
         assert_eq!(observed["cost_summary"]["mcp_action_count"], 2,
             "mcp_action_count must be a real count of action_attempts, not gated on any timing data being present: {:?}", observed["cost_summary"]);
+    }
+
+    /// Issue #38's MCP-side/storage observability (v0.3.23): every tool call
+    /// is logged (by call_tool's generic wrapper) with real wall-clock time,
+    /// correlated to this run via the episode_id it references. Confirms
+    /// mcp_handler_wall_time_ms and storage_bytes_written are real,
+    /// non-null, positive numbers after genuine episode/attempt activity —
+    /// and, critically (the explicit regression this issue asked for),
+    /// that cost_completeness STILL cannot reach total_cost_known even once
+    /// these new metrics are real and populated, since mcp_side_cost_micros/
+    /// storage_export_cost_micros remain null (no pricing profile exists).
+    #[tokio::test]
+    async fn test_benchmark_run_observe_aggregates_real_mcp_and_storage_metrics() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "mcp1", "theorem_name": "mcp1", "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run_envelope_id = create_run_envelope(&peer).await;
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "mcp-metrics-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // A real export call against this same episode contributes to
+        // storage_export_bytes/storage_export_wall_time_ms specifically.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+            "run_id": run["run_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let cs = &observed["cost_summary"];
+
+        assert!(cs["mcp_handler_wall_time_ms"].as_i64().unwrap_or(-1) >= 0,
+            "mcp_handler_wall_time_ms must be a real, non-null number once real tool calls reference this run's episode: {cs:?}");
+        assert!(cs["storage_bytes_written"].as_i64().unwrap_or(-1) > 0,
+            "storage_bytes_written must be a real positive byte count from the real persisted lean_result_json: {cs:?}");
+        assert!(cs["storage_export_bytes"].as_i64().unwrap_or(-1) > 0,
+            "storage_export_bytes must reflect the real proof_export call's returned content length: {cs:?}");
+        assert!(cs["storage_export_wall_time_ms"].as_i64().unwrap_or(-1) >= 0,
+            "storage_export_wall_time_ms must be a real, non-null number once a real proof_export/trajectory_export call references this run's episode: {cs:?}");
+
+        // The explicit regression this issue asked for: real MCP/storage
+        // METRICS existing must never be conflated with real MCP/storage
+        // COST existing -- mcp_side_cost_micros/storage_export_cost_micros
+        // stay null (no pricing profile), so cost_completeness must still
+        // be unable to reach total_cost_known.
+        assert!(cs["mcp_side_cost_micros"].is_null(),
+            "mcp_side_cost_micros must stay null even with real mcp_handler_wall_time_ms data -- a metric is not a price: {cs:?}");
+        assert!(cs["storage_export_cost_micros"].is_null(),
+            "storage_export_cost_micros must stay null even with real storage_export_bytes data -- a metric is not a price: {cs:?}");
+        assert_ne!(cs["cost_completeness"], "total_cost_known",
+            "cost_completeness must remain unable to reach total_cost_known despite real MCP/storage metrics, since no pricing profile exists for either surface: {cs:?}");
+    }
+
+    /// A run with genuinely NO tool-call activity correlated to it at all
+    /// (a fresh run with no episodes, no results) must report every new
+    /// metric as null, never fabricated as 0 -- "no data yet" and "zero
+    /// real cost" are different claims.
+    #[tokio::test]
+    async fn test_benchmark_run_observe_reports_null_mcp_storage_metrics_for_empty_run() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let run_envelope_id = create_run_envelope(&peer).await;
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+            "run_id": run["run_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let cs = &observed["cost_summary"];
+        assert!(cs["storage_bytes_written"].is_null(), "no episodes -> no persisted bytes -> null, not 0: {cs:?}");
+        assert!(cs["storage_export_bytes"].is_null(), "no export calls -> null, not 0: {cs:?}");
+        assert!(cs["storage_export_wall_time_ms"].is_null(), "no export calls -> null, not 0: {cs:?}");
+    }
+
+    /// Regression for a real, critical bug an adversarial review caught in
+    /// this same instrumentation pass: `call_tool`'s metrics-logging code
+    /// originally ran AFTER a plain `match request.name.as_ref() { ... }` —
+    /// but `?` and `return Err(...)` inside a match arm target the nearest
+    /// enclosing FUNCTION, not the match itself, so EVERY arm that uses
+    /// either (the overwhelming majority — arg-parsing failures, CAS
+    /// mismatches, policy rejections, DB errors) bypassed the metrics
+    /// insert entirely, silently undercounting mcp_handler_wall_time_ms for
+    /// any run with even one rejected call. Fixed by wrapping the whole
+    /// match in its own `async move { ... }.await` block, which gives
+    /// `?`/`return` a closer boundary to target. This test constructs its
+    /// own handler (not test_handler_with_gateway, which drops its own
+    /// Arc<Mutex<Connection>>) specifically to keep a raw handle on the
+    /// underlying connection, so it can directly query mcp_call_metrics
+    /// after a deliberately-failing call and prove a row was actually
+    /// logged for it — the exact case the bug silently dropped.
+    #[tokio::test]
+    async fn test_call_tool_logs_metrics_for_rejected_calls_not_just_successes() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        // episode_status's arg-parsing failure (missing required episode_id)
+        // hits `serde_json::from_value(...).map_err(...)?` -- a genuine `?`
+        // early return, exactly the bug class this regression guards
+        // against (as opposed to e.g. episode_status's OWN "unknown
+        // episode_id" rejection, which is a plain match-arm tail Err(...)
+        // value that would have flowed through even before this fix).
+        let rejected = peer.call_tool(CallToolRequestParams::new("episode_status").with_arguments(
+            serde_json::json!({}).as_object().unwrap().clone()
+        )).await;
+        assert!(rejected.is_err(), "missing required episode_id must be rejected");
+
+        let logged: i64 = conn_arc.lock().await.query_row(
+            "SELECT COUNT(*) FROM mcp_call_metrics WHERE tool_name = 'episode_status' AND is_error = 1",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(logged, 1,
+            "a rejected call that failed via `?` inside its arm must still be logged into mcp_call_metrics with is_error=1, not silently dropped");
     }
 
     /// Issue #34/#38's model_call_leases finding, now wired in per explicit

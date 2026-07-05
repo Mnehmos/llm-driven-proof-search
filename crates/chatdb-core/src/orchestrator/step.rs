@@ -627,11 +627,16 @@ pub fn attempt_finalize(
     // groundwork) — None for a GiveUp/Decompose action (never reaches the
     // gateway at all) or an infra failure (returns Err above before this
     // point), which is the correct, honest absence: no verification ran, so
-    // there is no verifier timing to report for this attempt.
+    // there is no verifier timing to report for this attempt. lean_result_bytes
+    // (issue #38's storage-bytes metric) is the real byte length of that same
+    // JSON as actually persisted — String::len() (byte count), never
+    // SQLite's own LENGTH() (UTF-8 character count, which would undercount
+    // multi-byte math notation like ∀/≥/⟨⟩ inside the serialized result).
     if let Some(json) = &lean_result_json {
+        let byte_len = json.len() as i64;
         tx.execute(
-            "UPDATE action_attempts SET lean_result_json = ?1 WHERE id = ?2",
-            (json, attempt_id.to_string()),
+            "UPDATE action_attempts SET lean_result_json = ?1, lean_result_bytes = ?2 WHERE id = ?3",
+            (json, byte_len, attempt_id.to_string()),
         )?;
     }
 

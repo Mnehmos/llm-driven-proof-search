@@ -328,8 +328,13 @@ suites now require a real independent review) shipped (v0.3.21). #38's
 mode-enforcement policy (unsafe_dev_attestation blocked from
 benchmark/evaluation/public_report runs, with a real conflict against the
 already-shipped putnam_runner.rs found and resolved via a
-trusted_canonical_source exception) shipped (v0.3.22). The full PutnamBench
-sprint is complete, and the first real playtest attempt has run:
+trusted_canonical_source exception) shipped (v0.3.22). #38's MCP/storage
+observability (mcp_handler_wall_time_ms, storage_bytes_written,
+storage_export_bytes, storage_export_wall_time_ms all real now; an
+adversarial review caught and fixed a critical bug where rejected calls
+silently bypassed metrics logging entirely; the trusted-hash exemption
+formalized as a named policy function) shipped (v0.3.23). The full
+PutnamBench sprint is complete, and the first real playtest attempt has run:
 12 real
 problems, 1/12 (8.3%) pass@1 — see
 `docs/playtests/2026-07-04-putnambench-first-attempt.md`. Zero infra errors,
@@ -655,6 +660,53 @@ independently still rejects "attested" content regardless of this flag in
 that case) — corrected to document this honestly rather than expand
 `benchmark_fidelity_basis`'s enum unilaterally to make the flag "fully"
 functional, which would be a genuine design decision left undecided.
+
+**#38 (MCP/storage observability) — the remaining instrumentation gap
+closed.** ✅ Shipped in v0.3.23, completing the metrics-first redesign: a new
+`mcp_call_metrics` table logs every MCP tool call (success or failure) with
+real wall-clock time, real response byte length, and best-effort correlation
+IDs; `action_attempts.lean_result_bytes` records the real persisted byte
+length (Rust `String::len()`, not SQLite's character-counting `LENGTH()`) of
+each attempt's verification result. `benchmark_run_observe` now reports real,
+measured `mcp_handler_wall_time_ms`, `storage_bytes_written`,
+`storage_export_bytes`, and `storage_export_wall_time_ms` — all four were
+previously hardcoded `null`. Monetary honesty is unchanged and explicitly
+regression-tested: `mcp_side_cost_micros`/`storage_export_cost_micros` still
+stay `null` (no pricing profile exists for either surface), so
+`cost_completeness` still cannot reach `"total_cost_known"` even with these
+new metrics fully populated with real data — a metric is not a price.
+
+An adversarial review caught a critical, structural bug in the first pass:
+the metrics-logging code ran after a plain `match request.name.as_ref() {
+... }` inside `call_tool`, but Rust's `?`/`return Err(...)` inside a match
+arm target the nearest enclosing *function*, not the match — so every arm
+using either (the vast majority of the ~42 tool handlers) silently bypassed
+the metrics insert entirely, undercounting `mcp_handler_wall_time_ms` for
+any run with even one rejected call. Fixed by wrapping the whole match in
+its own `async move { ... }.await` block, giving every arm's early return a
+closer boundary to land on with zero changes needed to individual handlers.
+Regression-tested directly against the underlying connection (not just
+through the MCP peer interface) to prove a deliberately-rejected call now
+produces a logged, `is_error=1` row.
+
+The trusted-canonical-hash exemption (from the mode-enforcement policy
+above) was also formalized into its own named, documented,
+directly-unit-tested policy function,
+`trusted_canonical_hash_exemption_applies`, per explicit follow-up
+direction — no longer an inline, PutnamBench-shaped special case.
+
+Verified against the real Lean 4.32.0-rc1 + Mathlib toolchain via
+`playtest.rs`. Two rounds of independent adversarial review: the first
+caught the critical `?`/match-arm bug; a follow-up confirmed the fix is
+structurally complete (tool-agnostic, not just fixing the one arm the new
+test happens to check) and introduces no new behavioral change from the
+`async move` wrapping itself. Every cost surface from the original 7-bucket
+ask is now either a real measured metric, real attested/exact monetary
+data, or an honestly-`null` bucket — the only genuinely open piece left is
+a business decision this session cannot make unilaterally: whether/how to
+ever assign a real price to `mcp_side_cost`/`storage_export_cost` at all
+(there may simply never be a rate card for ChatDB's own compute/storage,
+which would be a legitimate, permanent "unpriced" state, not a gap).
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
