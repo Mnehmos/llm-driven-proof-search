@@ -274,53 +274,129 @@ The full 672-theorem suite (`import_putnambench`/`putnam_runner` against a
 real local clone) is a separate, explicitly-invoked mode — never run as part
 of the normal `cargo test` suite.
 
-## Cost surfaces (issue #38 — partial)
+## Cost surfaces (issue #38 — cost policy v2)
 
-**The product principle:** "every dollar belongs to one bucket: build the
-environment, run the agent, execute the harness, verify the proof,
-store/export the artifact, or unknown." `benchmark_run_observe`'s response
-now includes a `cost_summary` object — honest about which of those buckets
-it can actually account for today, rather than implying a total that isn't
-real:
+**The product principle, restated after real design direction (v0.3.20):**
+metrics first, money second. Time/count/byte fields are real measurements
+ChatDB attempts honestly regardless of whether any money is involved;
+`*_cost_micros` fields are monetary and stay `null` unless real money data
+(a provider receipt, a local meter, a self-report, or a rate card) actually
+exists. `null` always means "not measured" — never `0`. `benchmark_run_observe`'s
+response includes a `cost_summary` object with this full shape:
 
 ```json
 "cost_summary": {
-  "host_side_cost_micros": 100,
+  "host_side_cost_micros": 1000,
   "host_cost_confidence": "exact_local_meter",
+  "model_call_reported_cost_micros": 350,
+  "model_call_cost_confidence": "attested",
+  "verifier_wall_time_ms": 57245,
+  "verifier_cpu_time_ms": 57245,
+  "mcp_action_count": 1,
+  "mcp_handler_wall_time_ms": null,
   "mcp_side_cost_micros": null,
-  "verifier_cost_ms": 9482,
+  "storage_bytes_written": null,
+  "storage_export_bytes": null,
+  "storage_export_wall_time_ms": null,
   "storage_export_cost_micros": null,
-  "unknown_external_cost": "mcp_side_cost/storage_export_cost are not yet instrumented — a known gap (issue #38), never silently reported as zero. verifier_cost_ms is real (summed Lean wall-clock time from action_attempts.lean_result_json) when present, null if no attempt in this run has recorded timing yet",
-  "cost_completeness": "host_cost_known"
+  "known_exact_cost_micros": 1000,
+  "reported_attested_cost_micros": 350,
+  "estimated_cost_micros": null,
+  "unknown_cost_present": true,
+  "cost_completeness": "reported_total_not_exact",
+  "not_yet_instrumented": "mcp_handler_wall_time_ms, storage_bytes_written, storage_export_bytes, storage_export_wall_time_ms, mcp_side_cost_micros, storage_export_cost_micros are not yet instrumented — never reported as zero. model_call_reported_cost_micros is real per-attempt data from model_call_leases but always self-reported (attested), never independently measured by ChatDB."
 }
 ```
 
-`cost_completeness` is `"host_cost_known"` only when `host_cost_confidence`
-is `exact_provider_receipt`/`exact_local_meter` — deliberately conservative,
-matching the acceptance criterion's own wording ("unless host-side cost is
-included **or exact**"). `"estimated"`/`"attested"`/`"unknown"` (and no run
-envelope at all) all report `"total_cost_incomplete"`, since those aren't
-the same reliability tier as a real receipt or meter reading.
+**Field meanings, by unit:**
 
-**`verifier_cost_ms` is now real** (a follow-up to the gap first found while
-designing this feature): `RealLeanGateway::verify_exact`/`verify_module`
-already computed `wall_time_ms`/`lean_cpu_time_ms` on every real verification
-call (see `LeanVerificationResult`), but `attempt_finalize` in
+- `*_cost_micros` — money. `host_side_cost_micros`/`host_cost_confidence` come
+  from `run_envelopes` (unchanged). `model_call_reported_cost_micros` is new:
+  real per-attempt cost data folded in from `model_call_leases` (populated by
+  `model_call_reserve`/`model_call_settle`), summed only over `status='settled'
+  AND actual_cost_micros IS NOT NULL` rows — a reserved-but-never-settled
+  lease contributes nothing, never a phantom `0`. It is ALWAYS reported at
+  `"attested"` confidence (`model_call_cost_confidence`), since it is entirely
+  self-reported by the runner/host and never independently measured or
+  receipted by ChatDB — it is never merged into an exact total.
+  `mcp_side_cost_micros`/`storage_export_cost_micros` stay `null` until a real
+  meter or an explicit rate card exists for ChatDB's own compute/storage —
+  there is none today.
+- `*_wall_time_ms`/`*_cpu_time_ms` — real time, not money.
+  `verifier_wall_time_ms`/`verifier_cpu_time_ms` sum real
+  `wall_time_ms`/`lean_cpu_time_ms` persisted on `action_attempts.lean_result_json`
+  (see below) across every attempt on every episode a run's results
+  reference — each tracked with its own "any data found" flag, since the
+  `SubmitModule` path's result type has no cpu-time field at all.
+  `mcp_handler_wall_time_ms`/`storage_export_wall_time_ms` are real
+  instrumentation not yet built (deferred).
+- `mcp_action_count` — a real count, never null (0 is a genuine count, not
+  a stand-in for "unmeasured"): the number of `action_attempts` rows across
+  the run's episodes.
+- `*_bytes` — `storage_bytes_written`/`storage_export_bytes` are real byte
+  counts, not yet instrumented (deferred).
+
+**The monetary rollup** (`known_exact_cost_micros`/`reported_attested_cost_micros`/
+`estimated_cost_micros`/`unknown_cost_present`/`cost_completeness`) never
+merges a self-reported or estimated figure into a claimed exact total:
+
+- `known_exact_cost_micros` sums only `exact_provider_receipt`/`exact_local_meter`-confidence
+  monetary amounts (currently only `host_side_cost_micros` can ever qualify).
+- `reported_attested_cost_micros` sums `"attested"`-confidence amounts —
+  `model_call_reported_cost_micros` always lands here, plus `host_side_cost_micros`
+  if its OWN confidence is `"attested"`.
+- `estimated_cost_micros` sums `"estimated"`-confidence amounts.
+- Each bucket is `null`, never `0`, when nothing qualifies for it.
+  `host_side_cost_micros` under `"unknown"` confidence (or unset) is excluded
+  from all three buckets — its reliability is explicitly unvouched-for —
+  though it still appears verbatim in the raw `host_side_cost_micros` field.
+- `unknown_cost_present` is `true` whenever `mcp_side_cost_micros` or
+  `storage_export_cost_micros` is null (always true today — zero
+  instrumentation for either) or host cost confidence is `None`/`"unknown"`.
+- `cost_completeness`: **`"total_cost_known"`** only if every material cost
+  surface is exact — `!unknown_cost_present` AND no attested/estimated amount
+  exists AND an exact amount does. Given `mcp_side_cost`/`storage_export_cost`
+  have zero instrumentation, **this state is currently unreachable in
+  practice** — the honest, intentional state until those surfaces are ever
+  instrumented, not a bug. **`"reported_total_not_exact"`** whenever some real
+  monetary signal exists (exact, attested, or estimated) but the report can't
+  vouch for a complete exact total. **`"total_cost_incomplete"`** when no
+  monetary signal exists at all.
+
+**`verifier_wall_time_ms`/`verifier_cpu_time_ms` are real** (a follow-up to
+the gap first found while designing this feature, later split into two
+fields and renamed from the original single `verifier_cost_ms`):
+`RealLeanGateway::verify_exact`/`verify_module` already computed
+`wall_time_ms`/`lean_cpu_time_ms` on every real verification call (see
+`LeanVerificationResult`), but `attempt_finalize` in
 `crates/chatdb-core/src/orchestrator/step.rs` originally discarded everything
 except the bare `LeanVerificationOutcome` enum before this data ever reached
 anywhere persistent. This turned out to need no signature change at all —
 `attempt_finalize` already receives the full `GatewayResponse` parameter, so
-the fix serializes the real result (`serde_json::to_string(&result)`) and
-persists it onto the existing, previously-never-written `action_attempts.lean_result_json`
-column entirely within the function body. `benchmark_run_observe` in
-`crates/chatdb-mcp/src/lib.rs` then sums `wall_time_ms` across every
-`action_attempts` row for every episode a run's results reference into
-`cost_summary.verifier_cost_ms` — `Some(sum)` if any attempt in the run has
-persisted timing, `null` (never fabricated as `0`) otherwise. Verified against
-the real Lean 4.32.0-rc1 + Mathlib toolchain via `examples/playtest.rs` (a
-real `True`/`trivial` episode produced `verifier_cost_ms: 9482`, real
-wall-clock milliseconds from an actual Lean process invocation) and covered
-by `test_benchmark_run_observe_aggregates_real_verifier_cost_from_persisted_attempts`.
+the fix serializes the real result and persists it onto the existing,
+previously-never-written `action_attempts.lean_result_json` column entirely
+within the function body. Verified against the real Lean 4.32.0-rc1 +
+Mathlib toolchain via `examples/playtest.rs` (a real `True`/`trivial` episode
+with a settled model-call lease and an exact host cost produced
+`verifier_wall_time_ms: 57245`, `verifier_cpu_time_ms: 57245`,
+`known_exact_cost_micros: 1000`, `reported_attested_cost_micros: 350`,
+`cost_completeness: "reported_total_not_exact"` — every figure genuine, not
+fabricated) and covered by
+`test_benchmark_run_observe_aggregates_real_verifier_cost_from_persisted_attempts`,
+`test_benchmark_run_observe_folds_in_model_call_cost_as_attested`, and
+`test_benchmark_run_observe_ignores_unsettled_model_call_leases`.
+
+**A real, non-obvious behavior found while writing the "unsettled lease"
+regression test**: calling `episode_step` for the SAME `(episode_id,
+action_attempt_id)` a `model_call_leases` row is reserved against
+auto-settles it, using that step's OWN `cost_micros` argument as
+`actual_cost_micros` (`crates/chatdb-mcp/src/lib.rs`'s `episode_step`
+handler, a pre-existing, deliberate behavior, not a bug) — a lease is not
+guaranteed to stay `'reserved'` until an explicit `model_call_settle` call;
+the very next `episode_step` on that attempt settles it implicitly. It only
+stays genuinely unsettled if that attempt is never stepped at all (e.g. the
+episode is instead terminated via `episode_close`, which never touches
+`model_call_leases`).
 
 (A separate, dead, pre-`step.rs` legacy `Orchestrator` in `orchestrator/mod.rs`
 also persists timing — into `proposal_attempts` via
@@ -331,11 +407,9 @@ from its own `#[cfg(all(test, feature = "legacy_tests"))]` test module and
 was never the reference for this fix; it genuinely isn't exercised by the
 MCP path.)
 
-`mcp_side_cost`/`storage_export_cost` still have no instrumentation at all yet
-(no code anywhere measures ChatDB's own action-processing time or
-export/storage costs) — a larger, separate design question (what's even a
-meaningful unit for "MCP-side cost" — wall-clock time in the handler? action
-count? — needs its own decision, not just wiring existing data through).
+`mcp_handler_wall_time_ms`/`storage_bytes_written`/`storage_export_bytes`/
+`storage_export_wall_time_ms`/`mcp_side_cost_micros`/`storage_export_cost_micros`
+still have no instrumentation at all yet — deferred to a future slice.
 
 `environment_build_cost` vs. `benchmark_episode_cost` is already available
 via `run_envelopes.mode` (`"development"` vs. `"benchmark"`/`"evaluation"`)
