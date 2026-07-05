@@ -310,9 +310,11 @@ shipped (v0.3.6). #29+#30 schema shipped (v0.3.7). #33+#37 shipped (v0.3.8).
 partial (bounded 13/42-tool classification audit, found and fixed a real
 trajectory_export contamination gap) shipped (v0.3.16). #34 partial (14 more
 tools classified, 27/42 total, found the model_call_leases cost-aggregation
-gap and left it as an open design question) shipped (v0.3.17). The full
-PutnamBench sprint is complete, and the first real playtest attempt has run:
-12 real
+gap and left it as an open design question) shipped (v0.3.17). #34's
+tool-classification audit reached 42/42 COMPLETE (found the episode_observe
+non-idempotence and problem_submit_fidelity_review/benchmark_results
+staleness findings) shipped (v0.3.18). The full PutnamBench sprint is
+complete, and the first real playtest attempt has run: 12 real
 problems, 1/12 (8.3%) pass@1 — see
 `docs/playtests/2026-07-04-putnambench-first-attempt.md`. Zero infra errors,
 zero panics, correct enforcement throughout; the constraint was genuine
@@ -414,6 +416,44 @@ code bugs and independently re-verified five of the new entries' claims
 directly against handler/schema code. Still open on #34: 15 of 42 tools
 remain unclassified, plus everything already noted as open from the first
 slice.
+
+**#34 — tool-classification audit: 42/42 COMPLETE.** ✅ Shipped in v0.3.18,
+the third and final slice, classifying the remaining 15 tools: `readme_first`,
+`environment_describe`, `problem_submit_fidelity_review`, `problem_list`,
+`episode_reset`, `episode_observe`, `episode_status`, `episode_close`,
+`proof_pattern_search`, `proof_pattern_record_application`, `draft_observe`,
+`draft_extract_moves`, `benchmark_suite_create`, `benchmark_problem_register`,
+`lean_declaration_lookup`. Every MCP tool ChatDB exposes now has a real,
+grounded classification entry — `classified_tool_count`/`total_tool_count`
+are both tied to the actual registered tool list (`list_res.tools.len()`),
+not a hand-maintained figure that could silently drift. Two notable,
+non-obvious findings from this slice: `episode_observe` is classified
+`mutating`, not `read_only`, despite its name — it recovers expired attempt
+claims/action requests and can mint a genuinely new action_request before
+returning, so two consecutive calls aren't guaranteed to return the same
+request id; and `problem_submit_fidelity_review` can retroactively upgrade
+an already-terminal episode's outcome from `kernel_verified` to `certified`
+(and the problem's state to `COMPLETE`) after the fact, which can leave a
+previously-recorded `benchmark_results` row silently stale (still reporting
+`kernel_verified` after the underlying episode was promoted to `certified`)
+since `benchmark_result_record` has no mechanism to re-check a result once
+recorded. Both independently confirmed by adversarial review, which found no
+code bugs in this slice. Verified against the real Lean 4.32.0-rc1 + Mathlib
+toolchain via `playtest.rs`.
+**Note on what "complete" means here**: `classified_tool_count ==
+total_tool_count` now, but classification is a snapshot, not a standing
+guarantee — it needs re-checking as tools change, and several entries record
+open design questions rather than closed answers (`unresolved_design_question`
+fields on `benchmark_result_record`, `problem_create`, `run_envelope_attach_episode`,
+`model_call_reserve`). Of #34's other acceptance criteria: the read-me-first
+tool (`readme_first`) and the docs on trust boundary/cost surfaces were
+already in place before this audit; the run-envelope requirement shipped in
+v0.3.13; the benchmark-mode source-mutation guardrail remains moot (no MCP
+tool edits source files); the cost accounting fields
+(`host_side_cost`/`verifier_cost`/`mcp_side_cost`/`storage_cost`) are still
+only partially wired (see #38 below) — full closure of #34 is still gated on
+that cost-accounting work and a decision on the two lingering design
+questions above.
 
 **#38 (partial) — cost-completeness marking for benchmark reports.** ✅
 Shipped in v0.3.14, one small bounded slice of #38's larger 7-bucket ask
