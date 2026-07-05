@@ -317,8 +317,13 @@ staleness findings) shipped (v0.3.18). #41 (multi-line proof_term tactic-
 block splicing, found via the playtest below) fixed at the source and
 CLOSED, including a real gap an adversarial review caught in the first pass
 (the SubmitModule root theorem was still exposed to the bug) shipped
-(v0.3.19). The full PutnamBench sprint is complete, and the first real
-playtest attempt has run: 12 real
+(v0.3.19). #38's cost policy redesigned per explicit product direction
+(metrics-first units, model_call_leases folded in as attested cost, a
+three-tier monetary rollup that never merges attested/estimated into an
+exact total) shipped (v0.3.20), including a real auto-settle-on-episode_step
+behavior found while fixing an adversarial-review-caught vacuous test. The
+full PutnamBench sprint is complete, and the first real playtest attempt has
+run: 12 real
 problems, 1/12 (8.3%) pass@1 — see
 `docs/playtests/2026-07-04-putnambench-first-attempt.md`. Zero infra errors,
 zero panics, correct enforcement throughout; the constraint was genuine
@@ -540,6 +545,58 @@ report the full real time — deemed acceptable since it isn't fabrication,
 just not run-exclusive, and isn't how episodes/runs are normally created).
 Still open for #38: `mcp_side_cost`/`storage_export_cost` remain fully
 uninstrumented, with no decided unit of measurement yet.
+
+**#38 (partial, cost policy v2) — metrics-first redesign + model-call cost
+folded in.** ✅ Shipped in v0.3.20, per an explicit, detailed product spec
+(not guessed at) resolving the "no decided unit of measurement" gap noted
+above. Full field list and semantics in `docs/benchmarks/putnambench.md`'s
+"Cost surfaces" section. Highlights: `verifier_cost_ms` split into
+`verifier_wall_time_ms`/`verifier_cpu_time_ms` (the `SubmitModule` result
+type has no cpu-time field, so each is tracked with its own independent
+"found any data" flag); a new, always-present `mcp_action_count` (0 is a
+genuine count, not a stand-in for unmeasured); `model_call_leases`' real
+per-attempt self-reported cost (issue #34's earlier audit finding) is now
+folded in as `model_call_reported_cost_micros`, always at `"attested"`
+confidence, summed only over `status='settled' AND actual_cost_micros IS
+NOT NULL` rows so a reserved-but-never-settled lease contributes nothing;
+a three-tier monetary rollup
+(`known_exact_cost_micros`/`reported_attested_cost_micros`/`estimated_cost_micros`/
+`unknown_cost_present`) that never merges an attested/estimated figure into
+an exact total; `cost_completeness` now three-valued
+(`total_cost_known`/`reported_total_not_exact`/`total_cost_incomplete`),
+with `total_cost_known` intentionally unreachable in practice today since
+`mcp_side_cost`/`storage_export_cost` still have zero instrumentation.
+`mcp_handler_wall_time_ms`/`storage_bytes_written`/`storage_export_bytes`/
+`storage_export_wall_time_ms` remain deferred (real instrumentation not yet
+built, explicitly `null`, never fabricated).
+
+Two real findings surfaced while building and testing this:
+1. An adversarial review caught that the first version of the "unsettled
+   model-call lease" regression test passed vacuously — it never actually
+   linked its episode into the run's results, so the aggregation loop never
+   ran against it. Fixed by making the episode conclude and genuinely
+   linking it via `benchmark_result_record`'s `episode_id`.
+2. Re-running the fixed test surfaced a second, genuinely new, non-obvious
+   real behavior (not a bug): calling `episode_step` for the same
+   `(episode_id, action_attempt_id)` a lease is reserved against
+   auto-settles it, using that step's own `cost_micros` argument as
+   `actual_cost_micros` — a lease only stays genuinely `'reserved'` if its
+   attempt is never stepped at all (e.g. the episode is terminated via
+   `episode_close` instead, which never touches `model_call_leases`). Now
+   documented in the `model_call_reserve`/`model_call_settle` tool
+   classification entries.
+
+Verified against the real Lean 4.32.0-rc1 + Mathlib toolchain via
+`playtest.rs`: a real episode with an exact host cost (1000), a settled
+model-call lease (350), and a real `True`/`trivial` proof produced
+`verifier_wall_time_ms: 57245`, `known_exact_cost_micros: 1000`,
+`reported_attested_cost_micros: 350`, `model_call_cost_confidence:
+"attested"`, `cost_completeness: "reported_total_not_exact"` — every figure
+genuine. Two rounds of independent adversarial review: the first caught the
+vacuous test; a follow-up review confirmed the fix and the auto-settle
+finding directly against the handler code. Still open for #38:
+`mcp_side_cost`/`storage_export_cost` (and their supporting metrics) remain
+fully uninstrumented.
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
