@@ -288,9 +288,9 @@ real:
   "host_side_cost_micros": 100,
   "host_cost_confidence": "exact_local_meter",
   "mcp_side_cost_micros": null,
-  "verifier_cost_ms": null,
+  "verifier_cost_ms": 9482,
   "storage_export_cost_micros": null,
-  "unknown_external_cost": "mcp_side_cost/verifier_cost/storage_export_cost are not yet instrumented — a known gap (issue #38), never silently reported as zero",
+  "unknown_external_cost": "mcp_side_cost/storage_export_cost are not yet instrumented — a known gap (issue #38), never silently reported as zero. verifier_cost_ms is real (summed Lean wall-clock time from action_attempts.lean_result_json) when present, null if no attempt in this run has recorded timing yet",
   "cost_completeness": "host_cost_known"
 }
 ```
@@ -302,39 +302,36 @@ included **or exact**"). `"estimated"`/`"attested"`/`"unknown"` (and no run
 envelope at all) all report `"total_cost_incomplete"`, since those aren't
 the same reliability tier as a real receipt or meter reading.
 
-**A real, previously-undiscovered gap found while designing this**:
-`RealLeanGateway::verify_exact`/`verify_module` already compute
-`wall_time_ms`/`lean_cpu_time_ms` on every real verification call (see
-`LeanVerificationResult`) — genuine, already-measured data for exactly what
-`verifier_cost` needs. But `crates/chatdb-core/src/orchestrator/step.rs`'s
-`attempt_finalize` — the real, active path `episode_step` uses — only
-returns the bare `LeanVerificationOutcome` enum, discarding every other
-field of the result, including this timing data, before it ever reaches
-anywhere persistent. So `verifier_cost` cannot yet be wired up as "sum of
-already-recorded timings" the way this session's other "vestigial data"
-findings worked — the data is computed but never survives past the function
-that measures it. (A separate, dead, pre-`step.rs` legacy `Orchestrator` in
-`orchestrator/mod.rs` DOES persist this timing — into `proposal_attempts`
-via `AttemptDiagnostic`/`db::insert_attempt`, not into
-`episode_budget_ledger`, which despite being a real table in the schema is
-never written to by anything, anywhere — but that whole `Orchestrator` is
-only ever constructed from its own `#[cfg(all(test, feature = "legacy_tests"))]`
-test module, confirmed by grepping the repo for `Orchestrator::new`; it
-genuinely isn't exercised by the MCP path, so there's no working reference
-implementation to adapt from there either.)
+**`verifier_cost_ms` is now real** (a follow-up to the gap first found while
+designing this feature): `RealLeanGateway::verify_exact`/`verify_module`
+already computed `wall_time_ms`/`lean_cpu_time_ms` on every real verification
+call (see `LeanVerificationResult`), but `attempt_finalize` in
+`crates/chatdb-core/src/orchestrator/step.rs` originally discarded everything
+except the bare `LeanVerificationOutcome` enum before this data ever reached
+anywhere persistent. This turned out to need no signature change at all —
+`attempt_finalize` already receives the full `GatewayResponse` parameter, so
+the fix serializes the real result (`serde_json::to_string(&result)`) and
+persists it onto the existing, previously-never-written `action_attempts.lean_result_json`
+column entirely within the function body. `benchmark_run_observe` in
+`crates/chatdb-mcp/src/lib.rs` then sums `wall_time_ms` across every
+`action_attempts` row for every episode a run's results reference into
+`cost_summary.verifier_cost_ms` — `Some(sum)` if any attempt in the run has
+persisted timing, `null` (never fabricated as `0`) otherwise. Verified against
+the real Lean 4.32.0-rc1 + Mathlib toolchain via `examples/playtest.rs` (a
+real `True`/`trivial` episode produced `verifier_cost_ms: 9482`, real
+wall-clock milliseconds from an actual Lean process invocation) and covered
+by `test_benchmark_run_observe_aggregates_real_verifier_cost_from_persisted_attempts`.
 
-Wiring this up for real requires: extending `attempt_finalize`'s return
-value (or adding an out-parameter) to surface the timing fields alongside
-the outcome, propagating them through `run_step_post_processing`'s
-`PostProcessing` struct in `crates/chatdb-mcp/src/lib.rs`, persisting them
-somewhere durable (a new `action_attempts` column, or the trajectory
-event's `payload_json`), and aggregating across an episode/run for
-`verifier_cost_ms`. That's a real, moderate-sized change touching multiple
-function signatures across two crates — scoped out of this pass
-deliberately (matching how #34's remaining tool-classification audit was
-scoped out) rather than force it in at the tail of an already long session.
+(A separate, dead, pre-`step.rs` legacy `Orchestrator` in `orchestrator/mod.rs`
+also persists timing — into `proposal_attempts` via
+`AttemptDiagnostic`/`db::insert_attempt`, not into `episode_budget_ledger`,
+which despite being a real table in the schema is never written to by
+anything, anywhere — but that whole `Orchestrator` is only ever constructed
+from its own `#[cfg(all(test, feature = "legacy_tests"))]` test module and
+was never the reference for this fix; it genuinely isn't exercised by the
+MCP path.)
 
-`mcp_side_cost`/`storage_export_cost` have no instrumentation at all yet
+`mcp_side_cost`/`storage_export_cost` still have no instrumentation at all yet
 (no code anywhere measures ChatDB's own action-processing time or
 export/storage costs) — a larger, separate design question (what's even a
 meaningful unit for "MCP-side cost" — wall-clock time in the handler? action
