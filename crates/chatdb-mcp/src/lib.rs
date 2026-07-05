@@ -2144,7 +2144,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.19"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.20"))
     }
 
     async fn list_tools(
@@ -2194,7 +2194,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise"),
             make_tool::<BenchmarkRunCreateArgs>("benchmark_run_create", "Create a benchmark run against a suite. Requires an existing run_envelope_id (call run_envelope_create first — a run should not start unassociated with host/mode/cost tracking). lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results"),
             make_tool::<BenchmarkResultRecordArgs>("benchmark_result_record", "Record (or update) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem"),
-            make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric. cost_summary's cost_completeness is 'host_cost_known' only when host-side cost confidence is exact_provider_receipt/exact_local_meter, else 'total_cost_incomplete' — mcp_side/verifier/storage_export costs are not yet instrumented and are never reported as zero"),
+            make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric. cost_summary separates real metrics (verifier_wall_time_ms/verifier_cpu_time_ms/mcp_action_count — always attempted, never null when data exists) from monetary cost (*_cost_micros fields, null unless real money data or a rate card exists). cost_completeness is 'total_cost_known' only when every material cost surface is exact (currently unreachable: mcp_side/storage_export costs have no instrumentation at all), 'reported_total_not_exact' when some real monetary signal exists (exact/attested/estimated) but not a complete exact total, else 'total_cost_incomplete'"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -2235,7 +2235,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.19",
+                    "environment_version": "0.3.20",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -2307,7 +2307,7 @@ impl ServerHandler for ChatDbMcp {
                             "episode_replay": {
                                 "side_effect": "read_only — re-executes the reducer in-memory against recorded events, writes nothing new",
                                 "trust_level": "verifier_backed — re-runs the SAME real Lean verification the original attempt used, doesn't trust the stored outcome blindly",
-                                "cost_surface": "verifier_side — a real second Lean invocation per replayed verification step, currently uncounted in cost_summary.verifier_cost_ms (which only sums the ORIGINAL attempt_finalize writes, not replay re-verifications)",
+                                "cost_surface": "verifier_side — a real second Lean invocation per replayed verification step, currently uncounted in cost_summary.verifier_wall_time_ms/verifier_cpu_time_ms (which only sum the ORIGINAL attempt_finalize writes, not replay re-verifications)",
                                 "benchmark_safety": "safe_public_output — returns only audit_passed/events_replayed/replay_status, never proof content",
                                 "replayability": "deterministic given a pinned Lean/Mathlib toolchain; a toolchain upgrade could change the outcome, which is itself the point (detecting drift)",
                                 "source_code_impact": "no_source_change",
@@ -2409,18 +2409,18 @@ impl ServerHandler for ChatDbMcp {
                             "model_call_reserve": {
                                 "side_effect": "mutating — inserts a model_call_leases row, checked-out against an episode's remaining cost_budget_micros",
                                 "trust_level": "untrusted_input — declared_model/runner_id/max_input_tokens/max_output_tokens are entirely client-asserted, not independently verified by ChatDB",
-                                "cost_surface": "host_side — reserves budget for what will become a HOST-reported model-call cost, distinct from run_envelopes.host_side_cost_micros (one aggregate figure per run) and from verifier_side cost (real, ChatDB-measured Lean timing)",
+                                "cost_surface": "host_side — reserves budget for what will become a HOST-reported model-call cost, distinct from run_envelopes.host_side_cost_micros (one aggregate figure per run) and from verifier_side cost (real, ChatDB-measured Lean timing). Now (v0.3.20) folded into benchmark_run_observe's cost_summary as model_call_reported_cost_micros, always at 'attested' confidence, never merged into an exact total",
                                 "benchmark_safety": "safe_public_output — a budget reservation, no proof content",
                                 "replayability": "deterministic given recorded state, but the reservation itself has no external effect to replay (no real model call happens through this tool — it only manages ChatDB's own ledger)",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
                                 "required_run_mode": "any",
-                                "unresolved_design_question": "a REAL, previously-undiscovered gap surfaced by this audit, structurally similar to the verifier_cost gap v0.3.15 fixed: model_call_leases already stores a granular, per-attempt cost figure (reserved_cost_micros, then actual_cost_micros once settled) but benchmark_run_observe's cost_summary never aggregates it at all today — it's invisible to any benchmark report. Unlike verifier_cost, this data is untrusted_input (self-reported by the caller, not measured by ChatDB), so folding it into cost_summary raises the same host_cost_confidence question run_envelopes already models explicitly — it is NOT simply 'sum it like verifier_cost' without deciding how its trust tier interacts with host_side_cost_confidence. Left undecided deliberately rather than wired in guessing at the answer."
+                                "note": "a REAL, non-obvious interaction found while writing the regression test for the aggregation above (not a bug — a genuine, pre-existing step.rs::attempt_finalize behavior): calling episode_step for the SAME (episode_id, action_attempt_id) this lease is reserved against auto-settles it, using that step's OWN cost_micros argument as actual_cost_micros — a lease is NOT guaranteed to stay 'reserved' until an explicit model_call_settle call; the very next episode_step on that attempt settles it implicitly, using a value the caller may not have intended as the model-call cost specifically (episode_step's cost_micros is the episode's own general bookkeeping figure, reused here for lease settlement too). A lease only stays genuinely unsettled if its attempt is never stepped at all (e.g. the episode is instead terminated via episode_close, which does not touch model_call_leases)."
                             },
                             "model_call_settle": {
-                                "side_effect": "mutating — updates the lease's status/actual_cost_micros/settled_at, and (if status='settled') decrements the episode's cost_budget_micros",
+                                "side_effect": "mutating — updates the lease's status/actual_cost_micros/settled_at, and (if status='settled') decrements the episode's cost_budget_micros. Note: this is not the ONLY way a lease reaches 'settled' — see model_call_reserve's note on episode_step's own auto-settle behavior for the same (episode_id, action_attempt_id) pair",
                                 "trust_level": "untrusted_input — actual_cost_micros is exactly as self-reported as the reservation was; nothing here upgrades it to verifier_backed or measured",
-                                "cost_surface": "host_side — see model_call_reserve's unresolved_design_question; this is the tool that would produce the real number IF that question were answered and wiring were built",
+                                "cost_surface": "host_side — now (v0.3.20) aggregated into benchmark_run_observe's cost_summary as model_call_reported_cost_micros, always at 'attested' confidence",
                                 "benchmark_safety": "safe_public_output",
                                 "replayability": "deterministic given recorded state",
                                 "source_code_impact": "no_source_change",
@@ -2680,7 +2680,7 @@ impl ServerHandler for ChatDbMcp {
                             "lean_declaration_lookup": {
                                 "side_effect": "read_only — no DB write; the DB mutex is deliberately released BEFORE the real (potentially 15-40+ second) Lean invocation, matching this codebase's convention of not stalling other concurrent tool calls on a slow operation",
                                 "trust_level": "verifier_backed — this is a REAL Lean toolchain query (self.gateway.lookup_declarations), not a heuristic guess; the result reflects what the pinned Lean/Mathlib environment actually resolves under the given import manifest",
-                                "cost_surface": "verifier_side — a real Lean process invocation, currently uncounted anywhere in cost_summary.verifier_cost_ms (which only sums attempt_finalize's episode_step writes, not this tool's independent lookups)",
+                                "cost_surface": "verifier_side — a real Lean process invocation, currently uncounted anywhere in cost_summary.verifier_wall_time_ms/verifier_cpu_time_ms (which only sum attempt_finalize's episode_step writes, not this tool's independent lookups)",
                                 "benchmark_safety": "safe_public_output — declaration name/status/diagnostics only, never a proof body",
                                 "replayability": "deterministic given a pinned Lean/Mathlib toolchain and import manifest; explicitly scoped to only the queried problem's own manifest by default (deep_check=true trades speed for a conclusive full-Mathlib-umbrella verdict) — a fast negative result does not by itself prove the declaration is absent from the library, a documented epistemic caveat surfaced in environment_describe's own epistemic_rules",
                                 "source_code_impact": "no_source_change",
@@ -4948,30 +4948,65 @@ impl ServerHandler for ChatDbMcp {
                 }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
                 let results: Vec<serde_json::Value> = rows.iter().map(|(v, _)| v.clone()).collect();
 
-                // Issue #38's verifier_cost: sum the real Lean invocation
-                // timing (wall_time_ms) persisted on action_attempts.lean_result_json
-                // (see step.rs::attempt_finalize) across every attempt on
-                // every episode this run's results reference. None when no
-                // episode in this run has any persisted timing at all — an
-                // honest "not available," never fabricated as zero.
+                // Issue #38's cost policy (redesigned after real product
+                // direction): verifier_wall_time_ms/verifier_cpu_time_ms sum
+                // the real Lean invocation timing persisted on
+                // action_attempts.lean_result_json (see
+                // step.rs::attempt_finalize) across every attempt on every
+                // episode this run's results reference. Each is tracked with
+                // its own "found any data" flag since LeanModuleVerificationResult
+                // (the SubmitModule path) has no cpu-time field at all — an
+                // attempt can contribute wall time without contributing cpu
+                // time. mcp_action_count is a real, always-available count
+                // (0 is a genuine count, not a stand-in for "unmeasured").
                 let mut verifier_wall_time_ms_total: i64 = 0;
-                let mut verifier_cost_data_found = false;
+                let mut verifier_wall_time_found = false;
+                let mut verifier_cpu_time_ms_total: i64 = 0;
+                let mut verifier_cpu_time_found = false;
+                let mut mcp_action_count: i64 = 0;
                 for episode_id in rows.iter().filter_map(|(_, ep)| ep.as_ref()) {
                     let mut jstmt = conn.prepare(
-                        "SELECT lean_result_json FROM action_attempts WHERE episode_id = ?1 AND lean_result_json IS NOT NULL"
+                        "SELECT lean_result_json FROM action_attempts WHERE episode_id = ?1"
                     ).map_err(rs)?;
-                    let jsons: Vec<String> = jstmt.query_map([episode_id], |row| row.get(0))
+                    let jsons: Vec<Option<String>> = jstmt.query_map([episode_id], |row| row.get(0))
                         .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
-                    for j in &jsons {
+                    mcp_action_count += jsons.len() as i64;
+                    for j in jsons.iter().flatten() {
                         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(j) {
                             if let Some(wall_ms) = parsed.get("wall_time_ms").and_then(|v| v.as_i64()) {
                                 verifier_wall_time_ms_total += wall_ms;
-                                verifier_cost_data_found = true;
+                                verifier_wall_time_found = true;
+                            }
+                            if let Some(cpu_ms) = parsed.get("lean_cpu_time_ms").and_then(|v| v.as_i64()) {
+                                verifier_cpu_time_ms_total += cpu_ms;
+                                verifier_cpu_time_found = true;
                             }
                         }
                     }
                 }
-                let verifier_cost_ms: Option<i64> = if verifier_cost_data_found { Some(verifier_wall_time_ms_total) } else { None };
+                let verifier_wall_time_ms: Option<i64> = if verifier_wall_time_found { Some(verifier_wall_time_ms_total) } else { None };
+                let verifier_cpu_time_ms: Option<i64> = if verifier_cpu_time_found { Some(verifier_cpu_time_ms_total) } else { None };
+
+                // model_call_reported_cost_micros: real per-attempt cost data
+                // already stored in model_call_leases (issue #34's audit
+                // finding), but ALWAYS self-reported by the runner/host, never
+                // independently measured by ChatDB — so it is bucketed at
+                // "attested" confidence, never merged into an exact total.
+                let mut model_call_cost_total: i64 = 0;
+                let mut model_call_cost_found = false;
+                for episode_id in rows.iter().filter_map(|(_, ep)| ep.as_ref()) {
+                    let mut mstmt = conn.prepare(
+                        "SELECT actual_cost_micros FROM model_call_leases WHERE episode_id = ?1 AND status = 'settled' AND actual_cost_micros IS NOT NULL"
+                    ).map_err(rs)?;
+                    let amounts: Vec<i64> = mstmt.query_map([episode_id], |row| row.get(0))
+                        .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+                    for a in amounts {
+                        model_call_cost_total += a;
+                        model_call_cost_found = true;
+                    }
+                }
+                let model_call_reported_cost_micros: Option<i64> = if model_call_cost_found { Some(model_call_cost_total) } else { None };
+                let model_call_cost_confidence: Option<&str> = if model_call_cost_found { Some("attested") } else { None };
 
                 let is_solved = |r: &serde_json::Value| matches!(r["status"].as_str(), Some("kernel_verified") | Some("certified"));
                 let solved = results.iter().filter(|r| is_solved(r)).count();
@@ -4999,17 +5034,13 @@ impl ServerHandler for ChatDbMcp {
                     "average_attempts_per_result": if total > 0 { total_attempts as f64 / total as f64 } else { 0.0 },
                 });
 
-                // Issue #38: "public benchmark reports never present
-                // MCP-visible cost as total cost unless host-side cost is
-                // included or exact." host_side_cost_micros/host_cost_confidence
-                // are the only cost surface actually tracked today —
-                // mcp_side/verifier/storage_export costs have no
-                // instrumentation yet (a known, documented gap, not silently
-                // implied as zero). cost_completeness is honest about which
-                // dimension it covers: "total_cost_incomplete" whenever the
-                // host-side figure isn't itself known with confidence,
-                // "host_cost_known" when it is — never claims a genuine
-                // all-surfaces total, since most surfaces aren't tracked.
+                // Issue #38's cost policy, redesigned per explicit product
+                // direction: metrics first (time/count/bytes are real,
+                // reported honestly), monetary cost fields (*_cost_micros)
+                // ONLY populated when real money data exists, and a
+                // three-tier monetary rollup that never merges a
+                // self-reported (attested) or estimated figure into an
+                // "exact total" claim.
                 let (host_side_cost_micros, host_cost_confidence): (Option<i64>, Option<String>) = match &run_envelope_id {
                     Some(env_id) => conn.query_row(
                         "SELECT host_side_cost_micros, host_cost_confidence FROM run_envelopes WHERE id = ?1",
@@ -5017,25 +5048,81 @@ impl ServerHandler for ChatDbMcp {
                     ).optional().map_err(rs)?.unwrap_or((None, None)),
                     None => (None, None),
                 };
-                // Deliberately conservative: only the two "exact_*" confidence
-                // levels count as "host cost known" — the acceptance
-                // criterion's own wording is "unless host-side cost is
-                // included or exact." "estimated"/"attested" are real,
-                // useful signals but not the same reliability tier as a
-                // real receipt or meter reading, so they still mark the
-                // report incomplete rather than implying a firm total.
-                let cost_completeness = match host_cost_confidence.as_deref() {
-                    Some("exact_provider_receipt") | Some("exact_local_meter") => "host_cost_known",
-                    _ => "total_cost_incomplete",
+
+                // Bucket every known monetary figure by its own confidence
+                // tier. "unknown"-confidence host cost is deliberately
+                // excluded from every bucket (its reliability is explicitly
+                // unvouched-for) but still surfaced verbatim in
+                // host_side_cost_micros for transparency.
+                let mut known_exact_cost_micros: Option<i64> = None;
+                let mut reported_attested_cost_micros: Option<i64> = None;
+                let mut estimated_cost_micros: Option<i64> = None;
+                if let Some(amount) = host_side_cost_micros {
+                    match host_cost_confidence.as_deref() {
+                        Some("exact_provider_receipt") | Some("exact_local_meter") => {
+                            known_exact_cost_micros = Some(known_exact_cost_micros.unwrap_or(0) + amount);
+                        }
+                        Some("estimated") => {
+                            estimated_cost_micros = Some(estimated_cost_micros.unwrap_or(0) + amount);
+                        }
+                        Some("attested") => {
+                            reported_attested_cost_micros = Some(reported_attested_cost_micros.unwrap_or(0) + amount);
+                        }
+                        _ => {} // "unknown" or unset: real number, unvouched reliability — not bucketed.
+                    }
+                }
+                if let Some(amount) = model_call_reported_cost_micros {
+                    // model_call_reported_cost_micros is always "attested" tier today
+                    // (no mechanism yet to attach a provider receipt to a lease).
+                    reported_attested_cost_micros = Some(reported_attested_cost_micros.unwrap_or(0) + amount);
+                }
+
+                // mcp_side_cost_micros/storage_export_cost_micros have no meter
+                // or rate card yet — always null, never fabricated as zero.
+                // Their absence alone is enough to keep unknown_cost_present
+                // true until real instrumentation lands for them.
+                let mcp_side_cost_micros: Option<i64> = None;
+                let storage_export_cost_micros: Option<i64> = None;
+                let unknown_cost_present = mcp_side_cost_micros.is_none()
+                    || storage_export_cost_micros.is_none()
+                    || matches!(host_cost_confidence.as_deref(), None | Some("unknown"));
+
+                // total_cost_known requires EVERY material cost surface to be
+                // exact — currently unreachable in practice, since mcp_side/
+                // storage_export costs have no instrumentation at all yet;
+                // that's the honest, correct state until they do.
+                // reported_total_not_exact: some real monetary signal exists
+                // (exact, attested, or estimated) but the report can't yet
+                // vouch for a complete exact total.
+                // total_cost_incomplete: no monetary signal at all.
+                let cost_completeness = if !unknown_cost_present && estimated_cost_micros.is_none() && reported_attested_cost_micros.is_none() && known_exact_cost_micros.is_some() {
+                    "total_cost_known"
+                } else if known_exact_cost_micros.is_some() || reported_attested_cost_micros.is_some() || estimated_cost_micros.is_some() {
+                    "reported_total_not_exact"
+                } else {
+                    "total_cost_incomplete"
                 };
+
                 let cost_summary = serde_json::json!({
                     "host_side_cost_micros": host_side_cost_micros,
                     "host_cost_confidence": host_cost_confidence,
-                    "mcp_side_cost_micros": serde_json::Value::Null,
-                    "verifier_cost_ms": verifier_cost_ms,
-                    "storage_export_cost_micros": serde_json::Value::Null,
-                    "unknown_external_cost": "mcp_side_cost/storage_export_cost are not yet instrumented — a known gap (issue #38), never silently reported as zero. verifier_cost_ms is real (summed Lean wall-clock time from action_attempts.lean_result_json) when present, null if no attempt in this run has recorded timing yet",
+                    "model_call_reported_cost_micros": model_call_reported_cost_micros,
+                    "model_call_cost_confidence": model_call_cost_confidence,
+                    "verifier_wall_time_ms": verifier_wall_time_ms,
+                    "verifier_cpu_time_ms": verifier_cpu_time_ms,
+                    "mcp_action_count": mcp_action_count,
+                    "mcp_handler_wall_time_ms": serde_json::Value::Null,
+                    "mcp_side_cost_micros": mcp_side_cost_micros,
+                    "storage_bytes_written": serde_json::Value::Null,
+                    "storage_export_bytes": serde_json::Value::Null,
+                    "storage_export_wall_time_ms": serde_json::Value::Null,
+                    "storage_export_cost_micros": storage_export_cost_micros,
+                    "known_exact_cost_micros": known_exact_cost_micros,
+                    "reported_attested_cost_micros": reported_attested_cost_micros,
+                    "estimated_cost_micros": estimated_cost_micros,
+                    "unknown_cost_present": unknown_cost_present,
                     "cost_completeness": cost_completeness,
+                    "not_yet_instrumented": "mcp_handler_wall_time_ms, storage_bytes_written, storage_export_bytes, storage_export_wall_time_ms, mcp_side_cost_micros, storage_export_cost_micros are not yet instrumented — never reported as zero. model_call_reported_cost_micros is real per-attempt data from model_call_leases but always self-reported (attested), never independently measured by ChatDB.",
                 });
 
                 let res = serde_json::json!({
@@ -8239,9 +8326,14 @@ mod tests {
         assert!(ok.is_ok(), "a real run_envelope_id must be accepted: {:?}", ok.err());
     }
 
-    /// Issue #38: "public benchmark reports never present MCP-visible cost
-    /// as total cost unless host-side cost is included or exact" / "a run
-    /// with unknown host cost is marked total_cost_incomplete."
+    /// Issue #38's cost policy, redesigned per explicit product direction:
+    /// three-tier monetary completeness (total_cost_known /
+    /// reported_total_not_exact / total_cost_incomplete), never merging an
+    /// attested/estimated figure into a claimed exact total. `total_cost_known`
+    /// requires EVERY material cost surface to be exact — currently
+    /// unreachable in practice since mcp_side_cost/storage_export_cost have
+    /// no instrumentation at all yet, which is the intentional, honest state
+    /// until they do (see the third case below).
     #[tokio::test]
     async fn test_benchmark_run_observe_marks_cost_completeness_from_host_confidence() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
@@ -8258,11 +8350,19 @@ mod tests {
         let observed_unknown = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
             "run_id": run_unknown["run_id"],
         }).as_object().unwrap().clone())).await.unwrap());
-        assert_eq!(observed_unknown["cost_summary"]["cost_completeness"], "total_cost_incomplete");
+        assert_eq!(observed_unknown["cost_summary"]["cost_completeness"], "total_cost_incomplete",
+            "no monetary signal at all (no host cost, no model-call cost) must report incomplete, not a made-up middle state");
         assert!(observed_unknown["cost_summary"]["mcp_side_cost_micros"].is_null(),
             "un-instrumented cost surfaces must be null, never silently reported as zero");
+        assert!(observed_unknown["cost_summary"]["known_exact_cost_micros"].is_null());
+        assert!(observed_unknown["cost_summary"]["reported_attested_cost_micros"].is_null());
+        assert!(observed_unknown["cost_summary"]["estimated_cost_micros"].is_null());
+        assert_eq!(observed_unknown["cost_summary"]["unknown_cost_present"], true);
 
-        // "estimated" confidence: still incomplete -- only exact_* counts.
+        // "estimated" confidence: a REAL monetary signal exists now, just not
+        // an exact one -- this is the honest middle tier, not "incomplete"
+        // (which should mean "we know nothing"), and not "known" (which
+        // would overstate an estimate's reliability).
         let estimated_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
             "mode": "benchmark", "host_name": "test-host", "host_side_cost_micros": 100, "host_cost_confidence": "estimated",
         }).as_object().unwrap().clone())).await.unwrap());
@@ -8272,10 +8372,18 @@ mod tests {
         let observed_estimated = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
             "run_id": run_estimated["run_id"],
         }).as_object().unwrap().clone())).await.unwrap());
-        assert_eq!(observed_estimated["cost_summary"]["cost_completeness"], "total_cost_incomplete",
-            "an estimate is not the same reliability tier as a real receipt/meter reading");
+        assert_eq!(observed_estimated["cost_summary"]["cost_completeness"], "reported_total_not_exact",
+            "an estimate is real signal, not nothing, but is not the same reliability tier as a real receipt/meter reading");
+        assert_eq!(observed_estimated["cost_summary"]["estimated_cost_micros"], 100);
+        assert!(observed_estimated["cost_summary"]["known_exact_cost_micros"].is_null(),
+            "an estimated figure must never be counted toward the exact bucket");
 
-        // exact_local_meter: host cost known.
+        // exact_local_meter: host cost itself is exact, but mcp_side_cost/
+        // storage_export_cost still have zero instrumentation today, so the
+        // report as a WHOLE still cannot claim total_cost_known -- that state
+        // is intentionally unreachable until those surfaces are instrumented,
+        // exactly the point of never conflating "one surface is exact" with
+        // "the total is known."
         let exact_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
             "mode": "benchmark", "host_name": "test-host", "host_side_cost_micros": 100, "host_cost_confidence": "exact_local_meter",
         }).as_object().unwrap().clone())).await.unwrap());
@@ -8285,8 +8393,10 @@ mod tests {
         let observed_exact = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
             "run_id": run_exact["run_id"],
         }).as_object().unwrap().clone())).await.unwrap());
-        assert_eq!(observed_exact["cost_summary"]["cost_completeness"], "host_cost_known");
+        assert_eq!(observed_exact["cost_summary"]["known_exact_cost_micros"], 100);
         assert_eq!(observed_exact["cost_summary"]["host_side_cost_micros"], 100);
+        assert_eq!(observed_exact["cost_summary"]["cost_completeness"], "reported_total_not_exact",
+            "total_cost_known must stay unreachable while mcp_side_cost/storage_export_cost remain uninstrumented, even with an exact host figure");
     }
 
     /// Issue #38's verifier_cost groundwork: a real, previously-undiscovered
@@ -8296,8 +8406,8 @@ mod tests {
     /// the outcome enum before this fix. Confirms the full pipeline:
     /// attempt_finalize persists the raw result onto
     /// action_attempts.lean_result_json, and benchmark_run_observe sums
-    /// wall_time_ms across every attempt on the episode into
-    /// cost_summary.verifier_cost_ms.
+    /// wall_time_ms/lean_cpu_time_ms across every attempt on the episode into
+    /// cost_summary.verifier_wall_time_ms/verifier_cpu_time_ms.
     #[tokio::test]
     async fn test_benchmark_run_observe_aggregates_real_verifier_cost_from_persisted_attempts() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
@@ -8348,11 +8458,152 @@ mod tests {
         let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
             "run_id": run["run_id"],
         }).as_object().unwrap().clone())).await.unwrap());
-        // MockGateway reports wall_time_ms=1 per verification call; 2 real
-        // attempts on this episode -> verifier_cost_ms must be 2, not null,
-        // not 0 by coincidence.
-        assert_eq!(observed["cost_summary"]["verifier_cost_ms"], 2,
-            "verifier_cost_ms must sum real persisted timing across every attempt on the episode: {:?}", observed["cost_summary"]);
+        // MockGateway reports wall_time_ms=1 and lean_cpu_time_ms=1 per
+        // verification call; 2 real attempts on this episode -> both sums
+        // must be 2, not null, not 0 by coincidence. mcp_action_count is a
+        // real, always-present count (not gated on any "found" flag) of
+        // every action_attempts row for this episode.
+        assert_eq!(observed["cost_summary"]["verifier_wall_time_ms"], 2,
+            "verifier_wall_time_ms must sum real persisted timing across every attempt on the episode: {:?}", observed["cost_summary"]);
+        assert_eq!(observed["cost_summary"]["verifier_cpu_time_ms"], 2,
+            "verifier_cpu_time_ms must sum real persisted cpu timing across every attempt on the episode: {:?}", observed["cost_summary"]);
+        assert_eq!(observed["cost_summary"]["mcp_action_count"], 2,
+            "mcp_action_count must be a real count of action_attempts, not gated on any timing data being present: {:?}", observed["cost_summary"]);
+    }
+
+    /// Issue #34/#38's model_call_leases finding, now wired in per explicit
+    /// product direction: real per-attempt self-reported model-call cost is
+    /// folded into benchmark_run_observe as model_call_reported_cost_micros,
+    /// ALWAYS at "attested" confidence (never independently measured by
+    /// ChatDB) — so it must land in reported_attested_cost_micros, never
+    /// known_exact_cost_micros, and its presence must keep cost_completeness
+    /// at reported_total_not_exact even when the host-side figure is
+    /// separately exact.
+    #[tokio::test]
+    async fn test_benchmark_run_observe_folds_in_model_call_cost_as_attested() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "benchmark", "host_name": "test-host", "host_side_cost_micros": 500, "host_cost_confidence": "exact_local_meter",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "model-call-cost-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let action_attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+
+        let lease = tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_reserve").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": action_attempt_id, "runner_id": "test-runner",
+            "declared_model": "test-model", "max_input_tokens": 1000, "max_output_tokens": 500, "reserved_cost_micros": 300,
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_settle").with_arguments(serde_json::json!({
+            "lease_id": lease["lease_id"], "actual_cost_micros": 250, "status": "settled",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": action_attempt_id,
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+            "run_id": run["run_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let cs = &observed["cost_summary"];
+        assert_eq!(cs["model_call_reported_cost_micros"], 250, "must sum settled actual_cost_micros, not reserved_cost_micros: {cs:?}");
+        assert_eq!(cs["model_call_cost_confidence"], "attested");
+        assert_eq!(cs["known_exact_cost_micros"], 500, "the host-side exact figure must still land in the exact bucket on its own");
+        assert_eq!(cs["reported_attested_cost_micros"], 250, "model-call cost must land in the attested bucket, never merged into known_exact");
+        assert_eq!(cs["cost_completeness"], "reported_total_not_exact",
+            "attested model-call cost present alongside an exact host figure must still block total_cost_known: {cs:?}");
+    }
+
+    /// A reserved-but-never-settled lease must not contribute a phantom cost
+    /// figure — actual_cost_micros is NULL until settlement, so it must be
+    /// excluded from the sum entirely, not treated as 0. Critically, the
+    /// episode carrying the unsettled lease IS actually linked into this
+    /// run's results (via benchmark_result_record's episode_id) so the
+    /// aggregation loop genuinely visits it — an adversarial review of an
+    /// earlier version of this test caught that it passed vacuously
+    /// (run_envelope_attach_episode does NOT feed benchmark_run_observe's
+    /// aggregation at all; only benchmark_results.episode_id does), so the
+    /// episode must actually reach a concluded outcome and be recorded via
+    /// benchmark_result_record with a real episode_id for this test to mean
+    /// anything.
+    #[tokio::test]
+    async fn test_benchmark_run_observe_ignores_unsettled_model_call_leases() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "unsettled1", "theorem_name": "unsettled1", "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run_envelope_id = create_run_envelope(&peer).await;
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "unsettled-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_reserve").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"], "runner_id": "test-runner",
+            "declared_model": "test-model", "max_input_tokens": 1000, "max_output_tokens": 500, "reserved_cost_micros": 900,
+        }).as_object().unwrap().clone())).await.unwrap());
+        // Deliberately does NOT call episode_step on this claimed attempt:
+        // step.rs::attempt_finalize's real, pre-existing behavior auto-settles
+        // ANY 'reserved' lease matching the stepped (episode_id, action_attempt_id)
+        // pair using that step's OWN cost_micros as actual_cost_micros --
+        // discovered while writing this exact test (an earlier version used
+        // episode_step/give_up here and the "unsettled" lease was silently
+        // auto-settled to cost_micros=1, making the test pass vacuously for a
+        // second, different reason than the first fix). episode_close is used
+        // instead: it force-terminates the episode without touching
+        // model_call_leases at all, so this lease genuinely stays 'reserved'.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_close").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "reason": "test",
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "failed", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+            "run_id": run["run_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        // Sanity check that this test actually visits the episode at all
+        // (mcp_action_count > 0 proves the aggregation loop ran against a
+        // real linked episode, not an empty/unreferenced one).
+        assert_eq!(observed["cost_summary"]["mcp_action_count"], 1,
+            "the episode must genuinely be linked into this run's results for this test to mean anything: {:?}", observed["cost_summary"]);
+        assert!(observed["cost_summary"]["model_call_reported_cost_micros"].is_null(),
+            "an unsettled (reserved-only) lease has no actual_cost_micros yet and must not contribute a phantom figure: {:?}", observed["cost_summary"]);
+        assert!(observed["cost_summary"]["model_call_cost_confidence"].is_null());
     }
 
     #[tokio::test]
