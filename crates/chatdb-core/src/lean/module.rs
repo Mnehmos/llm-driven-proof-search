@@ -444,8 +444,12 @@ pub fn assemble_module(
         }
     }
 
-    // Root theorem last.
-    source.push_str(&format!("theorem {} : {} := by\n{}\n\n", root_theorem.name, root_theorem.statement.trim(), indent(&root_theorem.proof_term)));
+    // Root theorem last. Goes through the same render_theorem/normalize_and_indent
+    // path every other item uses — this is raw, client-supplied leaf content
+    // (the actual goal being proved), not an already-rendered structural
+    // block, so it needs the same issue #41 normalization, not the old
+    // blind-uniform-add indent() a prior version of this fix missed here.
+    source.push_str(&render_theorem(&root_theorem.name, &root_theorem.statement, &root_theorem.proof_term));
     item_manifest.push(AssembledItem {
         order: next_order,
         kind: "root_theorem".to_string(),
@@ -478,24 +482,75 @@ pub fn assemble_module(
 /// block compiles to identical Lean as a standalone `Def` would.
 fn render_def(name: &str, type_signature: &str, body: &str) -> String {
     if type_signature.trim().is_empty() {
-        format!("def {} :=\n{}\n\n", name, indent(body))
+        format!("def {} :=\n{}\n\n", name, normalize_and_indent(body))
     } else {
-        format!("def {} : {} :=\n{}\n\n", name, type_signature.trim(), indent(body))
+        format!("def {} : {} :=\n{}\n\n", name, type_signature.trim(), normalize_and_indent(body))
     }
 }
 
 /// Renders a `theorem` declaration — the `Theorem`/`mutual`-group analogue of
 /// [`render_def`].
 fn render_theorem(name: &str, statement: &str, proof_term: &str) -> String {
-    format!("theorem {} : {} := by\n{}\n\n", name, statement.trim(), indent(proof_term))
+    format!("theorem {} : {} := by\n{}\n\n", name, statement.trim(), normalize_and_indent(proof_term))
 }
 
-/// Indents every line of a client string by two spaces. Lean 4.32+ requires the
-/// first token after `:= by` (and after a `def ... :=` on its own line) to be
-/// indented relative to the declaration; matching `verify_exact`'s convention
-/// keeps single- and multi-line bodies both elaborating.
+/// Indents every line of a string by two spaces, with NO per-line
+/// normalization — for re-indenting an already-correctly-formed, multi-
+/// declaration block (e.g. a `mutual` group's concatenated member
+/// declarations, each already rendered by [`render_def`]/[`render_theorem`])
+/// by one more structural level. Such a block's lines are deliberately NOT
+/// uniformly indented (each member's own header sits at column 0 relative to
+/// the block, its body at column 2), so [`normalize_and_indent`]'s
+/// uniform-vs-flatten logic would wrongly collapse that real structure. Use
+/// this only for re-indenting already-assembled Lean text; use
+/// `normalize_and_indent` for raw, client-supplied leaf content (a body or
+/// proof_term string).
 fn indent(s: &str) -> String {
     s.lines().map(|l| format!("  {}", l)).collect::<Vec<_>>().join("\n")
+}
+
+/// Indents a client-supplied leaf `body`/`proof_term` string by two spaces —
+/// the base indent Lean 4.32+ requires for the first token after `:= by` (or
+/// a `def ... :=` on its own line) — while normalizing the client's own
+/// per-line indentation first (issue #41).
+///
+/// Lean's tactic-block parser is whitespace-sensitive: every line at the
+/// SAME column as the block's first tactic is a sequential sibling; a line
+/// indented MORE than that is parsed as nested under the preceding tactic,
+/// not as its sibling. A client that writes the first tactic flush and
+/// indents the rest "to show they're part of the block" (a natural,
+/// human/LLM-typical style, but not how Lean's syntax actually works) was
+/// silently reinterpreted as nesting rather than sequencing, failing with a
+/// misleading error that gave no hint the real problem was formatting.
+///
+/// If every non-blank line already shares one common indentation level
+/// (including the ordinary single-line case, and a block someone already
+/// indented uniformly), that relationship is preserved exactly as authored —
+/// adding the same uniform base indent keeps it uniform. Otherwise (mismatched
+/// per-line indentation), every line is flattened to one level before the
+/// base indent is applied. This can only ever help: a non-uniformly indented
+/// multi-line term reaches the kernel with a 0% success rate today (this
+/// exact case is issue #41's repro), so flattening turns a guaranteed
+/// rejection into a real elaboration attempt. The tradeoff is that a proof
+/// intentionally relying on Lean's relative-indentation nesting (e.g. a `·`
+/// focus block with a deeper-indented sub-tactic) would have that nesting
+/// discarded too — but that fails loudly (an out-of-scope identifier, since a
+/// name introduced only inside the nested block is no longer in scope for a
+/// sibling line), never a silent wrong-proof accept, and is no worse than
+/// today's guaranteed failure for the same non-uniform input.
+pub(crate) fn normalize_and_indent(s: &str) -> String {
+    let lines: Vec<&str> = s.lines().collect();
+    let non_blank_indents: Vec<usize> = lines.iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .collect();
+    let uniform = non_blank_indents.windows(2).all(|w| w[0] == w[1]);
+
+    if uniform {
+        lines.iter().map(|l| format!("  {}", l)).collect::<Vec<_>>().join("\n")
+    } else {
+        lines.iter().map(|l| format!("  {}", l.trim())).collect::<Vec<_>>().join("\n")
+    }
 }
 
 #[cfg(test)]
@@ -512,6 +567,65 @@ mod tests {
 
     fn root_hash(statement: &str) -> String {
         canonical_hash(&statement.to_string()).unwrap()
+    }
+
+    /// Issue #41's exact repro: a naturally-formatted multi-line proof term
+    /// with the first tactic flush and the rest indented by 2. Before the
+    /// fix, this shape always produced a mismatched indentation level that
+    /// Lean's whitespace-sensitive parser reinterpreted as nesting rather
+    /// than sequencing; normalize_and_indent must flatten it to one uniform
+    /// level instead of blindly adding a fixed prefix to each line.
+    #[test]
+    fn normalize_and_indent_flattens_mismatched_first_line_indentation() {
+        let input = "intro a ha b hb\n  refine foo\n  ring";
+        let out = normalize_and_indent(input);
+        assert_eq!(out, "  intro a ha b hb\n  refine foo\n  ring",
+            "mismatched per-line indentation must be flattened to one uniform level, not blindly re-prefixed: {out:?}");
+    }
+
+    /// A proof term whose lines already share one indentation level
+    /// (including a block someone already indented themselves) must be
+    /// preserved exactly as authored — adding the same uniform base indent
+    /// keeps it uniform, so this must NOT be flattened.
+    #[test]
+    fn normalize_and_indent_preserves_already_uniform_indentation() {
+        let input = "  intro a ha b hb\n  refine foo\n  ring";
+        let out = normalize_and_indent(input);
+        assert_eq!(out, "    intro a ha b hb\n    refine foo\n    ring",
+            "already-uniform per-line indentation must be preserved (just re-based), not stripped: {out:?}");
+    }
+
+    #[test]
+    fn normalize_and_indent_handles_single_line() {
+        assert_eq!(normalize_and_indent("norm_num"), "  norm_num");
+    }
+
+    /// A blank line inside a multi-line proof must not force a spurious
+    /// "mismatched indentation" flatten — blank lines are excluded from the
+    /// uniformity check.
+    #[test]
+    fn normalize_and_indent_ignores_blank_lines_for_uniformity_check() {
+        let input = "  intro a\n\n  ring";
+        let out = normalize_and_indent(input);
+        assert_eq!(out, "    intro a\n  \n    ring",
+            "a blank line must not defeat the uniform-indent detection for otherwise-matching lines: {out:?}");
+    }
+
+    /// Regression for a real bug found by adversarial review while fixing
+    /// issue #41: assemble_module's root-theorem rendering originally called
+    /// the OLD, unfixed indent() directly on root_theorem.proof_term instead
+    /// of going through render_theorem/normalize_and_indent like every other
+    /// item — meaning the actual goal being proved in a SubmitModule call
+    /// (the root theorem) was still exposed to the exact bug this fix exists
+    /// for. Confirms assemble_module's assembled source reflects the
+    /// flattened, normalized proof for a mismatched-indentation root
+    /// proof_term, not the double-indented (and Lean-misparsed) original.
+    #[test]
+    fn assemble_module_normalizes_root_theorem_proof_term_indentation() {
+        let r = root("1 + 1 = 2", "intro\n  norm_num");
+        let asm = assemble_module("ChatDB.P_abc", &root_hash("1 + 1 = 2"), &[], &r, &manifest()).unwrap();
+        assert!(asm.source.contains("theorem root_thm : 1 + 1 = 2 := by\n  intro\n  norm_num"),
+            "root theorem's mismatched-indentation proof_term must be flattened to one uniform level, not blindly re-prefixed: {}", asm.source);
     }
 
     #[test]
