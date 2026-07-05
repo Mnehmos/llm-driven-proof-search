@@ -396,6 +396,19 @@ pub struct BenchmarkSuiteCreateArgs {
     pub upstream_commit: Option<String>,
     #[serde(default = "default_benchmark_language")]
     pub language: String,
+    /// An honest, self-declared trust assertion (issue #38's fidelity-basis
+    /// policy): set true ONLY for a suite you can vouch is a real,
+    /// externally-curated benchmark corpus (e.g. PutnamBench) whose own
+    /// registered root_formal_statement is itself sufficient fidelity
+    /// evidence — a statement-hash match against such a suite is accepted
+    /// by benchmark_result_record as fidelity basis for a kernel_verified/
+    /// certified claim WITHOUT requiring a separate problem_submit_fidelity_review.
+    /// ChatDB never independently verifies this claim, exactly like
+    /// unsafe_dev_attestation/host_cost_confidence elsewhere — defaults to
+    /// false so an arbitrary custom suite can never silently gain this
+    /// treatment.
+    #[serde(default)]
+    pub trusted_canonical_source: bool,
 }
 fn default_benchmark_language() -> String { "Lean4".to_string() }
 
@@ -2144,7 +2157,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.20"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.21"))
     }
 
     async fn list_tools(
@@ -2235,7 +2248,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.20",
+                    "environment_version": "0.3.21",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -2315,15 +2328,15 @@ impl ServerHandler for ChatDbMcp {
                                 "required_run_mode": "any"
                             },
                             "benchmark_result_record": {
-                                "side_effect": "mutating — upserts benchmark_results",
-                                "trust_level": "verifier_backed cross-check, not bare client assertion: since issue #36, a kernel_verified/certified claim is rejected outright without a real episode_id, and since issue #30 the episode's actual recorded outcome and root_statement_hash (via COALESCE(prover_ready_statement_hash, root_statement_hash)) must both match what's claimed",
+                                "side_effect": "mutating — upserts benchmark_results, now including benchmark_fidelity_basis (v0.3.21)",
+                                "trust_level": "verifier_backed cross-check, not bare client assertion: since issue #36, a kernel_verified/certified claim is rejected outright without a real episode_id, and since issue #30 the episode's actual recorded outcome and root_statement_hash (via COALESCE(prover_ready_statement_hash, root_statement_hash)) must both match what's claimed. Since v0.3.21 (issue #38's fidelity-basis policy, resolving the design question this entry used to record), a kernel_verified/certified claim is ALSO rejected outright unless EITHER the suite is trusted_canonical_source=true (a real, externally-curated corpus like PutnamBench, whose own canonical statement-hash match is accepted as sufficient fidelity evidence — basis='canonical_statement_hash_match') OR the backing problem_version's fidelity_status is independently 'verified' (basis='problem_fidelity_verified'). An arbitrary untrusted/custom suite backed only by an unsafe_dev_attestation ('attested') problem is no longer sufficient",
                                 "cost_surface": "none directly",
-                                "benchmark_safety": "safe_public_output — records status/metrics/attempts_used, never a proof body",
+                                "benchmark_safety": "safe_public_output — records status/metrics/attempts_used/benchmark_fidelity_basis, never a proof body",
                                 "replayability": "replayable_with_hashes via the referenced episode_id",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "aggregate_metric",
                                 "required_run_mode": "benchmark",
-                                "unresolved_design_question": "the cross-check validates statement identity (same root_statement_hash) but not the problem_version's fidelity_status — a result can currently be backed by an 'attested' (unsafe_dev_attestation, never independently reviewed) problem_version just as validly as a 'verified' one. For PutnamBench-imported problems this is arguably correct (the hash-match against the suite's own canonical statement IS the fidelity guarantee, not human review of an informal-to-formal translation) but it's a real, not-yet-explicitly-documented boundary worth a deliberate decision rather than an accident"
+                                "note": "benchmark_fidelity_basis is deliberately distinct from problem_versions.fidelity_status: the latter asks whether the formal statement faithfully represents the INFORMAL source problem (independent human/reviewer judgment); the former asks what evidence backs THIS benchmark claim specifically, which for a trusted suite can be satisfied by hash-matching alone without ever requiring that separate review. Public/report-facing consumers should describe basis='canonical_statement_hash_match' as e.g. 'matched the suite's own canonical formal statement', never as 'statement-fidelity certified by ChatDB' — ChatDB performed a hash comparison, not an independent fidelity review, in that case."
                             },
                             "benchmark_run_observe": {
                                 "side_effect": "read_only — aggregates existing benchmark_results/action_attempts rows, writes nothing",
@@ -2669,7 +2682,7 @@ impl ServerHandler for ChatDbMcp {
                             },
                             "benchmark_suite_create": {
                                 "side_effect": "mutating — inserts a benchmark_suites row; rejects a duplicate name rather than silently creating a second suite with the same identity",
-                                "trust_level": "human_attested — a suite's name/upstream_url/upstream_commit/language are exactly what the caller declares; ChatDB does not itself fetch or verify the upstream repository",
+                                "trust_level": "human_attested — a suite's name/upstream_url/upstream_commit/language are exactly what the caller declares; ChatDB does not itself fetch or verify the upstream repository. trusted_canonical_source (v0.3.21, issue #38's fidelity-basis policy) is the SAME kind of honest self-declared trust assertion, not independently verified — it defaults to false so an arbitrary custom suite can never silently gain the 'hash-match alone is sufficient fidelity evidence' treatment meant only for a real, externally-curated corpus like PutnamBench",
                                 "cost_surface": "none",
                                 "benchmark_safety": "safe_public_output — suite metadata, no proof content",
                                 "replayability": "deterministic",
@@ -4621,16 +4634,16 @@ impl ServerHandler for ChatDbMcp {
                 let suite_id = Uuid::new_v4().to_string();
                 let now = Utc::now().to_rfc3339();
                 conn.execute(
-                    "INSERT INTO benchmark_suites (id, name, upstream_url, upstream_commit, language, imported_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    (&suite_id, &args.name, &args.upstream_url, &args.upstream_commit, &args.language, &now),
+                    "INSERT INTO benchmark_suites (id, name, upstream_url, upstream_commit, language, trusted_canonical_source, imported_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    (&suite_id, &args.name, &args.upstream_url, &args.upstream_commit, &args.language, args.trusted_canonical_source, &now),
                 ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
                     mcp_invalid_params(format!("a benchmark suite named {:?} already exists", args.name))
                 } else {
                     rs(e)
                 })?;
 
-                let res = serde_json::json!({ "suite_id": suite_id, "name": args.name, "created_at": now });
+                let res = serde_json::json!({ "suite_id": suite_id, "name": args.name, "trusted_canonical_source": args.trusted_canonical_source, "created_at": now });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
             "benchmark_problem_register" => {
@@ -4821,7 +4834,21 @@ impl ServerHandler for ChatDbMcp {
                         status_str
                     )));
                 }
-                if let Some(episode_id) = &args.episode_id {
+                // Issue #38's fidelity-basis policy: what evidence, if any,
+                // backs a kernel_verified/certified claim's STATEMENT
+                // fidelity — deliberately distinct from
+                // problem_versions.fidelity_status (whether the formal
+                // statement faithfully represents the INFORMAL problem). A
+                // trusted, externally-curated suite's own canonical
+                // statement-hash match is accepted on its own (PutnamBench:
+                // the hash-match against the suite's own catalog text IS the
+                // fidelity guarantee); an untrusted/custom suite requires a
+                // real independent review (fidelity_status='verified')
+                // instead — the hash-match check above only proves the
+                // episode proved *some* problem_version with this exact
+                // statement, not that anyone ever vouched the statement
+                // itself is a faithful formalization.
+                let benchmark_fidelity_basis: Option<&str> = if let Some(episode_id) = &args.episode_id {
                     let episode_row: Option<(String, Option<String>)> = conn.query_row(
                         "SELECT problem_version_id, outcome FROM episodes WHERE id = ?1", [episode_id],
                         |row| Ok((row.get(0)?, row.get(1)?)),
@@ -4846,8 +4873,9 @@ impl ServerHandler for ChatDbMcp {
                             )));
                         }
                     }
-                    let episode_pv_hash: String = conn.query_row(
-                        "SELECT root_statement_hash FROM problem_versions WHERE id = ?1", [&episode_pv_id], |row| row.get(0),
+                    let (episode_pv_hash, problem_fidelity_status): (String, String) = conn.query_row(
+                        "SELECT root_statement_hash, fidelity_status FROM problem_versions WHERE id = ?1", [&episode_pv_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
                     ).map_err(rs)?;
                     if episode_pv_hash != problem_root_hash {
                         return Err(mcp_invalid_params(format!(
@@ -4865,7 +4893,30 @@ impl ServerHandler for ChatDbMcp {
                             "status 'certified' claimed, but episode {} actually reached outcome '{}'", episode_id, episode_outcome
                         )));
                     }
-                }
+                    if matches!(status_str, "kernel_verified" | "certified") {
+                        let suite_trusted: bool = conn.query_row(
+                            "SELECT trusted_canonical_source FROM benchmark_suites WHERE id = ?1", [&run_suite_id], |row| row.get(0),
+                        ).map_err(rs)?;
+                        if suite_trusted {
+                            Some("canonical_statement_hash_match")
+                        } else if problem_fidelity_status == "verified" {
+                            Some("problem_fidelity_verified")
+                        } else {
+                            return Err(mcp_invalid_params(format!(
+                                "status {:?} claims a verified proof, and the statement hash matches benchmark_problem_id {}, but suite {} is not trusted_canonical_source AND problem_version {} has not been independently fidelity-reviewed (fidelity_status={:?}) — a benchmark result claiming kernel_verified/certified needs either a trusted suite's canonical statement match or a real problem_submit_fidelity_review (issue #38's fidelity-basis policy)",
+                                status_str, args.benchmark_problem_id, run_suite_id, episode_pv_id, problem_fidelity_status
+                            )));
+                        }
+                    } else {
+                        // An episode_id was given, but for a non-proof-claiming
+                        // status (failed/timeout/infra_error/formalization_gap/
+                        // skipped) -- no proof claim, so no fidelity basis to report.
+                        Some("none")
+                    }
+                } else {
+                    // No episode_id -> no proof claim -> no fidelity basis to report.
+                    Some("none")
+                };
 
                 let existing_id: Option<String> = conn.query_row(
                     "SELECT id FROM benchmark_results WHERE run_id = ?1 AND benchmark_problem_id = ?2",
@@ -4880,24 +4931,24 @@ impl ServerHandler for ChatDbMcp {
                             problem_version_id = ?1, episode_id = ?2, status = ?3, outcome = ?4, pass_at = ?5,
                             attempts_used = ?6, time_to_first_success_ms = ?7, cost_micros = ?8,
                             final_diagnostic_category = ?9, proof_artifact_hash = ?10, trajectory_export_hash = ?11,
-                            replay_status = ?12, updated_at = ?13
-                         WHERE id = ?14",
+                            replay_status = ?12, benchmark_fidelity_basis = ?13, updated_at = ?14
+                         WHERE id = ?15",
                         (&args.problem_version_id, &args.episode_id, status_str, &args.outcome, &args.pass_at,
                          args.attempts_used, &args.time_to_first_success_ms, &args.cost_micros,
                          &args.final_diagnostic_category, &args.proof_artifact_hash, &args.trajectory_export_hash,
-                         &args.replay_status, &now, existing_id),
+                         &args.replay_status, &benchmark_fidelity_basis, &now, existing_id),
                     ).map_err(rs)?;
                 } else {
                     conn.execute(
                         "INSERT INTO benchmark_results (
                             id, run_id, benchmark_problem_id, problem_version_id, episode_id, status, outcome,
                             pass_at, attempts_used, time_to_first_success_ms, cost_micros, final_diagnostic_category,
-                            proof_artifact_hash, trajectory_export_hash, replay_status, created_at, updated_at
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
-                        (&result_id, &args.run_id, &args.benchmark_problem_id, &args.problem_version_id, &args.episode_id,
+                            proof_artifact_hash, trajectory_export_hash, replay_status, benchmark_fidelity_basis, created_at, updated_at
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17)",
+                        rusqlite::params![&result_id, &args.run_id, &args.benchmark_problem_id, &args.problem_version_id, &args.episode_id,
                          status_str, &args.outcome, &args.pass_at, args.attempts_used, &args.time_to_first_success_ms,
                          &args.cost_micros, &args.final_diagnostic_category, &args.proof_artifact_hash,
-                         &args.trajectory_export_hash, &args.replay_status, &now),
+                         &args.trajectory_export_hash, &args.replay_status, &benchmark_fidelity_basis, &now],
                     ).map_err(rs)?;
                 }
 
@@ -4905,6 +4956,7 @@ impl ServerHandler for ChatDbMcp {
                     "result_id": result_id,
                     "run_id": args.run_id,
                     "benchmark_problem_id": args.benchmark_problem_id,
+                    "benchmark_fidelity_basis": benchmark_fidelity_basis,
                     "status": status_str,
                     "updated": existing_id.is_some(),
                 });
@@ -4928,7 +4980,8 @@ impl ServerHandler for ChatDbMcp {
 
                 let mut rstmt = conn.prepare(
                     "SELECT r.benchmark_problem_id, p.theorem_name, r.status, r.outcome, r.pass_at, r.attempts_used,
-                            r.time_to_first_success_ms, r.cost_micros, r.final_diagnostic_category, r.replay_status, r.episode_id
+                            r.time_to_first_success_ms, r.cost_micros, r.final_diagnostic_category, r.replay_status,
+                            r.benchmark_fidelity_basis, r.episode_id
                      FROM benchmark_results r JOIN benchmark_problems p ON p.id = r.benchmark_problem_id
                      WHERE r.run_id = ?1 ORDER BY p.upstream_problem_id ASC"
                 ).map_err(rs)?;
@@ -4944,7 +4997,8 @@ impl ServerHandler for ChatDbMcp {
                         "cost_micros": row.get::<_, Option<i64>>(7)?,
                         "final_diagnostic_category": row.get::<_, Option<String>>(8)?,
                         "replay_status": row.get::<_, Option<String>>(9)?,
-                    }), row.get::<_, Option<String>>(10)?))
+                        "benchmark_fidelity_basis": row.get::<_, Option<String>>(10)?,
+                    }), row.get::<_, Option<String>>(11)?))
                 }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
                 let results: Vec<serde_json::Value> = rows.iter().map(|(v, _)| v.clone()).collect();
 
@@ -8119,9 +8173,15 @@ mod tests {
 
     // -- PutnamBench benchmark schema (issues #29, #30) ----------------------
 
+    /// Issue #38's fidelity-basis policy: trusted_canonical_source=true,
+    /// matching every existing test's implicit assumption that its suite
+    /// behaves like a real, externally-curated corpus (PutnamBench) whose
+    /// own canonical statement-hash match is sufficient fidelity evidence —
+    /// dedicated tests below exercise the untrusted-suite rejection path
+    /// explicitly via a raw benchmark_suite_create call instead of this helper.
     async fn create_suite(peer: &rmcp::service::Peer<rmcp::RoleClient>, name: &str) -> String {
         let created = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
-            "name": name,
+            "name": name, "trusted_canonical_source": true,
         }).as_object().unwrap().clone())).await.unwrap());
         created["suite_id"].as_str().unwrap().to_string()
     }
@@ -8732,6 +8792,144 @@ mod tests {
             "episode_id": episode_id, "status": "failed", "attempts_used": 1,
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(honest["status"], "failed");
+        assert_eq!(honest["benchmark_fidelity_basis"], "none",
+            "a non-kernel_verified/certified status makes no proof claim, so it must report benchmark_fidelity_basis='none', not fabricate one");
+    }
+
+    /// Issue #38's fidelity-basis policy, the core new enforcement: a
+    /// kernel_verified/certified claim against an UNTRUSTED suite (the
+    /// default for any newly registered suite) backed only by an
+    /// unsafe_dev_attestation problem (fidelity_status='attested', never
+    /// independently reviewed) must be REJECTED outright — a statement-hash
+    /// match alone is only sufficient fidelity evidence for a suite that
+    /// explicitly opted into trusted_canonical_source (a real, externally-
+    /// curated corpus like PutnamBench); an arbitrary custom suite gets no
+    /// such shortcut.
+    #[tokio::test]
+    async fn test_benchmark_result_record_rejects_untrusted_suite_without_independent_review() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        // NOT create_suite() -- that helper defaults trusted_canonical_source
+        // to true; this test needs the real, untrusted default explicitly.
+        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
+            "name": "UntrustedCustomSuite",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let suite_id = suite["suite_id"].as_str().unwrap().to_string();
+        assert_eq!(suite["trusted_canonical_source"], false, "trusted_canonical_source must default to false, never silently true");
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "u1", "theorem_name": "u1", "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // create_problem uses unsafe_dev_attestation -> fidelity_status='attested', never 'verified'.
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "untrusted-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let rejected = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await;
+        assert!(rejected.is_err(),
+            "an untrusted suite + an unreviewed (attested) problem must not be sufficient fidelity evidence for a kernel_verified claim");
+
+        // A REAL independent fidelity review (fidelity_status='verified')
+        // unblocks the exact same untrusted suite -- basis becomes
+        // problem_fidelity_verified, not canonical_statement_hash_match.
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "reviewed problem for untrusted suite", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let reviewed_pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let review = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_submit_fidelity_review").with_arguments(serde_json::json!({
+            "problem_version_id": reviewed_pv_id, "decision": "verified", "method": "human_review",
+            "approver_id": "reviewer-1", "rubric_version": "v1",
+            "source_problem_hash": create["source_problem_hash"], "root_statement_hash": create["root_statement_hash"],
+            "rendering_hash": create["rendering_hash"], "evidence_json": "{}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(review["fidelity_status"], "verified");
+
+        let problem2 = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "u2", "theorem_name": "u2", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let ep2 = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": reviewed_pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode2_id = ep2["episode_id"].as_str().unwrap().to_string();
+        let req2 = &ep2["next_action_request"];
+        let claim2 = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode2_id, "action_request_id": req2["id"], "idempotency_key": "untrusted-2",
+            "expected_revision": req2["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        // reviewed_pv_id's fidelity_status is ALREADY 'verified' (from the
+        // review above) before this episode's root gets proved, so per
+        // step.rs's promotion logic the outcome lands directly on
+        // 'certified', not 'kernel_verified' -- reflect that here.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode2_id, "action_attempt_id": claim2["action_attempt_id"],
+            "expected_revision": req2["episode_revision"], "claim_token": claim2["claim_token"],
+            "action": {"type": "solve", "proof_term": "norm_num"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let accepted = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem2["benchmark_problem_id"],
+            "episode_id": episode2_id, "status": "certified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(accepted["benchmark_fidelity_basis"], "problem_fidelity_verified",
+            "an untrusted suite backed by a REAL independent review must be accepted with the problem_fidelity_verified basis, not canonical_statement_hash_match: {accepted:?}");
+    }
+
+    /// Issue #38's fidelity-basis policy: a TRUSTED suite's own canonical
+    /// statement-hash match is sufficient on its own, WITHOUT requiring a
+    /// separate independent review — the exact PutnamBench scenario this
+    /// policy exists for.
+    #[tokio::test]
+    async fn test_benchmark_result_record_trusted_suite_accepts_hash_match_alone() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await; // trusted_canonical_source: true
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "t1", "theorem_name": "t1", "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // create_problem -> unsafe_dev_attestation -> fidelity_status='attested', deliberately NOT 'verified'.
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "trusted-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let accepted = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(accepted["benchmark_fidelity_basis"], "canonical_statement_hash_match",
+            "a trusted suite's own hash match must be sufficient fidelity evidence without an independent review: {accepted:?}");
     }
 
     #[tokio::test]

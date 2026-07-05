@@ -416,6 +416,70 @@ via `run_envelopes.mode` (`"development"` vs. `"benchmark"`/`"evaluation"`)
 — a report can group/filter by mode to get this split; no new schema
 needed for that half of the ask.
 
+## Fidelity-basis policy (issue #38, v0.3.21)
+
+**The gap:** `benchmark_result_record`'s anti-fabrication cross-checks (issue
+#30/#36) validate that an episode's actually-recorded outcome and its
+`problem_version`'s statement hash match what's claimed — but never checked
+the backing `problem_version`'s own `fidelity_status` (whether a human ever
+reviewed that the formal statement faithfully represents the *informal*
+source problem). A result could be backed by an `unsafe_dev_attestation`
+("attested", never independently reviewed) problem just as validly as a
+`"verified"` one.
+
+**The resolution, per explicit product direction:** two deliberately
+separate concepts.
+
+- `problem_versions.fidelity_status` (unchanged) — does this formal
+  statement faithfully represent the *informal* source problem? An
+  independent human-review question, set by `problem_submit_fidelity_review`
+  or (capped, dev-only) `problem_create`'s `unsafe_dev_attestation=true`.
+- `benchmark_results.benchmark_fidelity_basis` (new) — what evidence backs
+  *this specific benchmark claim's* statement fidelity:
+  `canonical_statement_hash_match` | `problem_fidelity_verified` | `none` |
+  `mismatch` (the last is reserved/defensive — a real hash mismatch is
+  rejected outright before any row is written, so it's never actually
+  persisted).
+
+**Enforcement, in `benchmark_result_record`:** for a `kernel_verified`/
+`certified` claim (after the existing episode-outcome and statement-hash
+checks pass), the referenced benchmark suite must be
+`trusted_canonical_source=true` (basis becomes `canonical_statement_hash_match`
+— sufficient on its own, no independent review required) **or** the backing
+`problem_version`'s `fidelity_status` must already be `"verified"` (basis
+becomes `problem_fidelity_verified`). Neither being true is now a hard
+rejection, not a warning or a weaker recorded basis. For any non-proof-claiming
+status (`failed`/`timeout`/`infra_error`/`formalization_gap`/`skipped`), or
+when no `episode_id` is given at all, `benchmark_fidelity_basis` is `"none"`
+— no proof claim, nothing to report a basis for.
+
+`benchmark_suites.trusted_canonical_source` (new, defaults `false`) is set
+at `benchmark_suite_create` time via the same param name — an honest,
+**self-declared** trust assertion the caller makes, exactly like
+`unsafe_dev_attestation`/`host_cost_confidence` elsewhere in this codebase.
+ChatDB never independently verifies it. There is no tool that updates an
+existing suite's `trusted_canonical_source` after creation — an untrusted
+suite can never be retroactively "laundered" into looking trusted. Set it
+true only for a suite you can vouch is a real, externally-curated corpus
+(PutnamBench) whose own registered `root_formal_statement` is itself
+sufficient fidelity evidence; leave it false for an arbitrary custom suite.
+
+**Public-facing wording matters here**: describe a
+`canonical_statement_hash_match` result as e.g. "matched the suite's own
+canonical formal statement" — never as "statement-fidelity certified by
+ChatDB." ChatDB performed a hash comparison against a self-declared-trusted
+suite's catalog text in that case, not an independent fidelity review.
+
+Verified against the real Lean 4.32.0-rc1 + Mathlib toolchain via
+`playtest.rs`: a trusted suite + an `unsafe_dev_attestation` problem + a real
+`True`/`trivial` proof produced `benchmark_fidelity_basis:
+"canonical_statement_hash_match"`; the identical setup against an untrusted
+suite was correctly rejected outright. Covered by
+`test_benchmark_result_record_trusted_suite_accepts_hash_match_alone` and
+`test_benchmark_result_record_rejects_untrusted_suite_without_independent_review`
+(the latter also proves a real `problem_submit_fidelity_review` unblocks the
+same untrusted suite, with basis `problem_fidelity_verified`).
+
 ## Tracked vs. untracked verifier use (issue #36)
 
 **The product principle:** a proof attempt that bypasses the episode ledger
