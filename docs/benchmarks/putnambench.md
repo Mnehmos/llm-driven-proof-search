@@ -311,14 +311,17 @@ response includes a `cost_summary` object with this full shape:
 **Field meanings, by unit:**
 
 - `*_cost_micros` — money. `host_side_cost_micros`/`host_cost_confidence` come
-  from `run_envelopes` (unchanged). `model_call_reported_cost_micros` is new:
-  real per-attempt cost data folded in from `model_call_leases` (populated by
-  `model_call_reserve`/`model_call_settle`), summed only over `status='settled'
+  from `run_envelopes` (unchanged). `model_call_reported_cost_micros` is:
+  real per-attempt cost data folded in from `model_call_leases` (reserved by
+  `model_call_reserve`, settled or voided by `model_call_settle` or the
+  same-attempt `episode_step` auto-settle path), summed only over `status='settled'
   AND actual_cost_micros IS NOT NULL` rows — a reserved-but-never-settled
-  lease contributes nothing, never a phantom `0`. It is ALWAYS reported at
-  `"attested"` confidence (`model_call_cost_confidence`), since it is entirely
+  lease is still only a reservation and contributes nothing to reported actual
+  cost, never a phantom `0`. A voided lease refunds its reservation and also
+  contributes no actual cost. Settled actual costs are ALWAYS reported at
+  `"attested"` confidence (`model_call_cost_confidence`), since they are entirely
   self-reported by the runner/host and never independently measured or
-  receipted by ChatDB — it is never merged into an exact total.
+  receipted by ChatDB — they are never merged into an exact total.
   `mcp_side_cost_micros`/`storage_export_cost_micros` stay `null` until a real
   meter or an explicit rate card exists for ChatDB's own compute/storage —
   there is none today, and these two fields are the ONLY ones this policy
@@ -449,6 +452,12 @@ the very next `episode_step` on that attempt settles it implicitly. It only
 stays genuinely unsettled if that attempt is never stepped at all (e.g. the
 episode is instead terminated via `episode_close`, which never touches
 `model_call_leases`).
+
+As of the budget-hardening pass for #47/#48, that implicit settlement uses the
+same delta rule as explicit `model_call_settle`: lower actual cost refunds only
+the reserved difference, higher actual cost must reserve only the extra delta,
+and a failed delta reservation rolls the step preparation back before any Lean
+gateway call.
 
 (A separate, dead, pre-`step.rs` legacy `Orchestrator` in `orchestrator/mod.rs`
 also persists timing — into `proposal_attempts` via
