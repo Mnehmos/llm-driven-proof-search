@@ -293,18 +293,18 @@ response includes a `cost_summary` object with this full shape:
   "verifier_wall_time_ms": 57245,
   "verifier_cpu_time_ms": 57245,
   "mcp_action_count": 1,
-  "mcp_handler_wall_time_ms": null,
+  "mcp_handler_wall_time_ms": 9620,
   "mcp_side_cost_micros": null,
-  "storage_bytes_written": null,
-  "storage_export_bytes": null,
-  "storage_export_wall_time_ms": null,
+  "storage_bytes_written": 568,
+  "storage_export_bytes": 870,
+  "storage_export_wall_time_ms": 0,
   "storage_export_cost_micros": null,
   "known_exact_cost_micros": 1000,
   "reported_attested_cost_micros": 350,
   "estimated_cost_micros": null,
   "unknown_cost_present": true,
   "cost_completeness": "reported_total_not_exact",
-  "not_yet_instrumented": "mcp_handler_wall_time_ms, storage_bytes_written, storage_export_bytes, storage_export_wall_time_ms, mcp_side_cost_micros, storage_export_cost_micros are not yet instrumented — never reported as zero. model_call_reported_cost_micros is real per-attempt data from model_call_leases but always self-reported (attested), never independently measured by ChatDB."
+  "not_yet_instrumented": "mcp_side_cost_micros/storage_export_cost_micros are not yet instrumented — never reported as zero; there is no pricing/rate-card decision yet for either surface. mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms are now real, measured metrics — null only when this run genuinely has no correlated data yet, never fabricated as zero. model_call_reported_cost_micros is real per-attempt data from model_call_leases but always self-reported (attested), never independently measured by ChatDB."
 }
 ```
 
@@ -321,20 +321,72 @@ response includes a `cost_summary` object with this full shape:
   receipted by ChatDB — it is never merged into an exact total.
   `mcp_side_cost_micros`/`storage_export_cost_micros` stay `null` until a real
   meter or an explicit rate card exists for ChatDB's own compute/storage —
-  there is none today.
+  there is none today, and these two fields are the ONLY ones this policy
+  never converts a metric into a dollar figure for (see "MCP/storage
+  observability" below — the metrics ARE real now, the prices are not).
 - `*_wall_time_ms`/`*_cpu_time_ms` — real time, not money.
   `verifier_wall_time_ms`/`verifier_cpu_time_ms` sum real
   `wall_time_ms`/`lean_cpu_time_ms` persisted on `action_attempts.lean_result_json`
   (see below) across every attempt on every episode a run's results
   reference — each tracked with its own "any data found" flag, since the
   `SubmitModule` path's result type has no cpu-time field at all.
-  `mcp_handler_wall_time_ms`/`storage_export_wall_time_ms` are real
-  instrumentation not yet built (deferred).
+  `mcp_handler_wall_time_ms`/`storage_export_wall_time_ms` are now real,
+  measured metrics too (see below).
 - `mcp_action_count` — a real count, never null (0 is a genuine count, not
   a stand-in for "unmeasured"): the number of `action_attempts` rows across
   the run's episodes.
-- `*_bytes` — `storage_bytes_written`/`storage_export_bytes` are real byte
-  counts, not yet instrumented (deferred).
+- `*_bytes` — `storage_bytes_written`/`storage_export_bytes` are now real
+  byte counts too (see below).
+
+### MCP/storage observability (issue #38, v0.3.23)
+
+The previously-deferred metrics (`mcp_handler_wall_time_ms`,
+`storage_bytes_written`, `storage_export_bytes`, `storage_export_wall_time_ms`)
+are now real, measured instrumentation — still metrics, never converted into
+a dollar figure without a real pricing profile (there is none today, so
+`mcp_side_cost_micros`/`storage_export_cost_micros` stay `null`, and
+`cost_completeness` remains unable to reach `"total_cost_known"` regardless).
+
+**How it works:** a new `mcp_call_metrics` table logs EVERY MCP tool call —
+success or failure, since a genuine handler-time accounting must include
+rejected/invalid calls too, not just clean successes — with real wall-clock
+time, the real byte length of the returned content, and best-effort
+correlation IDs (`episode_id`/`run_id`/`run_envelope_id`) duck-typed
+generically out of whatever fields the specific tool's own args happen to
+contain, with no per-tool special casing needed. `benchmark_run_observe`
+aggregates `mcp_handler_wall_time_ms` across every logged call correlated to
+a run (by episode, by run id, or by run envelope id — a call matching more
+than one is still only counted once), and `storage_export_bytes`/
+`storage_export_wall_time_ms` the same way but restricted to `proof_export`/
+`trajectory_export` calls specifically. `storage_bytes_written` sums a new
+`action_attempts.lean_result_bytes` column — the real byte length (Rust
+`String::len()`, never SQLite's own character-counting `LENGTH()`, which
+would undercount Lean/Mathlib's multi-byte math notation like `∀`/`≥`/`⟨⟩`)
+of the same `lean_result_json` already persisted per attempt.
+
+**A real, critical bug an adversarial review caught and a fix verified
+against**: the metrics-logging code was originally wired to run after a
+plain `match request.name.as_ref() { ... }` inside `call_tool` — but Rust's
+`?` and `return Err(...)` inside a match arm target the nearest enclosing
+*function*, not the match itself, so every arm using either (the vast
+majority — argument-parsing failures, CAS mismatches, policy rejections, DB
+errors) bypassed the metrics insert entirely, silently undercounting
+`mcp_handler_wall_time_ms` for any run with even one rejected call. Fixed by
+wrapping the entire match in its own `async move { ... }.await` block, which
+gives every arm's early return a closer boundary to land on — zero changes
+needed to any individual tool handler. Regression-tested directly: a
+deliberately-rejected call (missing a required argument) is now confirmed,
+via a direct query against the underlying connection, to still produce a
+`mcp_call_metrics` row with `is_error=1`.
+
+Verified against the real Lean 4.32.0-rc1 + Mathlib toolchain via
+`playtest.rs`: a real episode + a real `proof_export` call produced
+`mcp_handler_wall_time_ms: 9620`, `storage_bytes_written: 568`,
+`storage_export_bytes: 870`, `storage_export_wall_time_ms: 0` (a pure
+DB-read export with no Lean invocation completing in under a millisecond is
+genuinely plausible, not a broken timer) — while `cost_completeness`
+correctly stayed at `"reported_total_not_exact"`, never reaching
+`"total_cost_known"`, exactly as the policy requires.
 
 **The monetary rollup** (`known_exact_cost_micros`/`reported_attested_cost_micros`/
 `estimated_cost_micros`/`unknown_cost_present`/`cost_completeness`) never
@@ -516,6 +568,25 @@ mostly changes rejection WORDING there (to the exact "boring" message this
 policy specifies), not the accept/reject outcome — the real, new behavioral
 restriction lives in `run_envelope_attach_episode`, which has no suite-trust
 exception at all.
+
+**Formalized as a named policy (v0.3.23), per explicit follow-up direction**
+— not left as an inline, PutnamBench-shaped special case. The exact rule:
+"`unsafe_dev_attestation` is forbidden in benchmark/evaluation/public_report
+runs unless the problem belongs to a benchmark suite marked
+`trusted_canonical_source` AND the resulting `benchmark_fidelity_basis` is
+`canonical_statement_hash_match` against that suite's own registered
+canonical/prover-ready formal statement." Extracted into its own function,
+`trusted_canonical_hash_exemption_applies(suite_trusted: bool) -> bool`, with
+an extensive doc comment justifying why `suite_trusted` alone is a sound,
+complete proxy for "this claim's basis will be
+`canonical_statement_hash_match`" (reaching the exemption check at all
+already implies the statement-hash cross-check passed, and a trusted suite's
+fidelity-basis logic assigns `canonical_statement_hash_match` unconditionally,
+never falling through to `problem_fidelity_verified` even for an
+independently-reviewed problem) — directly unit-tested
+(`test_trusted_canonical_hash_exemption_applies`,
+`test_enforce_dev_attestation_mode_policy`), not just incidentally exercised
+through the larger integration tests.
 
 **A known, deliberately-undecided limitation** the same adversarial review
 caught: `BenchmarkResultRecordArgs.allow_dev_attested`'s doc comment

@@ -735,10 +735,45 @@ CREATE TABLE IF NOT EXISTS action_attempts (
     preflight_result_json TEXT,
     lean_invocation_id TEXT,
     lean_result_json TEXT,
+    -- issue #38's storage-bytes metric: the real byte length (Rust
+    -- String::len(), NOT SQLite's LENGTH() which counts UTF-8 CHARACTERS,
+    -- undercounting multi-byte math notation like ∀/≥/⟨⟩) of
+    -- lean_result_json as actually persisted, computed once at write time
+    -- rather than recomputed per read. NULL exactly when lean_result_json
+    -- is NULL (no verification ran for this attempt).
+    lean_result_bytes INTEGER,
     commit_result_json TEXT,
     failure_reason TEXT,
     CHECK(status IN ('claimed', 'preflight_rejected', 'executing', 'verified', 'rejected', 'committed', 'abandoned', 'expired', 'infrastructure_failed'))
 );
+
+-- issue #38's MCP-side/storage-export observability: a generic, per-call
+-- timing/size log populated for EVERY MCP tool call (success or failure —
+-- an honest total of real handler time spent, not just successful calls),
+-- with best-effort correlation IDs duck-typed out of the call's own args
+-- (episode_id/run_id/run_envelope_id, whichever the specific tool happens to
+-- accept) so benchmark_run_observe can aggregate mcp_handler_wall_time_ms
+-- for a run's episodes/run_id/run_envelope without any per-tool special
+-- casing. response_bytes is the real byte length of the returned content —
+-- used for storage_export_bytes when tool_name is proof_export/
+-- trajectory_export, otherwise just a general diagnostic. No monetary
+-- figure is ever derived from this table: mcp_side_cost_micros/
+-- storage_export_cost_micros stay null until a real pricing profile exists.
+CREATE TABLE IF NOT EXISTS mcp_call_metrics (
+    id TEXT PRIMARY KEY,
+    tool_name TEXT NOT NULL,
+    episode_id TEXT,
+    run_id TEXT,
+    run_envelope_id TEXT,
+    wall_time_ms INTEGER NOT NULL,
+    response_bytes INTEGER,
+    is_error INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_call_metrics_episode_id ON mcp_call_metrics(episode_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_call_metrics_run_id ON mcp_call_metrics(run_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_call_metrics_run_envelope_id ON mcp_call_metrics(run_envelope_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_call_metrics_tool_name ON mcp_call_metrics(tool_name);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_attempt_idempotency
 ON action_attempts(episode_id, idempotency_key);
@@ -795,6 +830,7 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     migrate_add_mutual_group_column(conn)?;
     migrate_add_prover_ready_statement_columns(conn)?;
     migrate_add_benchmark_fidelity_basis_columns(conn)?;
+    migrate_add_lean_result_bytes_column(conn)?;
     // CHECK constraints are baked into a table at creation and CREATE TABLE IF
     // NOT EXISTS cannot update them on a table that already exists — a database
     // that predates the fidelity-vocabulary rewrite (docs/fix_plan_playtest_02.md)
@@ -1227,6 +1263,31 @@ fn migrate_add_benchmark_fidelity_basis_columns(conn: &Connection) -> rusqlite::
         if !existing_columns.iter().any(|c| c == "benchmark_fidelity_basis") {
             conn.execute("ALTER TABLE benchmark_results ADD COLUMN benchmark_fidelity_basis TEXT", [])?;
         }
+    }
+    Ok(())
+}
+
+/// Adds `action_attempts.lean_result_bytes` (issue #38's storage-bytes
+/// metric) to a pre-existing `action_attempts` table. Plain nullable `ALTER
+/// TABLE ADD COLUMN` — every pre-existing row simply has no byte count
+/// recorded (NULL) until re-verified. `mcp_call_metrics` is a brand-new
+/// table (created via `CREATE TABLE IF NOT EXISTS` above for both fresh and
+/// pre-existing databases), so it needs no separate migration.
+fn migrate_add_lean_result_bytes_column(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='action_attempts'",
+        [], |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let existing_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(action_attempts)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !existing_columns.iter().any(|c| c == "lean_result_bytes") {
+        conn.execute("ALTER TABLE action_attempts ADD COLUMN lean_result_bytes INTEGER", [])?;
     }
     Ok(())
 }
