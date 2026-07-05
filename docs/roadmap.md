@@ -321,9 +321,12 @@ CLOSED, including a real gap an adversarial review caught in the first pass
 (metrics-first units, model_call_leases folded in as attested cost, a
 three-tier monetary rollup that never merges attested/estimated into an
 exact total) shipped (v0.3.20), including a real auto-settle-on-episode_step
-behavior found while fixing an adversarial-review-caught vacuous test. The
-full PutnamBench sprint is complete, and the first real playtest attempt has
-run: 12 real
+behavior found while fixing an adversarial-review-caught vacuous test.
+#34/#38's fidelity-basis policy (benchmark_fidelity_basis split from
+problem_fidelity_status, trusted_canonical_source suite flag, untrusted
+suites now require a real independent review) shipped (v0.3.21). The full
+PutnamBench sprint is complete, and the first real playtest attempt has run:
+12 real
 problems, 1/12 (8.3%) pass@1 — see
 `docs/playtests/2026-07-04-putnambench-first-attempt.md`. Zero infra errors,
 zero panics, correct enforcement throughout; the constraint was genuine
@@ -597,6 +600,31 @@ vacuous test; a follow-up review confirmed the fix and the auto-settle
 finding directly against the handler code. Still open for #38:
 `mcp_side_cost`/`storage_export_cost` (and their supporting metrics) remain
 fully uninstrumented.
+
+**#34/#38 (partial, fidelity-basis policy) — resolved the fidelity_status
+cross-check open question.** ✅ Shipped in v0.3.21, per explicit product
+direction. Full policy in `docs/benchmarks/putnambench.md`'s "Fidelity-basis
+policy" section. Two deliberately separate concepts:
+`problem_versions.fidelity_status` (unchanged — does the formal statement
+faithfully represent the *informal* source problem?) and a new
+`benchmark_results.benchmark_fidelity_basis` (what evidence backs *this
+specific benchmark claim*: `canonical_statement_hash_match`/
+`problem_fidelity_verified`/`none`/`mismatch`). `benchmark_result_record` now
+REJECTS a `kernel_verified`/`certified` claim outright unless the suite is
+`trusted_canonical_source=true` (a new, honest, self-declared
+`benchmark_suite_create` flag — same idiom as `unsafe_dev_attestation`,
+defaults `false`, no tool ever updates it after creation, so an untrusted
+suite can never be retroactively laundered) or the backing problem's
+`fidelity_status` is independently `"verified"`. An arbitrary custom suite
+backed only by an `unsafe_dev_attestation` problem is no longer sufficient —
+a real, previously-open fabrication-adjacent gap now closed. Verified
+against the real Lean 4.32.0-rc1 + Mathlib toolchain via `playtest.rs`: a
+trusted suite + `unsafe_dev_attestation` problem + a real `True`/`trivial`
+proof produced `benchmark_fidelity_basis: "canonical_statement_hash_match"`;
+the identical setup against an untrusted suite was correctly rejected
+outright with the expected error. An adversarial review found no bugs,
+independently confirmed there's no suite-trust "laundering" path, and traced
+the exhaustive if/else enforcement logic directly.
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a

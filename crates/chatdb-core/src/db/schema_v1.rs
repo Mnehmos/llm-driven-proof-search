@@ -565,12 +565,21 @@ CREATE TABLE IF NOT EXISTS run_envelopes (
 -- importer (populating benchmark_problems automatically from a real
 -- PutnamBench checkout) is still unimplemented -- see the design note on
 -- issue #29.
+-- trusted_canonical_source (issue #38's fidelity-basis policy): an honest,
+-- self-declared trust assertion the CALLER makes when registering a suite —
+-- ChatDB never independently verifies it, same idiom as
+-- unsafe_dev_attestation/host_cost_confidence elsewhere. Defaults to 0
+-- (untrusted) so an arbitrary custom suite can never silently gain the
+-- "statement-hash match alone is sufficient fidelity evidence" treatment
+-- meant only for a real, externally-curated corpus like PutnamBench. See
+-- migrate_add_trusted_canonical_source_column for the full rationale.
 CREATE TABLE IF NOT EXISTS benchmark_suites (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     upstream_url TEXT,
     upstream_commit TEXT,
     language TEXT NOT NULL,
+    trusted_canonical_source INTEGER NOT NULL DEFAULT 0,
     imported_at TEXT NOT NULL
 );
 
@@ -649,10 +658,29 @@ CREATE TABLE IF NOT EXISTS benchmark_results (
     proof_artifact_hash TEXT,
     trajectory_export_hash TEXT,
     replay_status TEXT,
+    -- benchmark_fidelity_basis (issue #38): what evidence, if any, backs a
+    -- kernel_verified/certified claim's STATEMENT fidelity specifically --
+    -- deliberately distinct from problem_versions.fidelity_status (whether
+    -- the formal statement faithfully represents the informal problem).
+    -- 'canonical_statement_hash_match': the episode's problem_version hash
+    -- matches this benchmark_problem's registered hash AND the suite is
+    -- trusted_canonical_source -- sufficient fidelity evidence for a real,
+    -- externally-curated corpus like PutnamBench without requiring a
+    -- separate independent review.
+    -- 'problem_fidelity_verified': the backing problem_version's own
+    -- fidelity_status is 'verified' (a real problem_submit_fidelity_review
+    -- landed), independent of suite trust.
+    -- 'none': no proof claim is being made (a non-kernel_verified/certified
+    -- status has no fidelity basis to report).
+    -- 'mismatch': reserved for defensive completeness; a real hash mismatch
+    -- is rejected outright by benchmark_result_record before a row is ever
+    -- written, so this value is never actually persisted today.
+    benchmark_fidelity_basis TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(run_id, benchmark_problem_id),
-    CHECK(status IN ('kernel_verified', 'certified', 'failed', 'timeout', 'infra_error', 'formalization_gap', 'skipped'))
+    CHECK(status IN ('kernel_verified', 'certified', 'failed', 'timeout', 'infra_error', 'formalization_gap', 'skipped')),
+    CHECK(benchmark_fidelity_basis IS NULL OR benchmark_fidelity_basis IN ('canonical_statement_hash_match', 'problem_fidelity_verified', 'none', 'mismatch'))
 );
 
 CREATE TABLE IF NOT EXISTS action_requests (
@@ -766,6 +794,7 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     migrate_add_import_manifest_columns(conn)?;
     migrate_add_mutual_group_column(conn)?;
     migrate_add_prover_ready_statement_columns(conn)?;
+    migrate_add_benchmark_fidelity_basis_columns(conn)?;
     // CHECK constraints are baked into a table at creation and CREATE TABLE IF
     // NOT EXISTS cannot update them on a table that already exists — a database
     // that predates the fidelity-vocabulary rewrite (docs/fix_plan_playtest_02.md)
@@ -1159,6 +1188,45 @@ fn migrate_add_prover_ready_statement_columns(conn: &Connection) -> rusqlite::Re
     }
     if !existing_columns.iter().any(|c| c == "prover_ready_statement_hash") {
         conn.execute("ALTER TABLE benchmark_problems ADD COLUMN prover_ready_statement_hash TEXT", [])?;
+    }
+    Ok(())
+}
+
+/// Adds `benchmark_suites.trusted_canonical_source` and
+/// `benchmark_results.benchmark_fidelity_basis` (issue #38's fidelity-basis
+/// policy) to pre-existing tables. Plain nullable/defaulted `ALTER TABLE ADD
+/// COLUMN` — no existing row's meaning changes; every pre-existing suite
+/// defaults to untrusted (0), and every pre-existing result simply has no
+/// recorded fidelity basis (NULL) until re-recorded.
+fn migrate_add_benchmark_fidelity_basis_columns(conn: &Connection) -> rusqlite::Result<()> {
+    let suites_exist: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='benchmark_suites'",
+        [], |row| row.get(0),
+    )?;
+    if suites_exist > 0 {
+        let existing_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(benchmark_suites)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if !existing_columns.iter().any(|c| c == "trusted_canonical_source") {
+            conn.execute("ALTER TABLE benchmark_suites ADD COLUMN trusted_canonical_source INTEGER NOT NULL DEFAULT 0", [])?;
+        }
+    }
+
+    let results_exist: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='benchmark_results'",
+        [], |row| row.get(0),
+    )?;
+    if results_exist > 0 {
+        let existing_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(benchmark_results)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if !existing_columns.iter().any(|c| c == "benchmark_fidelity_basis") {
+            conn.execute("ALTER TABLE benchmark_results ADD COLUMN benchmark_fidelity_basis TEXT", [])?;
+        }
     }
     Ok(())
 }
