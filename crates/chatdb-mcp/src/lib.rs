@@ -1,3 +1,8 @@
+// environment_describe's tool_classification field is one large nested
+// serde_json::json! literal (issue #34's audit data) that exceeds the
+// default macro recursion limit.
+#![recursion_limit = "512"]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -2139,7 +2144,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.16"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.17"))
     }
 
     async fn list_tools(
@@ -2230,7 +2235,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.16",
+                    "environment_version": "0.3.17",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -2265,8 +2270,8 @@ impl ServerHandler for ChatDbMcp {
                         "A prior model's proof (from another session, another model, a paper, etc.) is a candidate artifact, not evidence of correctness, until it passes THIS pinned verifier. Do not skip verification because a candidate 'looks complete'."
                     ],
                     "tool_classification": {
-                        "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied as a bounded, real per-tool slice — the highest-risk/highest-signal tools first, not a blanket pass over every tool yet. A tool's ABSENCE from this map is not a safety claim; it means not yet classified, not 'nothing to worry about'.",
-                        "classified_tool_count": 13,
+                        "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied as a bounded, real per-tool slice, done in two passes so far — the highest-risk/highest-signal tools first, not a blanket pass over every tool yet. A tool's ABSENCE from this map is not a safety claim; it means not yet classified, not 'nothing to worry about'.",
+                        "classified_tool_count": 27,
                         "total_tool_count": 42,
                         "tools": {
                             "episode_step": {
@@ -2399,6 +2404,147 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none — purely advisory, can never mark anything proved or change fidelity/certification status",
+                                "required_run_mode": "any"
+                            },
+                            "model_call_reserve": {
+                                "side_effect": "mutating — inserts a model_call_leases row, checked-out against an episode's remaining cost_budget_micros",
+                                "trust_level": "untrusted_input — declared_model/runner_id/max_input_tokens/max_output_tokens are entirely client-asserted, not independently verified by ChatDB",
+                                "cost_surface": "host_side — reserves budget for what will become a HOST-reported model-call cost, distinct from run_envelopes.host_side_cost_micros (one aggregate figure per run) and from verifier_side cost (real, ChatDB-measured Lean timing)",
+                                "benchmark_safety": "safe_public_output — a budget reservation, no proof content",
+                                "replayability": "deterministic given recorded state, but the reservation itself has no external effect to replay (no real model call happens through this tool — it only manages ChatDB's own ledger)",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any",
+                                "unresolved_design_question": "a REAL, previously-undiscovered gap surfaced by this audit, structurally similar to the verifier_cost gap v0.3.15 fixed: model_call_leases already stores a granular, per-attempt cost figure (reserved_cost_micros, then actual_cost_micros once settled) but benchmark_run_observe's cost_summary never aggregates it at all today — it's invisible to any benchmark report. Unlike verifier_cost, this data is untrusted_input (self-reported by the caller, not measured by ChatDB), so folding it into cost_summary raises the same host_cost_confidence question run_envelopes already models explicitly — it is NOT simply 'sum it like verifier_cost' without deciding how its trust tier interacts with host_side_cost_confidence. Left undecided deliberately rather than wired in guessing at the answer."
+                            },
+                            "model_call_settle": {
+                                "side_effect": "mutating — updates the lease's status/actual_cost_micros/settled_at, and (if status='settled') decrements the episode's cost_budget_micros",
+                                "trust_level": "untrusted_input — actual_cost_micros is exactly as self-reported as the reservation was; nothing here upgrades it to verifier_backed or measured",
+                                "cost_surface": "host_side — see model_call_reserve's unresolved_design_question; this is the tool that would produce the real number IF that question were answered and wiring were built",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic given recorded state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "run_envelope_update": {
+                                "side_effect": "mutating — overwrites host_side_cost_micros/host_cost_confidence/notes on an existing run_envelopes row IN PLACE",
+                                "trust_level": "human_attested, same as run_envelope_create — self-declared, with an explicit confidence tier rather than pretending certainty",
+                                "cost_surface": "host_side — this is the correction/refinement path for that same declaration",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "NOT replayable in the audit sense: there is no history/versioning of prior values — an update overwrites host_side_cost_micros/host_cost_confidence with no log of what it was before or when it changed. A benchmark_run_observe call made before vs after an update would report genuinely different numbers with no record that a correction happened. Worth a deliberate decision (an append-only revision log?) if run envelopes are ever updated after a report has already been shared, rather than assumed away",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "run_envelope_attach_episode": {
+                                "side_effect": "mutating — sets episodes.run_id only; confirmed by reading the handler that it never touches outcome/state/current_revision or any other proof-status column",
+                                "trust_level": "mcp_generated linkage between two things that separately already exist (a real run_envelope, a real episode) — the tool itself asserts nothing new about either",
+                                "cost_surface": "none directly",
+                                "benchmark_safety": "safe_public_output — a tagging operation, no proof content moves",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any — same undocumented mode-enforcement gap already noted for problem_create's unsafe_dev_attestation applies here too: nothing stops attaching an episode built from an unreviewed/attested problem to a 'benchmark' or 'evaluation' mode envelope"
+                            },
+                            "run_envelope_observe": {
+                                "side_effect": "read_only — reads run_envelopes plus every episodes row with matching run_id, writes nothing",
+                                "trust_level": "mixed, transparently: mode/host_name/host_model/notes are human_attested (as declared at creation/update); host_cost_confidence is reported alongside the cost figure specifically so a reader can judge how much to trust it, rather than presenting one undifferentiated number",
+                                "cost_surface": "none directly; surfaces host_side cost data for other surfaces",
+                                "benchmark_safety": "safe_public_output — episode_id/outcome/state only, never proof content",
+                                "replayability": "deterministic given current DB state (see run_envelope_update's replayability note on why 'current state' isn't the same as 'full history')",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "formalization_plan_create": {
+                                "side_effect": "mutating — inserts a formalization_plans row and, when seeding from draft moves, formalization_plan_items rows plus UPDATEs on draft_moves.promoted_plan_item_id, all in one transaction (validates every seed move before writing any row, so a bad move in the batch never leaves a partially-seeded plan behind)",
+                                "trust_level": "untrusted_input — a plan is advisory scaffolding the caller proposes; nothing here is proof-checked",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output — planning metadata, not a proof artifact",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none — advisory scaffolding, explicitly not a proof authority",
+                                "required_run_mode": "any"
+                            },
+                            "formalization_plan_observe": {
+                                "side_effect": "read_only",
+                                "trust_level": "untrusted_input pass-through — reads back exactly what was asserted at creation/update, no verification layer",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "formalization_plan_update": {
+                                "side_effect": "mutating — overwrites a plan's title/status/risk_flags_json IN PLACE (partial update: an omitted field keeps its current value rather than being cleared)",
+                                "trust_level": "untrusted_input — status transitions (draft/active/completed/abandoned) are caller-asserted, not derived from any verified state",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "NOT replayable in the audit sense — like run_envelope_update, this overwrites in place with no history of prior title/status/risk_flags values",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "formalization_plan_add_item": {
+                                "side_effect": "mutating — inserts a formalization_plan_items row",
+                                "trust_level": "untrusted_input",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "formalization_plan_attach_lookup": {
+                                "side_effect": "mutating — updates one item's mathlib_coverage_status/lookup_result_json; rejects a non-'open' item (already promoted/dropped) rather than silently overwriting settled state",
+                                "trust_level": "mcp_generated hint attachment, not a re-check — this tool records what lean_declaration_lookup already reported, it doesn't re-verify anything itself",
+                                "cost_surface": "none directly (the real cost was already paid by the lean_declaration_lookup call being attached)",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none — never changes proof status, only planning metadata",
+                                "required_run_mode": "any"
+                            },
+                            "formalization_plan_promote_item_to_obligation": {
+                                "side_effect": "mutating — sets one item's status/promoted_obligation_id; a partial UNIQUE index on promoted_obligation_id (schema_v1.rs) stops two plan items from claiming the same real obligation, enforced at the DB layer rather than only this handler's logic",
+                                "trust_level": "verifier_backed linkage, not creation: the tool independently confirms the obligation_id already exists in episode_obligations AND belongs to the given episode_id before recording the link — it never creates the obligation itself, so it can never bypass the episode's real budget/CAS accounting",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "formalization_plan_attach_librarian_result": {
+                                "side_effect": "mutating — updates mathlib_coverage_status/mathlib_candidate_names_json (accumulated/deduped, not overwritten)/lookup_result_json (latest wins) on one item",
+                                "trust_level": "untrusted_input for confidence tier itself (exact_match/nearby_name/type_match/usage_example/unknown is the caller's own assessment of ITS search result), but the underlying search is over ChatDB's own real data (mathlib_search_declarations/mathlib_search_local_artifacts), not fabricated from nothing",
+                                "cost_surface": "none directly",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "mathlib_search_declarations": {
+                                "side_effect": "read_only — a filesystem scan of the local Mathlib checkout, no DB write",
+                                "trust_level": "mcp_generated from real Mathlib source text, but explicitly file-local-name matching only (documented namespace-resolution limitation) — a hit is a real declaration name found in real source, not a guarantee it resolves under any particular problem's import manifest",
+                                "cost_surface": "none tracked (filesystem-bound, not verifier-bound; the DB mutex is deliberately NOT held during this scan, matching the codebase's convention for slow operations)",
+                                "benchmark_safety": "safe_public_output — Mathlib's own public source, not ChatDB proof content",
+                                "replayability": "deterministic given the same pinned Mathlib checkout; a checkout upgrade could change results",
+                                "source_code_impact": "no_source_change — reads Mathlib's checked-out source, never ChatDB's own",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "mathlib_search_local_artifacts": {
+                                "side_effect": "read_only — queries episode_verified_lemmas/episode_verified_module_items, no write",
+                                "trust_level": "verifier_backed — every name returned already passed the real Lean kernel in some prior episode on THIS instance; explicitly labeled confidence: 'usage_example', i.e. local precedent, not a Mathlib-library result",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output — declaration names only, not full proof bodies",
+                                "replayability": "deterministic given current DB state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
                                 "required_run_mode": "any"
                             }
                         }
@@ -4948,8 +5094,10 @@ mod tests {
             "classified_tool_count must match the real number of entries in the map: {classification}");
         assert!(classification["total_tool_count"].as_u64().unwrap() as usize > classified.len(),
             "total_tool_count must honestly exceed classified_tool_count while the audit remains partial: {classification}");
-        for tool in ["episode_step", "proof_export", "trajectory_export", "benchmark_result_record", "problem_create"] {
-            let entry = &classified[tool];
+        // Every classified tool, not just a spot-check sample — catches a
+        // future edit that adds a tool entry missing one of the 8 dimensions,
+        // or that drops a dimension while editing an existing entry.
+        for (tool, entry) in classified {
             for dim in ["side_effect", "trust_level", "cost_surface", "benchmark_safety", "replayability", "source_code_impact", "artifact_risk", "required_run_mode"] {
                 assert!(entry[dim].is_string() && !entry[dim].as_str().unwrap().is_empty(),
                     "tool_classification.{tool}.{dim} must be a real, non-empty classification: {entry}");
