@@ -349,6 +349,28 @@ benchmark-mode guardrails against source-code mutation (moot for ChatDB's
 actual tool surface today — there is no MCP tool that edits source files —
 but worth revisiting if one is ever added).
 
+**#38 (partial) — cost-completeness marking for benchmark reports.** ✅
+Shipped in v0.3.14, one small bounded slice of #38's larger 7-bucket ask
+(see `docs/benchmarks/putnambench.md`'s "Cost surfaces" section for the
+full breakdown of what's tracked vs. not). `benchmark_run_observe` now
+returns a `cost_summary` object: `host_side_cost_micros`/
+`host_cost_confidence` (already-existing `run_envelopes` data), a derived
+`cost_completeness` (`"host_cost_known"` only for `exact_provider_receipt`/
+`exact_local_meter` confidence, else `"total_cost_incomplete"` — matching
+the acceptance criterion's own "unless host-side cost is included or
+*exact*" wording), and `mcp_side_cost_micros`/`verifier_cost_ms`/
+`storage_export_cost_micros` explicitly reported as `null` (never
+fabricated as zero) with a documented reason. A real, previously-
+undiscovered gap found while designing this: `RealLeanGateway` already
+computes real `wall_time_ms`/`lean_cpu_time_ms` on every verification call,
+but the active `step.rs`/`attempt_finalize` path discards it before it
+reaches anywhere persistent — genuinely wiring up `verifier_cost` needs a
+signature change across `step.rs` and `lib.rs`, scoped out of this pass as
+a moderate, separate follow-up (matching how #34's remaining audit was
+scoped out). An adversarial review caught one real doc inaccuracy (a wrong
+table name in the explanation of why the legacy orchestrator path can't be
+reused) but no code bugs.
+
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a
 `SubmitModule` skeleton, and no record of what Mathlib coverage was actually
