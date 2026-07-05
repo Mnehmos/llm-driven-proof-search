@@ -2130,7 +2130,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.13"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.14"))
     }
 
     async fn list_tools(
@@ -2180,7 +2180,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise"),
             make_tool::<BenchmarkRunCreateArgs>("benchmark_run_create", "Create a benchmark run against a suite. Requires an existing run_envelope_id (call run_envelope_create first — a run should not start unassociated with host/mode/cost tracking). lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results"),
             make_tool::<BenchmarkResultRecordArgs>("benchmark_result_record", "Record (or update) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem"),
-            make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric"),
+            make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric. cost_summary's cost_completeness is 'host_cost_known' only when host-side cost confidence is exact_provider_receipt/exact_local_meter, else 'total_cost_incomplete' — mcp_side/verifier/storage_export costs are not yet instrumented and are never reported as zero"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -2221,7 +2221,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.13",
+                    "environment_version": "0.3.14",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -4510,6 +4510,45 @@ impl ServerHandler for ChatDbMcp {
                     "average_attempts_per_result": if total > 0 { total_attempts as f64 / total as f64 } else { 0.0 },
                 });
 
+                // Issue #38: "public benchmark reports never present
+                // MCP-visible cost as total cost unless host-side cost is
+                // included or exact." host_side_cost_micros/host_cost_confidence
+                // are the only cost surface actually tracked today —
+                // mcp_side/verifier/storage_export costs have no
+                // instrumentation yet (a known, documented gap, not silently
+                // implied as zero). cost_completeness is honest about which
+                // dimension it covers: "total_cost_incomplete" whenever the
+                // host-side figure isn't itself known with confidence,
+                // "host_cost_known" when it is — never claims a genuine
+                // all-surfaces total, since most surfaces aren't tracked.
+                let (host_side_cost_micros, host_cost_confidence): (Option<i64>, Option<String>) = match &run_envelope_id {
+                    Some(env_id) => conn.query_row(
+                        "SELECT host_side_cost_micros, host_cost_confidence FROM run_envelopes WHERE id = ?1",
+                        [env_id], |row| Ok((row.get(0)?, row.get(1)?)),
+                    ).optional().map_err(rs)?.unwrap_or((None, None)),
+                    None => (None, None),
+                };
+                // Deliberately conservative: only the two "exact_*" confidence
+                // levels count as "host cost known" — the acceptance
+                // criterion's own wording is "unless host-side cost is
+                // included or exact." "estimated"/"attested" are real,
+                // useful signals but not the same reliability tier as a
+                // real receipt or meter reading, so they still mark the
+                // report incomplete rather than implying a firm total.
+                let cost_completeness = match host_cost_confidence.as_deref() {
+                    Some("exact_provider_receipt") | Some("exact_local_meter") => "host_cost_known",
+                    _ => "total_cost_incomplete",
+                };
+                let cost_summary = serde_json::json!({
+                    "host_side_cost_micros": host_side_cost_micros,
+                    "host_cost_confidence": host_cost_confidence,
+                    "mcp_side_cost_micros": serde_json::Value::Null,
+                    "verifier_cost_ms": serde_json::Value::Null,
+                    "storage_export_cost_micros": serde_json::Value::Null,
+                    "unknown_external_cost": "mcp_side_cost/verifier_cost/storage_export_cost are not yet instrumented — a known gap (issue #38), never silently reported as zero",
+                    "cost_completeness": cost_completeness,
+                });
+
                 let res = serde_json::json!({
                     "run_id": args.run_id,
                     "suite_id": suite_id,
@@ -4525,6 +4564,7 @@ impl ServerHandler for ChatDbMcp {
                     "created_at": created_at,
                     "results": results,
                     "metrics": metrics,
+                    "cost_summary": cost_summary,
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
@@ -7686,6 +7726,56 @@ mod tests {
             "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await;
         assert!(ok.is_ok(), "a real run_envelope_id must be accepted: {:?}", ok.err());
+    }
+
+    /// Issue #38: "public benchmark reports never present MCP-visible cost
+    /// as total cost unless host-side cost is included or exact" / "a run
+    /// with unknown host cost is marked total_cost_incomplete."
+    #[tokio::test]
+    async fn test_benchmark_run_observe_marks_cost_completeness_from_host_confidence() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+
+        // Default confidence ("unknown", the honest default when unset) -> incomplete.
+        let unknown_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "benchmark", "host_name": "test-host",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run_unknown = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": unknown_envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let observed_unknown = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+            "run_id": run_unknown["run_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed_unknown["cost_summary"]["cost_completeness"], "total_cost_incomplete");
+        assert!(observed_unknown["cost_summary"]["mcp_side_cost_micros"].is_null(),
+            "un-instrumented cost surfaces must be null, never silently reported as zero");
+
+        // "estimated" confidence: still incomplete -- only exact_* counts.
+        let estimated_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "benchmark", "host_name": "test-host", "host_side_cost_micros": 100, "host_cost_confidence": "estimated",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run_estimated = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": estimated_envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let observed_estimated = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+            "run_id": run_estimated["run_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed_estimated["cost_summary"]["cost_completeness"], "total_cost_incomplete",
+            "an estimate is not the same reliability tier as a real receipt/meter reading");
+
+        // exact_local_meter: host cost known.
+        let exact_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "benchmark", "host_name": "test-host", "host_side_cost_micros": 100, "host_cost_confidence": "exact_local_meter",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run_exact = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": exact_envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let observed_exact = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+            "run_id": run_exact["run_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed_exact["cost_summary"]["cost_completeness"], "host_cost_known");
+        assert_eq!(observed_exact["cost_summary"]["host_side_cost_micros"], 100);
     }
 
     #[tokio::test]
