@@ -71,6 +71,12 @@ The diagnostic shows `intro a ha b hb` had *already succeeded completely* (all f
 
 **Why this matters:** this is exactly the kind of failure mode that would silently penalize an agent (human or LLM) that writes idiomatic, readable multi-line Lean — the error message gives no hint that formatting is the actual problem, so an agent would plausibly try to "fix" the *proof* (re-deriving the math, second-guessing a correct argument) rather than the *formatting*, burning attempts on a non-issue. Filed as issue #41: either (a) document this prominently in `readme_first`/the tool description ("submit proof_term as a single line or with `<;>`/`;` chaining — embedded newlines are not guaranteed to preserve tactic-block structure once spliced into the assembled module"), or (b) fix it at the source — normalize/re-indent a client-supplied multi-line `proof_term` before splicing it into the assembled Lean source, so natural formatting isn't a trap.
 
+**Resolved (v0.3.19, issue #41 closed):** fixed at the source. The exact
+proof term shown above now reaches `kernel_verified` unmodified — confirmed
+against the real Lean/Mathlib toolchain via
+`crates/chatdb-mcp/examples/regression_scripts/issue41_multiline_proof_term.json`.
+See `docs/roadmap.md`'s #41 entry for the root cause and fix.
+
 ## Honest calibration
 
 11 of 12 attempts got a single, unconsidered `sorry` (or, for find-the-value problems, a plausible-looking but unverified guessed answer alongside `sorry`) rather than a genuine mathematical attempt. This was a deliberate scoping choice, not a failure to try: real Putnam problems — even at the historically "easiest" A1/B1 competition positions — require actual multi-step mathematical argument (synthetic geometry, real analysis, generating functions, number-theoretic case analysis), not a tactic-combinator guess. Getting a second one (`putnam_1966_a1`, sum-identity via a floor-function closed form — the math was fully worked out: `f(n) = ⌊n²/4⌋`, then a parity case split) to a checked Lean proof was judged to need real, uninterrupted formalization effort beyond what remained in this session, not a quick attempt — that's a genuine, honest constraint, not an environment gap.

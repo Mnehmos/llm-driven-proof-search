@@ -10,7 +10,7 @@ use crate::models::{
 use uuid::Uuid;
 
 pub mod module;
-use module::AssembledModule;
+use module::{AssembledModule, normalize_and_indent};
 
 pub trait LeanGateway {
     fn verify_exact(
@@ -272,13 +272,12 @@ impl LeanGateway for RealLeanGateway {
         // Lean 4.32+ requires the first tactic after `:= by` to be indented
         // relative to the theorem — a proof block at column 0 is parsed as an
         // empty `by` block followed by stray identifiers, failing every proof.
-        // Indent every line of the candidate proof by two spaces so both
-        // single-tactic and multi-tactic blocks elaborate correctly.
-        let indented_proof = candidate_source
-            .lines()
-            .map(|l| format!("  {}", l))
-            .collect::<Vec<_>>()
-            .join("\n");
+        // normalize_and_indent also fixes issue #41: a naturally-formatted
+        // multi-line proof whose lines don't already share one indentation
+        // level (e.g. the first tactic flush, the rest indented) was silently
+        // reinterpreted by Lean's whitespace-sensitive parser as nesting
+        // rather than sequencing — see its doc comment in lean/module.rs.
+        let indented_proof = normalize_and_indent(candidate_source);
         let file_content = format!(
             "{}\nnamespace {}\n\ntheorem {} : {} := by\n{}\n\nend {}\n",
             imports,
