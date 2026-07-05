@@ -480,6 +480,63 @@ suite was correctly rejected outright. Covered by
 (the latter also proves a real `problem_submit_fidelity_review` unblocks the
 same untrusted suite, with basis `problem_fidelity_verified`).
 
+## Mode-enforcement policy (issue #38, v0.3.22)
+
+**The rule, per explicit product direction:** `unsafe_dev_attestation` means
+development playtest — it should never be allowed into a *measured* claim.
+`run_envelope_attach_episode` (a general-purpose tool with no suite/trust
+concept of its own — it just tags any episode with any run envelope)
+unconditionally rejects attaching an `"attested"`-fidelity episode to a
+`benchmark`/`evaluation`/`public_report`-mode envelope; `development` is
+always allowed; `private_audit` requires a new explicit
+`allow_dev_attested=true` argument.
+
+**A real conflict found while implementing this, and how it was resolved:**
+taken completely literally (no exceptions), this rule would have broken the
+real, already-shipped, real-toolchain-verified `putnam_runner.rs` — the
+actual automated PutnamBench pass@k benchmark runner, which creates its run
+envelope with `mode: "benchmark"` and calls `problem_create` with
+`unsafe_dev_attestation: true` for every problem it imports (there is no
+per-problem human fidelity review step for an automated import of ~600
+problems). `benchmark_result_record`'s mode-enforcement therefore has an
+exception: it is SKIPPED when the referenced suite is
+`trusted_canonical_source=true` — that flag already means "this suite's own
+hash-match is sufficient fidelity evidence, independent of mode," and was
+independently verified (real toolchain) to preserve the actual PutnamBench
+pipeline: a trusted suite + `unsafe_dev_attestation` problem + `benchmark`
+mode still succeeds with `canonical_statement_hash_match`. An adversarial
+review scrutinized this exception specifically (not just ordinary bugs) and
+concluded it's a defensible, non-rationalized reading — a trusted suite's
+hash-match already answers the concern the mode-enforcement rule exists for
+("don't let uncertified dev-bypass content leak into a measured claim");
+for an untrusted suite, the review confirmed the SEPARATE, pre-existing
+fidelity-basis policy already unconditionally rejects `"attested"` claims
+in every mode anyway, so `benchmark_result_record`'s mode-enforcement check
+mostly changes rejection WORDING there (to the exact "boring" message this
+policy specifies), not the accept/reject outcome — the real, new behavioral
+restriction lives in `run_envelope_attach_episode`, which has no suite-trust
+exception at all.
+
+**A known, deliberately-undecided limitation** the same adversarial review
+caught: `BenchmarkResultRecordArgs.allow_dev_attested`'s doc comment
+originally overclaimed that setting it true would let a `private_audit`-mode
+claim succeed for an untrusted suite — it doesn't; the fidelity-basis policy
+independently still rejects `"attested"` (not `"verified"`) content
+regardless of this flag. Making the flag genuinely bypass that would need a
+real design decision (e.g. a fifth `benchmark_fidelity_basis` value for an
+explicitly-supervised private-audit override) — left undecided and
+documented rather than guessed at. In practice this flag currently only has
+a real effect for a *trusted* suite in `private_audit` mode.
+
+Verified against the real Lean 4.32.0-rc1 + Mathlib toolchain via
+`playtest.rs`: an `unsafe_dev_attestation` episode was correctly blocked
+from `benchmark`/`evaluation`/`public_report`-mode envelopes, allowed
+unconditionally for `development`, and blocked-then-allowed for
+`private_audit` without/with `allow_dev_attested=true`. Covered by
+`test_run_envelope_attach_episode_blocks_attested_episode_from_measured_modes`
+and
+`test_benchmark_result_record_reports_exact_mode_enforcement_message_for_untrusted_suite`.
+
 ## Tracked vs. untracked verifier use (issue #36)
 
 **The product principle:** a proof attempt that bypasses the episode ledger
