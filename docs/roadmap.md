@@ -304,8 +304,11 @@ last):
 together (v0.3.3). #25 shipped (v0.3.4). #35 shipped (v0.3.5). #34+#38 core
 shipped (v0.3.6). #29+#30 schema shipped (v0.3.7). #33+#37 shipped (v0.3.8).
 #28 shipped, docs-only. #29 (importer) shipped (v0.3.9). #31 (runner) shipped
-(v0.3.10). #32 (smoke fixtures) shipped (v0.3.11). The full PutnamBench
-sprint is complete, and the first real playtest attempt has run: 12 real
+(v0.3.10). #32 (smoke fixtures) shipped (v0.3.11). #36 shipped (v0.3.12).
+#34 partial shipped (v0.3.13). #38 partial (cost-completeness) shipped
+(v0.3.14). #38 partial (real verifier_cost wiring) shipped (v0.3.15). The
+full PutnamBench sprint is complete, and the first real playtest attempt has
+run: 12 real
 problems, 1/12 (8.3%) pass@1 — see
 `docs/playtests/2026-07-04-putnambench-first-attempt.md`. Zero infra errors,
 zero panics, correct enforcement throughout; the constraint was genuine
@@ -360,16 +363,33 @@ returns a `cost_summary` object: `host_side_cost_micros`/
 the acceptance criterion's own "unless host-side cost is included or
 *exact*" wording), and `mcp_side_cost_micros`/`verifier_cost_ms`/
 `storage_export_cost_micros` explicitly reported as `null` (never
-fabricated as zero) with a documented reason. A real, previously-
-undiscovered gap found while designing this: `RealLeanGateway` already
-computes real `wall_time_ms`/`lean_cpu_time_ms` on every verification call,
-but the active `step.rs`/`attempt_finalize` path discards it before it
-reaches anywhere persistent — genuinely wiring up `verifier_cost` needs a
-signature change across `step.rs` and `lib.rs`, scoped out of this pass as
-a moderate, separate follow-up (matching how #34's remaining audit was
-scoped out). An adversarial review caught one real doc inaccuracy (a wrong
-table name in the explanation of why the legacy orchestrator path can't be
-reused) but no code bugs.
+fabricated as zero) with a documented reason. An adversarial review caught
+one real doc inaccuracy (a wrong table name in the explanation of why the
+legacy orchestrator path can't be reused) but no code bugs.
+
+**#38 (partial, follow-up) — real `verifier_cost_ms` wiring.** ✅ Shipped in
+v0.3.15. v0.3.14 found that `RealLeanGateway` already computes real
+`wall_time_ms`/`lean_cpu_time_ms` on every verification call, but the active
+`step.rs`/`attempt_finalize` path discarded it before it reached anywhere
+persistent — expected to need a signature change across `step.rs` and
+`lib.rs`. That expectation turned out wrong once in the code:
+`attempt_finalize` already receives the full `GatewayResponse`, so the real
+result is now serialized and persisted onto the existing, previously-never-
+written `action_attempts.lean_result_json` column entirely within the
+existing function body, no signature change needed anywhere.
+`benchmark_run_observe` sums `wall_time_ms` across every attempt on every
+episode a run's results reference into `cost_summary.verifier_cost_ms` —
+real data when present, `null` (never `0`) otherwise. Verified against the
+real Lean 4.32.0-rc1 + Mathlib toolchain via `playtest.rs` (a real
+`True`/`trivial` episode produced `verifier_cost_ms: 9482`, genuine
+wall-clock milliseconds). An adversarial review found no code bugs — one
+pre-existing, non-introduced modeling nuance noted (an episode's
+`action_attempts` aren't scoped to a single run, so if the same episode were
+ever referenced by results in two different runs, both would independently
+report the full real time — deemed acceptable since it isn't fabrication,
+just not run-exclusive, and isn't how episodes/runs are normally created).
+Still open for #38: `mcp_side_cost`/`storage_export_cost` remain fully
+uninstrumented, with no decided unit of measurement yet.
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
 response text with no ChatDB-tracked artifact, no promotion path to a

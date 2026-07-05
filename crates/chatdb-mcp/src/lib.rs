@@ -2130,7 +2130,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.14"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.15"))
     }
 
     async fn list_tools(
@@ -2221,7 +2221,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.14",
+                    "environment_version": "0.3.15",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -4465,12 +4465,12 @@ impl ServerHandler for ChatDbMcp {
 
                 let mut rstmt = conn.prepare(
                     "SELECT r.benchmark_problem_id, p.theorem_name, r.status, r.outcome, r.pass_at, r.attempts_used,
-                            r.time_to_first_success_ms, r.cost_micros, r.final_diagnostic_category, r.replay_status
+                            r.time_to_first_success_ms, r.cost_micros, r.final_diagnostic_category, r.replay_status, r.episode_id
                      FROM benchmark_results r JOIN benchmark_problems p ON p.id = r.benchmark_problem_id
                      WHERE r.run_id = ?1 ORDER BY p.upstream_problem_id ASC"
                 ).map_err(rs)?;
-                let results: Vec<serde_json::Value> = rstmt.query_map([&args.run_id], |row| {
-                    Ok(serde_json::json!({
+                let rows: Vec<(serde_json::Value, Option<String>)> = rstmt.query_map([&args.run_id], |row| {
+                    Ok((serde_json::json!({
                         "benchmark_problem_id": row.get::<_, String>(0)?,
                         "theorem_name": row.get::<_, String>(1)?,
                         "status": row.get::<_, String>(2)?,
@@ -4481,8 +4481,34 @@ impl ServerHandler for ChatDbMcp {
                         "cost_micros": row.get::<_, Option<i64>>(7)?,
                         "final_diagnostic_category": row.get::<_, Option<String>>(8)?,
                         "replay_status": row.get::<_, Option<String>>(9)?,
-                    }))
+                    }), row.get::<_, Option<String>>(10)?))
                 }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+                let results: Vec<serde_json::Value> = rows.iter().map(|(v, _)| v.clone()).collect();
+
+                // Issue #38's verifier_cost: sum the real Lean invocation
+                // timing (wall_time_ms) persisted on action_attempts.lean_result_json
+                // (see step.rs::attempt_finalize) across every attempt on
+                // every episode this run's results reference. None when no
+                // episode in this run has any persisted timing at all — an
+                // honest "not available," never fabricated as zero.
+                let mut verifier_wall_time_ms_total: i64 = 0;
+                let mut verifier_cost_data_found = false;
+                for episode_id in rows.iter().filter_map(|(_, ep)| ep.as_ref()) {
+                    let mut jstmt = conn.prepare(
+                        "SELECT lean_result_json FROM action_attempts WHERE episode_id = ?1 AND lean_result_json IS NOT NULL"
+                    ).map_err(rs)?;
+                    let jsons: Vec<String> = jstmt.query_map([episode_id], |row| row.get(0))
+                        .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+                    for j in &jsons {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(j) {
+                            if let Some(wall_ms) = parsed.get("wall_time_ms").and_then(|v| v.as_i64()) {
+                                verifier_wall_time_ms_total += wall_ms;
+                                verifier_cost_data_found = true;
+                            }
+                        }
+                    }
+                }
+                let verifier_cost_ms: Option<i64> = if verifier_cost_data_found { Some(verifier_wall_time_ms_total) } else { None };
 
                 let is_solved = |r: &serde_json::Value| matches!(r["status"].as_str(), Some("kernel_verified") | Some("certified"));
                 let solved = results.iter().filter(|r| is_solved(r)).count();
@@ -4543,9 +4569,9 @@ impl ServerHandler for ChatDbMcp {
                     "host_side_cost_micros": host_side_cost_micros,
                     "host_cost_confidence": host_cost_confidence,
                     "mcp_side_cost_micros": serde_json::Value::Null,
-                    "verifier_cost_ms": serde_json::Value::Null,
+                    "verifier_cost_ms": verifier_cost_ms,
                     "storage_export_cost_micros": serde_json::Value::Null,
-                    "unknown_external_cost": "mcp_side_cost/verifier_cost/storage_export_cost are not yet instrumented — a known gap (issue #38), never silently reported as zero",
+                    "unknown_external_cost": "mcp_side_cost/storage_export_cost are not yet instrumented — a known gap (issue #38), never silently reported as zero. verifier_cost_ms is real (summed Lean wall-clock time from action_attempts.lean_result_json) when present, null if no attempt in this run has recorded timing yet",
                     "cost_completeness": cost_completeness,
                 });
 
@@ -7776,6 +7802,72 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed_exact["cost_summary"]["cost_completeness"], "host_cost_known");
         assert_eq!(observed_exact["cost_summary"]["host_side_cost_micros"], 100);
+    }
+
+    /// Issue #38's verifier_cost groundwork: a real, previously-undiscovered
+    /// gap found while designing cost_summary — RealLeanGateway already
+    /// computes real Lean invocation timing on every verification call, but
+    /// the active step.rs/attempt_finalize path discarded everything except
+    /// the outcome enum before this fix. Confirms the full pipeline:
+    /// attempt_finalize persists the raw result onto
+    /// action_attempts.lean_result_json, and benchmark_run_observe sums
+    /// wall_time_ms across every attempt on the episode into
+    /// cost_summary.verifier_cost_ms.
+    #[tokio::test]
+    async fn test_benchmark_run_observe_aggregates_real_verifier_cost_from_persisted_attempts() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run_envelope_id = create_run_envelope(&peer).await;
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // A real episode with TWO real verification attempts (one failed
+        // kernel_fail, one successful) — both must contribute their
+        // MockGateway-reported wall_time_ms (1 each) to the total.
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req1 = &ep["next_action_request"];
+        let claim1 = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req1["id"], "idempotency_key": "verifier-cost-1",
+            "expected_revision": req1["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let step1 = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim1["action_attempt_id"],
+            "expected_revision": req1["episode_revision"], "claim_token": claim1["claim_token"],
+            "action": {"type": "solve", "proof_term": "sorry"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let req2 = &step1["next_action_request"];
+        let claim2 = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req2["id"], "idempotency_key": "verifier-cost-2",
+            "expected_revision": req2["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim2["action_attempt_id"],
+            "expected_revision": req2["episode_revision"], "claim_token": claim2["claim_token"],
+            "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 2,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+            "run_id": run["run_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        // MockGateway reports wall_time_ms=1 per verification call; 2 real
+        // attempts on this episode -> verifier_cost_ms must be 2, not null,
+        // not 0 by coincidence.
+        assert_eq!(observed["cost_summary"]["verifier_cost_ms"], 2,
+            "verifier_cost_ms must sum real persisted timing across every attempt on the episode: {:?}", observed["cost_summary"]);
     }
 
     #[tokio::test]
