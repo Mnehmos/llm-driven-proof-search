@@ -1120,16 +1120,22 @@ CREATE TABLE IF NOT EXISTS ingested_document_nodes (
     node_order INTEGER NOT NULL,
     node_kind TEXT NOT NULL,
     natural_language_text TEXT NOT NULL,
-    source_span TEXT,
+    -- Required (issue #27 acceptance: source-span tracking). Every extracted
+    -- node must be traceable back to the paper text; the MCP handler also
+    -- rejects a blank span.
+    source_span TEXT NOT NULL,
     confidence TEXT,
     formalization_status TEXT NOT NULL DEFAULT 'prose_only',
     citation_status TEXT NOT NULL DEFAULT 'uncited',
     review_status TEXT NOT NULL DEFAULT 'unreviewed_extraction',
     risk_flags_json TEXT NOT NULL DEFAULT '[]',
-    -- Optional forward links once a node is promoted through a real path.
+    -- Forward links set by paper_ingest_link_node when a node is promoted
+    -- through a real path. A link records provenance only — it never grants the
+    -- node proof/kernel authority (the linked artifact keeps its own trust).
     linked_external_reference_id TEXT REFERENCES external_references(id),
     linked_external_theorem_claim_id TEXT REFERENCES external_theorem_claims(id),
     linked_research_node_id TEXT REFERENCES research_nodes(id),
+    linked_formalization_plan_item_id TEXT REFERENCES formalization_plan_items(id),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(document_id, node_order),
