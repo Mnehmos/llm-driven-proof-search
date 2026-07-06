@@ -171,12 +171,31 @@ budget state, fidelity status, or benchmark results.
 Candidate constructions are proposed mathematical objects — graph families,
 point configurations, colorings, field towers, lattices, counterexamples,
 asymptotic families, algebraic objects, combinatorial designs, and so on. They
-are useful for search and research planning: a candidate construction can
-exist before there is a research dossier written up, before there is a Lean
-theorem, before there is an episode, and before there is empirical search
-machinery to generate one automatically (that machinery is issue #26's
-empirical math lab; this substrate only holds the objects it will produce and
-judge).
+are the first durable object layer for **motivated discovery**: beyond *what*
+object is proposed, each records *why* it was proposed and what to do with it,
+encoding the loop
+
+```text
+observation → motivated move → proposed object → intended role → next check
+```
+
+via the fields `motivating_move` (`generalize`, `specialize`, `decompose`,
+`search_extremal_example`, `search_counterexample`, `introduce_invariant`,
+`reduce_to_known_theorem`, …), `source_observation`, `intended_role`
+(`witness`, `counterexample`, `extremal_example`, `lower_bound_construction`,
+`formalization_target`, `bridge_to_existing_theorem`, …), `strategy_context`,
+`why_this_might_work`, `why_this_might_fail`, `next_check`, and
+`future_challenge_relevance`. The object itself lives in `informal_description`,
+`parameters_json`, and `construction_json`; `verification_targets_json` records
+what a later system should check.
+
+A candidate construction can exist before there is a research dossier written
+up, before there is a Lean theorem, before there is an episode, and before
+there is empirical search machinery to generate one automatically (that
+machinery is issue #26's empirical math lab; this substrate only holds the
+objects it will produce and judge). Every link — `dossier_id`,
+`related_node_id`, `verification_layer_id`, `problem_version_id`,
+`episode_id` — is optional.
 
 Candidate constructions are **not proof certificates**. Their `trust_status`
 makes that explicit:

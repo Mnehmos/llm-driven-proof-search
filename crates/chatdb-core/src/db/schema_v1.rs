@@ -686,29 +686,53 @@ CREATE INDEX IF NOT EXISTS idx_verification_layers_dossier ON verification_layer
 
 -- Candidate construction artifacts (issue #8): proposed mathematical objects
 -- (graph families, colorings, point configurations, counterexamples, ...)
--- that can exist before a dossier is written up, before a Lean theorem
--- exists, before an episode exists, and before #26's empirical math lab
--- exists to generate/test/rank/falsify them. dossier_id is nullable -- unlike
--- research_nodes, a candidate construction is meant to be producible by a
--- future automated search (#26) or ad hoc exploration with no research
--- write-up yet, mirroring how research_dossiers themselves attach optionally
--- to a problem_version/episode. A candidate construction is a research
--- artifact, never proof authority: trust_status='kernel_verified_claim_linked'
--- is the only status this table can carry that claims kernel evidence, and it
--- is only reachable (enforced at the MCP layer, mirroring
--- enforce_kernel_verified_research_boundary) when verification_layer_id names
--- a verification_layers row whose own status is already 'kernel_verified'.
+-- captured as the first durable object layer for MOTIVATED discovery. Beyond
+-- "what object is proposed", each row records why it was proposed
+-- (motivating_move, source_observation), what role it should play
+-- (intended_role), the strategic context and the case for/against it
+-- (strategy_context, why_this_might_work, why_this_might_fail), what to check
+-- next (next_check), and how it may later connect to downstream systems
+-- (verification_targets_json, future_challenge_relevance) -- encoding the
+-- observation -> motivated move -> proposed object -> intended role ->
+-- next check loop.
+--
+-- A candidate construction can exist before a dossier is written up, before a
+-- Lean theorem exists, before an episode exists, and before #26's empirical
+-- math lab exists to generate/test/rank/falsify them. Every link
+-- (dossier_id, related_node_id, verification_layer_id, problem_version_id,
+-- episode_id) is nullable. It is a research artifact, never proof authority:
+-- trust_status='kernel_verified_claim_linked' is the only status this table
+-- can carry that claims kernel evidence, and it is only reachable (enforced
+-- at the MCP layer, mirroring enforce_kernel_verified_research_boundary) when
+-- verification_layer_id names a verification_layers row whose own status is
+-- already 'kernel_verified'. empirically_supported / human_reviewed /
+-- formalized_statement_exists / linked_to_formal_claim are NOT proof.
 CREATE TABLE IF NOT EXISTS candidate_constructions (
     id TEXT PRIMARY KEY,
     dossier_id TEXT REFERENCES research_dossiers(id),
     related_node_id TEXT REFERENCES research_nodes(id),
     verification_layer_id TEXT REFERENCES verification_layers(id),
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
     construction_type TEXT NOT NULL,
+    name TEXT,
     informal_description TEXT NOT NULL,
     parameters_json TEXT NOT NULL DEFAULT '{}',
+    construction_json TEXT NOT NULL DEFAULT '{}',
     claimed_properties_json TEXT NOT NULL DEFAULT '[]',
     known_failures_json TEXT NOT NULL DEFAULT '[]',
     empirical_checks_json TEXT NOT NULL DEFAULT '[]',
+    verification_targets_json TEXT NOT NULL DEFAULT '[]',
+    -- Motivated-discovery metadata (nullable: a bare object proposal is still
+    -- valid, but the discovery loop is what makes the artifact useful).
+    motivating_move TEXT,
+    source_observation TEXT,
+    intended_role TEXT,
+    strategy_context TEXT,
+    why_this_might_work TEXT,
+    why_this_might_fail TEXT,
+    next_check TEXT,
+    future_challenge_relevance TEXT,
     status TEXT NOT NULL DEFAULT 'proposed',
     trust_status TEXT NOT NULL DEFAULT 'informal',
     created_by TEXT NOT NULL,
@@ -724,6 +748,36 @@ CREATE TABLE IF NOT EXISTS candidate_constructions (
         'asymptotic_family',
         'algebraic_object',
         'combinatorial_design',
+        'other'
+    )),
+    CHECK(motivating_move IS NULL OR motivating_move IN (
+        'generalize',
+        'specialize',
+        'decompose',
+        'analogize',
+        'search_extremal_example',
+        'search_counterexample',
+        'lift_construction',
+        'compress_structure',
+        'introduce_invariant',
+        'weaken_hypothesis',
+        'strengthen_conclusion',
+        'change_representation',
+        'reduce_to_known_theorem',
+        'other'
+    )),
+    CHECK(intended_role IS NULL OR intended_role IN (
+        'witness',
+        'counterexample',
+        'extremal_example',
+        'lower_bound_construction',
+        'upper_bound_obstruction',
+        'lemma_motivator',
+        'formalization_target',
+        'heuristic_test_case',
+        'asymptotic_family',
+        'bridge_to_existing_theorem',
+        'future_challenge_submission',
         'other'
     )),
     CHECK(status IN (
@@ -748,6 +802,8 @@ CREATE TABLE IF NOT EXISTS candidate_constructions (
 CREATE INDEX IF NOT EXISTS idx_candidate_constructions_dossier ON candidate_constructions(dossier_id);
 CREATE INDEX IF NOT EXISTS idx_candidate_constructions_node ON candidate_constructions(related_node_id);
 CREATE INDEX IF NOT EXISTS idx_candidate_constructions_verification_layer ON candidate_constructions(verification_layer_id);
+CREATE INDEX IF NOT EXISTS idx_candidate_constructions_problem_version ON candidate_constructions(problem_version_id);
+CREATE INDEX IF NOT EXISTS idx_candidate_constructions_episode ON candidate_constructions(episode_id);
 
 -- Run envelopes (issues #34 core concept + #38 cost-surface splitting): a
 -- run envelope separates WHO/WHAT/WHY around a set of episodes from the

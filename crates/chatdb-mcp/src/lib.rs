@@ -1104,16 +1104,44 @@ pub struct CandidateConstructionAddArgs {
     pub related_node_id: Option<String>,
     #[serde(default)]
     pub verification_layer_id: Option<String>,
+    #[serde(default)]
+    pub problem_version_id: Option<String>,
+    #[serde(default)]
+    pub episode_id: Option<String>,
     pub construction_type: String,
+    #[serde(default)]
+    pub name: Option<String>,
     pub informal_description: String,
     #[serde(default)]
     pub parameters_json: Option<String>,
+    #[serde(default)]
+    pub construction_json: Option<String>,
     #[serde(default)]
     pub claimed_properties_json: Option<String>,
     #[serde(default)]
     pub known_failures_json: Option<String>,
     #[serde(default)]
     pub empirical_checks_json: Option<String>,
+    #[serde(default)]
+    pub verification_targets_json: Option<String>,
+    // Motivated-discovery metadata: observation -> motivated move -> proposed
+    // object -> intended role -> next check.
+    #[serde(default)]
+    pub motivating_move: Option<String>,
+    #[serde(default)]
+    pub source_observation: Option<String>,
+    #[serde(default)]
+    pub intended_role: Option<String>,
+    #[serde(default)]
+    pub strategy_context: Option<String>,
+    #[serde(default)]
+    pub why_this_might_work: Option<String>,
+    #[serde(default)]
+    pub why_this_might_fail: Option<String>,
+    #[serde(default)]
+    pub next_check: Option<String>,
+    #[serde(default)]
+    pub future_challenge_relevance: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
@@ -1143,6 +1171,10 @@ pub struct CandidateConstructionUpdateStatusArgs {
     pub claimed_properties_json: Option<String>,
     #[serde(default)]
     pub known_failures_json: Option<String>,
+    /// "What to check next" evolves as review proceeds, so it can be revised
+    /// through status updates without re-adding the construction.
+    #[serde(default)]
+    pub next_check: Option<String>,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -1666,11 +1698,44 @@ const CANDIDATE_CONSTRUCTION_TRUST_STATUSES: &[&str] = &[
     "kernel_verified_claim_linked",
 ];
 const CANDIDATE_CONSTRUCTION_OBSERVATION_RESULTS: &[&str] = &["supports", "refutes", "inconclusive"];
+const CANDIDATE_CONSTRUCTION_MOTIVATING_MOVES: &[&str] = &[
+    "generalize",
+    "specialize",
+    "decompose",
+    "analogize",
+    "search_extremal_example",
+    "search_counterexample",
+    "lift_construction",
+    "compress_structure",
+    "introduce_invariant",
+    "weaken_hypothesis",
+    "strengthen_conclusion",
+    "change_representation",
+    "reduce_to_known_theorem",
+    "other",
+];
+const CANDIDATE_CONSTRUCTION_INTENDED_ROLES: &[&str] = &[
+    "witness",
+    "counterexample",
+    "extremal_example",
+    "lower_bound_construction",
+    "upper_bound_obstruction",
+    "lemma_motivator",
+    "formalization_target",
+    "heuristic_test_case",
+    "asymptotic_family",
+    "bridge_to_existing_theorem",
+    "future_challenge_submission",
+    "other",
+];
 
 const CANDIDATE_CONSTRUCTION_SELECT: &str = "SELECT cc.id, cc.dossier_id, cc.related_node_id, cc.verification_layer_id, \
-    cc.construction_type, cc.informal_description, cc.parameters_json, cc.claimed_properties_json, \
-    cc.known_failures_json, cc.empirical_checks_json, cc.status, cc.trust_status, cc.created_by, \
-    cc.created_at, cc.updated_at, vl.status \
+    cc.problem_version_id, cc.episode_id, cc.construction_type, cc.name, cc.informal_description, \
+    cc.parameters_json, cc.construction_json, cc.claimed_properties_json, cc.known_failures_json, \
+    cc.empirical_checks_json, cc.verification_targets_json, cc.motivating_move, cc.source_observation, \
+    cc.intended_role, cc.strategy_context, cc.why_this_might_work, cc.why_this_might_fail, cc.next_check, \
+    cc.future_challenge_relevance, cc.status, cc.trust_status, cc.created_by, cc.created_at, cc.updated_at, \
+    vl.status \
     FROM candidate_constructions cc LEFT JOIN verification_layers vl ON vl.id = cc.verification_layer_id";
 
 /// A candidate construction never mutates proof outcome, so its
@@ -1709,12 +1774,14 @@ fn parse_json_or_wrap(raw: &str) -> serde_json::Value {
 }
 
 fn map_candidate_construction_row(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
-    let parameters_json: String = row.get(6)?;
-    let claimed_properties_json: String = row.get(7)?;
-    let known_failures_json: String = row.get(8)?;
-    let empirical_checks_json: String = row.get(9)?;
-    let trust_status: String = row.get(11)?;
-    let verification_layer_status: Option<String> = row.get(15)?;
+    let parameters_json: String = row.get(9)?;
+    let construction_json: String = row.get(10)?;
+    let claimed_properties_json: String = row.get(11)?;
+    let known_failures_json: String = row.get(12)?;
+    let empirical_checks_json: String = row.get(13)?;
+    let verification_targets_json: String = row.get(14)?;
+    let trust_status: String = row.get(24)?;
+    let verification_layer_status: Option<String> = row.get(28)?;
     let has_kernel_evidence = trust_status == "kernel_verified_claim_linked"
         && verification_layer_status.as_deref() == Some("kernel_verified");
     Ok(serde_json::json!({
@@ -1722,17 +1789,30 @@ fn map_candidate_construction_row(row: &rusqlite::Row) -> rusqlite::Result<serde
         "dossier_id": row.get::<_, Option<String>>(1)?,
         "related_node_id": row.get::<_, Option<String>>(2)?,
         "verification_layer_id": row.get::<_, Option<String>>(3)?,
-        "construction_type": row.get::<_, String>(4)?,
-        "informal_description": row.get::<_, String>(5)?,
+        "problem_version_id": row.get::<_, Option<String>>(4)?,
+        "episode_id": row.get::<_, Option<String>>(5)?,
+        "construction_type": row.get::<_, String>(6)?,
+        "name": row.get::<_, Option<String>>(7)?,
+        "informal_description": row.get::<_, String>(8)?,
         "parameters": parse_json_or_wrap(&parameters_json),
+        "construction": parse_json_or_wrap(&construction_json),
         "claimed_properties": parse_json_or_wrap(&claimed_properties_json),
         "known_failures": parse_json_or_wrap(&known_failures_json),
         "empirical_checks": parse_json_or_wrap(&empirical_checks_json),
-        "status": row.get::<_, String>(10)?,
+        "verification_targets": parse_json_or_wrap(&verification_targets_json),
+        "motivating_move": row.get::<_, Option<String>>(15)?,
+        "source_observation": row.get::<_, Option<String>>(16)?,
+        "intended_role": row.get::<_, Option<String>>(17)?,
+        "strategy_context": row.get::<_, Option<String>>(18)?,
+        "why_this_might_work": row.get::<_, Option<String>>(19)?,
+        "why_this_might_fail": row.get::<_, Option<String>>(20)?,
+        "next_check": row.get::<_, Option<String>>(21)?,
+        "future_challenge_relevance": row.get::<_, Option<String>>(22)?,
+        "status": row.get::<_, String>(23)?,
         "trust_status": trust_status,
-        "created_by": row.get::<_, String>(12)?,
-        "created_at": row.get::<_, String>(13)?,
-        "updated_at": row.get::<_, String>(14)?,
+        "created_by": row.get::<_, String>(25)?,
+        "created_at": row.get::<_, String>(26)?,
+        "updated_at": row.get::<_, String>(27)?,
         "verification_layer_status": verification_layer_status,
         "has_kernel_evidence": has_kernel_evidence,
     }))
@@ -3112,9 +3192,9 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<AssumptionBoundaryAddArgs>("assumption_boundary_add", "Add an unformalized or rejected unsafe assumption boundary to a dossier. Assumptions are visible metadata, not proof authority"),
             make_tool::<CitationReviewAddArgs>("citation_review_add", "Record a human citation review for an external theorem claim. Human review remains distinct from Lean kernel verification"),
             make_tool::<VerificationLayerSetArgs>("verification_layer_set", "Set an independent verification layer for a dossier target. Blocked/failed layers do not fail the dossier; cited/reviewed/assumed artifacts cannot be mislabeled kernel_verified"),
-            make_tool::<CandidateConstructionAddArgs>("candidate_construction_add", "Propose a candidate mathematical construction (graph_family/point_configuration/coloring/field_tower/lattice/counterexample/asymptotic_family/algebraic_object/combinatorial_design/other). Can exist before a dossier, node, Lean theorem, or episode. A research artifact, not a proof certificate"),
+            make_tool::<CandidateConstructionAddArgs>("candidate_construction_add", "Propose a candidate mathematical construction (graph_family/point_configuration/coloring/field_tower/lattice/counterexample/asymptotic_family/algebraic_object/combinatorial_design/other) with motivated-discovery metadata: motivating_move, source_observation, intended_role, why_this_might_work/fail, next_check. Can exist before a dossier, node, Lean theorem, problem, or episode. A research artifact, not a proof certificate"),
             make_tool::<CandidateConstructionObserveArgs>("candidate_construction_observe", "Record one empirical check (supports/refutes/inconclusive) against a candidate construction, appended to its empirical_checks history. Never changes proof status, and 'supports' never implies proved"),
-            make_tool::<CandidateConstructionUpdateStatusArgs>("candidate_construction_update_status", "Update a candidate construction's status and/or trust_status (and optionally its claimed_properties/known_failures). trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified"),
+            make_tool::<CandidateConstructionUpdateStatusArgs>("candidate_construction_update_status", "Update a candidate construction's status, trust_status, claimed_properties, known_failures, and/or next_check. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified"),
             make_tool::<CandidateConstructionLinkNodeArgs>("candidate_construction_link_node", "Attach a candidate construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier"),
             make_tool::<CandidateConstructionLinkVerificationLayerArgs>("candidate_construction_link_verification_layer", "Attach a candidate construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier"),
             make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
@@ -3566,8 +3646,8 @@ impl ServerHandler for ChatDbMcp {
                                 "required_run_mode": "any"
                             },
                             "candidate_construction_add": {
-                                "side_effect": "mutating — inserts one candidate_constructions row, optionally linked to a dossier, research node, and/or verification layer that must already exist (and, if a dossier is also given, must already belong to that dossier)",
-                                "trust_level": "untrusted_input — a candidate construction is a proposed mathematical object (informal_description/parameters/claimed_properties), never proof authority; trust_status='kernel_verified_claim_linked' is rejected by enforce_kernel_verified_construction_boundary unless verification_layer_id names a verification_layers row whose own status is already 'kernel_verified'",
+                                "side_effect": "mutating — inserts one candidate_constructions row, optionally linked to a dossier, research node, verification layer, problem_version, and/or episode that must already exist (a linked node/layer must belong to the given dossier; a linked episode must belong to the given problem_version)",
+                                "trust_level": "untrusted_input — a candidate construction is a proposed mathematical object plus motivated-discovery narrative (informal_description/parameters/construction/claimed_properties and motivating_move/source_observation/intended_role/why_this_might_work/why_this_might_fail/next_check), never proof authority; trust_status='kernel_verified_claim_linked' is rejected by enforce_kernel_verified_construction_boundary unless verification_layer_id names a verification_layers row whose own status is already 'kernel_verified'",
                                 "cost_surface": "none",
                                 "benchmark_safety": "safe_public_output",
                                 "replayability": "deterministic",
@@ -5727,9 +5807,18 @@ impl ServerHandler for ChatDbMcp {
                 validate_one_of("status", &status, CANDIDATE_CONSTRUCTION_STATUSES)?;
                 let trust_status = args.trust_status.clone().unwrap_or_else(|| "informal".to_string());
                 validate_one_of("trust_status", &trust_status, CANDIDATE_CONSTRUCTION_TRUST_STATUSES)?;
+                if let Some(motivating_move) = &args.motivating_move {
+                    validate_one_of("motivating_move", motivating_move, CANDIDATE_CONSTRUCTION_MOTIVATING_MOVES)?;
+                }
+                if let Some(intended_role) = &args.intended_role {
+                    validate_one_of("intended_role", intended_role, CANDIDATE_CONSTRUCTION_INTENDED_ROLES)?;
+                }
                 let parameters_json = args.parameters_json.clone().unwrap_or_else(|| "{}".to_string());
                 serde_json::from_str::<serde_json::Value>(&parameters_json)
                     .map_err(|e| mcp_invalid_params(format!("parameters_json must be valid JSON: {}", e)))?;
+                let construction_json = args.construction_json.clone().unwrap_or_else(|| "{}".to_string());
+                serde_json::from_str::<serde_json::Value>(&construction_json)
+                    .map_err(|e| mcp_invalid_params(format!("construction_json must be valid JSON: {}", e)))?;
                 let claimed_properties_json = args.claimed_properties_json.clone().unwrap_or_else(|| "[]".to_string());
                 serde_json::from_str::<serde_json::Value>(&claimed_properties_json)
                     .map_err(|e| mcp_invalid_params(format!("claimed_properties_json must be valid JSON: {}", e)))?;
@@ -5739,6 +5828,9 @@ impl ServerHandler for ChatDbMcp {
                 let empirical_checks_json = args.empirical_checks_json.clone().unwrap_or_else(|| "[]".to_string());
                 serde_json::from_str::<serde_json::Value>(&empirical_checks_json)
                     .map_err(|e| mcp_invalid_params(format!("empirical_checks_json must be valid JSON: {}", e)))?;
+                let verification_targets_json = args.verification_targets_json.clone().unwrap_or_else(|| "[]".to_string());
+                serde_json::from_str::<serde_json::Value>(&verification_targets_json)
+                    .map_err(|e| mcp_invalid_params(format!("verification_targets_json must be valid JSON: {}", e)))?;
 
                 let mut conn = self.conn.lock().await;
                 let tx = conn.transaction().map_err(rs)?;
@@ -5757,32 +5849,53 @@ impl ServerHandler for ChatDbMcp {
                         None => require_row_exists(&tx, "verification_layers", layer_id, "verification_layer_id")?,
                     }
                 }
+                // problem_version_id / episode_id are optional links to the
+                // existing episode substrate; verify_dossier_links also checks
+                // the episode actually belongs to the problem_version when both
+                // are given. A candidate construction never requires either.
+                verify_dossier_links(&tx, &args.problem_version_id, &args.episode_id)?;
                 enforce_kernel_verified_construction_boundary(&tx, &args.verification_layer_id, &trust_status)?;
 
                 let candidate_construction_id = Uuid::new_v4().to_string();
                 let now = Utc::now().to_rfc3339();
                 tx.execute(
                     "INSERT INTO candidate_constructions (
-                        id, dossier_id, related_node_id, verification_layer_id, construction_type, informal_description,
-                        parameters_json, claimed_properties_json, known_failures_json, empirical_checks_json,
+                        id, dossier_id, related_node_id, verification_layer_id, problem_version_id, episode_id,
+                        construction_type, name, informal_description, parameters_json, construction_json,
+                        claimed_properties_json, known_failures_json, empirical_checks_json, verification_targets_json,
+                        motivating_move, source_observation, intended_role, strategy_context, why_this_might_work,
+                        why_this_might_fail, next_check, future_challenge_relevance,
                         status, trust_status, created_by, created_at, updated_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
-                    (
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?27)",
+                    rusqlite::params![
                         &candidate_construction_id,
                         args.dossier_id.as_deref(),
                         args.related_node_id.as_deref(),
                         args.verification_layer_id.as_deref(),
+                        args.problem_version_id.as_deref(),
+                        args.episode_id.as_deref(),
                         &args.construction_type,
+                        args.name.as_deref().map(str::trim),
                         args.informal_description.trim(),
                         &parameters_json,
+                        &construction_json,
                         &claimed_properties_json,
                         &known_failures_json,
                         &empirical_checks_json,
+                        &verification_targets_json,
+                        args.motivating_move.as_deref(),
+                        args.source_observation.as_deref(),
+                        args.intended_role.as_deref(),
+                        args.strategy_context.as_deref(),
+                        args.why_this_might_work.as_deref(),
+                        args.why_this_might_fail.as_deref(),
+                        args.next_check.as_deref(),
+                        args.future_challenge_relevance.as_deref(),
                         &status,
                         &trust_status,
                         args.created_by.trim(),
                         &now,
-                    ),
+                    ],
                 ).map_err(rs)?;
                 let candidate = candidate_construction_json(&tx, &candidate_construction_id)?;
                 let dossier = match &args.dossier_id {
@@ -5850,8 +5963,9 @@ impl ServerHandler for ChatDbMcp {
                 let args: CandidateConstructionUpdateStatusArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
                 if args.status.is_none() && args.trust_status.is_none()
-                    && args.claimed_properties_json.is_none() && args.known_failures_json.is_none() {
-                    return Err(mcp_invalid_params("at least one of status, trust_status, claimed_properties_json, known_failures_json must be provided"));
+                    && args.claimed_properties_json.is_none() && args.known_failures_json.is_none()
+                    && args.next_check.is_none() {
+                    return Err(mcp_invalid_params("at least one of status, trust_status, claimed_properties_json, known_failures_json, next_check must be provided"));
                 }
                 if let Some(status) = &args.status {
                     validate_one_of("status", status, CANDIDATE_CONSTRUCTION_STATUSES)?;
@@ -5888,13 +6002,15 @@ impl ServerHandler for ChatDbMcp {
                         trust_status = COALESCE(?2, trust_status),
                         claimed_properties_json = COALESCE(?3, claimed_properties_json),
                         known_failures_json = COALESCE(?4, known_failures_json),
-                        updated_at = ?5
-                     WHERE id = ?6",
+                        next_check = COALESCE(?5, next_check),
+                        updated_at = ?6
+                     WHERE id = ?7",
                     (
                         args.status.as_deref(),
                         args.trust_status.as_deref(),
                         args.claimed_properties_json.as_deref(),
                         args.known_failures_json.as_deref(),
+                        args.next_check.as_deref(),
                         &now,
                         &args.candidate_construction_id,
                     ),
@@ -9666,17 +9782,46 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        // A candidate construction can exist before a dossier, before a node, before an episode.
+        // A candidate construction can exist before a dossier, before a node, before an episode,
+        // and it records the motivated-discovery loop: observation -> motivated move -> proposed
+        // object -> intended role -> next check.
         let standalone = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
             "construction_type": "graph_family",
+            "name": "Kneser-like family K(n)",
             "informal_description": "A family of Kneser-like graphs indexed by n",
+            "motivating_move": "generalize",
+            "source_observation": "The n=5 case had an unexpectedly large independent set",
+            "intended_role": "extremal_example",
+            "strategy_context": "Trying to force the chromatic number up while keeping the clique number fixed",
+            "why_this_might_work": "The Kneser structure is known to decouple clique and chromatic number",
+            "why_this_might_fail": "The independence number may collapse for large n",
+            "next_check": "Compute chromatic number for n in 5..9",
+            "future_challenge_relevance": "Could seed a future extremal-graph challenge",
             "created_by": "researcher-1",
         }).as_object().unwrap().clone())).await.unwrap());
         let standalone_id = standalone["candidate_construction_id"].as_str().unwrap().to_string();
         assert!(standalone["dossier"].is_null(), "{:?}", standalone);
-        assert_eq!(standalone["candidate_construction"]["status"], "proposed", "{:?}", standalone);
-        assert_eq!(standalone["candidate_construction"]["trust_status"], "informal", "{:?}", standalone);
-        assert!(standalone["candidate_construction"]["dossier_id"].is_null(), "{:?}", standalone);
+        let sc = &standalone["candidate_construction"];
+        assert_eq!(sc["status"], "proposed", "{:?}", standalone);
+        assert_eq!(sc["trust_status"], "informal", "{:?}", standalone);
+        assert!(sc["dossier_id"].is_null(), "{:?}", standalone);
+        // Motivated-discovery metadata round-trips.
+        assert_eq!(sc["motivating_move"], "generalize", "{:?}", sc);
+        assert_eq!(sc["intended_role"], "extremal_example", "{:?}", sc);
+        assert_eq!(sc["source_observation"], "The n=5 case had an unexpectedly large independent set", "{:?}", sc);
+        assert_eq!(sc["why_this_might_work"], "The Kneser structure is known to decouple clique and chromatic number", "{:?}", sc);
+        assert_eq!(sc["why_this_might_fail"], "The independence number may collapse for large n", "{:?}", sc);
+        assert_eq!(sc["next_check"], "Compute chromatic number for n in 5..9", "{:?}", sc);
+        assert_eq!(sc["name"], "Kneser-like family K(n)", "{:?}", sc);
+
+        // Invalid motivating_move / intended_role are rejected (enum-guarded).
+        let bad_move = peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
+            "construction_type": "graph_family",
+            "informal_description": "x",
+            "motivating_move": "teleport",
+            "created_by": "researcher-1",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_move.is_err(), "an unknown motivating_move must be rejected");
 
         // A candidate construction can link to a dossier at creation time.
         let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
@@ -9894,6 +10039,84 @@ mod tests {
         assert_eq!(candidate_constructions.len(), 2, "{:?}", dossier_observed);
         let statuses: Vec<&str> = candidate_constructions.iter().map(|c| c["status"].as_str().unwrap()).collect();
         assert!(statuses.contains(&"falsified"), "falsified constructions must remain visible in dossier observation: {:?}", statuses);
+    }
+
+    #[tokio::test]
+    async fn test_candidate_construction_links_problem_and_episode_and_surfaces_motivated_discovery_in_dossier() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        // A candidate construction can attach to a problem_version and an episode without
+        // requiring any Lean proof to exist first.
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Motivated discovery dossier",
+            "problem_version_id": pv_id,
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+            "problem_version_id": pv_id,
+            "episode_id": episode_id,
+            "construction_type": "point_configuration",
+            "informal_description": "A configuration of 2n points forcing many unit distances",
+            "motivating_move": "search_extremal_example",
+            "source_observation": "Small cases suggest a super-linear unit-distance count",
+            "intended_role": "lower_bound_construction",
+            "why_this_might_work": "Grid-like structure maximizes repeated distances",
+            "why_this_might_fail": "Collinear degeneracies may reduce the count",
+            "next_check": "Count unit distances for n up to 20",
+            "verification_targets_json": "[{\"target\":\"unit_distance_count\",\"threshold\":\"c*n*log(n)\"}]",
+            "created_by": "researcher-2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let cc = &created["candidate_construction"];
+        assert_eq!(cc["problem_version_id"], pv_id, "{:?}", cc);
+        assert_eq!(cc["episode_id"], episode_id, "{:?}", cc);
+        assert_eq!(cc["motivating_move"], "search_extremal_example", "{:?}", cc);
+        assert_eq!(cc["intended_role"], "lower_bound_construction", "{:?}", cc);
+        assert_eq!(cc["verification_targets"].as_array().unwrap().len(), 1, "{:?}", cc);
+        assert_eq!(cc["has_kernel_evidence"], false, "{:?}", cc);
+
+        // The dossier bucket keeps candidate constructions SEPARATE from proof/citation/
+        // assumption/verification-layer/open-gap state, and carries the motivated-discovery fields.
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let bucket = observed["candidate_constructions"].as_array().unwrap();
+        assert_eq!(bucket.len(), 1, "{:?}", observed);
+        let entry = &bucket[0];
+        assert_eq!(entry["construction_type"], "point_configuration");
+        assert_eq!(entry["motivating_move"], "search_extremal_example");
+        assert_eq!(entry["intended_role"], "lower_bound_construction");
+        assert_eq!(entry["source_observation"], "Small cases suggest a super-linear unit-distance count");
+        assert_eq!(entry["why_this_might_work"], "Grid-like structure maximizes repeated distances");
+        assert_eq!(entry["why_this_might_fail"], "Collinear degeneracies may reduce the count");
+        assert_eq!(entry["next_check"], "Count unit distances for n up to 20");
+        assert_eq!(entry["has_kernel_evidence"], false);
+        // Candidate constructions are their own bucket, not mixed into the trust_boundary buckets
+        // that summarize proved/cited/assumed/open state.
+        assert!(observed.get("candidate_constructions").is_some());
+        let tb = &observed["trust_boundary"];
+        assert!(tb.get("candidate_constructions").is_none(), "candidate constructions must not be folded into the proof/citation/assumption trust_boundary: {:?}", tb);
+        assert!(observed["nodes"].as_array().unwrap().is_empty(), "{:?}", observed);
+        assert!(observed["verification_layers"].as_array().unwrap().is_empty(), "{:?}", observed);
+
+        // next_check evolves through a status update without re-adding the construction.
+        let cc_id = cc["candidate_construction_id"].as_str().unwrap().to_string();
+        let updated = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_update_status").with_arguments(serde_json::json!({
+            "candidate_construction_id": cc_id,
+            "status": "under_review",
+            "next_check": "Count unit distances for n up to 40",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(updated["candidate_construction"]["status"], "under_review", "{:?}", updated);
+        assert_eq!(updated["candidate_construction"]["next_check"], "Count unit distances for n up to 40", "{:?}", updated);
     }
 
     #[tokio::test]
