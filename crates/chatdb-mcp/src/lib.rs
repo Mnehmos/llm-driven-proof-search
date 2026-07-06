@@ -1726,6 +1726,57 @@ fn require_row_in_dossier(tx: &Transaction, table: &str, id: &str, dossier_id: &
     }
 }
 
+/// Issues #9/#11/#13 trust-boundary tightening (PR #55 review): a research node
+/// or external claim may only be marked `proved_in_episode` by linking to a
+/// verified lemma that belongs to THIS dossier's own proof context — the
+/// dossier's episode, or an episode of the dossier's problem_version. Without
+/// this, a dossier tied to problem A could point at a verified lemma from an
+/// unrelated episode B and — since `verification_layer_set` accepts
+/// `kernel_verified` for a node/claim by checking only its `proved_in_episode`
+/// status — surface B's kernel evidence as A's own. When a declared episode id
+/// is supplied (an external claim's `proved_episode_id`) it must also equal the
+/// lemma's actual episode. Requires the dossier to be bound to a problem/episode
+/// at all — a standalone dossier has no "own" proof context to claim.
+fn ensure_proved_lemma_in_dossier_context(
+    tx: &Transaction,
+    dossier_id: &str,
+    lemma_id: &str,
+    declared_episode_id: Option<&str>,
+) -> Result<(), McpError> {
+    let (dossier_pv, dossier_ep): (Option<String>, Option<String>) = tx.query_row(
+        "SELECT problem_version_id, episode_id FROM research_dossiers WHERE id = ?1",
+        [dossier_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).map_err(rs)?;
+    let lemma_episode: String = tx.query_row(
+        "SELECT episode_id FROM episode_verified_lemmas WHERE id = ?1",
+        [lemma_id],
+        |row| row.get(0),
+    ).map_err(rs)?;
+    if let Some(declared) = declared_episode_id {
+        if declared != lemma_episode {
+            return Err(mcp_invalid_params(
+                "proved_episode_id does not match the verified lemma's actual episode"
+            ));
+        }
+    }
+    let lemma_pv: String = tx.query_row(
+        "SELECT problem_version_id FROM episodes WHERE id = ?1",
+        [&lemma_episode],
+        |row| row.get(0),
+    ).map_err(rs)?;
+    let matches_context = dossier_ep.as_deref() == Some(lemma_episode.as_str())
+        || dossier_pv.as_deref() == Some(lemma_pv.as_str());
+    if !matches_context {
+        return Err(mcp_invalid_params(
+            "'proved_in_episode' requires the linked verified lemma to come from this dossier's OWN episode \
+             or problem_version — a dossier cannot borrow kernel evidence from an unrelated episode. Link \
+             the dossier to that episode/problem, or use a non-proved trust status."
+        ));
+    }
+    Ok(())
+}
+
 fn next_order(tx: &Transaction, table: &str, order_col: &str, dossier_id: &str) -> Result<i64, McpError> {
     let sql = format!("SELECT COALESCE(MAX({}), -1) + 1 FROM {} WHERE dossier_id = ?1", order_col, table);
     tx.query_row(&sql, [dossier_id], |row| row.get(0)).map_err(rs)
@@ -6306,6 +6357,25 @@ impl ServerHandler for ChatDbMcp {
                 }
                 if let Some(lemma_id) = &args.linked_verified_lemma_id {
                     require_row_exists(&tx, "episode_verified_lemmas", lemma_id, "linked_verified_lemma_id")?;
+                    // Trust boundary (PR #55 review): a 'proved_in_episode' node
+                    // must point at a lemma from this dossier's OWN proof context,
+                    // never borrow unrelated kernel evidence.
+                    if trust_status == "proved_in_episode" {
+                        ensure_proved_lemma_in_dossier_context(&tx, &args.dossier_id, lemma_id, None)?;
+                        // If an obligation is also linked, it must belong to the
+                        // same episode the lemma was proved in.
+                        if let Some(obligation_id) = &args.linked_obligation_id {
+                            let lemma_episode: String = tx.query_row(
+                                "SELECT episode_id FROM episode_verified_lemmas WHERE id = ?1", [lemma_id], |r| r.get(0),
+                            ).map_err(rs)?;
+                            let obl_episode: String = tx.query_row(
+                                "SELECT episode_id FROM episode_obligations WHERE id = ?1", [obligation_id], |r| r.get(0),
+                            ).map_err(rs)?;
+                            if obl_episode != lemma_episode {
+                                return Err(mcp_invalid_params("linked_obligation_id belongs to a different episode than the linked verified lemma"));
+                            }
+                        }
+                    }
                 }
 
                 let node_id = Uuid::new_v4().to_string();
@@ -6364,6 +6434,14 @@ impl ServerHandler for ChatDbMcp {
                 }
                 if let Some(lemma_id) = &args.proved_lemma_id {
                     require_row_exists(&tx, "episode_verified_lemmas", lemma_id, "proved_lemma_id")?;
+                    // Trust boundary (PR #55 review): a 'proved_in_episode' claim
+                    // must point at a lemma from this dossier's OWN proof context,
+                    // and a supplied proved_episode_id must match the lemma's
+                    // actual episode — never borrow unrelated kernel evidence into
+                    // trust_boundary.lean_verified.
+                    if claim_status == "proved_in_episode" {
+                        ensure_proved_lemma_in_dossier_context(&tx, &args.dossier_id, lemma_id, args.proved_episode_id.as_deref())?;
+                    }
                 }
 
                 let reference_id = Uuid::new_v4().to_string();
@@ -11036,6 +11114,77 @@ mod tests {
             boundary["lean_verified"]["external_theorem_claims"][0]["claim_status"],
             "Mathlib imports and locally proved episode claims must remain distinct"
         );
+    }
+
+    /// PR #55 review (trust-boundary tightening): a dossier bound to problem/
+    /// episode A must NOT be able to mark a node or external claim
+    /// `proved_in_episode` by pointing at a verified lemma from an UNRELATED
+    /// episode B — otherwise it could surface B's kernel evidence as its own.
+    #[tokio::test]
+    async fn test_proved_in_episode_requires_lemma_from_dossiers_own_context() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        // Two independent proved episodes A and B, each with its own verified lemma.
+        let lemma_for = |peer: rmcp::service::Peer<rmcp::RoleClient>, conn_arc: Arc<Mutex<Connection>>, tag: &'static str| async move {
+            let pv = create_problem(&peer, "True").await;
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+            let step = claim_and_solve(&peer, &episode_id, "trivial", tag).await;
+            assert_eq!(step["outcome"], "kernel_verified");
+            let lemma: String = {
+                let conn = conn_arc.lock().await;
+                conn.query_row("SELECT id FROM episode_verified_lemmas WHERE episode_id = ?1 LIMIT 1", [&episode_id], |r| r.get(0)).unwrap()
+            };
+            (pv, episode_id, lemma)
+        };
+        let (pv_a, ep_a, lemma_a) = lemma_for(peer.clone(), conn_arc.clone(), "proof-A").await;
+        let (_pv_b, ep_b, lemma_b) = lemma_for(peer.clone(), conn_arc.clone(), "proof-B").await;
+
+        // Dossier bound to A.
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Dossier for problem A", "problem_version_id": pv_a, "episode_id": ep_a,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+
+        // NODE: borrowing B's lemma is rejected; A's own lemma is accepted.
+        let node_borrow = peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "node_type": "theorem", "title": "borrowed", "trust_status": "proved_in_episode",
+            "linked_verified_lemma_id": lemma_b,
+        }).as_object().unwrap().clone())).await;
+        assert!(node_borrow.is_err(), "a node must not claim proved_in_episode with a lemma from an unrelated episode");
+        let node_ok = peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "node_type": "theorem", "title": "own", "trust_status": "proved_in_episode",
+            "linked_verified_lemma_id": lemma_a,
+        }).as_object().unwrap().clone())).await;
+        assert!(node_ok.is_ok(), "a node backed by the dossier's OWN episode lemma must be accepted: {:?}", node_ok.err());
+
+        // CLAIM: borrowing B's lemma is rejected; A's own lemma is accepted;
+        // a proved_episode_id that mismatches the lemma's episode is rejected.
+        let claim_borrow = peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "title": "borrowed claim", "theorem_label": "b", "theorem_statement": "True",
+            "claim_status": "proved_in_episode", "proved_lemma_id": lemma_b,
+        }).as_object().unwrap().clone())).await;
+        assert!(claim_borrow.is_err(), "a claim must not borrow an unrelated episode's lemma");
+        let claim_mismatch = peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "title": "mismatch", "theorem_label": "m", "theorem_statement": "True",
+            "claim_status": "proved_in_episode", "proved_lemma_id": lemma_a, "proved_episode_id": ep_b,
+        }).as_object().unwrap().clone())).await;
+        assert!(claim_mismatch.is_err(), "proved_episode_id must match the lemma's actual episode");
+        let claim_ok = peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "title": "own claim", "theorem_label": "a", "theorem_statement": "True",
+            "claim_status": "proved_in_episode", "proved_lemma_id": lemma_a, "proved_episode_id": ep_a,
+        }).as_object().unwrap().clone())).await;
+        assert!(claim_ok.is_ok(), "a claim backed by the dossier's OWN episode lemma must be accepted: {:?}", claim_ok.err());
     }
 
     #[tokio::test]
