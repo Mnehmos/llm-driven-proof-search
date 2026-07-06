@@ -1066,6 +1066,119 @@ CREATE INDEX IF NOT EXISTS idx_empirical_searches_candidate ON empirical_searche
 CREATE INDEX IF NOT EXISTS idx_empirical_searches_verification_layer ON empirical_searches(verification_layer_id);
 CREATE INDEX IF NOT EXISTS idx_empirical_searches_node ON empirical_searches(related_node_id);
 
+-- Paper/PDF ingestion (issue #27): turns a paper, manuscript, model-written
+-- proof sketch, or human exposition into a REVIEWABLE research workspace inside
+-- a dossier. ChatDB does no OCR/LLM extraction itself (no inference code lives
+-- here) -- the host performs extraction and records the structured result,
+-- which is UNTRUSTED by construction. Ingestion is not verification: an
+-- ingested_documents row and its extracted ingested_document_nodes have NO
+-- column able to hold kernel evidence. extraction_trust_status tops out at
+-- 'human_reviewed_extraction'/'linked_to_dossier_artifact' -- still not proof.
+-- No ingested artifact can mark anything kernel_verified, certified, proved,
+-- statement_fidelity_approved, benchmark_certified, or training_eligible; that
+-- structural absence, not a CHECK, is the guarantee. Extracted theorem text is
+-- NOT statement-fidelity approval, an extracted citation is NOT citation
+-- validation, and an extracted assumption is NOT an accepted assumption -- each
+-- is a candidate that must go through the existing fidelity/citation/review
+-- paths (or Lean) to gain any authority. dossier_id is nullable: a document can
+-- be ingested before it is attached to a dossier.
+CREATE TABLE IF NOT EXISTS ingested_documents (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    title TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_ref TEXT,
+    source_content_hash TEXT,
+    ingest_status TEXT NOT NULL DEFAULT 'planned',
+    extraction_trust_status TEXT NOT NULL DEFAULT 'unreviewed_extraction',
+    notes TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(source_kind IN ('pdf', 'manuscript', 'proof_sketch', 'exposition', 'webpage', 'other')),
+    CHECK(ingest_status IN ('planned', 'ingesting', 'ingested', 'failed', 'superseded')),
+    CHECK(extraction_trust_status IN (
+        'unreviewed_extraction',
+        'machine_extracted',
+        'human_reviewed_extraction',
+        'rejected_extraction',
+        'linked_to_dossier_artifact'
+    ))
+);
+
+-- One extracted node from an ingested document, in document order. Every field
+-- is untrusted extraction. formalization_status can never reach a proved/
+-- verified value here -- 'prose_only' / 'formalization_pending' /
+-- 'formalization_target_linked' only; kernel verification lives in the
+-- episode/canonical tables alone. citation_status/review_status likewise never
+-- confer validation or fidelity approval. source_span traces the node back to
+-- the paper text so a reviewer can check it.
+CREATE TABLE IF NOT EXISTS ingested_document_nodes (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES ingested_documents(id),
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    node_order INTEGER NOT NULL,
+    node_kind TEXT NOT NULL,
+    natural_language_text TEXT NOT NULL,
+    -- Required (issue #27 acceptance: source-span tracking). Every extracted
+    -- node must be traceable back to the paper text; the MCP handler also
+    -- rejects a blank span.
+    source_span TEXT NOT NULL,
+    confidence TEXT,
+    formalization_status TEXT NOT NULL DEFAULT 'prose_only',
+    citation_status TEXT NOT NULL DEFAULT 'uncited',
+    review_status TEXT NOT NULL DEFAULT 'unreviewed_extraction',
+    risk_flags_json TEXT NOT NULL DEFAULT '[]',
+    -- Forward links set by paper_ingest_link_node when a node is promoted
+    -- through a real path. A link records provenance only — it never grants the
+    -- node proof/kernel authority (the linked artifact keeps its own trust).
+    linked_external_reference_id TEXT REFERENCES external_references(id),
+    linked_external_theorem_claim_id TEXT REFERENCES external_theorem_claims(id),
+    linked_research_node_id TEXT REFERENCES research_nodes(id),
+    linked_formalization_plan_item_id TEXT REFERENCES formalization_plan_items(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(document_id, node_order),
+    CHECK(node_kind IN (
+        'abstract', 'main_theorem', 'definition', 'proposition', 'lemma',
+        'proof_step', 'construction', 'remark', 'appendix_fact', 'reference', 'open_gap'
+    )),
+    CHECK(formalization_status IN ('prose_only', 'formalization_pending', 'formalization_target_linked')),
+    CHECK(citation_status IN ('uncited', 'citation_recorded')),
+    CHECK(confidence IS NULL OR confidence IN ('low', 'medium', 'high')),
+    CHECK(review_status IN (
+        'unreviewed_extraction',
+        'machine_extracted',
+        'human_reviewed_extraction',
+        'rejected_extraction',
+        'linked_to_dossier_artifact'
+    )),
+    -- A "backed" status must be backed by a real forward link (issue #27, PR #58
+    -- review, blocker #2). These three terminal states are reachable ONLY via
+    -- paper_ingest_link_node, which sets the matching FK in the same UPDATE; a
+    -- node can never be *labeled* citation_recorded / formalization_target_linked
+    -- / linked_to_dossier_artifact while pointing at nothing. Structural, not a
+    -- handler courtesy: even a future bug or a raw INSERT cannot decouple the
+    -- label from the artifact it claims to be tied to. A database that created
+    -- this table before these three CHECKs existed is rebuilt into them by
+    -- migrate_ingested_document_nodes_backed_status_checks (keep the two
+    -- definitions in sync).
+    CHECK(citation_status <> 'citation_recorded'
+          OR linked_external_reference_id IS NOT NULL
+          OR linked_external_theorem_claim_id IS NOT NULL),
+    CHECK(formalization_status <> 'formalization_target_linked'
+          OR linked_research_node_id IS NOT NULL
+          OR linked_formalization_plan_item_id IS NOT NULL),
+    CHECK(review_status <> 'linked_to_dossier_artifact'
+          OR linked_external_reference_id IS NOT NULL
+          OR linked_external_theorem_claim_id IS NOT NULL
+          OR linked_research_node_id IS NOT NULL
+          OR linked_formalization_plan_item_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_ingested_documents_dossier ON ingested_documents(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_ingested_document_nodes_document ON ingested_document_nodes(document_id);
+CREATE INDEX IF NOT EXISTS idx_ingested_document_nodes_dossier ON ingested_document_nodes(dossier_id);
+
 -- Run envelopes (issues #34 core concept + #38 cost-surface splitting): a
 -- run envelope separates WHO/WHAT/WHY around a set of episodes from the
 -- episodes themselves -- host identity, run mode (a plain dev/exploratory
@@ -1421,6 +1534,7 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     migrate_fidelity_status_vocabulary(conn)?;
     migrate_expand_fidelity_status_benchmark_aligned(conn)?;
     migrate_episode_outcome_vocabulary(conn)?;
+    migrate_ingested_document_nodes_backed_status_checks(conn)?;
     conn.execute_batch(V1_SCHEMA)?;
     seed_proof_patterns(conn)?;
     conn.execute("PRAGMA foreign_keys = ON;", [])?;
@@ -1784,6 +1898,130 @@ fn migrate_episode_outcome_vocabulary(conn: &Connection) -> rusqlite::Result<()>
     Ok(())
 }
 
+/// Issue #27 (PR #58 review, blocker #2): rebuilds an `ingested_document_nodes`
+/// table that was created before the three "backed status requires a real
+/// forward link" CHECK constraints existed, so the structural guarantee holds
+/// on every database, not only freshly-created ones. Same create-copy-drop-
+/// rename technique as `migrate_fidelity_status_vocabulary`, for the same
+/// reason: CREATE TABLE IF NOT EXISTS cannot add a CHECK to a table that
+/// already exists, so without this a pre-existing local DB would keep enforcing
+/// only the handler guard (layer 1) and a raw write could decouple a
+/// citation_recorded / formalization_target_linked / linked_to_dossier_artifact
+/// label from any real artifact.
+///
+/// Idempotent: no-op once the stored CHECK text is present. Only rebuilds a
+/// table that already carries `linked_formalization_plan_item_id` (the column
+/// that must exist for the copy's SELECT) — an even-older shape is a throwaway
+/// mid-development DB that is already incompatible with the current node SELECT
+/// and is left for a fresh create. Any legacy row that would violate the new
+/// CHECKs (a backed status with no matching FK — reachable only through the
+/// pre-fix free-form path) is sanitized back to its unbacked base value during
+/// the copy, so the rebuild itself never fails on bad data.
+fn migrate_ingested_document_nodes_backed_status_checks(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ingested_document_nodes'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let current_sql: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='ingested_document_nodes'",
+        [],
+        |row| row.get(0),
+    )?;
+    // Already migrated (the distinctive backed-status CHECK is present).
+    if current_sql.contains("citation_status <> 'citation_recorded'") {
+        return Ok(());
+    }
+    // Only a table already carrying every current column can be copied; an
+    // older shape lacking linked_formalization_plan_item_id is an incompatible
+    // dev throwaway — leave it for a fresh create rather than crash.
+    if !current_sql.contains("linked_formalization_plan_item_id") {
+        return Ok(());
+    }
+
+    // Table body kept byte-for-byte in sync with the CREATE TABLE above.
+    conn.execute_batch(
+        "CREATE TABLE ingested_document_nodes_migrating (
+            id TEXT PRIMARY KEY,
+            document_id TEXT NOT NULL REFERENCES ingested_documents(id),
+            dossier_id TEXT REFERENCES research_dossiers(id),
+            node_order INTEGER NOT NULL,
+            node_kind TEXT NOT NULL,
+            natural_language_text TEXT NOT NULL,
+            source_span TEXT NOT NULL,
+            confidence TEXT,
+            formalization_status TEXT NOT NULL DEFAULT 'prose_only',
+            citation_status TEXT NOT NULL DEFAULT 'uncited',
+            review_status TEXT NOT NULL DEFAULT 'unreviewed_extraction',
+            risk_flags_json TEXT NOT NULL DEFAULT '[]',
+            linked_external_reference_id TEXT REFERENCES external_references(id),
+            linked_external_theorem_claim_id TEXT REFERENCES external_theorem_claims(id),
+            linked_research_node_id TEXT REFERENCES research_nodes(id),
+            linked_formalization_plan_item_id TEXT REFERENCES formalization_plan_items(id),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(document_id, node_order),
+            CHECK(node_kind IN (
+                'abstract', 'main_theorem', 'definition', 'proposition', 'lemma',
+                'proof_step', 'construction', 'remark', 'appendix_fact', 'reference', 'open_gap'
+            )),
+            CHECK(formalization_status IN ('prose_only', 'formalization_pending', 'formalization_target_linked')),
+            CHECK(citation_status IN ('uncited', 'citation_recorded')),
+            CHECK(confidence IS NULL OR confidence IN ('low', 'medium', 'high')),
+            CHECK(review_status IN (
+                'unreviewed_extraction',
+                'machine_extracted',
+                'human_reviewed_extraction',
+                'rejected_extraction',
+                'linked_to_dossier_artifact'
+            )),
+            CHECK(citation_status <> 'citation_recorded'
+                  OR linked_external_reference_id IS NOT NULL
+                  OR linked_external_theorem_claim_id IS NOT NULL),
+            CHECK(formalization_status <> 'formalization_target_linked'
+                  OR linked_research_node_id IS NOT NULL
+                  OR linked_formalization_plan_item_id IS NOT NULL),
+            CHECK(review_status <> 'linked_to_dossier_artifact'
+                  OR linked_external_reference_id IS NOT NULL
+                  OR linked_external_theorem_claim_id IS NOT NULL
+                  OR linked_research_node_id IS NOT NULL
+                  OR linked_formalization_plan_item_id IS NOT NULL)
+        );
+        INSERT INTO ingested_document_nodes_migrating (
+            id, document_id, dossier_id, node_order, node_kind, natural_language_text,
+            source_span, confidence, formalization_status, citation_status, review_status,
+            risk_flags_json, linked_external_reference_id, linked_external_theorem_claim_id,
+            linked_research_node_id, linked_formalization_plan_item_id, created_at, updated_at
+        )
+        SELECT
+            id, document_id, dossier_id, node_order, node_kind, natural_language_text,
+            source_span, confidence,
+            CASE WHEN formalization_status = 'formalization_target_linked'
+                      AND linked_research_node_id IS NULL
+                      AND linked_formalization_plan_item_id IS NULL
+                 THEN 'prose_only' ELSE formalization_status END,
+            CASE WHEN citation_status = 'citation_recorded'
+                      AND linked_external_reference_id IS NULL
+                      AND linked_external_theorem_claim_id IS NULL
+                 THEN 'uncited' ELSE citation_status END,
+            CASE WHEN review_status = 'linked_to_dossier_artifact'
+                      AND linked_external_reference_id IS NULL
+                      AND linked_external_theorem_claim_id IS NULL
+                      AND linked_research_node_id IS NULL
+                      AND linked_formalization_plan_item_id IS NULL
+                 THEN 'machine_extracted' ELSE review_status END,
+            risk_flags_json, linked_external_reference_id, linked_external_theorem_claim_id,
+            linked_research_node_id, linked_formalization_plan_item_id, created_at, updated_at
+        FROM ingested_document_nodes;
+        DROP TABLE ingested_document_nodes;
+        ALTER TABLE ingested_document_nodes_migrating RENAME TO ingested_document_nodes;",
+    )?;
+    Ok(())
+}
+
 /// Adds `import_manifest_json`/`import_manifest_hash` to a `problem_versions`
 /// table that predates them (pre-v0.2.3 databases). No-op on a fresh database
 /// (table doesn't exist yet — CREATE TABLE below brings it up to the current
@@ -2047,4 +2285,100 @@ fn migrate_add_current_cost_observation_column(conn: &Connection) -> rusqlite::R
         conn.execute("ALTER TABLE run_envelopes ADD COLUMN current_cost_observation_id TEXT", [])?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #27 (PR #58 review, blocker #2): a database whose
+    /// `ingested_document_nodes` table predates the backed-status CHECK
+    /// constraints is rebuilt to enforce them, and any legacy row that violates
+    /// the new invariant (a backed status with no matching forward link) is
+    /// sanitized to its unbacked base value during the copy.
+    #[test]
+    fn migrate_ingested_backed_status_checks_rebuilds_and_sanitizes_legacy_db() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = OFF;", []).unwrap();
+        // Old-shape table: all current columns (incl. linked_formalization_plan_item_id)
+        // but WITHOUT the three backed-status CHECK constraints.
+        conn.execute_batch(
+            "CREATE TABLE ingested_document_nodes (
+                id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL,
+                dossier_id TEXT,
+                node_order INTEGER NOT NULL,
+                node_kind TEXT NOT NULL,
+                natural_language_text TEXT NOT NULL,
+                source_span TEXT NOT NULL,
+                confidence TEXT,
+                formalization_status TEXT NOT NULL DEFAULT 'prose_only',
+                citation_status TEXT NOT NULL DEFAULT 'uncited',
+                review_status TEXT NOT NULL DEFAULT 'unreviewed_extraction',
+                risk_flags_json TEXT NOT NULL DEFAULT '[]',
+                linked_external_reference_id TEXT,
+                linked_external_theorem_claim_id TEXT,
+                linked_research_node_id TEXT,
+                linked_formalization_plan_item_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(document_id, node_order)
+            );",
+        ).unwrap();
+        // A violating legacy row: citation_recorded + formalization_target_linked
+        // + linked_to_dossier_artifact, all with NULL forward links (only the
+        // pre-fix free-form path could produce this).
+        conn.execute(
+            "INSERT INTO ingested_document_nodes (id, document_id, node_order, node_kind,
+                natural_language_text, source_span, formalization_status, citation_status,
+                review_status, risk_flags_json, created_at, updated_at)
+             VALUES ('bad', 'd1', 0, 'lemma', 'L', 'p.1', 'formalization_target_linked',
+                'citation_recorded', 'linked_to_dossier_artifact', '[]', 't', 't')",
+            [],
+        ).unwrap();
+        // A clean legacy row that must survive verbatim.
+        conn.execute(
+            "INSERT INTO ingested_document_nodes (id, document_id, node_order, node_kind,
+                natural_language_text, source_span, formalization_status, citation_status,
+                review_status, risk_flags_json, created_at, updated_at)
+             VALUES ('ok', 'd1', 1, 'remark', 'R', 'p.2', 'formalization_pending',
+                'uncited', 'machine_extracted', '[]', 't', 't')",
+            [],
+        ).unwrap();
+
+        migrate_ingested_document_nodes_backed_status_checks(&conn).unwrap();
+
+        // The CHECK is now baked in.
+        let sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='ingested_document_nodes'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert!(sql.contains("citation_status <> 'citation_recorded'"), "migration must add the backed-status CHECK");
+
+        // Both rows survive; the violating one is sanitized to its base values.
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM ingested_document_nodes", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2);
+        let (cit, form, rev): (String, String, String) = conn.query_row(
+            "SELECT citation_status, formalization_status, review_status FROM ingested_document_nodes WHERE id = 'bad'",
+            [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap();
+        assert_eq!(cit, "uncited", "orphan citation_recorded must be sanitized");
+        assert_eq!(form, "prose_only", "orphan formalization_target_linked must be sanitized");
+        assert_eq!(rev, "machine_extracted", "orphan linked_to_dossier_artifact must be sanitized");
+        let ok_cit: String = conn.query_row(
+            "SELECT formalization_status FROM ingested_document_nodes WHERE id = 'ok'", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(ok_cit, "formalization_pending", "clean rows are preserved verbatim");
+
+        // The rebuilt table now structurally rejects a raw decoupled write.
+        let raw = conn.execute(
+            "UPDATE ingested_document_nodes SET citation_status = 'citation_recorded' WHERE id = 'ok'", [],
+        );
+        assert!(raw.is_err(), "post-migration CHECK must reject citation_recorded with no linked reference/claim");
+
+        // Idempotent: a second run is a no-op.
+        migrate_ingested_document_nodes_backed_status_checks(&conn).unwrap();
+        let count2: i64 = conn.query_row("SELECT COUNT(*) FROM ingested_document_nodes", [], |r| r.get(0)).unwrap();
+        assert_eq!(count2, 2);
+    }
 }

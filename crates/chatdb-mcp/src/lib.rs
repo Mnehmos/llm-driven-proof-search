@@ -1328,6 +1328,108 @@ pub struct EmpiricalSearchLinkVerificationLayerArgs {
     pub verification_layer_id: String,
 }
 
+// -- Paper/PDF ingestion (issue #27) ----------------------------------------
+//
+// Turns a paper/manuscript/proof-sketch/exposition into reviewable research
+// metadata inside a dossier. ChatDB does no OCR/LLM extraction — the host
+// records the structured result, which is UNTRUSTED by construction. Ingestion
+// is not verification: no field can hold kernel evidence, no status confers
+// proof, statement fidelity, or citation validation.
+
+#[derive(JsonSchema, Deserialize)]
+pub struct PaperIngestCreateArgs {
+    #[serde(default)]
+    pub dossier_id: Option<String>,
+    pub title: String,
+    pub source_kind: String,
+    /// A URL / file path / DOI / arXiv id. Free text; not fetched or validated.
+    #[serde(default)]
+    pub source_ref: Option<String>,
+    /// Optional caller-supplied hash of the source text (untrusted provenance).
+    #[serde(default)]
+    pub source_content_hash: Option<String>,
+    #[serde(default)]
+    pub ingest_status: Option<String>,
+    #[serde(default)]
+    pub extraction_trust_status: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    pub created_by: String,
+}
+
+/// One extracted node the host identified in the document.
+#[derive(JsonSchema, Deserialize)]
+pub struct PaperIngestNodeSpec {
+    pub node_kind: String,
+    pub natural_language_text: String,
+    /// REQUIRED (issue #27): a non-empty span tracing this node back to the
+    /// paper text (e.g. "p.3 Thm 2", "§4.1", a char range). Enforced non-blank.
+    pub source_span: String,
+    #[serde(default)]
+    pub confidence: Option<String>,
+    #[serde(default)]
+    pub formalization_status: Option<String>,
+    #[serde(default)]
+    pub citation_status: Option<String>,
+    #[serde(default)]
+    pub review_status: Option<String>,
+    #[serde(default)]
+    pub risk_flags_json: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct PaperIngestExtractClaimsArgs {
+    pub document_id: String,
+    /// The extracted nodes to append, in document order.
+    pub nodes: Vec<PaperIngestNodeSpec>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct PaperIngestObserveArgs {
+    pub document_id: String,
+}
+
+/// Promote/attach an extracted node to a real dossier artifact (issue #27).
+/// target_kind: external_reference | external_theorem_claim | research_node |
+/// formalization_plan_item. Records provenance and updates the node's derived
+/// citation_status/formalization_status — never grants the node proof authority.
+#[derive(JsonSchema, Deserialize)]
+pub struct PaperIngestLinkNodeArgs {
+    pub document_id: String,
+    pub node_id: String,
+    pub target_kind: String,
+    pub target_id: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct PaperIngestLinkToDossierArgs {
+    pub document_id: String,
+    pub dossier_id: String,
+}
+
+/// Update the review/trust status of a document, or of one of its extracted
+/// nodes when `node_id` is supplied. Never deletes — a rejected extraction
+/// stays visible.
+#[derive(JsonSchema, Deserialize)]
+pub struct PaperIngestMarkReviewStatusArgs {
+    pub document_id: String,
+    /// If set, the status change targets this extracted node instead of the document.
+    #[serde(default)]
+    pub node_id: Option<String>,
+    // Document-level.
+    #[serde(default)]
+    pub ingest_status: Option<String>,
+    #[serde(default)]
+    pub extraction_trust_status: Option<String>,
+    // Node-level.
+    #[serde(default)]
+    pub review_status: Option<String>,
+    #[serde(default)]
+    pub formalization_status: Option<String>,
+    #[serde(default)]
+    pub citation_status: Option<String>,
+}
+
 // -- Exposition artifacts (issue #7) ----------------------------------------
 //
 // Human-readable mathematical exposition captured alongside, and explicitly
@@ -2250,6 +2352,128 @@ fn empirical_search_json(conn: &Connection, id: &str) -> Result<serde_json::Valu
         .ok_or_else(|| mcp_invalid_params(format!("unknown empirical_search_id: {}", id)))
 }
 
+// -- Paper/PDF ingestion (issue #27) ----------------------------------------
+
+const INGEST_SOURCE_KINDS: &[&str] = &["pdf", "manuscript", "proof_sketch", "exposition", "webpage", "other"];
+const INGEST_STATUSES: &[&str] = &["planned", "ingesting", "ingested", "failed", "superseded"];
+const INGEST_TRUST_STATUSES: &[&str] = &[
+    "unreviewed_extraction", "machine_extracted", "human_reviewed_extraction",
+    "rejected_extraction", "linked_to_dossier_artifact",
+];
+const INGEST_NODE_KINDS: &[&str] = &[
+    "abstract", "main_theorem", "definition", "proposition", "lemma",
+    "proof_step", "construction", "remark", "appendix_fact", "reference", "open_gap",
+];
+const INGEST_FORMALIZATION_STATUSES: &[&str] = &["prose_only", "formalization_pending", "formalization_target_linked"];
+const INGEST_CITATION_STATUSES: &[&str] = &["uncited", "citation_recorded"];
+const INGEST_CONFIDENCE: &[&str] = &["low", "medium", "high"];
+const INGEST_LINK_TARGET_KINDS: &[&str] = &[
+    "external_reference", "external_theorem_claim", "research_node", "formalization_plan_item",
+];
+
+/// The three "backed/linked" node statuses assert that a node is tied to a real
+/// dossier artifact. They are reachable ONLY through `paper_ingest_link_node`,
+/// which sets the corresponding forward-link FK in the same UPDATE. Free-form
+/// extraction/review paths must reject them (PR #58 review, blocker #2) — the
+/// DB CHECK constraints on `ingested_document_nodes` enforce the same invariant
+/// structurally; this handler guard gives a precise error at the API boundary.
+fn reject_link_backed_status(
+    ctx: &str,
+    citation_status: Option<&str>,
+    formalization_status: Option<&str>,
+    review_status: Option<&str>,
+) -> Result<(), McpError> {
+    if citation_status == Some("citation_recorded") {
+        return Err(mcp_invalid_params(format!(
+            "{ctx}citation_status='citation_recorded' cannot be set here — a recorded citation must be established with paper_ingest_link_node, which ties the node to a real external_reference or external_theorem_claim"
+        )));
+    }
+    if formalization_status == Some("formalization_target_linked") {
+        return Err(mcp_invalid_params(format!(
+            "{ctx}formalization_status='formalization_target_linked' cannot be set here — use paper_ingest_link_node to tie the node to a real research_node or formalization_plan_item"
+        )));
+    }
+    if review_status == Some("linked_to_dossier_artifact") {
+        return Err(mcp_invalid_params(format!(
+            "{ctx}review_status='linked_to_dossier_artifact' is set only by paper_ingest_link_node when a node is promoted to a real artifact"
+        )));
+    }
+    Ok(())
+}
+
+const INGESTED_DOCUMENT_SELECT: &str = "SELECT id, dossier_id, title, source_kind, source_ref, source_content_hash, \
+    ingest_status, extraction_trust_status, notes, created_by, created_at, updated_at FROM ingested_documents";
+
+const INGESTED_NODE_SELECT: &str = "SELECT id, document_id, dossier_id, node_order, node_kind, natural_language_text, \
+    source_span, confidence, formalization_status, citation_status, review_status, risk_flags_json, \
+    linked_external_reference_id, linked_external_theorem_claim_id, linked_research_node_id, \
+    linked_formalization_plan_item_id, created_at, updated_at \
+    FROM ingested_document_nodes";
+
+fn map_ingested_node_row(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
+    let risk_flags_json: String = row.get(11)?;
+    Ok(serde_json::json!({
+        "ingested_node_id": row.get::<_, String>(0)?,
+        "document_id": row.get::<_, String>(1)?,
+        "dossier_id": row.get::<_, Option<String>>(2)?,
+        "node_order": row.get::<_, i64>(3)?,
+        "node_kind": row.get::<_, String>(4)?,
+        "natural_language_text": row.get::<_, String>(5)?,
+        "source_span": row.get::<_, String>(6)?,
+        "confidence": row.get::<_, Option<String>>(7)?,
+        "formalization_status": row.get::<_, String>(8)?,
+        "citation_status": row.get::<_, String>(9)?,
+        "review_status": row.get::<_, String>(10)?,
+        "risk_flags": parse_json_or_wrap(&risk_flags_json),
+        "linked_external_reference_id": row.get::<_, Option<String>>(12)?,
+        "linked_external_theorem_claim_id": row.get::<_, Option<String>>(13)?,
+        "linked_research_node_id": row.get::<_, Option<String>>(14)?,
+        "linked_formalization_plan_item_id": row.get::<_, Option<String>>(15)?,
+        // Extraction is untrusted and never proof — structural, even after a link.
+        "is_proof": false,
+        "has_kernel_evidence": false,
+        "is_statement_fidelity_approved": false,
+        "created_at": row.get::<_, String>(16)?,
+        "updated_at": row.get::<_, String>(17)?,
+    }))
+}
+
+fn ingested_nodes_for_document(conn: &Connection, document_id: &str) -> Result<Vec<serde_json::Value>, McpError> {
+    let mut stmt = conn.prepare(&format!("{} WHERE document_id = ?1 ORDER BY node_order ASC", INGESTED_NODE_SELECT)).map_err(rs)?;
+    let nodes = stmt.query_map([document_id], map_ingested_node_row)
+        .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    Ok(nodes)
+}
+
+fn ingested_document_json(conn: &Connection, document_id: &str) -> Result<serde_json::Value, McpError> {
+    let sql = format!("{} WHERE id = ?1", INGESTED_DOCUMENT_SELECT);
+    let doc: Option<serde_json::Value> = conn.query_row(&sql, [document_id], |row| {
+        Ok(serde_json::json!({
+            "ingested_document_id": row.get::<_, String>(0)?,
+            "dossier_id": row.get::<_, Option<String>>(1)?,
+            "title": row.get::<_, String>(2)?,
+            "source_kind": row.get::<_, String>(3)?,
+            "source_ref": row.get::<_, Option<String>>(4)?,
+            "source_content_hash": row.get::<_, Option<String>>(5)?,
+            "ingest_status": row.get::<_, String>(6)?,
+            "extraction_trust_status": row.get::<_, String>(7)?,
+            "notes": row.get::<_, Option<String>>(8)?,
+            // Ingestion is not proof — structural, applies to the doc and all its nodes.
+            "is_proof": false,
+            "has_kernel_evidence": false,
+            "created_by": row.get::<_, String>(9)?,
+            "created_at": row.get::<_, String>(10)?,
+            "updated_at": row.get::<_, String>(11)?,
+        }))
+    }).optional().map_err(rs)?;
+    let Some(mut doc) = doc else {
+        return Err(mcp_invalid_params(format!("unknown document_id: {}", document_id)));
+    };
+    let nodes = ingested_nodes_for_document(conn, document_id)?;
+    doc.as_object_mut().unwrap().insert("nodes".to_string(), serde_json::Value::Array(nodes));
+    Ok(doc)
+}
+
 const EXPOSITION_SECTION_KINDS: &[&str] = &[
     "problem_summary",
     "formalization_explanation",
@@ -2638,6 +2862,19 @@ fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<
     ).map_err(rs)?;
     let empirical_searches = stmt.query_map([dossier_id], map_empirical_search_row)
         .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(stmt);
+
+    // Issue #27: ingested documents + their extracted nodes, in their own bucket.
+    let mut stmt = conn.prepare(
+        &format!("{} WHERE dossier_id = ?1 ORDER BY created_at ASC, id ASC", INGESTED_DOCUMENT_SELECT),
+    ).map_err(rs)?;
+    let ingest_doc_ids: Vec<String> = stmt.query_map([dossier_id], |row| row.get::<_, String>(0))
+        .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(stmt);
+    let mut ingested_documents: Vec<serde_json::Value> = Vec::new();
+    for doc_id in &ingest_doc_ids {
+        ingested_documents.push(ingested_document_json(conn, doc_id)?);
+    }
 
     let collect_by_status = |items: &[serde_json::Value], key: &str, status: &str| -> Vec<serde_json::Value> {
         items.iter()
@@ -2656,7 +2893,7 @@ fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<
         "unformalized_assumptions": collect_by_status(&assumptions, "assumption_status", "unformalized_assumption"),
         "rejected_assumptions": collect_by_status(&assumptions, "assumption_status", "rejected_unsafe_assumption"),
         "open_gaps": collect_by_status(&nodes, "trust_status", "open_gap"),
-        "policy": "Research dossier state is not proof authority. Only Lean-backed episode/canonical lemma rows are kernel evidence; citations, reviews, empirical layers, assumptions, candidate constructions, exposition prose, semantic skeletons (structured readings, never the fidelity gate), expert reviews (human-attested ledger entries, never kernel evidence), and empirical searches (experimental evidence: small-case/counterexample/construction searches — never a proof, never a certification of an asymptotic or universal claim) stay explicitly labeled."
+        "policy": "Research dossier state is not proof authority. Only Lean-backed episode/canonical lemma rows are kernel evidence; citations, reviews, empirical layers, assumptions, candidate constructions, exposition prose, semantic skeletons (structured readings, never the fidelity gate), expert reviews (human-attested ledger entries, never kernel evidence), empirical searches (experimental evidence: small-case/counterexample/construction searches — never a proof, never a certification of an asymptotic or universal claim), and ingested documents + their extracted nodes (untrusted paper/PDF extraction — not proof, not statement-fidelity approval, not citation validation, not accepted assumptions) stay explicitly labeled."
     });
 
     Ok(serde_json::json!({
@@ -2680,6 +2917,7 @@ fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<
         "semantic_skeletons": semantic_skeletons,
         "expert_reviews": expert_reviews,
         "empirical_searches": empirical_searches,
+        "ingested_documents": ingested_documents,
         "trust_boundary": trust_boundary,
     }))
 }
@@ -3989,6 +4227,12 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EmpiricalSearchUpdateStatusArgs>("empirical_search_update_status", "Update an empirical search's status/trust_status/results/linked candidates. Counterexamples are NOT updatable here — a recorded witness stays visible (add via empirical_search_observe). Falsified/failed/timed-out searches stay visible. No trust_status implies proof — the strongest, 'linked_to_formal_target', still is not kernel evidence"),
             make_tool::<EmpiricalSearchLinkCandidateArgs>("empirical_search_link_candidate", "Link an empirical search to a candidate construction (adopting its dossier if the search has none). Empirical support for a construction never proves its claimed properties"),
             make_tool::<EmpiricalSearchLinkVerificationLayerArgs>("empirical_search_link_verification_layer", "Link an empirical search to a verification layer (adopting its dossier if the search has none). The link records evidence; it can never make the layer kernel_verified"),
+            make_tool::<PaperIngestCreateArgs>("paper_ingest_create", "Ingest a paper/manuscript/proof_sketch/exposition as a reviewable source document (issue #27), optionally linked to a dossier. ChatDB does no OCR/LLM extraction — this records the host's UNTRUSTED extraction. Ingestion is not proof: no field can hold kernel evidence"),
+            make_tool::<PaperIngestExtractClaimsArgs>("paper_ingest_extract_claims", "Append extracted nodes (abstract/main_theorem/definition/proposition/lemma/proof_step/construction/remark/appendix_fact/reference/open_gap) with source_span, confidence, and status labels to an ingested document. Each node is untrusted extraction — an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT accepted"),
+            make_tool::<PaperIngestObserveArgs>("paper_ingest_observe", "Read an ingested document with all its extracted nodes and their trust labels. Read-only; nothing here is proof or kernel evidence"),
+            make_tool::<PaperIngestLinkToDossierArgs>("paper_ingest_link_to_dossier", "Attach an ingested document (and its extracted nodes) to a research dossier so they surface in research_dossier_observe's ingestion bucket, separate from proof authority"),
+            make_tool::<PaperIngestMarkReviewStatusArgs>("paper_ingest_mark_review_status", "Update an ingested document's ingest_status/extraction_trust_status, or (with node_id) a node's review_status/formalization_status/citation_status. rejected_extraction stays visible, never deleted. None of these statuses confers proof, kernel verification, statement fidelity, or citation validation"),
+            make_tool::<PaperIngestLinkNodeArgs>("paper_ingest_link_node", "Promote/attach an extracted node to a real dossier artifact — target_kind external_reference / external_theorem_claim (sets citation_status=citation_recorded) / research_node / formalization_plan_item (sets formalization_status=formalization_target_linked). Records provenance and marks review_status=linked_to_dossier_artifact; the linked artifact keeps its own trust and the node NEVER gains proof/kernel authority"),
             make_tool::<ExpositionAddArgs>("exposition_add", "Add a human-readable mathematical exposition section (problem_summary/formalization_explanation/construction_intuition/key_lemmas/proof_strategy/verified_claim/unverified_bridges/reviewer_notes/next_formalization_targets) linked to a problem, episode, obligation, verified module, verified lemma, and/or dossier. prose_status (prose/reviewed_prose/formalized) marks epistemic weight — prose is never proof and never changes certification or training eligibility"),
             make_tool::<ExpositionObserveArgs>("exposition_observe", "List exposition artifacts for a problem_version, episode, or dossier. Read-only prose, explicitly separate from kernel-verified proof"),
             make_tool::<SemanticSkeletonAddArgs>("semantic_skeleton_add", "Attach a semantic statement skeleton / module-aware fidelity note (issue #6): a structured reading of a root statement, verified module, or source-aligned solution — quantifiers, hypotheses, conclusion, helper definitions, construction/final-answer map, back-translation, and fidelity risk_flags — scoped by review_scope (root_statement_only/module_artifact/source_aligned_solution/computational_check_only/structural_proof). All links optional. semantic_fingerprint_hash is server-computed. Metadata only: never marks anything proved, never sets fidelity_status, never substitutes for problem_submit_fidelity_review"),
@@ -4121,8 +4365,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of ChatDB's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 67,
-                        "total_tool_count": 67,
+                        "classified_tool_count": 73,
+                        "total_tool_count": 73,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -4551,6 +4795,66 @@ impl ServerHandler for ChatDbMcp {
                             "empirical_search_link_verification_layer": {
                                 "side_effect": "mutating — sets verification_layer_id on one empirical_searches row, adopting the layer's dossier if the search had none",
                                 "trust_level": "verifier_backed linkage only — the link records evidence and can never make the layer kernel_verified (that path is gated by enforce_kernel_verified_research_boundary / the asymptotic evidence boundary, both of which reject empirical/finite evidence)",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "paper_ingest_create": {
+                                "side_effect": "mutating — inserts one ingested_documents row, optionally linked to a dossier that must already exist",
+                                "trust_level": "untrusted_input — ChatDB does no OCR/LLM extraction (no inference code); this records the HOST's extraction result, untrusted by construction. Ingestion is not verification — the table has no column able to hold kernel evidence, and extraction_trust_status never confers proof",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none — an ingested document cannot mark anything kernel_verified/certified/proved/statement_fidelity_approved/benchmark_certified/training_eligible",
+                                "required_run_mode": "any"
+                            },
+                            "paper_ingest_extract_claims": {
+                                "side_effect": "mutating — appends extracted ingested_document_nodes rows (batch, all-or-nothing) to a document",
+                                "trust_level": "untrusted_input — machine/host extraction. An extracted main_theorem is NOT statement-fidelity approval; an extracted reference is NOT citation validation; an extracted assumption is NOT an accepted assumption. formalization_status is CHECK-constrained to prose_only/formalization_pending/formalization_target_linked — it can never reach a proved/verified value; is_proof/has_kernel_evidence are always false",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output — extracted prose from a source document, not this instance's own proof output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none — extracted nodes are candidates that must pass the normal Lean/fidelity/citation/review paths to gain authority",
+                                "required_run_mode": "any"
+                            },
+                            "paper_ingest_observe": {
+                                "side_effect": "read_only — returns an ingested document with its extracted nodes",
+                                "trust_level": "untrusted_input echoed back — surfaces extraction with its trust labels; reading it never confers proof authority",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "paper_ingest_link_to_dossier": {
+                                "side_effect": "mutating — sets dossier_id on one ingested_documents row and its nodes so they surface in that dossier's ingestion bucket",
+                                "trust_level": "verifier_backed linkage only — confirms both rows exist; linking never changes an extraction's trust status or grants it authority",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "paper_ingest_mark_review_status": {
+                                "side_effect": "mutating — updates a document's ingest_status/extraction_trust_status, or (with node_id) a node's review_status/formalization_status/citation_status; a rejected_extraction stays visible, never deleted",
+                                "trust_level": "human-attested at most — human_reviewed_extraction means a person looked at the extraction, not that Lean verified it. No status here (review/formalization/citation) confers kernel verification, statement-fidelity approval, or citation validation; formalization_status still cannot reach a proved value",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "paper_ingest_link_node": {
+                                "side_effect": "mutating — sets one forward-link column (linked_external_reference_id / linked_external_theorem_claim_id / linked_research_node_id / linked_formalization_plan_item_id) on an extracted node, plus its derived citation_status/formalization_status and review_status=linked_to_dossier_artifact",
+                                "trust_level": "verifier_backed linkage only — the target must already exist (and belong to the document's dossier for dossier-scoped kinds). The link records provenance so citation_recorded/formalization_target_linked are backed by a real artifact, but it NEVER grants the extracted node proof/kernel authority: is_proof/has_kernel_evidence stay false, and the linked artifact keeps its own independent trust (an external_theorem_claim is only kernel-backed if it was itself proved_in_episode with a real lemma)",
                                 "cost_surface": "none",
                                 "benchmark_safety": "safe_public_output",
                                 "replayability": "deterministic",
@@ -7449,6 +7753,293 @@ impl ServerHandler for ChatDbMcp {
                     "empirical_search_id": args.empirical_search_id, "empirical_search": search, "dossier": dossier,
                 })).unwrap())]))
             }
+            "paper_ingest_create" => {
+                let args: PaperIngestCreateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("source_kind", &args.source_kind, INGEST_SOURCE_KINDS)?;
+                if args.title.trim().is_empty() { return Err(mcp_invalid_params("title must be non-empty")); }
+                if args.created_by.trim().is_empty() { return Err(mcp_invalid_params("created_by must be non-empty")); }
+                let ingest_status = args.ingest_status.clone().unwrap_or_else(|| "planned".to_string());
+                validate_one_of("ingest_status", &ingest_status, INGEST_STATUSES)?;
+                let extraction_trust_status = args.extraction_trust_status.clone().unwrap_or_else(|| "unreviewed_extraction".to_string());
+                validate_one_of("extraction_trust_status", &extraction_trust_status, INGEST_TRUST_STATUSES)?;
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                if let Some(id) = &args.dossier_id { require_row_exists(&tx, "research_dossiers", id, "dossier_id")?; }
+                let document_id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT INTO ingested_documents (
+                        id, dossier_id, title, source_kind, source_ref, source_content_hash,
+                        ingest_status, extraction_trust_status, notes, created_by, created_at, updated_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                    rusqlite::params![
+                        &document_id, args.dossier_id.as_deref(), args.title.trim(), &args.source_kind,
+                        args.source_ref.as_deref(), args.source_content_hash.as_deref(), &ingest_status,
+                        &extraction_trust_status, args.notes.as_deref(), args.created_by.trim(), &now,
+                    ],
+                ).map_err(rs)?;
+                let document = ingested_document_json(&tx, &document_id)?;
+                let dossier = match &args.dossier_id { Some(d) => Some(research_dossier_observe_json(&tx, d)?), None => None };
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "ingested_document_id": document_id, "ingested_document": document, "dossier": dossier,
+                })).unwrap())]))
+            }
+            "paper_ingest_extract_claims" => {
+                let args: PaperIngestExtractClaimsArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.nodes.is_empty() { return Err(mcp_invalid_params("nodes must be non-empty")); }
+                // Validate every node up front so the batch is all-or-nothing.
+                for (i, n) in args.nodes.iter().enumerate() {
+                    validate_one_of("node_kind", &n.node_kind, INGEST_NODE_KINDS)?;
+                    if n.natural_language_text.trim().is_empty() {
+                        return Err(mcp_invalid_params(format!("nodes[{}].natural_language_text must be non-empty", i)));
+                    }
+                    // Issue #27 acceptance: every extracted node must be traceable
+                    // back to the paper text.
+                    if n.source_span.trim().is_empty() {
+                        return Err(mcp_invalid_params(format!("nodes[{}].source_span must be non-empty — every extracted node must be traceable to the paper", i)));
+                    }
+                    if let Some(c) = &n.confidence { validate_one_of("confidence", c, INGEST_CONFIDENCE)?; }
+                    if let Some(s) = &n.formalization_status { validate_one_of("formalization_status", s, INGEST_FORMALIZATION_STATUSES)?; }
+                    if let Some(s) = &n.citation_status { validate_one_of("citation_status", s, INGEST_CITATION_STATUSES)?; }
+                    if let Some(s) = &n.review_status { validate_one_of("review_status", s, INGEST_TRUST_STATUSES)?; }
+                    // A backed/linked status is reachable only via paper_ingest_link_node
+                    // (which sets the FK); extraction must not label a node as tied to
+                    // an artifact it is not actually tied to.
+                    reject_link_backed_status(
+                        &format!("nodes[{}].", i),
+                        n.citation_status.as_deref(),
+                        n.formalization_status.as_deref(),
+                        n.review_status.as_deref(),
+                    )?;
+                    if let Some(raw) = &n.risk_flags_json {
+                        serde_json::from_str::<serde_json::Value>(raw).map_err(|e| mcp_invalid_params(format!("nodes[{}].risk_flags_json must be valid JSON: {}", i, e)))?;
+                    }
+                }
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let doc_dossier: Option<Option<String>> = tx.query_row(
+                    "SELECT dossier_id FROM ingested_documents WHERE id = ?1", [&args.document_id], |r| r.get(0),
+                ).optional().map_err(rs)?;
+                let Some(doc_dossier) = doc_dossier else {
+                    return Err(mcp_invalid_params(format!("unknown document_id: {}", args.document_id)));
+                };
+                let now = Utc::now().to_rfc3339();
+                let mut next_order: i64 = tx.query_row(
+                    "SELECT COALESCE(MAX(node_order), -1) + 1 FROM ingested_document_nodes WHERE document_id = ?1",
+                    [&args.document_id], |r| r.get(0),
+                ).map_err(rs)?;
+                let mut node_ids: Vec<String> = Vec::new();
+                for n in &args.nodes {
+                    let node_id = Uuid::new_v4().to_string();
+                    let risk_flags_json = n.risk_flags_json.clone().unwrap_or_else(|| "[]".to_string());
+                    tx.execute(
+                        "INSERT INTO ingested_document_nodes (
+                            id, document_id, dossier_id, node_order, node_kind, natural_language_text, source_span,
+                            confidence, formalization_status, citation_status, review_status, risk_flags_json,
+                            created_at, updated_at
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+                        rusqlite::params![
+                            &node_id, &args.document_id, doc_dossier.as_deref(), next_order, &n.node_kind,
+                            n.natural_language_text.trim(), n.source_span.trim(), n.confidence.as_deref(),
+                            n.formalization_status.clone().unwrap_or_else(|| "prose_only".to_string()),
+                            n.citation_status.clone().unwrap_or_else(|| "uncited".to_string()),
+                            n.review_status.clone().unwrap_or_else(|| "machine_extracted".to_string()),
+                            &risk_flags_json, &now,
+                        ],
+                    ).map_err(rs)?;
+                    node_ids.push(node_id);
+                    next_order += 1;
+                }
+                tx.execute("UPDATE ingested_documents SET updated_at = ?1 WHERE id = ?2", (&now, &args.document_id)).map_err(rs)?;
+                let document = ingested_document_json(&tx, &args.document_id)?;
+                let dossier = match &doc_dossier { Some(d) => Some(research_dossier_observe_json(&tx, d)?), None => None };
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "document_id": args.document_id, "added_node_ids": node_ids, "ingested_document": document, "dossier": dossier,
+                })).unwrap())]))
+            }
+            "paper_ingest_observe" => {
+                let args: PaperIngestObserveArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                let conn = self.conn.lock().await;
+                let document = ingested_document_json(&conn, &args.document_id)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "ingested_document": document,
+                    "policy": "Ingestion is untrusted extraction, never proof. No node here is kernel-verified, statement-fidelity-approved, or a validated citation; extracted claims are candidates that must pass the normal Lean/fidelity/citation/review paths to gain any authority.",
+                })).unwrap())]))
+            }
+            "paper_ingest_link_to_dossier" => {
+                let args: PaperIngestLinkToDossierArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let existing: Option<Option<String>> = tx.query_row(
+                    "SELECT dossier_id FROM ingested_documents WHERE id = ?1", [&args.document_id], |r| r.get(0),
+                ).optional().map_err(rs)?;
+                let Some(existing) = existing else {
+                    return Err(mcp_invalid_params(format!("unknown document_id: {}", args.document_id)));
+                };
+                require_row_exists(&tx, "research_dossiers", &args.dossier_id, "dossier_id")?;
+                if let Some(cur) = &existing {
+                    if cur != &args.dossier_id {
+                        return Err(mcp_invalid_params("this document is already linked to a different dossier"));
+                    }
+                }
+                let now = Utc::now().to_rfc3339();
+                tx.execute("UPDATE ingested_documents SET dossier_id = ?1, updated_at = ?2 WHERE id = ?3",
+                    (&args.dossier_id, &now, &args.document_id)).map_err(rs)?;
+                // Keep the denormalized dossier on the nodes in sync.
+                tx.execute("UPDATE ingested_document_nodes SET dossier_id = ?1, updated_at = ?2 WHERE document_id = ?3",
+                    (&args.dossier_id, &now, &args.document_id)).map_err(rs)?;
+                let document = ingested_document_json(&tx, &args.document_id)?;
+                let dossier = research_dossier_observe_json(&tx, &args.dossier_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "document_id": args.document_id, "ingested_document": document, "dossier": dossier,
+                })).unwrap())]))
+            }
+            "paper_ingest_mark_review_status" => {
+                let args: PaperIngestMarkReviewStatusArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if let Some(s) = &args.ingest_status { validate_one_of("ingest_status", s, INGEST_STATUSES)?; }
+                if let Some(s) = &args.extraction_trust_status { validate_one_of("extraction_trust_status", s, INGEST_TRUST_STATUSES)?; }
+                if let Some(s) = &args.review_status { validate_one_of("review_status", s, INGEST_TRUST_STATUSES)?; }
+                if let Some(s) = &args.formalization_status { validate_one_of("formalization_status", s, INGEST_FORMALIZATION_STATUSES)?; }
+                if let Some(s) = &args.citation_status { validate_one_of("citation_status", s, INGEST_CITATION_STATUSES)?; }
+                // A review transition must never assert a link. The backed/linked
+                // statuses are reachable only via paper_ingest_link_node.
+                reject_link_backed_status(
+                    "",
+                    args.citation_status.as_deref(),
+                    args.formalization_status.as_deref(),
+                    args.review_status.as_deref(),
+                )?;
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let doc_exists: i64 = tx.query_row("SELECT COUNT(*) FROM ingested_documents WHERE id = ?1", [&args.document_id], |r| r.get(0)).map_err(rs)?;
+                if doc_exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown document_id: {}", args.document_id)));
+                }
+                let now = Utc::now().to_rfc3339();
+                if let Some(node_id) = &args.node_id {
+                    // Node-level status change.
+                    if args.review_status.is_none() && args.formalization_status.is_none() && args.citation_status.is_none() {
+                        return Err(mcp_invalid_params("with node_id, at least one of review_status, formalization_status, citation_status must be provided"));
+                    }
+                    let node_ok: Option<i64> = tx.query_row(
+                        "SELECT 1 FROM ingested_document_nodes WHERE id = ?1 AND document_id = ?2",
+                        (node_id, &args.document_id), |r| r.get(0),
+                    ).optional().map_err(rs)?;
+                    if node_ok.is_none() {
+                        return Err(mcp_invalid_params(format!("unknown node_id for this document: {}", node_id)));
+                    }
+                    tx.execute(
+                        "UPDATE ingested_document_nodes SET
+                            review_status = COALESCE(?1, review_status),
+                            formalization_status = COALESCE(?2, formalization_status),
+                            citation_status = COALESCE(?3, citation_status),
+                            updated_at = ?4
+                         WHERE id = ?5",
+                        (args.review_status.as_deref(), args.formalization_status.as_deref(), args.citation_status.as_deref(), &now, node_id),
+                    ).map_err(rs)?;
+                } else {
+                    // Document-level status change.
+                    if args.ingest_status.is_none() && args.extraction_trust_status.is_none() {
+                        return Err(mcp_invalid_params("at least one of ingest_status, extraction_trust_status (or a node_id with node-level fields) must be provided"));
+                    }
+                    tx.execute(
+                        "UPDATE ingested_documents SET
+                            ingest_status = COALESCE(?1, ingest_status),
+                            extraction_trust_status = COALESCE(?2, extraction_trust_status),
+                            updated_at = ?3
+                         WHERE id = ?4",
+                        (args.ingest_status.as_deref(), args.extraction_trust_status.as_deref(), &now, &args.document_id),
+                    ).map_err(rs)?;
+                }
+                let document = ingested_document_json(&tx, &args.document_id)?;
+                let dossier_id: Option<String> = tx.query_row("SELECT dossier_id FROM ingested_documents WHERE id = ?1", [&args.document_id], |r| r.get(0)).map_err(rs)?;
+                let dossier = match &dossier_id { Some(d) => Some(research_dossier_observe_json(&tx, d)?), None => None };
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "document_id": args.document_id, "ingested_document": document, "dossier": dossier,
+                })).unwrap())]))
+            }
+            "paper_ingest_link_node" => {
+                let args: PaperIngestLinkNodeArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("target_kind", &args.target_kind, INGEST_LINK_TARGET_KINDS)?;
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                // The node must belong to the named document.
+                let node_ok: Option<i64> = tx.query_row(
+                    "SELECT 1 FROM ingested_document_nodes WHERE id = ?1 AND document_id = ?2",
+                    (&args.node_id, &args.document_id), |r| r.get(0),
+                ).optional().map_err(rs)?;
+                if node_ok.is_none() {
+                    return Err(mcp_invalid_params(format!("unknown node_id {} for document {}", args.node_id, args.document_id)));
+                }
+                let doc_dossier: Option<String> = tx.query_row(
+                    "SELECT dossier_id FROM ingested_documents WHERE id = ?1", [&args.document_id], |r| r.get(0),
+                ).map_err(rs)?;
+
+                // Resolve the target: existence, and (for dossier-scoped kinds)
+                // membership in this document's dossier when it has one. Then set
+                // the matching forward-link column + the derived status. A link
+                // records provenance — it NEVER grants the node proof authority.
+                let (column, new_citation_status, new_formalization_status): (&str, Option<&str>, Option<&str>) = match args.target_kind.as_str() {
+                    "external_reference" => {
+                        match &doc_dossier {
+                            Some(d) => require_row_in_dossier(&tx, "external_references", &args.target_id, d, "target_id")?,
+                            None => require_row_exists(&tx, "external_references", &args.target_id, "target_id")?,
+                        }
+                        ("linked_external_reference_id", Some("citation_recorded"), None)
+                    }
+                    "external_theorem_claim" => {
+                        match &doc_dossier {
+                            Some(d) => require_row_in_dossier(&tx, "external_theorem_claims", &args.target_id, d, "target_id")?,
+                            None => require_row_exists(&tx, "external_theorem_claims", &args.target_id, "target_id")?,
+                        }
+                        ("linked_external_theorem_claim_id", Some("citation_recorded"), None)
+                    }
+                    "research_node" => {
+                        match &doc_dossier {
+                            Some(d) => require_row_in_dossier(&tx, "research_nodes", &args.target_id, d, "target_id")?,
+                            None => require_row_exists(&tx, "research_nodes", &args.target_id, "target_id")?,
+                        }
+                        ("linked_research_node_id", None, Some("formalization_target_linked"))
+                    }
+                    "formalization_plan_item" => {
+                        // Plan items are problem-scoped, not dossier-scoped.
+                        require_row_exists(&tx, "formalization_plan_items", &args.target_id, "target_id")?;
+                        ("linked_formalization_plan_item_id", None, Some("formalization_target_linked"))
+                    }
+                    _ => return Err(mcp_invalid_params("unknown target_kind")),
+                };
+
+                let now = Utc::now().to_rfc3339();
+                let sql = format!(
+                    "UPDATE ingested_document_nodes SET {} = ?1, \
+                        citation_status = COALESCE(?2, citation_status), \
+                        formalization_status = COALESCE(?3, formalization_status), \
+                        review_status = 'linked_to_dossier_artifact', updated_at = ?4 WHERE id = ?5",
+                    column,
+                );
+                tx.execute(&sql, rusqlite::params![&args.target_id, new_citation_status, new_formalization_status, &now, &args.node_id]).map_err(rs)?;
+                let document = ingested_document_json(&tx, &args.document_id)?;
+                let dossier = match &doc_dossier { Some(d) => Some(research_dossier_observe_json(&tx, d)?), None => None };
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "document_id": args.document_id, "node_id": args.node_id, "target_kind": args.target_kind,
+                    "target_id": args.target_id, "ingested_document": document, "dossier": dossier,
+                })).unwrap())]))
+            }
             "exposition_add" => {
                 let args: ExpositionAddArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -9106,7 +9697,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 67);
+        assert_eq!(list_res.tools.len(), 73);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -12203,6 +12794,333 @@ mod tests {
         let bucket = observed["empirical_searches"].as_array().unwrap();
         assert_eq!(bucket.len(), 1, "{:?}", bucket);
         assert_eq!(bucket[0]["counterexamples"].as_array().unwrap().len(), 1, "counterexample must remain visible in the dossier: {:?}", bucket);
+    }
+
+    /// Issue #27: a unit-distance-style paper ingests into a dossier as
+    /// reviewable metadata — main theorem, geometric criterion, field
+    /// construction, appendix reference — visible in its own bucket, traceable
+    /// via source_span, and NEVER proof.
+    #[tokio::test]
+    async fn test_paper_ingest_unit_distance_fixture_visible_and_never_proof() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        // A document can be ingested before it is attached to a dossier.
+        let doc = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_create").with_arguments(serde_json::json!({
+            "title": "On the unit-distance problem", "source_kind": "pdf",
+            "source_ref": "arXiv:0000.00000", "created_by": "ingest-bot",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let document_id = doc["ingested_document_id"].as_str().unwrap().to_string();
+        assert!(doc["dossier"].is_null(), "{:?}", doc);
+        assert_eq!(doc["ingested_document"]["ingest_status"], "planned");
+        assert_eq!(doc["ingested_document"]["extraction_trust_status"], "unreviewed_extraction");
+        assert_eq!(doc["ingested_document"]["is_proof"], false);
+
+        // Extract the unit-distance ladder.
+        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_extract_claims").with_arguments(serde_json::json!({
+            "document_id": document_id,
+            "nodes": [
+                {"node_kind": "main_theorem", "natural_language_text": "The number of unit distances among n points is super-linear.", "source_span": "p.1 Thm 1", "confidence": "high"},
+                {"node_kind": "proposition", "natural_language_text": "A geometric incidence criterion bounds repeated distances.", "source_span": "p.3 Prop 2"},
+                {"node_kind": "construction", "natural_language_text": "A field-tower construction realizes the extremal configuration.", "source_span": "p.5 §4"},
+                {"node_kind": "reference", "natural_language_text": "Szemerédi–Trotter incidence bound.", "source_span": "Appendix A", "citation_status": "uncited"}
+            ]
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(extracted["added_node_ids"].as_array().unwrap().len(), 4, "{:?}", extracted);
+        let nodes = extracted["ingested_document"]["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 4);
+        // Every node is untrusted extraction, never proof; prose_only by default; traceable.
+        assert!(nodes.iter().all(|n| n["is_proof"] == false && n["has_kernel_evidence"] == false && n["is_statement_fidelity_approved"] == false), "{:?}", nodes);
+        assert!(nodes.iter().all(|n| n["formalization_status"] == "prose_only"), "{:?}", nodes);
+        assert!(nodes.iter().all(|n| n["review_status"] == "machine_extracted"), "{:?}", nodes);
+        assert_eq!(nodes[0]["node_kind"], "main_theorem");
+        assert_eq!(nodes[0]["source_span"], "p.1 Thm 1");
+
+        // Link to a dossier; it surfaces in its own bucket, separate from proof/citation/etc.
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Unit-distance research workspace",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        let linked = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_link_to_dossier").with_arguments(serde_json::json!({
+            "document_id": document_id, "dossier_id": dossier_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let obs = &linked["dossier"];
+        let docs = obs["ingested_documents"].as_array().unwrap();
+        assert_eq!(docs.len(), 1, "{:?}", obs);
+        assert_eq!(docs[0]["nodes"].as_array().unwrap().len(), 4, "extracted nodes must be visible in the dossier: {:?}", docs);
+        // Separate bucket: not folded into proof/citation/assumption trust boundary.
+        assert!(obs["trust_boundary"].get("ingested_documents").is_none(), "ingestion must be its own bucket: {:?}", obs["trust_boundary"]);
+        assert!(obs["external_theorem_claims"].as_array().unwrap().is_empty(), "an extracted theorem is NOT an external theorem claim until promoted: {:?}", obs);
+        assert!(obs["nodes"].as_array().unwrap().is_empty(), "an extracted node is NOT a proved research node: {:?}", obs);
+    }
+
+    /// Issue #27: review-status transitions work at document and node level; a
+    /// rejected extraction stays visible; and no ingestion ever certifies anything.
+    #[tokio::test]
+    async fn test_paper_ingest_review_transitions_and_rejected_stays_visible() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Ingestion review dossier",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        let doc = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_create").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "title": "Draft manuscript", "source_kind": "manuscript", "created_by": "bot",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let document_id = doc["ingested_document_id"].as_str().unwrap().to_string();
+        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_extract_claims").with_arguments(serde_json::json!({
+            "document_id": document_id,
+            "nodes": [
+                {"node_kind": "lemma", "natural_language_text": "Key lemma L.", "source_span": "p.3 Lemma 2", "review_status": "machine_extracted"},
+                {"node_kind": "remark", "natural_language_text": "A dubious remark.", "source_span": "p.4 Remark 1", "review_status": "machine_extracted"}
+            ]
+        }).as_object().unwrap().clone())).await.unwrap());
+        let node_ids: Vec<String> = extracted["added_node_ids"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+
+        // Document-level review status transition.
+        let reviewed = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_mark_review_status").with_arguments(serde_json::json!({
+            "document_id": document_id, "ingest_status": "ingested", "extraction_trust_status": "human_reviewed_extraction",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(reviewed["ingested_document"]["extraction_trust_status"], "human_reviewed_extraction");
+        assert_eq!(reviewed["ingested_document"]["ingest_status"], "ingested");
+
+        // Node-level: a lemma reaches formalization_pending; a remark is rejected.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_mark_review_status").with_arguments(serde_json::json!({
+            "document_id": document_id, "node_id": node_ids[0], "review_status": "human_reviewed_extraction", "formalization_status": "formalization_pending",
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_mark_review_status").with_arguments(serde_json::json!({
+            "document_id": document_id, "node_id": node_ids[1], "review_status": "rejected_extraction",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // formalization_status can never reach a proved value.
+        let bad = peer.call_tool(CallToolRequestParams::new("paper_ingest_mark_review_status").with_arguments(serde_json::json!({
+            "document_id": document_id, "node_id": node_ids[0], "formalization_status": "kernel_verified",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad.is_err(), "formalization_status must never accept a kernel-verified value");
+
+        // Observe: both nodes still visible (rejected one is NOT deleted).
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_observe").with_arguments(serde_json::json!({
+            "document_id": document_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let nodes = observed["ingested_document"]["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 2, "a rejected extraction must stay visible: {:?}", nodes);
+        assert!(nodes.iter().any(|n| n["review_status"] == "rejected_extraction"), "{:?}", nodes);
+        assert!(nodes.iter().any(|n| n["formalization_status"] == "formalization_pending"), "{:?}", nodes);
+        assert!(nodes.iter().all(|n| n["has_kernel_evidence"] == false), "{:?}", nodes);
+
+        // Structural: no ingestion ever produced a verified/certified problem.
+        let certified: i64 = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT COUNT(*) FROM problem_versions WHERE fidelity_status = 'verified'", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(certified, 0, "ingestion must never certify anything");
+    }
+
+    /// Issue #27 (PR #58 review): an extracted node's forward links are not
+    /// schema-only — `paper_ingest_link_node` promotes a node to a real dossier
+    /// artifact, sets the derived citation/formalization status, records
+    /// provenance in the matching column, and NEVER grants the node kernel
+    /// authority. Also: source_span is required and cannot be blank.
+    #[tokio::test]
+    async fn test_paper_ingest_link_node_promotes_to_artifacts_without_granting_proof() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Link-promotion dossier",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+
+        // Blank source_span is rejected at extraction time (a node must be traceable).
+        let doc = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_create").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "title": "Promotable manuscript", "source_kind": "manuscript", "created_by": "bot",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let document_id = doc["ingested_document_id"].as_str().unwrap().to_string();
+        let blank = peer.call_tool(CallToolRequestParams::new("paper_ingest_extract_claims").with_arguments(serde_json::json!({
+            "document_id": document_id,
+            "nodes": [{"node_kind": "lemma", "natural_language_text": "L.", "source_span": "   "}]
+        }).as_object().unwrap().clone())).await;
+        assert!(blank.is_err(), "a blank source_span must be rejected");
+
+        // Extract four nodes, one to link to each target kind.
+        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_extract_claims").with_arguments(serde_json::json!({
+            "document_id": document_id,
+            "nodes": [
+                {"node_kind": "reference", "natural_language_text": "Cited prior work.", "source_span": "p.1 [3]"},
+                {"node_kind": "main_theorem", "natural_language_text": "External theorem to cite.", "source_span": "p.2 Thm A"},
+                {"node_kind": "lemma", "natural_language_text": "Prose lemma to formalize.", "source_span": "p.3 Lem 1"},
+                {"node_kind": "construction", "natural_language_text": "Plan-item target.", "source_span": "p.4 §5"}
+            ]
+        }).as_object().unwrap().clone())).await.unwrap());
+        let node_ids: Vec<String> = extracted["added_node_ids"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert_eq!(node_ids.len(), 4);
+
+        // Build the four real targets, all in the same dossier where applicable.
+        let ext = tool_json(&peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "title": "Szemerédi–Trotter", "theorem_statement": "Incidence bound.",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let reference_id = ext["reference_id"].as_str().unwrap().to_string();
+        let claim_id = ext["external_theorem_claim_id"].as_str().unwrap().to_string();
+        let rnode = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "node_type": "lemma", "title": "Research lemma", "trust_status": "unformalized_assumption",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let research_node_id = rnode["node_id"].as_str().unwrap().to_string();
+        let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "x", "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv["problem_version_id"], "title": "Plan",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let plan_item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            "plan_id": plan["plan_id"], "kind": "missing_lemma", "description": "Formalize the lemma.",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let plan_item_id = plan_item["plan_item_id"].as_str().unwrap().to_string();
+
+        // Link each node and assert the derived status + provenance column.
+        let find = |doc: &serde_json::Value, id: &str| -> serde_json::Value {
+            doc["ingested_document"]["nodes"].as_array().unwrap().iter().find(|n| n["ingested_node_id"] == id).unwrap().clone()
+        };
+        let r1 = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_link_node").with_arguments(serde_json::json!({
+            "document_id": document_id, "node_id": node_ids[0], "target_kind": "external_reference", "target_id": reference_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let n0 = find(&r1, &node_ids[0]);
+        assert_eq!(n0["citation_status"], "citation_recorded", "{:?}", n0);
+        assert_eq!(n0["linked_external_reference_id"], reference_id, "{:?}", n0);
+        assert_eq!(n0["review_status"], "linked_to_dossier_artifact", "{:?}", n0);
+
+        let r2 = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_link_node").with_arguments(serde_json::json!({
+            "document_id": document_id, "node_id": node_ids[1], "target_kind": "external_theorem_claim", "target_id": claim_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let n1 = find(&r2, &node_ids[1]);
+        assert_eq!(n1["citation_status"], "citation_recorded", "{:?}", n1);
+        assert_eq!(n1["linked_external_theorem_claim_id"], claim_id, "{:?}", n1);
+
+        let r3 = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_link_node").with_arguments(serde_json::json!({
+            "document_id": document_id, "node_id": node_ids[2], "target_kind": "research_node", "target_id": research_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let n2 = find(&r3, &node_ids[2]);
+        assert_eq!(n2["formalization_status"], "formalization_target_linked", "{:?}", n2);
+        assert_eq!(n2["linked_research_node_id"], research_node_id, "{:?}", n2);
+
+        let r4 = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_link_node").with_arguments(serde_json::json!({
+            "document_id": document_id, "node_id": node_ids[3], "target_kind": "formalization_plan_item", "target_id": plan_item_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let n3 = find(&r4, &node_ids[3]);
+        assert_eq!(n3["formalization_status"], "formalization_target_linked", "{:?}", n3);
+        assert_eq!(n3["linked_formalization_plan_item_id"], plan_item_id, "{:?}", n3);
+
+        // The linkage NEVER confers proof/kernel/fidelity authority on the node.
+        for n in [&n0, &n1, &n2, &n3] {
+            assert_eq!(n["is_proof"], false, "{:?}", n);
+            assert_eq!(n["has_kernel_evidence"], false, "{:?}", n);
+            assert_eq!(n["is_statement_fidelity_approved"], false, "{:?}", n);
+        }
+
+        // Unknown target_kind and a target outside the dossier are both rejected.
+        let bad_kind = peer.call_tool(CallToolRequestParams::new("paper_ingest_link_node").with_arguments(serde_json::json!({
+            "document_id": document_id, "node_id": node_ids[0], "target_kind": "made_up", "target_id": reference_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_kind.is_err(), "unknown target_kind must be rejected");
+        let other = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Other dossier",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let other_ref = tool_json(&peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+            "dossier_id": other["dossier_id"], "title": "Foreign ref",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let cross = peer.call_tool(CallToolRequestParams::new("paper_ingest_link_node").with_arguments(serde_json::json!({
+            "document_id": document_id, "node_id": node_ids[0], "target_kind": "external_reference", "target_id": other_ref["reference_id"],
+        }).as_object().unwrap().clone())).await;
+        assert!(cross.is_err(), "a node cannot be linked to an artifact in a different dossier");
+    }
+
+    /// Issue #27 (PR #58 review, blocker #2): a node can NEVER carry a
+    /// "backed/linked" status without a real forward link. The terminal states
+    /// citation_recorded / formalization_target_linked / linked_to_dossier_artifact
+    /// are reachable ONLY through paper_ingest_link_node — never as a free-form
+    /// label via extract_claims or mark_review_status, and never via a raw DB
+    /// write (the CHECK constraints enforce it structurally).
+    #[tokio::test]
+    async fn test_paper_ingest_backed_status_requires_real_link() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let doc = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_create").with_arguments(serde_json::json!({
+            "title": "Backdoor probe", "source_kind": "manuscript", "created_by": "bot",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let document_id = doc["ingested_document_id"].as_str().unwrap().to_string();
+
+        // extract_claims must reject each backed status supplied directly.
+        for (field, value) in [
+            ("citation_status", "citation_recorded"),
+            ("formalization_status", "formalization_target_linked"),
+            ("review_status", "linked_to_dossier_artifact"),
+        ] {
+            let mut node = serde_json::json!({"node_kind": "lemma", "natural_language_text": "L.", "source_span": "p.1"});
+            node.as_object_mut().unwrap().insert(field.to_string(), serde_json::json!(value));
+            let res = peer.call_tool(CallToolRequestParams::new("paper_ingest_extract_claims").with_arguments(serde_json::json!({
+                "document_id": document_id, "nodes": [node],
+            }).as_object().unwrap().clone())).await;
+            assert!(res.is_err(), "extract_claims must reject {field}={value} (only paper_ingest_link_node may set it)");
+        }
+
+        // A legitimately extracted, unlinked node.
+        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_extract_claims").with_arguments(serde_json::json!({
+            "document_id": document_id,
+            "nodes": [{"node_kind": "lemma", "natural_language_text": "L.", "source_span": "p.1 Lem 1"}]
+        }).as_object().unwrap().clone())).await.unwrap());
+        let node_id = extracted["added_node_ids"][0].as_str().unwrap().to_string();
+
+        // mark_review_status must reject the same backed statuses at the node level.
+        for (field, value) in [
+            ("citation_status", "citation_recorded"),
+            ("formalization_status", "formalization_target_linked"),
+            ("review_status", "linked_to_dossier_artifact"),
+        ] {
+            let res = peer.call_tool(CallToolRequestParams::new("paper_ingest_mark_review_status").with_arguments(serde_json::json!({
+                "document_id": document_id, "node_id": node_id, field: value,
+            }).as_object().unwrap().clone())).await;
+            assert!(res.is_err(), "mark_review_status must reject node {field}={value}");
+        }
+
+        // Structural backstop: even a raw DB write bypassing the handlers cannot
+        // decouple the label from a link — the CHECK constraint rejects it.
+        {
+            let conn = conn_arc.lock().await;
+            let raw_citation = conn.execute(
+                "UPDATE ingested_document_nodes SET citation_status = 'citation_recorded' WHERE id = ?1",
+                [&node_id],
+            );
+            assert!(raw_citation.is_err(), "DB CHECK must reject citation_recorded with no linked reference/claim");
+            let raw_formal = conn.execute(
+                "UPDATE ingested_document_nodes SET formalization_status = 'formalization_target_linked' WHERE id = ?1",
+                [&node_id],
+            );
+            assert!(raw_formal.is_err(), "DB CHECK must reject formalization_target_linked with no linked node/plan item");
+            let raw_review = conn.execute(
+                "UPDATE ingested_document_nodes SET review_status = 'linked_to_dossier_artifact' WHERE id = ?1",
+                [&node_id],
+            );
+            assert!(raw_review.is_err(), "DB CHECK must reject linked_to_dossier_artifact with no forward link at all");
+        }
+
+        // The node is still a plain, unlinked, non-proof extraction.
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_observe").with_arguments(serde_json::json!({
+            "document_id": document_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let node = &observed["ingested_document"]["nodes"][0];
+        assert_eq!(node["citation_status"], "uncited", "{:?}", node);
+        assert_eq!(node["formalization_status"], "prose_only", "{:?}", node);
+        assert!(node["linked_external_reference_id"].is_null(), "{:?}", node);
+        assert_eq!(node["has_kernel_evidence"], false, "{:?}", node);
     }
 
     #[tokio::test]
