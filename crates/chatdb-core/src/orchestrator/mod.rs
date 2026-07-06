@@ -199,6 +199,7 @@ impl<'a, L: LeanGateway, P: Prover> Orchestrator<'a, L, P> {
                 &dep_ids,
                 &pv.environment_hash,
                 &default_manifest,
+                crate::models::action::ProofFormat::FlatTacticSequence,
             );
 
             match verify_result {
@@ -307,6 +308,7 @@ mod tests {
             _deps: &[Uuid],
             _env: &str,
             _import_manifest: &[String],
+            _proof_format: crate::models::action::ProofFormat,
         ) -> Result<crate::models::LeanVerificationResult, String> {
             Ok(crate::models::LeanVerificationResult {
                 outcome: LeanVerificationOutcome::KernelPass,

@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::hashing::canonical_hash;
-use crate::models::action::{LeanModuleItem, ModuleTheorem, MutualMember};
+use crate::models::action::{LeanModuleItem, ModuleTheorem, MutualMember, ProofFormat};
 
 /// A token that must never appear (as a whole word) anywhere inside any
 /// client-supplied string. Each would open a fresh top-level Lean command and so
@@ -74,6 +74,15 @@ pub enum ModulePolicyError {
     DuplicateName { name: String },
     /// The root theorem's statement does not hash-match the registered root.
     RootStatementMismatch { expected_hash: String, actual_hash: String },
+    /// Issue #64: a module declaration's name occurs as a free identifier in
+    /// the hash-pinned root statement. The statement hash pins the TEXT, but a
+    /// free identifier in that text resolves against the module's own
+    /// namespace first — so a module-local `def C := fun _ => 0` under a
+    /// statement mentioning `C` would silently prove a different proposition
+    /// under the same hash. Only the designated solution slot (a name ending
+    /// in `_solution`, the find-the-value convention benchmark statements are
+    /// registered with) may be declared by the module.
+    ShadowsRootStatementIdentifier { name: String },
     /// The module is empty (no root theorem content) or otherwise malformed.
     Empty { detail: String },
     /// A hashing failure while building the manifest (should be unreachable).
@@ -93,6 +102,8 @@ impl std::fmt::Display for ModulePolicyError {
                 write!(f, "duplicate declaration name {:?} in module", name),
             ModulePolicyError::RootStatementMismatch { expected_hash, actual_hash } =>
                 write!(f, "root theorem statement hash {} does not match the registered root statement hash {}", actual_hash, expected_hash),
+            ModulePolicyError::ShadowsRootStatementIdentifier { name } =>
+                write!(f, "module declaration {:?} shadows a free identifier occurring in the root theorem statement — a module-local binding for a name the hash-pinned statement references could silently change what the statement means (issue #64). Only the designated solution slot (a name ending in `_solution`) may be declared by the module; reference library declarations by their qualified names or rely on the problem's registered open context instead", name),
             ModulePolicyError::Empty { detail } => write!(f, "malformed module: {}", detail),
             ModulePolicyError::Internal(m) => write!(f, "internal module-assembly error: {}", m),
         }
@@ -244,6 +255,153 @@ fn detect_deps(content: &str, candidate_names: &[String]) -> Vec<String> {
     candidate_names.iter().filter(|n| contains_word(content, n)).cloned().collect()
 }
 
+/// Issue #62: an import-manifest entry may be an `open` directive instead of a
+/// module path — `"open Polynomial"`, `"open scoped BigOperators"`, or
+/// `"open Polynomial Real Filter"`. Upstream benchmark files (e.g.
+/// PutnamBench) activate scoped notation (`ℤ[X]`, `∠`, `π`) via `open` lines,
+/// and a registered statement that relies on them cannot elaborate inside the
+/// assembled module namespace without that context; without it, `ℤ[X]` parses
+/// as `getElem` indexing and unknown lowercase identifiers silently auto-bind
+/// as implicits — the statement can elaborate to something OTHER than the
+/// intended mathematics. Carrying the open context inside the import manifest
+/// means the existing `import_manifest_hash` pins it for replay/result
+/// cross-checks with no schema change.
+///
+/// Returns the canonicalized directive (single-space separated, exactly
+/// `open [scoped] <Path> [<Path> ...]`) when `entry` is a valid open
+/// directive, `None` otherwise. Validation is the security boundary for the
+/// interpolation into Lean source: only `open`, an optional `scoped`, and
+/// dotted identifier paths — no newlines, comment syntax, or command
+/// separators can survive, and the RENDERED text is the canonical
+/// reconstruction from parsed tokens, never the raw entry.
+pub fn parse_open_directive(entry: &str) -> Option<String> {
+    if entry.len() > 512 {
+        return None;
+    }
+    let mut tokens = entry.split_whitespace();
+    if tokens.next()? != "open" {
+        return None;
+    }
+    let rest: Vec<&str> = tokens.collect();
+    let (scoped, paths) = match rest.split_first() {
+        Some((&"scoped", tail)) => (true, tail),
+        _ => (false, &rest[..]),
+    };
+    if paths.is_empty() {
+        return None;
+    }
+    let valid_namespace_path = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 256
+            && s.split('.').all(|segment| {
+                !segment.is_empty()
+                    && segment.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                    && segment.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '\'')
+            })
+    };
+    if !paths.iter().all(|p| valid_namespace_path(p)) {
+        return None;
+    }
+    let mut canonical = String::from("open ");
+    if scoped {
+        canonical.push_str("scoped ");
+    }
+    canonical.push_str(&paths.join(" "));
+    Some(canonical)
+}
+
+/// Splits an import manifest into (module import paths, canonical `open`
+/// directives), preserving order within each group. An entry that starts with
+/// the word `open` but fails [`parse_open_directive`] validation is returned
+/// with the IMPORTS (where it renders as a visibly broken `import open ...`
+/// line and fails the compile loudly) rather than being silently dropped or
+/// spliced raw into an `open` position — fail closed, fail visible.
+pub fn partition_import_manifest(manifest: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut imports = Vec::new();
+    let mut opens = Vec::new();
+    for entry in manifest {
+        match parse_open_directive(entry) {
+            Some(canonical) => opens.push(canonical),
+            None => imports.push(entry.clone()),
+        }
+    }
+    (imports, opens)
+}
+
+/// Issue #64: the ASCII identifier tokens occurring free-standing in a root
+/// statement. A token immediately preceded by `.` is a qualified-name suffix
+/// or field projection (`Finset.Icc`, `p.coeff`) — a module-local declaration
+/// cannot capture it, so it is excluded. Declared module names are constrained
+/// to ASCII by [`check_name`], so an ASCII scan is exhaustive for the
+/// shadowing check (a unicode statement token can never equal a declarable
+/// name).
+/// Issue #64: rejects a module in which any declaration binds a name the root
+/// statement references free. Inside the generated namespace a module-local
+/// declaration wins name resolution, so under a statement mentioning `C` a
+/// module could define `C := fun _ => 0` and prove a different proposition
+/// under the same statement hash. The single sanctioned exception is the
+/// find-the-value solution slot: a name ending in `_solution` (the convention
+/// benchmark statements are registered with) is exactly the identifier the
+/// module is REQUIRED to supply.
+///
+/// This is deliberately NOT part of [`assemble_module`]: for a client-authored
+/// (ad-hoc) problem the statement author IS the module author, and a root
+/// statement that references the module's own helper defs (`double 2 = 4`,
+/// `isEven seed = true`) is the documented, intended SubmitModule shape.
+/// The capture risk exists only when the statement text comes from someone
+/// else — a registered benchmark suite — so the orchestrator applies this
+/// check exactly when the target statement hash matches a registered
+/// benchmark problem's target hash.
+pub fn check_no_root_statement_shadowing(
+    module_items: &[LeanModuleItem],
+    root_theorem: &ModuleTheorem,
+) -> Result<(), ModulePolicyError> {
+    let statement_identifiers = root_statement_identifiers(&root_theorem.statement);
+    let mut check = |name: &str| -> Result<(), ModulePolicyError> {
+        if statement_identifiers.contains(name) && !name.ends_with("_solution") {
+            return Err(ModulePolicyError::ShadowsRootStatementIdentifier { name: name.to_string() });
+        }
+        Ok(())
+    };
+    for item in module_items {
+        match item {
+            LeanModuleItem::Def { name, .. } => check(name)?,
+            LeanModuleItem::Theorem { name, .. } => check(name)?,
+            LeanModuleItem::MutualGroup { members } => {
+                for member in members {
+                    match member {
+                        MutualMember::Def { name, .. } => check(name)?,
+                        MutualMember::Theorem { name, .. } => check(name)?,
+                    }
+                }
+            }
+        }
+    }
+    check(&root_theorem.name)
+}
+
+fn root_statement_identifiers(statement: &str) -> std::collections::HashSet<String> {
+    let chars: Vec<char> = statement.chars().collect();
+    let mut out = std::collections::HashSet::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == '\'') {
+                i += 1;
+            }
+            let qualified_suffix = start > 0 && chars[start - 1] == '.';
+            if !qualified_suffix {
+                out.insert(chars[start..i].iter().collect());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Policy-checks and assembles a structured module into Lean source under
 /// `problem_namespace`, with the same import manifest a single-theorem solve
 /// would use. Pure and deterministic: no Lean invocation, no filesystem.
@@ -339,14 +497,33 @@ pub fn assemble_module(
 
     // 4. Render. Imports first (ALL import lines must precede any command), then
     // server-owned set_options, then the namespace with defs, helper theorems,
-    // and finally the root theorem.
+    // and finally the root theorem. `open` directives carried in the manifest
+    // (issue #62) are emitted just inside the namespace, mirroring where the
+    // upstream benchmark file's own `open` lines sat relative to its theorem.
+    let (module_imports, open_directives) = partition_import_manifest(import_manifest);
     let mut source = String::new();
-    for module in import_manifest {
+    for module in &module_imports {
         source.push_str(&format!("import {}\n", module));
     }
     source.push_str("set_option linter.unusedTactic false\n");
     source.push_str("set_option linter.unreachableTactic false\n");
+    // Issue #63: Mathlib's Polynomial/Real/Measure values are noncomputable,
+    // so any solution `def` over them fails Lean's compiler under a plain
+    // `def`. The whole module is wrapped in a `noncomputable section` (the
+    // standard Mathlib idiom): it changes nothing for theorems and lets defs
+    // hold noncomputable values without the client ever writing the (banned)
+    // `noncomputable` keyword itself. Soundness is untouched — the kernel
+    // still checks every definition and proof; only code generation is
+    // skipped.
+    source.push_str("noncomputable section\n");
     source.push_str(&format!("\nnamespace {}\n\n", problem_namespace));
+    if !open_directives.is_empty() {
+        for open_directive in &open_directives {
+            source.push_str(open_directive);
+            source.push('\n');
+        }
+        source.push('\n');
+    }
 
     let mut item_manifest: Vec<AssembledItem> = Vec::new();
     let mut declared_so_far: Vec<String> = Vec::new();
@@ -376,7 +553,9 @@ pub fn assemble_module(
                 declared_so_far.push(name.clone());
             }
             LeanModuleItem::Theorem { name, statement, proof_term } => {
-                source.push_str(&render_theorem(name, statement, proof_term));
+                // Helper theorems are always flattened (issue #51 scopes the
+                // raw-block transport to the root proof only).
+                source.push_str(&render_theorem(name, statement, proof_term, ProofFormat::FlatTacticSequence));
                 item_manifest.push(AssembledItem {
                     order: next_order,
                     kind: "theorem".to_string(),
@@ -422,7 +601,7 @@ pub fn assemble_module(
                             next_order += 1;
                         }
                         MutualMember::Theorem { name, statement, proof_term } => {
-                            group_source.push_str(&render_theorem(name, statement, proof_term));
+                            group_source.push_str(&render_theorem(name, statement, proof_term, ProofFormat::FlatTacticSequence));
                             item_manifest.push(AssembledItem {
                                 order: next_order,
                                 kind: "theorem".to_string(),
@@ -449,7 +628,7 @@ pub fn assemble_module(
     // (the actual goal being proved), not an already-rendered structural
     // block, so it needs the same issue #41 normalization, not the old
     // blind-uniform-add indent() a prior version of this fix missed here.
-    source.push_str(&render_theorem(&root_theorem.name, &root_theorem.statement, &root_theorem.proof_term));
+    source.push_str(&render_theorem(&root_theorem.name, &root_theorem.statement, &root_theorem.proof_term, root_theorem.proof_format));
     item_manifest.push(AssembledItem {
         order: next_order,
         kind: "root_theorem".to_string(),
@@ -461,6 +640,8 @@ pub fn assemble_module(
     });
 
     source.push_str(&format!("end {}\n", problem_namespace));
+    // Closes the issue-#63 `noncomputable section` (LIFO with the namespace).
+    source.push_str("end\n");
 
     let module_source_hash = canonical_hash(&source).map_err(ModulePolicyError::Internal)?;
     let declaration_manifest_hash = canonical_hash(&item_manifest.iter().map(|it| {
@@ -490,8 +671,8 @@ fn render_def(name: &str, type_signature: &str, body: &str) -> String {
 
 /// Renders a `theorem` declaration — the `Theorem`/`mutual`-group analogue of
 /// [`render_def`].
-fn render_theorem(name: &str, statement: &str, proof_term: &str) -> String {
-    format!("theorem {} : {} := by\n{}\n\n", name, statement.trim(), normalize_and_indent(proof_term))
+fn render_theorem(name: &str, statement: &str, proof_term: &str, format: ProofFormat) -> String {
+    format!("theorem {} : {} := by\n{}\n\n", name, statement.trim(), normalize_proof(proof_term, format))
 }
 
 /// Indents every line of a string by two spaces, with NO per-line
@@ -553,6 +734,42 @@ pub(crate) fn normalize_and_indent(s: &str) -> String {
     }
 }
 
+/// Issue #51: `raw_lean_block` transport — strip only the COMMON left margin
+/// and re-base it to the module's two-space indent, preserving each line's
+/// RELATIVE indentation. Unlike [`normalize_and_indent`]'s flattening, a proof
+/// that intentionally uses Lean's indentation structure (focus bullets `·`,
+/// nested blocks) keeps its shape. Leading whitespace in submitted proofs is
+/// single-byte spaces, so slicing at the byte offset `min_indent` is safe.
+/// This only rewrites leading whitespace; it never touches tactic text, and
+/// the kernel remains the sole authority on the result.
+fn rebase_preserving_relative_indent(s: &str) -> String {
+    let lines: Vec<&str> = s.lines().collect();
+    let min_indent = lines.iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    lines.iter()
+        .map(|l| {
+            if l.trim().is_empty() {
+                String::new()
+            } else {
+                format!("  {}", &l[min_indent..])
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Dispatch a proof body through the transport format the caller declared
+/// (issue #51). Whitespace-only; the Lean kernel still decides the outcome.
+pub(crate) fn normalize_proof(s: &str, format: ProofFormat) -> String {
+    match format {
+        ProofFormat::FlatTacticSequence => normalize_and_indent(s),
+        ProofFormat::RawLeanBlock => rebase_preserving_relative_indent(s),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,7 +779,11 @@ mod tests {
     }
 
     fn root(statement: &str, proof: &str) -> ModuleTheorem {
-        ModuleTheorem { name: "root_thm".to_string(), statement: statement.to_string(), proof_term: proof.to_string() }
+        ModuleTheorem { name: "root_thm".to_string(), statement: statement.to_string(), proof_term: proof.to_string(), proof_format: ProofFormat::FlatTacticSequence }
+    }
+
+    fn root_fmt(statement: &str, proof: &str, proof_format: ProofFormat) -> ModuleTheorem {
+        ModuleTheorem { name: "root_thm".to_string(), statement: statement.to_string(), proof_term: proof.to_string(), proof_format }
     }
 
     fn root_hash(statement: &str) -> String {
@@ -628,6 +849,40 @@ mod tests {
             "root theorem's mismatched-indentation proof_term must be flattened to one uniform level, not blindly re-prefixed: {}", asm.source);
     }
 
+    /// Issue #51: raw_lean_block preserves RELATIVE indentation (focus bullets
+    /// keep their nesting), whereas flat_tactic_sequence flattens it. Same
+    /// input, two transport formats, two different rendered shapes.
+    #[test]
+    fn raw_block_preserves_relative_indentation() {
+        let input = "constructor\n  · exact h1\n  · exact h2";
+        assert_eq!(normalize_proof(input, ProofFormat::RawLeanBlock),
+            "  constructor\n    · exact h1\n    · exact h2",
+            "raw_lean_block must keep the two-space focus-bullet nesting under a re-based margin");
+        assert_eq!(normalize_proof(input, ProofFormat::FlatTacticSequence),
+            "  constructor\n  · exact h1\n  · exact h2",
+            "flat_tactic_sequence must flatten the mismatched nesting to one level (issue #41 behavior)");
+    }
+
+    /// raw_lean_block strips only the COMMON left margin and re-bases it, so a
+    /// pre-indented block keeps its internal relative structure.
+    #[test]
+    fn raw_block_strips_common_margin_and_rebases() {
+        let input = "  intro h\n    cases h";
+        assert_eq!(normalize_proof(input, ProofFormat::RawLeanBlock),
+            "  intro h\n    cases h",
+            "the common 2-space margin is stripped and a 2-space base re-added, so the +2 relative indent survives");
+    }
+
+    /// Issue #51 acceptance at the assembly layer: a raw_lean_block root proof
+    /// reaches the assembled module source with its nesting intact.
+    #[test]
+    fn assemble_module_root_theorem_raw_block_preserves_nesting() {
+        let r = root_fmt("p ∧ q", "constructor\n  · exact h1\n  · exact h2", ProofFormat::RawLeanBlock);
+        let asm = assemble_module("ChatDB.P_abc", &root_hash("p ∧ q"), &[], &r, &manifest()).unwrap();
+        assert!(asm.source.contains("theorem root_thm : p ∧ q := by\n  constructor\n    · exact h1\n    · exact h2"),
+            "raw_lean_block root proof must keep its focus-bullet nesting in the assembled source: {}", asm.source);
+    }
+
     #[test]
     fn assembles_def_plus_root_under_namespace() {
         let items = vec![LeanModuleItem::Def {
@@ -641,7 +896,9 @@ mod tests {
         assert!(asm.source.contains("namespace ChatDB.P_abc"), "{}", asm.source);
         assert!(asm.source.contains("def double : Nat → Nat :="), "{}", asm.source);
         assert!(asm.source.contains("theorem root_thm : double 2 = 4 := by"), "{}", asm.source);
-        assert!(asm.source.trim_end().ends_with("end ChatDB.P_abc"), "{}", asm.source);
+        // `end ChatDB.P_abc` closes the namespace; the trailing bare `end`
+        // closes the issue-#63 `noncomputable section`.
+        assert!(asm.source.trim_end().ends_with("end ChatDB.P_abc\nend"), "{}", asm.source);
         // manifest: def + root_theorem, root linked and hashed.
         assert_eq!(asm.item_manifest.len(), 2);
         assert_eq!(asm.item_manifest[1].kind, "root_theorem");
@@ -650,6 +907,138 @@ mod tests {
         assert!(!asm.declaration_manifest_hash.is_empty());
         // dependency detection: root uses `double`.
         assert_eq!(asm.item_manifest[1].depends_on, vec!["double".to_string()]);
+    }
+
+    /// Issue #63: the whole module sits in a `noncomputable section`, so a
+    /// solution def over a noncomputable carrier (Polynomial/ℝ/Measure)
+    /// compiles. The section opens before the namespace and is closed by the
+    /// final bare `end`.
+    #[test]
+    fn assembled_module_is_wrapped_in_noncomputable_section() {
+        let r = root("1 + 1 = 2", "norm_num");
+        let asm = assemble_module("ChatDB.P_abc", &root_hash("1 + 1 = 2"), &[], &r, &manifest()).unwrap();
+        assert!(asm.source.contains("noncomputable section\n\nnamespace ChatDB.P_abc"),
+            "noncomputable section must open before the namespace: {}", asm.source);
+        assert!(asm.source.trim_end().ends_with("end ChatDB.P_abc\nend"),
+            "the final bare `end` must close the section after the namespace closes: {}", asm.source);
+    }
+
+    /// Issue #62: `open` entries in the import manifest render as open
+    /// directives just inside the namespace, not as `import` lines.
+    #[test]
+    fn open_manifest_entries_render_inside_namespace() {
+        let mut m = manifest();
+        m.push("open Polynomial".to_string());
+        m.push("open scoped BigOperators".to_string());
+        let r = root("1 + 1 = 2", "norm_num");
+        let asm = assemble_module("ChatDB.P_abc", &root_hash("1 + 1 = 2"), &[], &r, &m).unwrap();
+        assert!(asm.source.contains("namespace ChatDB.P_abc\n\nopen Polynomial\nopen scoped BigOperators\n\n"),
+            "open directives must sit just inside the namespace: {}", asm.source);
+        assert!(!asm.source.contains("import open"),
+            "a valid open entry must never render as an import line: {}", asm.source);
+    }
+
+    /// Issue #62 security boundary: only `open [scoped] <dotted idents>`
+    /// parses; anything else (command separators, injection attempts) is not
+    /// an open directive and falls through to the visibly-broken import path.
+    #[test]
+    fn open_directive_parsing_is_strict_and_canonicalizing() {
+        assert_eq!(parse_open_directive("open Polynomial"), Some("open Polynomial".to_string()));
+        assert_eq!(parse_open_directive("open   Polynomial    Real"), Some("open Polynomial Real".to_string()));
+        assert_eq!(parse_open_directive("open scoped BigOperators"), Some("open scoped BigOperators".to_string()));
+        assert_eq!(parse_open_directive("open EuclideanGeometry.Sphere'"), Some("open EuclideanGeometry.Sphere'".to_string()));
+        assert_eq!(parse_open_directive("Mathlib.Tactic.Ring"), None, "a plain module path is not an open directive");
+        assert_eq!(parse_open_directive("open"), None, "open with no namespaces is invalid");
+        assert_eq!(parse_open_directive("open scoped"), None, "open scoped with no namespaces is invalid");
+        assert_eq!(parse_open_directive("open Foo\naxiom cheat : False"), None,
+            "a colon token can never be a namespace path — injection attempt must not parse");
+        assert_eq!(parse_open_directive("open Foo (renaming)"), None, "parenthesized open syntax is not admitted");
+        // Multi-line whitespace between otherwise-valid tokens canonicalizes to
+        // one line — the rendered text is rebuilt from parsed tokens, so no raw
+        // newline can survive into the source even if validation is loosened.
+        assert_eq!(parse_open_directive("open Foo\nBar"), Some("open Foo Bar".to_string()));
+    }
+
+    /// Issue #64: under the benchmark-statement guard, a helper def bound to a
+    /// name the root statement references free is rejected — with an honest
+    /// alias body just as much as a malicious one, because the checker cannot
+    /// tell them apart.
+    #[test]
+    fn rejects_module_def_shadowing_root_statement_identifier() {
+        let items = vec![LeanModuleItem::Def {
+            name: "C".to_string(),
+            type_signature: "Nat → Nat".to_string(),
+            body: "fun _ => 0".to_string(),
+        }];
+        let r = root("∀ a : Nat, C a = C a", "intro a; rfl");
+        let err = check_no_root_statement_shadowing(&items, &r).unwrap_err();
+        assert!(matches!(err, ModulePolicyError::ShadowsRootStatementIdentifier { ref name } if name == "C"), "{:?}", err);
+    }
+
+    /// Issue #64: mutual-group members are covered by the guard too.
+    #[test]
+    fn rejects_mutual_member_shadowing_root_statement_identifier() {
+        let items = vec![LeanModuleItem::MutualGroup { members: vec![
+            MutualMember::Def { name: "isEven".to_string(), type_signature: "Nat → Bool".to_string(), body: "fun _ => true".to_string() },
+            MutualMember::Def { name: "isOdd".to_string(), type_signature: "Nat → Bool".to_string(), body: "fun _ => false".to_string() },
+        ]}];
+        let r = root("isEven 4 = true", "rfl");
+        let err = check_no_root_statement_shadowing(&items, &r).unwrap_err();
+        assert!(matches!(err, ModulePolicyError::ShadowsRootStatementIdentifier { ref name } if name == "isEven"), "{:?}", err);
+    }
+
+    /// Issue #64: the `_solution` slot is the sanctioned exception — a
+    /// find-the-value statement REQUIRES the module to supply exactly that
+    /// name.
+    #[test]
+    fn solution_slot_is_exempt_from_shadow_rejection() {
+        let items = vec![LeanModuleItem::Def {
+            name: "putnam_1963_b1_solution".to_string(),
+            type_signature: "Int".to_string(),
+            body: "2".to_string(),
+        }];
+        let stmt = "∀ a : Int, a = putnam_1963_b1_solution ↔ a = putnam_1963_b1_solution";
+        let r = root(stmt, "intro a; rfl");
+        assert!(check_no_root_statement_shadowing(&items, &r).is_ok());
+    }
+
+    /// Issue #64: a qualified-name SUFFIX in the statement (`Finset.Icc`,
+    /// `p.coeff`) is not capturable by a module-local declaration and must not
+    /// trigger the rejection; helper names absent from the statement remain
+    /// fine.
+    #[test]
+    fn qualified_suffixes_and_fresh_names_do_not_trigger_shadow_rejection() {
+        let items = vec![
+            LeanModuleItem::Def {
+                name: "Icc".to_string(),
+                type_signature: "Nat".to_string(),
+                body: "0".to_string(),
+            },
+            LeanModuleItem::Theorem {
+                name: "helper_step".to_string(),
+                statement: "1 + 1 = 2".to_string(),
+                proof_term: "norm_num".to_string(),
+            },
+        ];
+        let stmt = "∀ n : Nat, n ∈ Finset.Icc 0 n → n = n";
+        let r = root(stmt, "intro n _; rfl");
+        assert!(check_no_root_statement_shadowing(&items, &r).is_ok(),
+            "`Icc` occurs only as a qualified suffix (`Finset.Icc`) and must not be treated as capturable");
+    }
+
+    /// Issue #64 scoping: assemble_module itself does NOT reject a root
+    /// statement referencing the module's own defs — that is the documented
+    /// SubmitModule shape for client-authored problems. The guard is applied
+    /// by the orchestrator only for benchmark-registered statements.
+    #[test]
+    fn assemble_module_itself_allows_module_supplied_identifiers() {
+        let items = vec![LeanModuleItem::Def {
+            name: "double".to_string(),
+            type_signature: "Nat → Nat".to_string(),
+            body: "fun n => n + n".to_string(),
+        }];
+        let r = root("double 2 = 4", "rfl");
+        assert!(assemble_module("ChatDB.P_x", &root_hash("double 2 = 4"), &items, &r, &manifest()).is_ok());
     }
 
     #[test]

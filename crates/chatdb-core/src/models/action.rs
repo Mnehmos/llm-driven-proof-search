@@ -6,11 +6,40 @@ use super::reward::RewardComponent;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+/// Issue #51: how the server should treat leading whitespace in a submitted
+/// proof body before splicing it under `... := by`. This is a pure TRANSPORT
+/// format — it only affects leading whitespace, never the tactic text, the
+/// statement, imports, or the namespace, and it never bypasses verification:
+/// the Lean kernel remains the sole authority on KernelPass/KernelFail.
+///
+/// - `flat_tactic_sequence` (default): the #41 flattener — re-bases uniform
+///   indentation and collapses accidental nesting to one level, protecting
+///   simple sequential tactic lists from an inadvertent focus-block trap.
+/// - `raw_lean_block`: strips only the common left margin and re-bases it,
+///   preserving RELATIVE indentation so a proof that intentionally relies on
+///   Lean's indentation structure (focus bullets `·`, nested `case`/`by`
+///   blocks) keeps its shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProofFormat {
+    #[default]
+    FlatTacticSequence,
+    RawLeanBlock,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TypedAction {
     Decompose { sub_lemmas: Vec<String> },
-    Solve { proof_term: String },
+    Solve {
+        proof_term: String,
+        /// Transport format for `proof_term`'s leading whitespace (see
+        /// [`ProofFormat`]). Defaults to `flat_tactic_sequence`; set
+        /// `raw_lean_block` only when the proof intentionally uses Lean
+        /// relative-indentation structure.
+        #[serde(default)]
+        proof_format: ProofFormat,
+    },
     /// Submit a small structured Lean development — helper definitions and
     /// helper theorems plus a root theorem — that the server assembles into one
     /// namespaced module and verifies as a unit. This is NOT a raw-Lean escape
@@ -103,6 +132,13 @@ pub struct ModuleTheorem {
     pub statement: String,
     /// The tactic block proving `statement` (what goes after `:= by`).
     pub proof_term: String,
+    /// Transport format for `proof_term`'s leading whitespace (see
+    /// [`ProofFormat`]). Defaults to `flat_tactic_sequence`; set
+    /// `raw_lean_block` only when the root proof intentionally uses Lean
+    /// relative-indentation structure. Helper defs/theorems and mutual members
+    /// are always flattened.
+    #[serde(default)]
+    pub proof_format: ProofFormat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

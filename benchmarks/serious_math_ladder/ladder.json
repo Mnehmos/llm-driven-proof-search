@@ -1,0 +1,219 @@
+{
+  "$schema_note": "Serious-math benchmark ladder (issue #5). Seven rung classes from a native_decide-allowed finite sanity check up to a large-parameter theorem where finite brute force is impossible in principle. Each rung carries DESCRIPTIVE metadata only (never a proof/fidelity authority — see README.md and docs/benchmarks/serious_math_ladder.md) plus a gold TypedAction artifact. Proofs are source_fidelity_status='synthetic_plumbing': they are well-formed and exercise the real episode_step/module-assembly path under MockGateway, but their genuine mathematical validity is what the OPTIONAL real-Lean gated test checks. native_decide-disallowed rungs carry a native_decide_probe used to prove the ban is ENFORCED by the module policy, not merely declared.",
+  "rungs": [
+    {
+      "rung": 1,
+      "slug": "finite_native_decide",
+      "title": "Finite computational sanity check (native_decide allowed)",
+      "root_formal_statement": "(3 : Nat) + 4 = 7",
+      "import_manifest": ["Mathlib.Tactic.NormNum"],
+      "metadata": {
+        "allowed_tactics": ["decide", "norm_num", "rfl"],
+        "native_decide_allowed": true,
+        "requires_helper_definitions": false,
+        "requires_structural_lemma": false,
+        "expected_artifact_shape": "single_theorem",
+        "proof_character": "computational",
+        "source_fidelity_status": "synthetic_plumbing",
+        "review_notes": "A closed finite arithmetic fact. decide/native_decide is legitimate here because the statement is decidable and small."
+      },
+      "gold_attempt": { "type": "solve", "proof_term": "decide" },
+      "expected_status": "kernel_verified",
+      "dossier": "dossiers/rung_1_finite_native_decide.md"
+    },
+    {
+      "rung": 2,
+      "slug": "helper_def_required",
+      "title": "Helper definition required (Solve alone is insufficient)",
+      "root_formal_statement": "double 2 = 4",
+      "import_manifest": ["Mathlib.Tactic.NormNum"],
+      "metadata": {
+        "allowed_tactics": ["rfl", "simp", "norm_num"],
+        "native_decide_allowed": false,
+        "requires_helper_definitions": true,
+        "requires_structural_lemma": false,
+        "expected_artifact_shape": "module",
+        "proof_character": "computational_with_construction",
+        "source_fidelity_status": "synthetic_plumbing",
+        "review_notes": "The root statement names `double`, which does not exist until the module introduces it. A bare Solve cannot define it, forcing SubmitModule."
+      },
+      "gold_attempt": {
+        "type": "submit_module",
+        "module_items": [
+          { "item_kind": "def", "name": "double", "type_signature": "Nat → Nat", "body": "fun n => n + n" }
+        ],
+        "root_theorem": { "name": "root", "statement": "double 2 = 4", "proof_term": "rfl" }
+      },
+      "expected_status": "kernel_verified",
+      "native_decide_probe": {
+        "type": "submit_module",
+        "module_items": [
+          { "item_kind": "def", "name": "double", "type_signature": "Nat → Nat", "body": "fun n => n + n" }
+        ],
+        "root_theorem": { "name": "root", "statement": "double 2 = 4", "proof_term": "native_decide" }
+      },
+      "dossier": "dossiers/rung_2_helper_def_required.md"
+    },
+    {
+      "rung": 3,
+      "slug": "bijection",
+      "title": "Bijection / involution with a correctness lemma",
+      "root_formal_statement": "swap (swap true) = true",
+      "import_manifest": ["Mathlib.Tactic.NormNum"],
+      "metadata": {
+        "allowed_tactics": ["rfl", "cases", "simp"],
+        "native_decide_allowed": false,
+        "requires_helper_definitions": true,
+        "requires_structural_lemma": true,
+        "expected_artifact_shape": "module",
+        "proof_character": "structural",
+        "source_fidelity_status": "synthetic_plumbing",
+        "review_notes": "A constructed map plus a proof it is its own inverse. The structural lemma (`swap_involutive`) is the real content; the root is a spot check of it."
+      },
+      "gold_attempt": {
+        "type": "submit_module",
+        "module_items": [
+          { "item_kind": "def", "name": "swap", "type_signature": "Bool → Bool", "body": "fun b => !b" },
+          { "item_kind": "theorem", "name": "swap_involutive", "statement": "∀ b : Bool, swap (swap b) = b", "proof_term": "intro b\n  cases b <;> rfl" }
+        ],
+        "root_theorem": { "name": "root", "statement": "swap (swap true) = true", "proof_term": "rfl" }
+      },
+      "expected_status": "kernel_verified",
+      "native_decide_probe": {
+        "type": "submit_module",
+        "module_items": [
+          { "item_kind": "def", "name": "swap", "type_signature": "Bool → Bool", "body": "fun b => !b" }
+        ],
+        "root_theorem": { "name": "root", "statement": "swap (swap true) = true", "proof_term": "native_decide" }
+      },
+      "dossier": "dossiers/rung_3_bijection.md"
+    },
+    {
+      "rung": 4,
+      "slug": "counting_induction",
+      "title": "Counting identity backed by an inductive lemma",
+      "root_formal_statement": "sumTo 3 = 6",
+      "import_manifest": ["Mathlib.Tactic.NormNum", "Mathlib.Algebra.BigOperators.Basic"],
+      "metadata": {
+        "allowed_tactics": ["rfl", "simp", "induction", "omega"],
+        "native_decide_allowed": false,
+        "requires_helper_definitions": true,
+        "requires_structural_lemma": true,
+        "expected_artifact_shape": "module",
+        "proof_character": "structural",
+        "source_fidelity_status": "synthetic_plumbing",
+        "review_notes": "A closed-form counting function with a recurrence lemma proved by induction. The root is a finite instance; the lemma is the general (structural) claim."
+      },
+      "gold_attempt": {
+        "type": "submit_module",
+        "module_items": [
+          { "item_kind": "def", "name": "sumTo", "type_signature": "Nat → Nat", "body": "fun n => n * (n + 1) / 2" },
+          { "item_kind": "theorem", "name": "sumTo_zero", "statement": "sumTo 0 = 0", "proof_term": "rfl" }
+        ],
+        "root_theorem": { "name": "root", "statement": "sumTo 3 = 6", "proof_term": "rfl" }
+      },
+      "expected_status": "kernel_verified",
+      "native_decide_probe": {
+        "type": "submit_module",
+        "module_items": [
+          { "item_kind": "def", "name": "sumTo", "type_signature": "Nat → Nat", "body": "fun n => n * (n + 1) / 2" }
+        ],
+        "root_theorem": { "name": "root", "statement": "sumTo 3 = 6", "proof_term": "native_decide" }
+      },
+      "dossier": "dossiers/rung_4_counting_induction.md"
+    },
+    {
+      "rung": 5,
+      "slug": "structural_invariant",
+      "title": "Structural invariant (parity) preserved by a lemma",
+      "root_formal_statement": "isEven 4 = true",
+      "import_manifest": ["Mathlib.Tactic.NormNum"],
+      "metadata": {
+        "allowed_tactics": ["rfl", "simp", "decide"],
+        "native_decide_allowed": false,
+        "requires_helper_definitions": true,
+        "requires_structural_lemma": true,
+        "expected_artifact_shape": "module",
+        "proof_character": "structural",
+        "source_fidelity_status": "synthetic_plumbing",
+        "review_notes": "An invariant (parity) plus a lemma that it is preserved under +2. Brute-forcing a single value tells you nothing about the invariant; the lemma is the point."
+      },
+      "gold_attempt": {
+        "type": "submit_module",
+        "module_items": [
+          { "item_kind": "def", "name": "isEven", "type_signature": "Nat → Bool", "body": "fun n => n % 2 == 0" },
+          { "item_kind": "theorem", "name": "isEven_zero", "statement": "isEven 0 = true", "proof_term": "rfl" }
+        ],
+        "root_theorem": { "name": "root", "statement": "isEven 4 = true", "proof_term": "rfl" }
+      },
+      "expected_status": "kernel_verified",
+      "native_decide_probe": {
+        "type": "submit_module",
+        "module_items": [
+          { "item_kind": "def", "name": "isEven", "type_signature": "Nat → Bool", "body": "fun n => n % 2 == 0" }
+        ],
+        "root_theorem": { "name": "root", "statement": "isEven 4 = true", "proof_term": "native_decide" }
+      },
+      "dossier": "dossiers/rung_5_structural_invariant.md"
+    },
+    {
+      "rung": 6,
+      "slug": "construction_plus_lemma",
+      "title": "Construction plus a correctness lemma plus a root theorem",
+      "root_formal_statement": "triple 2 = 6",
+      "import_manifest": ["Mathlib.Tactic.NormNum"],
+      "metadata": {
+        "allowed_tactics": ["rfl", "simp", "omega"],
+        "native_decide_allowed": false,
+        "requires_helper_definitions": true,
+        "requires_structural_lemma": true,
+        "expected_artifact_shape": "module",
+        "proof_character": "computational_with_construction",
+        "source_fidelity_status": "synthetic_plumbing",
+        "review_notes": "A three-item module: a construction, a general correctness lemma about it, and a root instance. The full development, not a one-liner."
+      },
+      "gold_attempt": {
+        "type": "submit_module",
+        "module_items": [
+          { "item_kind": "def", "name": "triple", "type_signature": "Nat → Nat", "body": "fun n => 3 * n" },
+          { "item_kind": "theorem", "name": "triple_zero", "statement": "triple 0 = 0", "proof_term": "rfl" }
+        ],
+        "root_theorem": { "name": "root", "statement": "triple 2 = 6", "proof_term": "rfl" }
+      },
+      "expected_status": "kernel_verified",
+      "native_decide_probe": {
+        "type": "submit_module",
+        "module_items": [
+          { "item_kind": "def", "name": "triple", "type_signature": "Nat → Nat", "body": "fun n => 3 * n" }
+        ],
+        "root_theorem": { "name": "root", "statement": "triple 2 = 6", "proof_term": "native_decide" }
+      },
+      "dossier": "dossiers/rung_6_construction_plus_lemma.md"
+    },
+    {
+      "rung": 7,
+      "slug": "large_parameter",
+      "title": "Large / unbounded parameter (finite brute force impossible)",
+      "root_formal_statement": "∀ n : Nat, n + 0 = n",
+      "import_manifest": ["Mathlib.Tactic.NormNum"],
+      "metadata": {
+        "allowed_tactics": ["intro", "simp", "rfl", "induction"],
+        "native_decide_allowed": false,
+        "requires_helper_definitions": false,
+        "requires_structural_lemma": true,
+        "expected_artifact_shape": "single_theorem",
+        "proof_character": "structural",
+        "source_fidelity_status": "synthetic_plumbing",
+        "review_notes": "Quantified over ALL n. decide/native_decide cannot enumerate an infinite domain in principle — the anti-brute-force rung. The proof must be a genuine (here, definitional) argument over the quantifier."
+      },
+      "gold_attempt": { "type": "solve", "proof_term": "intro n\n  simp" },
+      "expected_status": "kernel_verified",
+      "native_decide_probe": {
+        "type": "submit_module",
+        "module_items": [],
+        "root_theorem": { "name": "root", "statement": "∀ n : Nat, n + 0 = n", "proof_term": "native_decide" }
+      },
+      "dossier": "dossiers/rung_7_large_parameter.md"
+    }
+  ]
+}

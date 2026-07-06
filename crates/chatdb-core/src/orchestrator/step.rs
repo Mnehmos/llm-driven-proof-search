@@ -2,7 +2,7 @@ use chrono::Utc;
 use rusqlite::{Result, Transaction, OptionalExtension};
 use uuid::Uuid;
 
-use crate::models::action::TypedAction;
+use crate::models::action::{TypedAction, ProofFormat};
 use crate::lean::LeanGateway;
 use crate::lean::module::AssembledModule;
 use crate::models::{LeanVerificationOutcome, LeanVerificationResult, LeanModuleVerificationResult, Obligation, Polarity};
@@ -11,6 +11,8 @@ use crate::models::{LeanVerificationOutcome, LeanVerificationResult, LeanModuleV
 pub enum StepError {
     Conflict,
     InvalidAttempt,
+    InvalidCost { cost_micros: i128 },
+    BudgetExceeded { requested_cost_micros: i64, remaining_cost_micros: i64 },
     ActionSchemaInvalid(String),
     DatabaseError(rusqlite::Error),
     LeanGatewayError(String),
@@ -32,6 +34,7 @@ pub enum GatewayRequest {
     Solve {
         obl: Obligation,
         proof_term: String,
+        proof_format: ProofFormat,
         dep_ids: Vec<Uuid>,
         env_hash: String,
         import_manifest: Vec<String>,
@@ -115,6 +118,7 @@ pub fn attempt_prepare(
     action: &TypedAction,
     cost_micros: i128,
 ) -> Result<PrepOutcome, StepError> {
+    let _ = checked_cost_micros(cost_micros)?;
     let now = Utc::now().to_rfc3339();
 
     // 1. Verify attempt is valid
@@ -154,14 +158,8 @@ pub fn attempt_prepare(
         |row| row.get(0),
     )?;
 
-    // Update attempt to executing
-    tx.execute(
-        "UPDATE action_attempts SET status = 'executing', execution_started_at = ?1 WHERE id = ?2",
-        (&now, attempt_id.to_string()),
-    )?;
-
     match action {
-        TypedAction::Solve { proof_term } => {
+        TypedAction::Solve { proof_term, proof_format } => {
             let obl_id_str = target_obligation_id
                 .ok_or_else(|| StepError::ActionSchemaInvalid("No target obligation for this request".to_string()))?;
 
@@ -231,10 +229,11 @@ pub fn attempt_prepare(
             // call itself fails (LeanGatewayError carries no verdict and must not
             // cost budget, matching the pre-split behavior).
             reserve_cost_budget(tx, &episode_id_str, cost_micros)?;
+            mark_attempt_executing(tx, attempt_id, &now, &episode_id_str, cost_micros)?;
 
             Ok(PrepOutcome::NeedsGateway {
                 request: GatewayRequest::Solve {
-                    obl, proof_term: proof_term.clone(), dep_ids,
+                    obl, proof_term: proof_term.clone(), proof_format: *proof_format, dep_ids,
                     env_hash: pv_env_hash.clone(), import_manifest,
                 },
                 ctx: FinalizeContext::Solve { obl_id_str, pv_env_hash },
@@ -268,7 +267,31 @@ pub fn attempt_prepare(
             let ns16 = pv_id_str.replace('-', "");
             let problem_namespace = format!("ChatDB.P_{}", &ns16[..16.min(ns16.len())]);
 
-            match crate::lean::module::assemble_module(&problem_namespace, &stmt_hash, module_items, root_theorem, &import_manifest) {
+            reserve_cost_budget(tx, &episode_id_str, cost_micros)?;
+            mark_attempt_executing(tx, attempt_id, &now, &episode_id_str, cost_micros)?;
+
+            // Issue #64: when the target statement is a REGISTERED BENCHMARK
+            // statement (its hash matches a benchmark problem's target hash),
+            // the statement author is the upstream suite, not this module's
+            // author — so no module declaration may bind a name the statement
+            // references free (except the `_solution` slot), or the module
+            // could capture an intended-global identifier and prove a
+            // different proposition under the same hash. Client-authored
+            // (ad-hoc) statements keep the documented root-references-helpers
+            // SubmitModule shape.
+            let statement_is_benchmark_registered: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM benchmark_problems
+                               WHERE COALESCE(prover_ready_statement_hash, root_statement_hash) = ?1)",
+                [&stmt_hash],
+                |row| row.get::<_, i64>(0),
+            )? == 1;
+            let shadow_guard = if statement_is_benchmark_registered {
+                crate::lean::module::check_no_root_statement_shadowing(module_items, root_theorem)
+            } else {
+                Ok(())
+            };
+
+            match shadow_guard.and_then(|_| crate::lean::module::assemble_module(&problem_namespace, &stmt_hash, module_items, root_theorem, &import_manifest)) {
                 Err(policy_err) => {
                     // Deterministic policy rejection (bad name, prohibited construct,
                     // root hash mismatch, ...). A normal rejected attempt — never a
@@ -286,7 +309,7 @@ pub fn attempt_prepare(
                         "UPDATE episode_obligations SET status = 'open', failure_lesson = ?1 WHERE id = ?2",
                         (lesson, &obl_id_str),
                     )?;
-                    finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, cost_micros, false)?;
+                    finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, 0, false)?;
                     Ok(PrepOutcome::Done { outcome: LeanVerificationOutcome::KernelFail, is_valid: false })
                 }
                 Ok(assembled) => {
@@ -296,10 +319,6 @@ pub fn attempt_prepare(
                     }).to_string();
                     let namespace = assembled.namespace.clone();
                     let item_manifest = assembled.item_manifest.clone();
-                    // See the matching comment on the Solve path: reserve the cost
-                    // now, atomically with the CAS check, since the gateway call
-                    // (up to 120s for a module) runs with the DB lock released.
-                    reserve_cost_budget(tx, &episode_id_str, cost_micros)?;
                     Ok(PrepOutcome::NeedsGateway {
                         request: GatewayRequest::SubmitModule { assembled, env_hash: pv_env_hash.clone() },
                         ctx: FinalizeContext::SubmitModule {
@@ -324,6 +343,9 @@ pub fn attempt_prepare(
             if cleaned.is_empty() {
                 return Err(StepError::ActionSchemaInvalid("decompose requires at least one non-empty sub_lemma".to_string()));
             }
+
+            reserve_cost_budget(tx, &episode_id_str, cost_micros)?;
+            mark_attempt_executing(tx, attempt_id, &now, &episode_id_str, cost_micros)?;
 
             for sub in &cleaned {
                 let child_id = Uuid::new_v4();
@@ -367,18 +389,22 @@ pub fn attempt_prepare(
                 [&obl_id_str],
             )?;
 
-            finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, cost_micros, true)?;
+            finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, 0, true)?;
             Ok(PrepOutcome::Done { outcome: LeanVerificationOutcome::KernelPass, is_valid: true })
         }
         TypedAction::GiveUp => {
             // A deliberate give-up is a valid, terminal action — not an invalid
             // submission. The caller (MCP layer) is responsible for ending the
             // episode with outcome='gave_up' when it sees this committed.
-            finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, cost_micros, true)?;
+            reserve_cost_budget(tx, &episode_id_str, cost_micros)?;
+            mark_attempt_executing(tx, attempt_id, &now, &episode_id_str, cost_micros)?;
+            finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, 0, true)?;
             Ok(PrepOutcome::Done { outcome: LeanVerificationOutcome::KernelPass, is_valid: true })
         }
         TypedAction::ExternalResponseRejected { .. } => {
-            finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, cost_micros, false)?;
+            reserve_cost_budget(tx, &episode_id_str, cost_micros)?;
+            mark_attempt_executing(tx, attempt_id, &now, &episode_id_str, cost_micros)?;
+            finalize_bookkeeping(tx, attempt_id, &episode_id_str, &action_request_id_str, current_revision, 0, false)?;
             Ok(PrepOutcome::Done { outcome: LeanVerificationOutcome::KernelFail, is_valid: false })
         }
     }
@@ -401,6 +427,7 @@ pub fn attempt_finalize(
     ctx: FinalizeContext,
     response: GatewayResponse,
 ) -> Result<LeanVerificationOutcome, StepError> {
+    let _ = checked_cost_micros(cost_micros)?;
     let (status, episode_id_str, db_claim_token, action_request_id_str, current_revision): (String, String, String, String, i64) = {
         let (status, episode_id_str, db_claim_token, action_request_id_str): (String, String, String, String) = tx.query_row(
             "SELECT status, episode_id, claim_token, action_request_id FROM action_attempts WHERE id = ?1",
@@ -659,20 +686,63 @@ pub fn attempt_finalize(
 /// carries no verdict and must not cost budget). A no-op on a NULL
 /// (unbounded) `cost_budget_micros` — SQL NULL arithmetic stays NULL.
 fn reserve_cost_budget(tx: &Transaction, episode_id_str: &str, cost_micros: i128) -> Result<(), StepError> {
-    tx.execute(
-        "UPDATE episodes SET cost_budget_micros = cost_budget_micros - ?1 WHERE id = ?2",
-        (cost_micros as i64, episode_id_str),
+    let cost = checked_cost_micros(cost_micros)?;
+    let updated = tx.execute(
+        "UPDATE episodes
+         SET cost_budget_micros = cost_budget_micros - ?1
+         WHERE id = ?2
+           AND (cost_budget_micros IS NULL OR cost_budget_micros >= ?1)",
+        (cost, episode_id_str),
     )?;
+    if updated == 0 {
+        let remaining: Option<i64> = tx.query_row(
+            "SELECT cost_budget_micros FROM episodes WHERE id = ?1",
+            [episode_id_str],
+            |row| row.get(0),
+        ).optional()?.flatten();
+        if let Some(remaining) = remaining {
+            return Err(StepError::BudgetExceeded {
+                requested_cost_micros: cost,
+                remaining_cost_micros: remaining,
+            });
+        }
+        return Err(StepError::InvalidAttempt);
+    }
     Ok(())
 }
 
 /// Undoes a `reserve_cost_budget` reservation when the gateway call it was
 /// guarding against never produced a verdict (`LeanGatewayError`).
 fn refund_cost_budget(tx: &Transaction, episode_id_str: &str, cost_micros: i128) -> Result<(), StepError> {
+    let cost = checked_cost_micros(cost_micros)?;
     tx.execute(
         "UPDATE episodes SET cost_budget_micros = cost_budget_micros + ?1 WHERE id = ?2",
-        (cost_micros as i64, episode_id_str),
+        (cost, episode_id_str),
     )?;
+    Ok(())
+}
+
+fn checked_cost_micros(cost_micros: i128) -> Result<i64, StepError> {
+    if cost_micros < 0 || cost_micros > i64::MAX as i128 {
+        return Err(StepError::InvalidCost { cost_micros });
+    }
+    Ok(cost_micros as i64)
+}
+
+fn mark_attempt_executing(
+    tx: &Transaction,
+    attempt_id: Uuid,
+    now: &str,
+    episode_id_str: &str,
+    reserved_cost_micros: i128,
+) -> Result<(), StepError> {
+    if let Err(err) = tx.execute(
+        "UPDATE action_attempts SET status = 'executing', execution_started_at = ?1 WHERE id = ?2",
+        (now, attempt_id.to_string()),
+    ) {
+        let _ = refund_cost_budget(tx, episode_id_str, reserved_cost_micros);
+        return Err(StepError::DatabaseError(err));
+    }
     Ok(())
 }
 
@@ -693,6 +763,9 @@ fn finalize_bookkeeping(
     cost_micros: i128,
     is_valid: bool,
 ) -> Result<(), StepError> {
+    if checked_cost_micros(cost_micros)? > 0 {
+        reserve_cost_budget(tx, episode_id_str, cost_micros)?;
+    }
     let new_revision = current_revision + 1;
 
     if is_valid {
@@ -700,10 +773,9 @@ fn finalize_bookkeeping(
             "UPDATE episodes SET
                 current_revision = ?1,
                 step_count = step_count + 1,
-                cost_budget_micros = cost_budget_micros - ?2,
-                updated_at = ?3
-             WHERE id = ?4",
-            (new_revision, cost_micros as i64, Utc::now().to_rfc3339(), episode_id_str),
+                updated_at = ?2
+             WHERE id = ?3",
+            (new_revision, Utc::now().to_rfc3339(), episode_id_str),
         )?;
 
         tx.execute(
@@ -716,10 +788,9 @@ fn finalize_bookkeeping(
                 current_revision = ?1,
                 step_count = step_count + 1,
                 invalid_action_count = invalid_action_count + 1,
-                cost_budget_micros = cost_budget_micros - ?2,
-                updated_at = ?3
-             WHERE id = ?4",
-            (new_revision, cost_micros as i64, Utc::now().to_rfc3339(), episode_id_str),
+                updated_at = ?2
+             WHERE id = ?3",
+            (new_revision, Utc::now().to_rfc3339(), episode_id_str),
         )?;
 
         tx.execute(
@@ -760,8 +831,8 @@ pub fn attempt_commit(
         PrepOutcome::Done { outcome, .. } => Ok(outcome),
         PrepOutcome::NeedsGateway { request, ctx } => {
             let response = match request {
-                GatewayRequest::Solve { obl, proof_term, dep_ids, env_hash, import_manifest } => {
-                    GatewayResponse::Solve(lean_gateway.verify_exact(&obl, &proof_term, &dep_ids, &env_hash, &import_manifest))
+                GatewayRequest::Solve { obl, proof_term, proof_format, dep_ids, env_hash, import_manifest } => {
+                    GatewayResponse::Solve(lean_gateway.verify_exact(&obl, &proof_term, &dep_ids, &env_hash, &import_manifest, proof_format))
                 }
                 GatewayRequest::SubmitModule { assembled, env_hash } => {
                     GatewayResponse::SubmitModule(lean_gateway.verify_module(&assembled, &env_hash))

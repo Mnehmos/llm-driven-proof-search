@@ -10,7 +10,8 @@ use crate::models::{
 use uuid::Uuid;
 
 pub mod module;
-use module::{AssembledModule, normalize_and_indent};
+use module::{AssembledModule, normalize_proof};
+use crate::models::action::ProofFormat;
 
 pub trait LeanGateway {
     fn verify_exact(
@@ -20,6 +21,7 @@ pub trait LeanGateway {
         approved_dependency_ids: &[Uuid],
         environment: &str,
         import_manifest: &[String],
+        proof_format: ProofFormat,
     ) -> Result<LeanVerificationResult, String>;
 
     /// Confirms every module in `imports` actually resolves (catches typos /
@@ -156,16 +158,22 @@ impl RealLeanGateway {
         Ok((output.status.success(), lines, stderr_str))
     }
 
-    fn build_import_block(import_manifest: &[String], approved_dependency_ids: &[Uuid]) -> String {
+    /// Renders the manifest's module paths as `import` lines (plus approved
+    /// dependency imports) and returns the manifest's `open` directives
+    /// (issue #62) separately — `import` lines must precede every other
+    /// command, while `open` lines belong after the imports/namespace, so the
+    /// two render at different positions in the file.
+    fn build_import_block(import_manifest: &[String], approved_dependency_ids: &[Uuid]) -> (String, Vec<String>) {
+        let (module_imports, open_directives) = crate::lean::module::partition_import_manifest(import_manifest);
         let mut imports = String::new();
-        for module in import_manifest {
+        for module in &module_imports {
             imports.push_str(&format!("import {}\n", module));
         }
         for dep_id in approved_dependency_ids {
             let dep_first_16 = &dep_id.to_string().replace("-", "")[..16];
             imports.push_str(&format!("import LeanChecker.Verified.O_{}\n", dep_first_16));
         }
-        imports
+        (imports, open_directives)
     }
 }
 
@@ -251,6 +259,7 @@ impl LeanGateway for RealLeanGateway {
         approved_dependency_ids: &[Uuid],
         environment: &str,
         import_manifest: &[String],
+        proof_format: ProofFormat,
     ) -> Result<LeanVerificationResult, String> {
         let start_time = Instant::now();
 
@@ -263,25 +272,35 @@ impl LeanGateway for RealLeanGateway {
 
         // 2. Imports come from the problem's own immutable manifest — never
         // hardcoded here. ALL `import` lines must precede any other command, so
-        // dependency imports go before set_option.
-        let mut imports = Self::build_import_block(import_manifest, approved_dependency_ids);
+        // dependency imports go before set_option. The manifest's `open`
+        // directives (issue #62) render inside the namespace instead, matching
+        // where the upstream benchmark file's own `open` lines sat.
+        let (mut imports, open_directives) = Self::build_import_block(import_manifest, approved_dependency_ids);
         imports.push_str("set_option linter.unusedTactic false\n");
         imports.push_str("set_option linter.unreachableTactic false\n");
+        let open_block = if open_directives.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n\n", open_directives.join("\n"))
+        };
 
         // 3. Construct Lean source code
         // Lean 4.32+ requires the first tactic after `:= by` to be indented
         // relative to the theorem — a proof block at column 0 is parsed as an
         // empty `by` block followed by stray identifiers, failing every proof.
-        // normalize_and_indent also fixes issue #41: a naturally-formatted
-        // multi-line proof whose lines don't already share one indentation
-        // level (e.g. the first tactic flush, the rest indented) was silently
-        // reinterpreted by Lean's whitespace-sensitive parser as nesting
-        // rather than sequencing — see its doc comment in lean/module.rs.
-        let indented_proof = normalize_and_indent(candidate_source);
+        // normalize_proof applies the caller's declared transport format
+        // (issue #51): the default flat_tactic_sequence also fixes issue #41 (a
+        // naturally-formatted multi-line proof whose lines don't already share
+        // one indentation level was silently reinterpreted by Lean's
+        // whitespace-sensitive parser as nesting rather than sequencing);
+        // raw_lean_block instead preserves relative indentation for proofs that
+        // intentionally use it. Whitespace only — the kernel still decides.
+        let indented_proof = normalize_proof(candidate_source, proof_format);
         let file_content = format!(
-            "{}\nnamespace {}\n\ntheorem {} : {} := by\n{}\n\nend {}\n",
+            "{}\nnamespace {}\n\n{}theorem {} : {} := by\n{}\n\nend {}\n",
             imports,
             problem_namespace,
+            open_block,
             theorem_name,
             obligation.lean_statement,
             indented_proof,
@@ -569,15 +588,29 @@ impl LeanGateway for RealLeanGateway {
         if imports.is_empty() {
             return Ok(());
         }
+        let (module_imports, open_directives) = crate::lean::module::partition_import_manifest(imports);
         let mut content = String::new();
-        for module in imports {
+        for module in &module_imports {
             content.push_str(&format!("import {}\n", module));
         }
+        // `open` manifest entries (issue #62) are validated by the same probe:
+        // an unknown namespace in an `open` line is a compile error here, so a
+        // bad open entry is rejected at problem_create rather than surfacing as
+        // a confusing failure on the first proof attempt.
+        for open_directive in &open_directives {
+            content.push_str(open_directive);
+            content.push('\n');
+        }
         // Validating imports means resolving them, which can itself pull in a
-        // large chunk of Mathlib (e.g. NumberTheory modules) — give this more
-        // room than the fast declaration-lookup pass, but well under
-        // verify_exact's 60s since this only elaborates imports, not a proof.
-        let (proc_success, lines, stderr) = self.run_lean_json(&content, "import_probe", Duration::from_secs(45))?;
+        // large chunk of Mathlib (e.g. the full `Mathlib` umbrella) — issue #66:
+        // a COLD elaboration cache makes `import Mathlib` alone take over two
+        // minutes on a workstation, so the old 45s budget rejected perfectly
+        // valid manifests on the first call of a session. 240s covers a cold
+        // umbrella load with margin; the warm path stays fast, and problem_create
+        // additionally skips this probe entirely when the identical manifest
+        // already validated under the same environment (see the manifest-hash
+        // check there).
+        let (proc_success, lines, stderr) = self.run_lean_json(&content, "import_probe", Duration::from_secs(240))?;
         let errors: Vec<String> = lines.iter()
             .filter_map(|v| {
                 let (msg, _kind, severity, _line) = parse_diagnostic_line(v);
@@ -662,9 +695,17 @@ impl RealLeanGateway {
     /// Lean continues past an unresolved `#check` rather than aborting the file),
     /// returning true/false per name in the same order as `names`.
     fn check_pass(&self, names: &[String], imports: &[String], timeout: Duration) -> Result<Vec<bool>, String> {
+        let (module_imports, open_directives) = crate::lean::module::partition_import_manifest(imports);
         let mut content = String::new();
-        for module in imports {
+        for module in &module_imports {
             content.push_str(&format!("import {}\n", module));
+        }
+        // The manifest's `open` context (issue #62) participates in name
+        // resolution here too — a lookup should see exactly the scope a Solve
+        // attempt against this manifest would see.
+        for open_directive in &open_directives {
+            content.push_str(open_directive);
+            content.push('\n');
         }
         content.push('\n');
         let check_start_line = content.matches('\n').count() as i64 + 1; // 1-indexed line of the first #check
@@ -756,7 +797,7 @@ mod tests {
         };
 
         // This should fail to prove since 1 = 2 is false.
-        let res = gateway.verify_exact(&obligation, "rfl", &[], "envhash", &default_manifest());
+        let res = gateway.verify_exact(&obligation, "rfl", &[], "envhash", &default_manifest(), ProofFormat::FlatTacticSequence);
         if let Ok(res_val) = res {
             assert!(matches!(res_val.outcome, LeanVerificationOutcome::KernelFail));
         }
@@ -780,14 +821,14 @@ mod tests {
     /// be untouched. No partial commit.
     #[test]
     fn verify_module_does_not_write_on_failure() {
-        use crate::models::action::ModuleTheorem;
+        use crate::models::action::{ModuleTheorem, ProofFormat};
         let tmp = tempfile::tempdir().unwrap();
         let lean_project = tmp.path().to_path_buf();
         let gateway = RealLeanGateway::new(lean_project.clone(), PathBuf::from("Z:\\definitely\\nonexistent\\bin"));
 
         let stmt = "1 + 1 = 2";
         let root_hash = crate::hashing::canonical_hash(&stmt.to_string()).unwrap();
-        let root = ModuleTheorem { name: "r".to_string(), statement: stmt.to_string(), proof_term: "norm_num".to_string() };
+        let root = ModuleTheorem { name: "r".to_string(), statement: stmt.to_string(), proof_term: "norm_num".to_string(), proof_format: ProofFormat::FlatTacticSequence };
         let asm = module::assemble_module("ChatDB.P_test", &root_hash, &[], &root, &default_manifest()).unwrap();
 
         let res = gateway.verify_module(&asm, "envhash").unwrap();

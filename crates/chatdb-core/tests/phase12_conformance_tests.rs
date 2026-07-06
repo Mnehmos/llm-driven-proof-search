@@ -1,6 +1,6 @@
 use chatdb_proof_core::orchestrator::{lifecycle, attempts, step, trajectories};
 use chatdb_proof_core::lean::LeanGateway;
-use chatdb_proof_core::models::{Obligation, LeanVerificationOutcome, LeanVerificationResult, action::TypedAction};
+use chatdb_proof_core::models::{Obligation, LeanVerificationOutcome, LeanVerificationResult, action::TypedAction, action::ProofFormat};
 use rusqlite::Connection;
 use uuid::Uuid;
 use chrono::Utc;
@@ -14,6 +14,7 @@ impl LeanGateway for MockGateway {
         _approved_dependency_ids: &[Uuid],
         _environment: &str,
         _import_manifest: &[String],
+        _proof_format: ProofFormat,
     ) -> Result<LeanVerificationResult, String> {
         Ok(LeanVerificationResult {
             outcome: LeanVerificationOutcome::KernelPass,
@@ -64,7 +65,7 @@ fn test_production_path_matches_replay_path() {
     ).unwrap().expect("Claim ok");
 
     let gateway = MockGateway;
-    let action = TypedAction::Solve { proof_term: "rfl".to_string() };
+    let action = TypedAction::Solve { proof_term: "rfl".to_string(), proof_format: ProofFormat::FlatTacticSequence };
     
     // Live/Production step execution path
     let live_outcome = step::attempt_commit(

@@ -311,14 +311,17 @@ response includes a `cost_summary` object with this full shape:
 **Field meanings, by unit:**
 
 - `*_cost_micros` — money. `host_side_cost_micros`/`host_cost_confidence` come
-  from `run_envelopes` (unchanged). `model_call_reported_cost_micros` is new:
-  real per-attempt cost data folded in from `model_call_leases` (populated by
-  `model_call_reserve`/`model_call_settle`), summed only over `status='settled'
+  from `run_envelopes` (unchanged). `model_call_reported_cost_micros` is:
+  real per-attempt cost data folded in from `model_call_leases` (reserved by
+  `model_call_reserve`, settled or voided by `model_call_settle` or the
+  same-attempt `episode_step` auto-settle path), summed only over `status='settled'
   AND actual_cost_micros IS NOT NULL` rows — a reserved-but-never-settled
-  lease contributes nothing, never a phantom `0`. It is ALWAYS reported at
-  `"attested"` confidence (`model_call_cost_confidence`), since it is entirely
+  lease is still only a reservation and contributes nothing to reported actual
+  cost, never a phantom `0`. A voided lease refunds its reservation and also
+  contributes no actual cost. Settled actual costs are ALWAYS reported at
+  `"attested"` confidence (`model_call_cost_confidence`), since they are entirely
   self-reported by the runner/host and never independently measured or
-  receipted by ChatDB — it is never merged into an exact total.
+  receipted by ChatDB — they are never merged into an exact total.
   `mcp_side_cost_micros`/`storage_export_cost_micros` stay `null` until a real
   meter or an explicit rate card exists for ChatDB's own compute/storage —
   there is none today, and these two fields are the ONLY ones this policy
@@ -449,6 +452,12 @@ the very next `episode_step` on that attempt settles it implicitly. It only
 stays genuinely unsettled if that attempt is never stepped at all (e.g. the
 episode is instead terminated via `episode_close`, which never touches
 `model_call_leases`).
+
+As of the budget-hardening pass for #47/#48, that implicit settlement uses the
+same delta rule as explicit `model_call_settle`: lower actual cost refunds only
+the reserved difference, higher actual cost must reserve only the extra delta,
+and a failed delta reservation rolls the step preparation back before any Lean
+gateway call.
 
 (A separate, dead, pre-`step.rs` legacy `Orchestrator` in `orchestrator/mod.rs`
 also persists timing — into `proposal_attempts` via
@@ -737,6 +746,67 @@ check at all until now. It now requires `allow_putnambench_proof_export=true`
 for a benchmark-linked episode, using the identical `benchmark_suite_name_for_episode`
 lookup `proof_export` uses, and errors with the same guidance (use `proof_export`
 with `format="public_summary"` for a disclosure-safe report instead).
+
+The benchmark-link check keys on `COALESCE(prover_ready_statement_hash,
+root_statement_hash)` — the same statement identity `benchmark_result_record`
+uses — so an episode created from the prover-ready Pi-form (not the raw
+named-binder declaration a suite catalogs) is still recognized as
+benchmark-linked and cannot bypass the proof-body gate (#49).
+
+## Fidelity basis: formal_benchmark_hash_alignment (issue #43)
+
+A benchmark-imported problem no longer needs `unsafe_dev_attestation` to be
+provable. Because a `trusted_canonical_source` suite (like PutnamBench) is an
+externally-curated corpus, a problem whose server-computed `root_statement_hash`
+equals the registered benchmark target hash — `COALESCE(prover_ready_statement_hash,
+root_statement_hash)`, the same identity `benchmark_result_record` uses — is
+admitted on the honestly-named basis **`formal_benchmark_hash_alignment`**, via
+`problem_record_benchmark_alignment`. This sets `fidelity_status='benchmark_aligned'`
+and unlocks proving.
+
+This is **hash alignment to a curated target, not independent review.** It is
+deliberately weaker than `verified`:
+
+- It can reach `outcome=kernel_verified` but **never** `certified` / problem
+  state `COMPLETE` — the DB-level `CHECK(state <> 'COMPLETE' OR fidelity_status
+  = 'verified')` guard makes that structurally impossible.
+- The server recomputes every hash; no client-supplied hash is accepted.
+- An untrusted/custom suite is rejected and directed to a real
+  `problem_submit_fidelity_review`.
+- Training eligibility stays quarantined (`training_eligible` still requires
+  `verified`).
+
+`proof_export(format="public_summary")` reports the three independent claims
+separately so a benchmark success is never conflated with a discovery claim:
+
+- **`kernel_verified`** — Lean accepted a proof of the formal statement.
+- **`formal_target_matched`** — the formal statement is a registered benchmark
+  target (`benchmark_aligned`, or a recorded `canonical_statement_hash_match`).
+- **`certified`** — statement fidelity was independently reviewed (`verified`).
+
+`benchmark_success = kernel_verified + formal_target_matched`;
+`discovery_claim = kernel_verified + certified + independent_review`.
+
+## Stored result vs current episode outcome (issue #50)
+
+A benchmark result is a **historical report** — `benchmark_results.status` is
+recorded at result time and never rewritten. But `problem_submit_fidelity_review`
+can retroactively promote the referenced episode `kernel_verified` → `certified`
+*after* that row was recorded. To surface this without silently mutating
+history, `benchmark_run_observe` reports, per result:
+
+- `stored_result_status` — the status recorded at result time (also mirrored as
+  `status` for back-compat), never rewritten.
+- `current_episode_outcome` — the referenced episode's live outcome (e.g. after
+  a retroactive fidelity-review promotion).
+- `stale_result` — `true` when the two diverge within the proof vocabulary
+  (`kernel_verified` vs `certified`). Benign differences (a non-proof status
+  vs some other outcome) are never flagged.
+
+Aggregate metrics (`solved_count`, `pass_at_1_rate`, `kernel_verified_count`,
+`certified_count`, …) remain computed from `stored_result_status` — see the
+`aggregate_basis` field in the metrics block — so a run's reported numbers are
+stable even as individual episodes are later promoted.
 
 ## What "public" safely includes
 

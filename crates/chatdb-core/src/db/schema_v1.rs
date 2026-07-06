@@ -36,9 +36,13 @@ CREATE TABLE IF NOT EXISTS problem_versions (
     -- problem_submit_fidelity_review decision can reach 'verified', and only
     -- 'verified' may reach COMPLETE. This is the DB-level backstop for the
     -- proof-soundness-vs-statement-fidelity invariant; see docs/fix_plan_playtest_02.md.
-    CHECK(state NOT IN ('PROVING', 'ROOT_PROVED_COVERAGE_PENDING', 'ROOT_PROVED_COVERAGE_UNCONVERGED') OR fidelity_status IN ('verified', 'attested')),
+    -- 'benchmark_aligned' (issue #43) is proving-capable like 'attested' but
+    -- honestly named: a curated-benchmark hash-alignment basis, NOT independent
+    -- NL review. It is deliberately absent from the COMPLETE check below, so it
+    -- can reach kernel_verified but never 'certified'/COMPLETE.
+    CHECK(state NOT IN ('PROVING', 'ROOT_PROVED_COVERAGE_PENDING', 'ROOT_PROVED_COVERAGE_UNCONVERGED') OR fidelity_status IN ('verified', 'attested', 'benchmark_aligned')),
     CHECK(state <> 'COMPLETE' OR fidelity_status = 'verified'),
-    CHECK(fidelity_status IN ('unreviewed', 'attested', 'verified', 'rejected', 'revoked'))
+    CHECK(fidelity_status IN ('unreviewed', 'attested', 'verified', 'rejected', 'revoked', 'benchmark_aligned'))
 );
 
 -- Fidelity belongs to the problem version, not to any one proof episode: an
@@ -60,7 +64,9 @@ CREATE TABLE IF NOT EXISTS problem_fidelity_reviews (
     signature TEXT,
     created_at TEXT NOT NULL,
     revoked_at TEXT,
-    CHECK(decision IN ('verified', 'rejected'))
+    -- 'benchmark_aligned' (issue #43): the formal_benchmark_hash_alignment basis
+    -- — recorded via problem_record_benchmark_alignment, never a path to certified.
+    CHECK(decision IN ('verified', 'rejected', 'benchmark_aligned'))
 );
 
 CREATE TABLE IF NOT EXISTS canonical_verified_lemmas (
@@ -495,12 +501,19 @@ CREATE TABLE IF NOT EXISTS formalization_plan_items (
     mathlib_candidate_names_json TEXT NOT NULL,
     lookup_result_json TEXT,
     promoted_obligation_id TEXT REFERENCES episode_obligations(id),
+    -- Issue #12: optional growth-rate role, so an asymptotic proof's steps
+    -- (a lower/upper growth bound, an infinite-family extraction, a
+    -- sufficiently-large threshold, a limit comparison) are labeled distinctly
+    -- from finite sanity checks. Descriptive only; never proof authority. Added
+    -- to pre-existing DBs by migrate_add_plan_item_asymptotic_role_column.
+    asymptotic_role TEXT,
     status TEXT NOT NULL,
     created_at TEXT NOT NULL,
     UNIQUE(plan_id, item_order),
     CHECK(kind IN ('concept', 'missing_definition', 'missing_lemma', 'planned_module', 'external_citation')),
     CHECK(mathlib_coverage_status IN ('unknown', 'found', 'not_found', 'partial')),
-    CHECK(status IN ('open', 'promoted', 'dropped'))
+    CHECK(status IN ('open', 'promoted', 'dropped')),
+    CHECK(asymptotic_role IS NULL OR asymptotic_role IN ('growth_lower_bound', 'growth_upper_bound', 'infinite_family_extraction', 'sufficiently_large_threshold', 'limit_comparison'))
 );
 
 -- One row per extracted move within a draft, in the order the client
@@ -530,6 +543,642 @@ CREATE TABLE IF NOT EXISTS draft_moves (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_formalization_plan_items_promoted_obligation
     ON formalization_plan_items(promoted_obligation_id) WHERE promoted_obligation_id IS NOT NULL;
 
+-- Level 4 research substrate (issues #9, #11, #13): paper-scale research
+-- state, external citation/assumption boundaries, and independent verification
+-- layers. These tables are deliberately metadata-only: no row here can mark an
+-- episode obligation proved, create a canonical lemma, certify a problem, or
+-- change a proof outcome. Kernel verification still lives only in the existing
+-- Lean-backed episode/canonical tables.
+CREATE TABLE IF NOT EXISTS research_dossiers (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(status IN ('draft', 'active', 'blocked', 'completed', 'abandoned'))
+);
+
+CREATE TABLE IF NOT EXISTS research_sections (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    section_order INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(dossier_id, section_order)
+);
+
+CREATE TABLE IF NOT EXISTS research_nodes (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    section_id TEXT REFERENCES research_sections(id),
+    node_order INTEGER NOT NULL,
+    node_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    statement TEXT,
+    content TEXT,
+    trust_status TEXT NOT NULL,
+    linked_obligation_id TEXT REFERENCES episode_obligations(id),
+    linked_verified_lemma_id TEXT REFERENCES episode_verified_lemmas(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(dossier_id, node_order),
+    CHECK(node_type IN ('definition', 'proposition', 'lemma', 'theorem', 'remark', 'reference', 'open_gap')),
+    CHECK(trust_status IN (
+        'open_gap',
+        'proved_in_episode',
+        'imported_from_mathlib',
+        'external_citation_unreviewed',
+        'external_citation_human_reviewed',
+        'unformalized_assumption',
+        'rejected_unsafe_assumption'
+    )),
+    CHECK(trust_status <> 'proved_in_episode' OR linked_verified_lemma_id IS NOT NULL)
+);
+
+CREATE TABLE IF NOT EXISTS external_references (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    title TEXT NOT NULL,
+    authors TEXT,
+    venue TEXT,
+    year TEXT,
+    url TEXT,
+    doi TEXT,
+    raw_citation TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS external_theorem_claims (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    reference_id TEXT REFERENCES external_references(id),
+    node_id TEXT REFERENCES research_nodes(id),
+    label TEXT NOT NULL,
+    statement TEXT NOT NULL,
+    claim_status TEXT NOT NULL,
+    mathlib_name TEXT,
+    proved_episode_id TEXT REFERENCES episodes(id),
+    proved_lemma_id TEXT REFERENCES episode_verified_lemmas(id),
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(claim_status IN (
+        'proved_in_episode',
+        'imported_from_mathlib',
+        'external_citation_unreviewed',
+        'external_citation_human_reviewed',
+        'unformalized_assumption',
+        'rejected_unsafe_assumption'
+    )),
+    CHECK(claim_status <> 'proved_in_episode' OR proved_lemma_id IS NOT NULL),
+    CHECK(claim_status <> 'imported_from_mathlib' OR mathlib_name IS NOT NULL)
+);
+
+CREATE TABLE IF NOT EXISTS assumption_boundaries (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    node_id TEXT REFERENCES research_nodes(id),
+    label TEXT NOT NULL,
+    statement TEXT NOT NULL,
+    assumption_status TEXT NOT NULL,
+    rationale TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(assumption_status IN ('unformalized_assumption', 'rejected_unsafe_assumption'))
+);
+
+CREATE TABLE IF NOT EXISTS citation_reviews (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    external_theorem_claim_id TEXT NOT NULL REFERENCES external_theorem_claims(id),
+    reviewer_id TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    review_status TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    CHECK(decision IN ('human_reviewed', 'rejected', 'needs_formalization')),
+    CHECK(review_status IN ('external_citation_unreviewed', 'external_citation_human_reviewed', 'rejected_unsafe_assumption'))
+);
+
+CREATE TABLE IF NOT EXISTS verification_layers (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    target_kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    layer_kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    summary TEXT,
+    evidence_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(dossier_id, target_kind, target_id, layer_kind),
+    CHECK(target_kind IN ('dossier', 'node', 'assumption', 'external_theorem_claim', 'problem_version', 'episode')),
+    CHECK(layer_kind IN (
+        'construction_search',
+        'arithmetic_construction',
+        'geometric_criterion',
+        'packing_or_size_bound',
+        'asymptotic_extraction',
+        'formal_module',
+        'statement_fidelity',
+        'external_review',
+        'exposition_review'
+    )),
+    CHECK(status IN ('not_started', 'informal', 'empirical', 'cited', 'human_reviewed', 'kernel_verified', 'failed', 'blocked', 'rejected')),
+    CHECK(status <> 'kernel_verified' OR layer_kind IN ('formal_module', 'statement_fidelity'))
+);
+CREATE INDEX IF NOT EXISTS idx_research_dossiers_problem_version ON research_dossiers(problem_version_id);
+CREATE INDEX IF NOT EXISTS idx_research_dossiers_episode ON research_dossiers(episode_id);
+CREATE INDEX IF NOT EXISTS idx_research_nodes_dossier ON research_nodes(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_external_claims_dossier ON external_theorem_claims(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_assumption_boundaries_dossier ON assumption_boundaries(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_verification_layers_dossier ON verification_layers(dossier_id);
+
+-- Candidate construction artifacts (issue #8): proposed mathematical objects
+-- (graph families, colorings, point configurations, counterexamples, ...)
+-- captured as the first durable object layer for MOTIVATED discovery. Beyond
+-- "what object is proposed", each row records why it was proposed
+-- (motivating_move, source_observation), what role it should play
+-- (intended_role), the strategic context and the case for/against it
+-- (strategy_context, why_this_might_work, why_this_might_fail), what to check
+-- next (next_check), and how it may later connect to downstream systems
+-- (verification_targets_json, future_challenge_relevance) -- encoding the
+-- observation -> motivated move -> proposed object -> intended role ->
+-- next check loop.
+--
+-- A candidate construction can exist before a dossier is written up, before a
+-- Lean theorem exists, before an episode exists, and before #26's empirical
+-- math lab exists to generate/test/rank/falsify them. Every link
+-- (dossier_id, related_node_id, verification_layer_id, problem_version_id,
+-- episode_id) is nullable. It is a research artifact, never proof authority:
+-- trust_status='kernel_verified_claim_linked' is the only status this table
+-- can carry that claims kernel evidence, and it is only reachable (enforced
+-- at the MCP layer, mirroring enforce_kernel_verified_research_boundary) when
+-- verification_layer_id names a verification_layers row whose own status is
+-- already 'kernel_verified'. empirically_supported / human_reviewed /
+-- formalized_statement_exists / linked_to_formal_claim are NOT proof.
+CREATE TABLE IF NOT EXISTS candidate_constructions (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    related_node_id TEXT REFERENCES research_nodes(id),
+    verification_layer_id TEXT REFERENCES verification_layers(id),
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    construction_type TEXT NOT NULL,
+    name TEXT,
+    informal_description TEXT NOT NULL,
+    parameters_json TEXT NOT NULL DEFAULT '{}',
+    construction_json TEXT NOT NULL DEFAULT '{}',
+    claimed_properties_json TEXT NOT NULL DEFAULT '[]',
+    known_failures_json TEXT NOT NULL DEFAULT '[]',
+    empirical_checks_json TEXT NOT NULL DEFAULT '[]',
+    verification_targets_json TEXT NOT NULL DEFAULT '[]',
+    -- Motivated-discovery metadata (nullable: a bare object proposal is still
+    -- valid, but the discovery loop is what makes the artifact useful).
+    motivating_move TEXT,
+    source_observation TEXT,
+    intended_role TEXT,
+    strategy_context TEXT,
+    why_this_might_work TEXT,
+    why_this_might_fail TEXT,
+    next_check TEXT,
+    future_challenge_relevance TEXT,
+    status TEXT NOT NULL DEFAULT 'proposed',
+    trust_status TEXT NOT NULL DEFAULT 'informal',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(construction_type IN (
+        'graph_family',
+        'point_configuration',
+        'coloring',
+        'field_tower',
+        'lattice',
+        'counterexample',
+        'asymptotic_family',
+        'algebraic_object',
+        'combinatorial_design',
+        'other'
+    )),
+    CHECK(motivating_move IS NULL OR motivating_move IN (
+        'generalize',
+        'specialize',
+        'decompose',
+        'analogize',
+        'search_extremal_example',
+        'search_counterexample',
+        'lift_construction',
+        'compress_structure',
+        'introduce_invariant',
+        'weaken_hypothesis',
+        'strengthen_conclusion',
+        'change_representation',
+        'reduce_to_known_theorem',
+        'other'
+    )),
+    CHECK(intended_role IS NULL OR intended_role IN (
+        'witness',
+        'counterexample',
+        'extremal_example',
+        'lower_bound_construction',
+        'upper_bound_obstruction',
+        'lemma_motivator',
+        'formalization_target',
+        'heuristic_test_case',
+        'asymptotic_family',
+        'bridge_to_existing_theorem',
+        'future_challenge_submission',
+        'other'
+    )),
+    CHECK(status IN (
+        'proposed',
+        'under_review',
+        'refined',
+        'empirically_supported',
+        'falsified',
+        'rejected',
+        'linked_to_formal_claim'
+    )),
+    CHECK(trust_status IN (
+        'informal',
+        'empirical_evidence',
+        'cited',
+        'human_reviewed',
+        'formalized_statement_exists',
+        'kernel_verified_claim_linked'
+    )),
+    CHECK(trust_status <> 'kernel_verified_claim_linked' OR verification_layer_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_candidate_constructions_dossier ON candidate_constructions(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_candidate_constructions_node ON candidate_constructions(related_node_id);
+CREATE INDEX IF NOT EXISTS idx_candidate_constructions_verification_layer ON candidate_constructions(verification_layer_id);
+CREATE INDEX IF NOT EXISTS idx_candidate_constructions_problem_version ON candidate_constructions(problem_version_id);
+CREATE INDEX IF NOT EXISTS idx_candidate_constructions_episode ON candidate_constructions(episode_id);
+
+-- Exposition artifacts (issue #7): human-readable mathematical exposition that
+-- lives ALONGSIDE, and explicitly separate from, kernel-verified proof. A
+-- serious result needs an explanation layer (what the construction means, why
+-- the definitions were chosen, what the key lemma does, what remains
+-- unformalized) -- but prose must never be mistaken for proof. Every artifact
+-- carries a prose_status making its epistemic weight explicit: 'prose' (raw
+-- author narrative), 'reviewed_prose' (a human read it), or 'formalized' (the
+-- described claim is backed by a linked formal artifact). None of these is
+-- kernel verification. These rows are metadata: no exposition artifact changes
+-- an episode outcome, obligation status, fidelity_status, canonical promotion,
+-- training eligibility, budget, or benchmark state. An artifact can attach to a
+-- problem_version, an episode, a specific obligation, a verified module, a
+-- verified helper lemma, and/or a Level 4 research dossier -- every link is
+-- optional.
+CREATE TABLE IF NOT EXISTS exposition_artifacts (
+    id TEXT PRIMARY KEY,
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    obligation_id TEXT REFERENCES episode_obligations(id),
+    verified_module_id TEXT REFERENCES episode_verified_modules(id),
+    verified_lemma_id TEXT REFERENCES episode_verified_lemmas(id),
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    section_kind TEXT NOT NULL,
+    prose_status TEXT NOT NULL DEFAULT 'prose',
+    title TEXT,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    author TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(section_kind IN (
+        'problem_summary',
+        'formalization_explanation',
+        'construction_intuition',
+        'key_lemmas',
+        'proof_strategy',
+        'verified_claim',
+        'unverified_bridges',
+        'reviewer_notes',
+        'next_formalization_targets'
+    )),
+    CHECK(prose_status IN ('prose', 'reviewed_prose', 'formalized'))
+);
+CREATE INDEX IF NOT EXISTS idx_exposition_artifacts_episode ON exposition_artifacts(episode_id);
+CREATE INDEX IF NOT EXISTS idx_exposition_artifacts_problem_version ON exposition_artifacts(problem_version_id);
+CREATE INDEX IF NOT EXISTS idx_exposition_artifacts_dossier ON exposition_artifacts(dossier_id);
+
+-- Semantic statement skeletons and module-aware fidelity notes (issue #6).
+-- ADDITIVE and metadata-only: a row here NEVER marks anything proved, never
+-- sets problem_versions.fidelity_status, never changes an episode outcome,
+-- obligation status, budget, or benchmark state, and never substitutes for the
+-- root problem_submit_fidelity_review gate. It records a STRUCTURED reading of
+-- what a statement/module/solution actually says (quantifiers, hypotheses,
+-- conclusion, helper definitions, construction/final-answer map, a natural-
+-- language back-translation) plus fidelity risk flags, so fidelity review can
+-- inspect module-level structure (helper defs, bijection/construction claims,
+-- final-answer extraction, domain restrictions, prose-only bridges) WITHOUT
+-- weakening the existing root-statement gate. All FK links are nullable: a
+-- skeleton can describe a bare root statement before any dossier/episode/module
+-- exists. review_scope says WHAT was read; risk_flags_json says what looked
+-- wrong; neither is a pass/fail verdict. semantic_fingerprint_hash is
+-- server-computed over the normalized skeleton content, never client-supplied.
+-- The table carries NO status column able to hold kernel evidence -- that
+-- structural absence, not a CHECK, is the proof-safety guarantee.
+CREATE TABLE IF NOT EXISTS semantic_skeletons (
+    id TEXT PRIMARY KEY,
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    root_obligation_id TEXT REFERENCES episode_obligations(id),
+    module_id TEXT REFERENCES episode_verified_modules(id),
+    module_item_id TEXT REFERENCES episode_verified_module_items(id),
+    verified_lemma_id TEXT REFERENCES episode_verified_lemmas(id),
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    node_id TEXT REFERENCES research_nodes(id),
+    root_fidelity_review_id TEXT REFERENCES problem_fidelity_reviews(id),
+    review_scope TEXT NOT NULL,
+    quantifiers_json TEXT NOT NULL DEFAULT '[]',
+    hypotheses_json TEXT NOT NULL DEFAULT '[]',
+    conclusion_json TEXT NOT NULL DEFAULT '{}',
+    definitions_json TEXT NOT NULL DEFAULT '[]',
+    construction_map_json TEXT NOT NULL DEFAULT '[]',
+    backtranslation_text TEXT,
+    risk_flags_json TEXT NOT NULL DEFAULT '[]',
+    review_notes_json TEXT NOT NULL DEFAULT '[]',
+    semantic_fingerprint_hash TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(review_scope IN (
+        'root_statement_only',
+        'module_artifact',
+        'source_aligned_solution',
+        'computational_check_only',
+        'structural_proof'
+    )),
+    -- A module_artifact-scoped skeleton is ABOUT a module, so it must name one.
+    CHECK(review_scope <> 'module_artifact' OR module_id IS NOT NULL OR module_item_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_problem_version ON semantic_skeletons(problem_version_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_episode ON semantic_skeletons(episode_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_module ON semantic_skeletons(module_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_dossier ON semantic_skeletons(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_fingerprint ON semantic_skeletons(semantic_fingerprint_hash);
+
+-- Expert-review artifacts and role-separated research ledger (issue #14): an
+-- ADDITIVE, metadata-only ledger of who reviewed what and what they decided.
+-- Unlike citation_review_add (which updates external_theorem_claims.claim_status),
+-- expert_review_add is a PURE INSERT: a row here NEVER marks anything proved and
+-- never mutates episode outcome, obligation status, certification, budget,
+-- benchmark, or any other table. reviewer_id is caller-supplied free text, NOT an
+-- authenticated principal. A 'domain_expert'/'reviewer' 'approved' decision is
+-- human-attested and stays explicitly distinct from Lean kernel verification --
+-- the same trust boundary citation_reviews and candidate_constructions already
+-- apply. dossier_id is nullable so a review can exist standalone; the
+-- (review_target_kind, review_target_id) pair is polymorphic and validated
+-- per-kind at the MCP layer. The table carries NO column capable of holding
+-- kernel evidence -- that structural absence, not a CHECK, is the proof-safety
+-- guarantee. revoked_at soft-retracts a review without deleting the historical
+-- row (a rejection must not delete the reviewed artifact; a retraction must not
+-- delete the review).
+CREATE TABLE IF NOT EXISTS expert_reviews (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    reviewer_id TEXT NOT NULL,
+    reviewer_role TEXT NOT NULL,
+    expertise_tags_json TEXT NOT NULL DEFAULT '[]',
+    review_target_kind TEXT NOT NULL,
+    review_target_id TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    confidence TEXT,
+    notes TEXT,
+    requested_changes_json TEXT NOT NULL DEFAULT '[]',
+    risk_flags_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    revoked_at TEXT,
+    CHECK(reviewer_role IN (
+        'proposer',
+        'construction_searcher',
+        'formalizer',
+        'prover',
+        'reviewer',
+        'domain_expert',
+        'refuter',
+        'editor',
+        'librarian'
+    )),
+    CHECK(review_target_kind IN (
+        'source_problem',
+        'formal_statement',
+        'construction_artifact',
+        'module_artifact',
+        'external_citation',
+        'asymptotic_extraction',
+        'exposition',
+        'full_dossier'
+    )),
+    CHECK(decision IN (
+        'approved',
+        'approved_with_changes',
+        'needs_changes',
+        'rejected',
+        'abstain'
+    )),
+    CHECK(confidence IS NULL OR confidence IN ('low', 'medium', 'high'))
+);
+CREATE INDEX IF NOT EXISTS idx_expert_reviews_dossier ON expert_reviews(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_expert_reviews_target ON expert_reviews(review_target_kind, review_target_id);
+CREATE INDEX IF NOT EXISTS idx_expert_reviews_role ON expert_reviews(reviewer_role);
+
+-- Empirical math lab (issue #26): records small-case searches, counterexample
+-- searches, construction searches, finite checks, parameter sweeps, and
+-- candidate rankings as research EVIDENCE. This is the object layer #8's
+-- candidate constructions are generated/tested/ranked/falsified against, and it
+-- is bound by one hard rule: empirical evidence is NEVER proof. The table has
+-- NO column capable of holding kernel evidence; the strongest trust_status is
+-- 'linked_to_formal_target' ("this evidence points at a formalization target"),
+-- which is still not a proof. No row here can set or imply kernel_verified,
+-- certified, proved, statement_fidelity_approved, benchmark_certified, or
+-- training_eligible -- that structural absence, not a CHECK, is the guarantee.
+-- Guardrails (enforced at the MCP layer + by this structure): finite/no-
+-- counterexample evidence cannot certify an asymptotic or universal theorem; a
+-- successful construction search supports but never proves a candidate's
+-- claimed properties; a candidate ranking never changes proof authority;
+-- external tool output stays empirical unless independently kernel-verified
+-- elsewhere. Every link is nullable: a search can exist before any dossier,
+-- candidate, episode, or Lean proof. cost_summary_json/runtime_metadata_json
+-- are self-reported metadata about the EXTERNAL search run, isolated from
+-- ChatDB's own #38 cost surfaces (never merged into benchmark_run_observe).
+CREATE TABLE IF NOT EXISTS empirical_searches (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    related_node_id TEXT REFERENCES research_nodes(id),
+    candidate_construction_id TEXT REFERENCES candidate_constructions(id),
+    verification_layer_id TEXT REFERENCES verification_layers(id),
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    search_type TEXT NOT NULL,
+    search_space_description TEXT NOT NULL,
+    parameters_json TEXT NOT NULL DEFAULT '{}',
+    generator_description TEXT,
+    checks_json TEXT NOT NULL DEFAULT '[]',
+    results_json TEXT NOT NULL DEFAULT '{}',
+    counterexamples_json TEXT NOT NULL DEFAULT '[]',
+    candidate_construction_ids_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'planned',
+    trust_status TEXT NOT NULL DEFAULT 'unreviewed_empirical',
+    runtime_metadata_json TEXT NOT NULL DEFAULT '{}',
+    cost_summary_json TEXT NOT NULL DEFAULT '{}',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(search_type IN (
+        'small_case_search',
+        'counterexample_search',
+        'construction_search',
+        'parameter_sweep',
+        'finite_model_check',
+        'candidate_ranking',
+        'random_search',
+        'exhaustive_search',
+        'symbolic_search',
+        'external_tool_run',
+        'other'
+    )),
+    CHECK(status IN (
+        'planned',
+        'running',
+        'completed',
+        'completed_with_counterexample',
+        'completed_no_counterexample_found',
+        'failed',
+        'timed_out',
+        'rejected',
+        'superseded'
+    )),
+    CHECK(trust_status IN (
+        'unreviewed_empirical',
+        'reproducible_empirical',
+        'human_reviewed_empirical',
+        'linked_to_formal_target',
+        'rejected_empirical'
+    ))
+);
+CREATE INDEX IF NOT EXISTS idx_empirical_searches_dossier ON empirical_searches(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_empirical_searches_candidate ON empirical_searches(candidate_construction_id);
+CREATE INDEX IF NOT EXISTS idx_empirical_searches_verification_layer ON empirical_searches(verification_layer_id);
+CREATE INDEX IF NOT EXISTS idx_empirical_searches_node ON empirical_searches(related_node_id);
+
+-- Paper/PDF ingestion (issue #27): turns a paper, manuscript, model-written
+-- proof sketch, or human exposition into a REVIEWABLE research workspace inside
+-- a dossier. ChatDB does no OCR/LLM extraction itself (no inference code lives
+-- here) -- the host performs extraction and records the structured result,
+-- which is UNTRUSTED by construction. Ingestion is not verification: an
+-- ingested_documents row and its extracted ingested_document_nodes have NO
+-- column able to hold kernel evidence. extraction_trust_status tops out at
+-- 'human_reviewed_extraction'/'linked_to_dossier_artifact' -- still not proof.
+-- No ingested artifact can mark anything kernel_verified, certified, proved,
+-- statement_fidelity_approved, benchmark_certified, or training_eligible; that
+-- structural absence, not a CHECK, is the guarantee. Extracted theorem text is
+-- NOT statement-fidelity approval, an extracted citation is NOT citation
+-- validation, and an extracted assumption is NOT an accepted assumption -- each
+-- is a candidate that must go through the existing fidelity/citation/review
+-- paths (or Lean) to gain any authority. dossier_id is nullable: a document can
+-- be ingested before it is attached to a dossier.
+CREATE TABLE IF NOT EXISTS ingested_documents (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    title TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_ref TEXT,
+    source_content_hash TEXT,
+    ingest_status TEXT NOT NULL DEFAULT 'planned',
+    extraction_trust_status TEXT NOT NULL DEFAULT 'unreviewed_extraction',
+    notes TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(source_kind IN ('pdf', 'manuscript', 'proof_sketch', 'exposition', 'webpage', 'other')),
+    CHECK(ingest_status IN ('planned', 'ingesting', 'ingested', 'failed', 'superseded')),
+    CHECK(extraction_trust_status IN (
+        'unreviewed_extraction',
+        'machine_extracted',
+        'human_reviewed_extraction',
+        'rejected_extraction',
+        'linked_to_dossier_artifact'
+    ))
+);
+
+-- One extracted node from an ingested document, in document order. Every field
+-- is untrusted extraction. formalization_status can never reach a proved/
+-- verified value here -- 'prose_only' / 'formalization_pending' /
+-- 'formalization_target_linked' only; kernel verification lives in the
+-- episode/canonical tables alone. citation_status/review_status likewise never
+-- confer validation or fidelity approval. source_span traces the node back to
+-- the paper text so a reviewer can check it.
+CREATE TABLE IF NOT EXISTS ingested_document_nodes (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES ingested_documents(id),
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    node_order INTEGER NOT NULL,
+    node_kind TEXT NOT NULL,
+    natural_language_text TEXT NOT NULL,
+    -- Required (issue #27 acceptance: source-span tracking). Every extracted
+    -- node must be traceable back to the paper text; the MCP handler also
+    -- rejects a blank span.
+    source_span TEXT NOT NULL,
+    confidence TEXT,
+    formalization_status TEXT NOT NULL DEFAULT 'prose_only',
+    citation_status TEXT NOT NULL DEFAULT 'uncited',
+    review_status TEXT NOT NULL DEFAULT 'unreviewed_extraction',
+    risk_flags_json TEXT NOT NULL DEFAULT '[]',
+    -- Forward links set by paper_ingest_link_node when a node is promoted
+    -- through a real path. A link records provenance only — it never grants the
+    -- node proof/kernel authority (the linked artifact keeps its own trust).
+    linked_external_reference_id TEXT REFERENCES external_references(id),
+    linked_external_theorem_claim_id TEXT REFERENCES external_theorem_claims(id),
+    linked_research_node_id TEXT REFERENCES research_nodes(id),
+    linked_formalization_plan_item_id TEXT REFERENCES formalization_plan_items(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(document_id, node_order),
+    CHECK(node_kind IN (
+        'abstract', 'main_theorem', 'definition', 'proposition', 'lemma',
+        'proof_step', 'construction', 'remark', 'appendix_fact', 'reference', 'open_gap'
+    )),
+    CHECK(formalization_status IN ('prose_only', 'formalization_pending', 'formalization_target_linked')),
+    CHECK(citation_status IN ('uncited', 'citation_recorded')),
+    CHECK(confidence IS NULL OR confidence IN ('low', 'medium', 'high')),
+    CHECK(review_status IN (
+        'unreviewed_extraction',
+        'machine_extracted',
+        'human_reviewed_extraction',
+        'rejected_extraction',
+        'linked_to_dossier_artifact'
+    )),
+    -- A "backed" status must be backed by a real forward link (issue #27, PR #58
+    -- review, blocker #2). These three terminal states are reachable ONLY via
+    -- paper_ingest_link_node, which sets the matching FK in the same UPDATE; a
+    -- node can never be *labeled* citation_recorded / formalization_target_linked
+    -- / linked_to_dossier_artifact while pointing at nothing. Structural, not a
+    -- handler courtesy: even a future bug or a raw INSERT cannot decouple the
+    -- label from the artifact it claims to be tied to. A database that created
+    -- this table before these three CHECKs existed is rebuilt into them by
+    -- migrate_ingested_document_nodes_backed_status_checks (keep the two
+    -- definitions in sync).
+    CHECK(citation_status <> 'citation_recorded'
+          OR linked_external_reference_id IS NOT NULL
+          OR linked_external_theorem_claim_id IS NOT NULL),
+    CHECK(formalization_status <> 'formalization_target_linked'
+          OR linked_research_node_id IS NOT NULL
+          OR linked_formalization_plan_item_id IS NOT NULL),
+    CHECK(review_status <> 'linked_to_dossier_artifact'
+          OR linked_external_reference_id IS NOT NULL
+          OR linked_external_theorem_claim_id IS NOT NULL
+          OR linked_research_node_id IS NOT NULL
+          OR linked_formalization_plan_item_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_ingested_documents_dossier ON ingested_documents(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_ingested_document_nodes_document ON ingested_document_nodes(document_id);
+CREATE INDEX IF NOT EXISTS idx_ingested_document_nodes_dossier ON ingested_document_nodes(dossier_id);
+
 -- Run envelopes (issues #34 core concept + #38 cost-surface splitting): a
 -- run envelope separates WHO/WHAT/WHY around a set of episodes from the
 -- episodes themselves -- host identity, run mode (a plain dev/exploratory
@@ -551,11 +1200,37 @@ CREATE TABLE IF NOT EXISTS run_envelopes (
     host_side_cost_micros INTEGER,
     host_cost_confidence TEXT NOT NULL,
     notes TEXT,
+    -- Issue #46: head of the append-only host-side cost observation chain
+    -- (also added to pre-existing DBs by migrate_add_current_cost_observation_column).
+    current_cost_observation_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     CHECK(mode IN ('development', 'evaluation', 'benchmark', 'private_audit', 'public_report')),
     CHECK(host_cost_confidence IN ('exact_provider_receipt', 'exact_local_meter', 'estimated', 'attested', 'unknown'))
 );
+
+-- Append-only host-side cost observations (issue #46): a run envelope's
+-- host-side cost figure is often a CORRECTION of an earlier estimate (an
+-- estimate replaced by a provider receipt, etc.). Overwriting host_side_cost_
+-- micros in place destroys the audit trail. Instead every value is recorded as
+-- an immutable observation that supersedes (points back to) the one it
+-- replaces; run_envelopes.host_side_cost_micros/host_cost_confidence remain as
+-- a convenience mirror of the CURRENT observation (run_envelopes.current_cost_
+-- observation_id, added by migration). Same confidence tiers as run_envelopes;
+-- purely descriptive host metadata, never proof authority, never a fabricated
+-- exact figure (a NULL cost stays NULL, its confidence still recorded).
+CREATE TABLE IF NOT EXISTS run_envelope_cost_observations (
+    id TEXT PRIMARY KEY,
+    run_envelope_id TEXT NOT NULL REFERENCES run_envelopes(id),
+    host_side_cost_micros INTEGER,
+    host_cost_confidence TEXT NOT NULL,
+    source TEXT NOT NULL,
+    notes TEXT,
+    supersedes_observation_id TEXT REFERENCES run_envelope_cost_observations(id),
+    created_at TEXT NOT NULL,
+    CHECK(host_cost_confidence IN ('exact_provider_receipt', 'exact_local_meter', 'estimated', 'attested', 'unknown'))
+);
+CREATE INDEX IF NOT EXISTS idx_cost_observations_envelope ON run_envelope_cost_observations(run_envelope_id);
 
 -- PutnamBench benchmark schema (issues #29, #30, designed together since
 -- benchmark_results references benchmark_problems and benchmark_runs
@@ -583,6 +1258,26 @@ CREATE TABLE IF NOT EXISTS benchmark_suites (
     imported_at TEXT NOT NULL
 );
 
+-- Issue #65: the trust flag above is a load-bearing fidelity-basis input
+-- (benchmark_result_record accepts a hash match against a trusted suite as
+-- sufficient fidelity evidence), so changing it after creation must leave an
+-- append-only audit trail — who asserted the change, from what value to what
+-- value, and why. benchmark_suite_set_trust writes one row here per change
+-- and never deletes; the current flag on benchmark_suites is just the fold of
+-- this history.
+CREATE TABLE IF NOT EXISTS benchmark_suite_trust_reviews (
+    id TEXT PRIMARY KEY,
+    suite_id TEXT NOT NULL REFERENCES benchmark_suites(id),
+    previous_value INTEGER NOT NULL,
+    new_value INTEGER NOT NULL,
+    approver_id TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    CHECK(previous_value IN (0, 1)),
+    CHECK(new_value IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_benchmark_suite_trust_reviews_suite ON benchmark_suite_trust_reviews(suite_id);
+
 -- root_statement_hash is server-computed (canonical_hash of
 -- root_formal_statement), never trusted from the client -- same "never
 -- trust a client-supplied hash for something the server can independently
@@ -608,8 +1303,21 @@ CREATE TABLE IF NOT EXISTS benchmark_problems (
     -- migrate_add_prover_ready_statement_columns for the full rationale.
     prover_ready_statement TEXT,
     prover_ready_statement_hash TEXT,
+    -- Issue #12: goal class distinguishes a finite/exact target from a
+    -- parameterized family, an inductive growth bound, or a genuinely
+    -- asymptotic statement. brute_force_admissible records whether finite
+    -- enumeration is admissible evidence at all — an asymptotic goal is NOT
+    -- decidable by finite brute force, so it is forced to 0. Descriptive
+    -- benchmark metadata; neither column is proof authority. Added to
+    -- pre-existing DBs by migrate_add_benchmark_goal_class_columns (which cannot
+    -- re-add the cross-column CHECK — the MCP handler enforces it for those).
+    goal_class TEXT NOT NULL DEFAULT 'finite_exact',
+    brute_force_admissible INTEGER NOT NULL DEFAULT 1,
     UNIQUE(suite_id, upstream_problem_id),
-    CHECK(status IN ('imported', 'skipped_ambiguous', 'deprecated'))
+    CHECK(status IN ('imported', 'skipped_ambiguous', 'deprecated')),
+    CHECK(goal_class IN ('finite_exact', 'parameterized_family', 'inductive_growth_bound', 'asymptotic')),
+    CHECK(brute_force_admissible IN (0, 1)),
+    CHECK(goal_class <> 'asymptotic' OR brute_force_admissible = 0)
 );
 
 -- run_envelope_id links to the host/model/mode/cost tracking issues
@@ -676,6 +1384,11 @@ CREATE TABLE IF NOT EXISTS benchmark_results (
     -- is rejected outright by benchmark_result_record before a row is ever
     -- written, so this value is never actually persisted today.
     benchmark_fidelity_basis TEXT,
+    -- Issue #76: structured formalization-gap taxonomy for failed/gave-up
+    -- results — a JSON array of category slugs (validated at the MCP layer
+    -- against a fixed vocabulary). Additive metadata for reporting only:
+    -- never proof authority, never affects status/score/eligibility.
+    gap_categories_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(run_id, benchmark_problem_id),
@@ -812,6 +1525,204 @@ CREATE TABLE IF NOT EXISTS trajectory_events (
     UNIQUE(episode_id, event_sequence_number),
     UNIQUE(episode_id, event_hash)
 );
+
+-- Challenge / task / scoring substrate (issue #53): channels AI-generated
+-- mathematical material into small, bounded, typed, scored, reviewable tasks
+-- instead of giant opaque proof dumps. A dossier defines a challenge; a
+-- challenge defines bounded tasks; a task accepts submissions; a submission is
+-- validated, scored, and reviewed; accepted work links back to candidate
+-- constructions / empirical results / verification layers, and reusable method
+-- knowledge is distilled into strategy artifacts.
+--
+-- TRUST BOUNDARY (same discipline as every Level-4 table): none of these tables
+-- has a column that can hold kernel evidence. A scored submission is not a
+-- proof; a validated empirical result is not a proof; a human-reviewed
+-- submission is not a proof; a distilled strategy is not a proof. Only Lean /
+-- kernel verification creates kernel-verified proof authority. Submission
+-- status (validated / scored / accepted / ...) and review decisions are
+-- research bookkeeping and never mutate episode outcome, obligation status,
+-- fidelity status, benchmark results, or canonical lemma authority. A rejected
+-- or superseded submission stays visible (never deleted). Links to a
+-- kernel-verified verification_layer / candidate_construction record provenance
+-- only — they never confer proof authority on the submission itself.
+CREATE TABLE IF NOT EXISTS research_challenges (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(status IN ('open', 'closed', 'archived', 'superseded'))
+);
+
+-- A validation protocol: HOW a task's submissions are checked. Reusable and
+-- optional; a task may point at one. The protocol describes a check; running it
+-- (or a human running it) is what validates a submission — the protocol row is
+-- never itself proof.
+CREATE TABLE IF NOT EXISTS validation_protocols (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    challenge_id TEXT REFERENCES research_challenges(id),
+    name TEXT NOT NULL,
+    validation_method TEXT NOT NULL,
+    description TEXT,
+    protocol_json TEXT NOT NULL DEFAULT '{}',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(validation_method IN (
+        'reproducible_script',
+        'property_check',
+        'independent_recompute',
+        'finite_case_check',
+        'symbolic_check',
+        'manual_review',
+        'external_tool',
+        'other'
+    ))
+);
+
+-- A bounded task under a challenge. task_type is the shape of contribution
+-- requested; bounds_json states the explicit bound that keeps it small and
+-- reviewable. status open/closed/superseded — a superseded task stays visible.
+CREATE TABLE IF NOT EXISTS research_tasks (
+    id TEXT PRIMARY KEY,
+    challenge_id TEXT NOT NULL REFERENCES research_challenges(id),
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    validation_protocol_id TEXT REFERENCES validation_protocols(id),
+    task_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    bounds_json TEXT NOT NULL DEFAULT '{}',
+    success_criteria TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(task_type IN (
+        'find_candidate_object',
+        'improve_bound',
+        'find_counterexample',
+        'classify_small_cases',
+        'produce_witness',
+        'minimize_example',
+        'maximize_parameter',
+        'verify_property',
+        'compress_strategy',
+        'distill_method',
+        'formalize_claim'
+    )),
+    CHECK(status IN ('open', 'closed', 'superseded'))
+);
+
+-- A submission to a task. content_json is the untrusted contribution payload.
+-- status walks submitted -> validated/validation_failed -> scored ->
+-- human_reviewed -> accepted/rejected/superseded/merged_into_dossier. It links
+-- to a candidate construction / empirical result / verification layer as
+-- PROVENANCE only. is_proof is structurally false: no column here can hold
+-- kernel evidence, and the linked artifacts keep their own independent trust.
+CREATE TABLE IF NOT EXISTS research_task_submissions (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES research_tasks(id),
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    submitted_by TEXT NOT NULL,
+    content_json TEXT NOT NULL DEFAULT '{}',
+    notes TEXT,
+    status TEXT NOT NULL DEFAULT 'submitted',
+    linked_candidate_construction_id TEXT REFERENCES candidate_constructions(id),
+    linked_empirical_result_id TEXT REFERENCES empirical_searches(id),
+    linked_verification_layer_id TEXT REFERENCES verification_layers(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(status IN (
+        'submitted',
+        'validation_failed',
+        'validated',
+        'scored',
+        'human_reviewed',
+        'accepted',
+        'rejected',
+        'superseded',
+        'merged_into_dossier'
+    ))
+);
+
+-- A score attached to a submission. Descriptive measurement, never proof:
+-- score_value/units/rule record what was measured and how; validation_method
+-- records how it was checked; the linked artifacts are provenance. cost_summary_id
+-- ties the score to a real cost observation when one exists.
+CREATE TABLE IF NOT EXISTS scoring_results (
+    id TEXT PRIMARY KEY,
+    submission_id TEXT NOT NULL REFERENCES research_task_submissions(id),
+    score_value REAL,
+    score_units TEXT,
+    scoring_rule TEXT NOT NULL,
+    validation_method TEXT,
+    reproducibility_notes TEXT,
+    novelty_notes TEXT,
+    cost_summary_id TEXT REFERENCES run_envelope_cost_observations(id),
+    linked_candidate_construction_id TEXT REFERENCES candidate_constructions(id),
+    linked_empirical_result_id TEXT REFERENCES empirical_searches(id),
+    linked_verification_layer_id TEXT REFERENCES verification_layers(id),
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- A human review of a submission. Human review is distinct from kernel
+-- verification. A rejected review keeps the submission visible.
+CREATE TABLE IF NOT EXISTS review_results (
+    id TEXT PRIMARY KEY,
+    submission_id TEXT NOT NULL REFERENCES research_task_submissions(id),
+    reviewer_id TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    review_status TEXT NOT NULL DEFAULT 'human_reviewed',
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    CHECK(decision IN ('accepted', 'rejected', 'needs_changes', 'superseded')),
+    CHECK(review_status IN ('human_reviewed', 'machine_prechecked'))
+);
+
+-- Reusable distilled strategy knowledge: compressed search experience (cheat
+-- sheets, heuristics, counterexample patterns, construction recipes, ...). A
+-- distilled strategy is NOT a proof; trust_status tops out at human_reviewed.
+CREATE TABLE IF NOT EXISTS distilled_strategy_artifacts (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    challenge_id TEXT REFERENCES research_challenges(id),
+    task_id TEXT REFERENCES research_tasks(id),
+    submission_id TEXT REFERENCES research_task_submissions(id),
+    artifact_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    trust_status TEXT NOT NULL DEFAULT 'informal',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(artifact_type IN (
+        'strategy_cheat_sheet',
+        'failed_attempt_summary',
+        'heuristic_rule',
+        'counterexample_pattern',
+        'construction_recipe',
+        'formalization_hint',
+        'review_checklist'
+    )),
+    CHECK(trust_status IN ('informal', 'human_reviewed', 'deprecated', 'superseded'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_challenges_dossier ON research_challenges(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_research_tasks_challenge ON research_tasks(challenge_id);
+CREATE INDEX IF NOT EXISTS idx_research_task_submissions_task ON research_task_submissions(task_id);
+CREATE INDEX IF NOT EXISTS idx_scoring_results_submission ON scoring_results(submission_id);
+CREATE INDEX IF NOT EXISTS idx_review_results_submission ON review_results(submission_id);
+CREATE INDEX IF NOT EXISTS idx_validation_protocols_dossier ON validation_protocols(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_distilled_strategy_artifacts_dossier ON distilled_strategy_artifacts(dossier_id);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
@@ -831,6 +1742,9 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     migrate_add_prover_ready_statement_columns(conn)?;
     migrate_add_benchmark_fidelity_basis_columns(conn)?;
     migrate_add_lean_result_bytes_column(conn)?;
+    migrate_add_current_cost_observation_column(conn)?;
+    migrate_add_benchmark_goal_class_columns(conn)?;
+    migrate_add_plan_item_asymptotic_role_column(conn)?;
     // CHECK constraints are baked into a table at creation and CREATE TABLE IF
     // NOT EXISTS cannot update them on a table that already exists — a database
     // that predates the fidelity-vocabulary rewrite (docs/fix_plan_playtest_02.md)
@@ -841,7 +1755,9 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     // it's a deterministic, permanent rejection of the current code's writes,
     // not a one-time schema gap. See docs/fix_plan_playtest_05.md.
     migrate_fidelity_status_vocabulary(conn)?;
+    migrate_expand_fidelity_status_benchmark_aligned(conn)?;
     migrate_episode_outcome_vocabulary(conn)?;
+    migrate_ingested_document_nodes_backed_status_checks(conn)?;
     conn.execute_batch(V1_SCHEMA)?;
     seed_proof_patterns(conn)?;
     conn.execute("PRAGMA foreign_keys = ON;", [])?;
@@ -1026,6 +1942,113 @@ fn migrate_fidelity_status_vocabulary(conn: &Connection) -> rusqlite::Result<()>
     Ok(())
 }
 
+/// Issue #43: expands the fidelity vocabulary to include `benchmark_aligned`
+/// (problem_versions.fidelity_status and the proving-allowed CHECK) and the
+/// review decision vocabulary (problem_fidelity_reviews.decision). Same
+/// create-copy-drop-rename technique as `migrate_fidelity_status_vocabulary`,
+/// for the same reason: a database that predates #43 would otherwise reject
+/// every `benchmark_aligned` write forever. Strictly additive — every prior
+/// value is preserved verbatim, and the load-bearing
+/// `CHECK(state <> 'COMPLETE' OR fidelity_status = 'verified')` guard is
+/// carried over unchanged, so `benchmark_aligned` can never reach COMPLETE.
+/// Idempotent: no-op once the stored CHECK text already mentions the value.
+fn migrate_expand_fidelity_status_benchmark_aligned(conn: &Connection) -> rusqlite::Result<()> {
+    let pv_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='problem_versions'",
+        [], |row| row.get(0),
+    )?;
+    if pv_exists != 0 {
+        let current_sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='problem_versions'",
+            [], |row| row.get(0),
+        )?;
+        // Only rebuild an already-current-vocabulary table (has 'unreviewed')
+        // that hasn't yet gained 'benchmark_aligned'. A pre-'unreviewed' DB is
+        // handled by migrate_fidelity_status_vocabulary running first.
+        if current_sql.contains("'unreviewed'") && !current_sql.contains("'benchmark_aligned'") {
+            conn.execute_batch(
+                "CREATE TABLE problem_versions_ba_migrating (
+                    id TEXT PRIMARY KEY,
+                    source_problem_text TEXT NOT NULL,
+                    source_problem_hash TEXT NOT NULL,
+                    source_metadata_json TEXT NOT NULL,
+                    root_formal_statement TEXT NOT NULL,
+                    root_statement_hash TEXT NOT NULL,
+                    normalized_root_rendering TEXT NOT NULL,
+                    environment_hash TEXT NOT NULL,
+                    import_manifest_json TEXT NOT NULL DEFAULT '[\"Mathlib.Tactic.Ring\",\"Mathlib.Tactic.NormNum\"]',
+                    import_manifest_hash TEXT NOT NULL DEFAULT '',
+                    fidelity_status TEXT NOT NULL,
+                    fidelity_method TEXT NOT NULL,
+                    fidelity_approval_id TEXT,
+                    root_obligation_id TEXT,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    CHECK(state NOT IN ('PROVING', 'ROOT_PROVED_COVERAGE_PENDING', 'ROOT_PROVED_COVERAGE_UNCONVERGED') OR fidelity_status IN ('verified', 'attested', 'benchmark_aligned')),
+                    CHECK(state <> 'COMPLETE' OR fidelity_status = 'verified'),
+                    CHECK(fidelity_status IN ('unreviewed', 'attested', 'verified', 'rejected', 'revoked', 'benchmark_aligned'))
+                );
+                INSERT INTO problem_versions_ba_migrating (
+                    id, source_problem_text, source_problem_hash, source_metadata_json,
+                    root_formal_statement, root_statement_hash, normalized_root_rendering,
+                    environment_hash, import_manifest_json, import_manifest_hash,
+                    fidelity_status, fidelity_method, fidelity_approval_id,
+                    root_obligation_id, state, created_at
+                )
+                SELECT
+                    id, source_problem_text, source_problem_hash, source_metadata_json,
+                    root_formal_statement, root_statement_hash, normalized_root_rendering,
+                    environment_hash, import_manifest_json, import_manifest_hash,
+                    fidelity_status, fidelity_method, fidelity_approval_id,
+                    root_obligation_id, state, created_at
+                FROM problem_versions;
+                DROP TABLE problem_versions;
+                ALTER TABLE problem_versions_ba_migrating RENAME TO problem_versions;",
+            )?;
+        }
+    }
+
+    let pfr_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='problem_fidelity_reviews'",
+        [], |row| row.get(0),
+    )?;
+    if pfr_exists != 0 {
+        let current_sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='problem_fidelity_reviews'",
+            [], |row| row.get(0),
+        )?;
+        if !current_sql.contains("'benchmark_aligned'") {
+            conn.execute_batch(
+                "CREATE TABLE problem_fidelity_reviews_ba_migrating (
+                    id TEXT PRIMARY KEY,
+                    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+                    source_problem_hash TEXT NOT NULL,
+                    root_statement_hash TEXT NOT NULL,
+                    normalized_rendering_hash TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    approver_id TEXT NOT NULL,
+                    rubric_version TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    notes TEXT,
+                    signature TEXT,
+                    created_at TEXT NOT NULL,
+                    revoked_at TEXT,
+                    CHECK(decision IN ('verified', 'rejected', 'benchmark_aligned'))
+                );
+                INSERT INTO problem_fidelity_reviews_ba_migrating
+                SELECT id, problem_version_id, source_problem_hash, root_statement_hash,
+                       normalized_rendering_hash, decision, method, approver_id, rubric_version,
+                       evidence_json, notes, signature, created_at, revoked_at
+                FROM problem_fidelity_reviews;
+                DROP TABLE problem_fidelity_reviews;
+                ALTER TABLE problem_fidelity_reviews_ba_migrating RENAME TO problem_fidelity_reviews;",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Rebuilds `episodes` if it still carries the pre-fidelity-split CHECK on
 /// `outcome` (missing `'kernel_verified'`) — same create-copy-drop-rename
 /// technique as `migrate_fidelity_status_vocabulary`, and for the same reason:
@@ -1094,6 +2117,130 @@ fn migrate_episode_outcome_vocabulary(conn: &Connection) -> rusqlite::Result<()>
         INSERT INTO episodes_migrating SELECT * FROM episodes;
         DROP TABLE episodes;
         ALTER TABLE episodes_migrating RENAME TO episodes;",
+    )?;
+    Ok(())
+}
+
+/// Issue #27 (PR #58 review, blocker #2): rebuilds an `ingested_document_nodes`
+/// table that was created before the three "backed status requires a real
+/// forward link" CHECK constraints existed, so the structural guarantee holds
+/// on every database, not only freshly-created ones. Same create-copy-drop-
+/// rename technique as `migrate_fidelity_status_vocabulary`, for the same
+/// reason: CREATE TABLE IF NOT EXISTS cannot add a CHECK to a table that
+/// already exists, so without this a pre-existing local DB would keep enforcing
+/// only the handler guard (layer 1) and a raw write could decouple a
+/// citation_recorded / formalization_target_linked / linked_to_dossier_artifact
+/// label from any real artifact.
+///
+/// Idempotent: no-op once the stored CHECK text is present. Only rebuilds a
+/// table that already carries `linked_formalization_plan_item_id` (the column
+/// that must exist for the copy's SELECT) — an even-older shape is a throwaway
+/// mid-development DB that is already incompatible with the current node SELECT
+/// and is left for a fresh create. Any legacy row that would violate the new
+/// CHECKs (a backed status with no matching FK — reachable only through the
+/// pre-fix free-form path) is sanitized back to its unbacked base value during
+/// the copy, so the rebuild itself never fails on bad data.
+fn migrate_ingested_document_nodes_backed_status_checks(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ingested_document_nodes'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let current_sql: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='ingested_document_nodes'",
+        [],
+        |row| row.get(0),
+    )?;
+    // Already migrated (the distinctive backed-status CHECK is present).
+    if current_sql.contains("citation_status <> 'citation_recorded'") {
+        return Ok(());
+    }
+    // Only a table already carrying every current column can be copied; an
+    // older shape lacking linked_formalization_plan_item_id is an incompatible
+    // dev throwaway — leave it for a fresh create rather than crash.
+    if !current_sql.contains("linked_formalization_plan_item_id") {
+        return Ok(());
+    }
+
+    // Table body kept byte-for-byte in sync with the CREATE TABLE above.
+    conn.execute_batch(
+        "CREATE TABLE ingested_document_nodes_migrating (
+            id TEXT PRIMARY KEY,
+            document_id TEXT NOT NULL REFERENCES ingested_documents(id),
+            dossier_id TEXT REFERENCES research_dossiers(id),
+            node_order INTEGER NOT NULL,
+            node_kind TEXT NOT NULL,
+            natural_language_text TEXT NOT NULL,
+            source_span TEXT NOT NULL,
+            confidence TEXT,
+            formalization_status TEXT NOT NULL DEFAULT 'prose_only',
+            citation_status TEXT NOT NULL DEFAULT 'uncited',
+            review_status TEXT NOT NULL DEFAULT 'unreviewed_extraction',
+            risk_flags_json TEXT NOT NULL DEFAULT '[]',
+            linked_external_reference_id TEXT REFERENCES external_references(id),
+            linked_external_theorem_claim_id TEXT REFERENCES external_theorem_claims(id),
+            linked_research_node_id TEXT REFERENCES research_nodes(id),
+            linked_formalization_plan_item_id TEXT REFERENCES formalization_plan_items(id),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(document_id, node_order),
+            CHECK(node_kind IN (
+                'abstract', 'main_theorem', 'definition', 'proposition', 'lemma',
+                'proof_step', 'construction', 'remark', 'appendix_fact', 'reference', 'open_gap'
+            )),
+            CHECK(formalization_status IN ('prose_only', 'formalization_pending', 'formalization_target_linked')),
+            CHECK(citation_status IN ('uncited', 'citation_recorded')),
+            CHECK(confidence IS NULL OR confidence IN ('low', 'medium', 'high')),
+            CHECK(review_status IN (
+                'unreviewed_extraction',
+                'machine_extracted',
+                'human_reviewed_extraction',
+                'rejected_extraction',
+                'linked_to_dossier_artifact'
+            )),
+            CHECK(citation_status <> 'citation_recorded'
+                  OR linked_external_reference_id IS NOT NULL
+                  OR linked_external_theorem_claim_id IS NOT NULL),
+            CHECK(formalization_status <> 'formalization_target_linked'
+                  OR linked_research_node_id IS NOT NULL
+                  OR linked_formalization_plan_item_id IS NOT NULL),
+            CHECK(review_status <> 'linked_to_dossier_artifact'
+                  OR linked_external_reference_id IS NOT NULL
+                  OR linked_external_theorem_claim_id IS NOT NULL
+                  OR linked_research_node_id IS NOT NULL
+                  OR linked_formalization_plan_item_id IS NOT NULL)
+        );
+        INSERT INTO ingested_document_nodes_migrating (
+            id, document_id, dossier_id, node_order, node_kind, natural_language_text,
+            source_span, confidence, formalization_status, citation_status, review_status,
+            risk_flags_json, linked_external_reference_id, linked_external_theorem_claim_id,
+            linked_research_node_id, linked_formalization_plan_item_id, created_at, updated_at
+        )
+        SELECT
+            id, document_id, dossier_id, node_order, node_kind, natural_language_text,
+            source_span, confidence,
+            CASE WHEN formalization_status = 'formalization_target_linked'
+                      AND linked_research_node_id IS NULL
+                      AND linked_formalization_plan_item_id IS NULL
+                 THEN 'prose_only' ELSE formalization_status END,
+            CASE WHEN citation_status = 'citation_recorded'
+                      AND linked_external_reference_id IS NULL
+                      AND linked_external_theorem_claim_id IS NULL
+                 THEN 'uncited' ELSE citation_status END,
+            CASE WHEN review_status = 'linked_to_dossier_artifact'
+                      AND linked_external_reference_id IS NULL
+                      AND linked_external_theorem_claim_id IS NULL
+                      AND linked_research_node_id IS NULL
+                      AND linked_formalization_plan_item_id IS NULL
+                 THEN 'machine_extracted' ELSE review_status END,
+            risk_flags_json, linked_external_reference_id, linked_external_theorem_claim_id,
+            linked_research_node_id, linked_formalization_plan_item_id, created_at, updated_at
+        FROM ingested_document_nodes;
+        DROP TABLE ingested_document_nodes;
+        ALTER TABLE ingested_document_nodes_migrating RENAME TO ingested_document_nodes;",
     )?;
     Ok(())
 }
@@ -1263,6 +2410,11 @@ fn migrate_add_benchmark_fidelity_basis_columns(conn: &Connection) -> rusqlite::
         if !existing_columns.iter().any(|c| c == "benchmark_fidelity_basis") {
             conn.execute("ALTER TABLE benchmark_results ADD COLUMN benchmark_fidelity_basis TEXT", [])?;
         }
+        // Issue #76: structured formalization-gap categories (nullable JSON
+        // array of slugs) — pre-existing rows simply have none recorded.
+        if !existing_columns.iter().any(|c| c == "gap_categories_json") {
+            conn.execute("ALTER TABLE benchmark_results ADD COLUMN gap_categories_json TEXT", [])?;
+        }
     }
     Ok(())
 }
@@ -1290,4 +2442,171 @@ fn migrate_add_lean_result_bytes_column(conn: &Connection) -> rusqlite::Result<(
         conn.execute("ALTER TABLE action_attempts ADD COLUMN lean_result_bytes INTEGER", [])?;
     }
     Ok(())
+}
+
+/// Issue #12: adds benchmark_problems.goal_class + brute_force_admissible to a
+/// pre-existing DB. ALTER TABLE ADD COLUMN cannot re-add the cross-column CHECK
+/// (asymptotic => not brute-force-admissible); that is enforced on fresh DBs by
+/// the CREATE TABLE and at the MCP handler for legacy DBs — same pattern as
+/// trusted_canonical_source.
+fn migrate_add_benchmark_goal_class_columns(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='benchmark_problems'",
+        [], |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(benchmark_problems)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !cols.iter().any(|c| c == "goal_class") {
+        conn.execute("ALTER TABLE benchmark_problems ADD COLUMN goal_class TEXT NOT NULL DEFAULT 'finite_exact'", [])?;
+    }
+    if !cols.iter().any(|c| c == "brute_force_admissible") {
+        conn.execute("ALTER TABLE benchmark_problems ADD COLUMN brute_force_admissible INTEGER NOT NULL DEFAULT 1", [])?;
+    }
+    Ok(())
+}
+
+/// Issue #12: adds formalization_plan_items.asymptotic_role to a pre-existing
+/// DB. The CHECK is enforced on fresh DBs (CREATE TABLE) and by the MCP handler.
+fn migrate_add_plan_item_asymptotic_role_column(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='formalization_plan_items'",
+        [], |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(formalization_plan_items)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !cols.iter().any(|c| c == "asymptotic_role") {
+        conn.execute("ALTER TABLE formalization_plan_items ADD COLUMN asymptotic_role TEXT", [])?;
+    }
+    Ok(())
+}
+
+/// Issue #46: run_envelopes needs a pointer to its CURRENT cost observation so
+/// the append-only observation chain has a defined head. Added by guarded
+/// migration (like the columns above) so a database predating the observation
+/// model gains the column instead of failing on first query.
+fn migrate_add_current_cost_observation_column(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='run_envelopes'",
+        [], |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let existing_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(run_envelopes)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !existing_columns.iter().any(|c| c == "current_cost_observation_id") {
+        conn.execute("ALTER TABLE run_envelopes ADD COLUMN current_cost_observation_id TEXT", [])?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #27 (PR #58 review, blocker #2): a database whose
+    /// `ingested_document_nodes` table predates the backed-status CHECK
+    /// constraints is rebuilt to enforce them, and any legacy row that violates
+    /// the new invariant (a backed status with no matching forward link) is
+    /// sanitized to its unbacked base value during the copy.
+    #[test]
+    fn migrate_ingested_backed_status_checks_rebuilds_and_sanitizes_legacy_db() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = OFF;", []).unwrap();
+        // Old-shape table: all current columns (incl. linked_formalization_plan_item_id)
+        // but WITHOUT the three backed-status CHECK constraints.
+        conn.execute_batch(
+            "CREATE TABLE ingested_document_nodes (
+                id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL,
+                dossier_id TEXT,
+                node_order INTEGER NOT NULL,
+                node_kind TEXT NOT NULL,
+                natural_language_text TEXT NOT NULL,
+                source_span TEXT NOT NULL,
+                confidence TEXT,
+                formalization_status TEXT NOT NULL DEFAULT 'prose_only',
+                citation_status TEXT NOT NULL DEFAULT 'uncited',
+                review_status TEXT NOT NULL DEFAULT 'unreviewed_extraction',
+                risk_flags_json TEXT NOT NULL DEFAULT '[]',
+                linked_external_reference_id TEXT,
+                linked_external_theorem_claim_id TEXT,
+                linked_research_node_id TEXT,
+                linked_formalization_plan_item_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(document_id, node_order)
+            );",
+        ).unwrap();
+        // A violating legacy row: citation_recorded + formalization_target_linked
+        // + linked_to_dossier_artifact, all with NULL forward links (only the
+        // pre-fix free-form path could produce this).
+        conn.execute(
+            "INSERT INTO ingested_document_nodes (id, document_id, node_order, node_kind,
+                natural_language_text, source_span, formalization_status, citation_status,
+                review_status, risk_flags_json, created_at, updated_at)
+             VALUES ('bad', 'd1', 0, 'lemma', 'L', 'p.1', 'formalization_target_linked',
+                'citation_recorded', 'linked_to_dossier_artifact', '[]', 't', 't')",
+            [],
+        ).unwrap();
+        // A clean legacy row that must survive verbatim.
+        conn.execute(
+            "INSERT INTO ingested_document_nodes (id, document_id, node_order, node_kind,
+                natural_language_text, source_span, formalization_status, citation_status,
+                review_status, risk_flags_json, created_at, updated_at)
+             VALUES ('ok', 'd1', 1, 'remark', 'R', 'p.2', 'formalization_pending',
+                'uncited', 'machine_extracted', '[]', 't', 't')",
+            [],
+        ).unwrap();
+
+        migrate_ingested_document_nodes_backed_status_checks(&conn).unwrap();
+
+        // The CHECK is now baked in.
+        let sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='ingested_document_nodes'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert!(sql.contains("citation_status <> 'citation_recorded'"), "migration must add the backed-status CHECK");
+
+        // Both rows survive; the violating one is sanitized to its base values.
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM ingested_document_nodes", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2);
+        let (cit, form, rev): (String, String, String) = conn.query_row(
+            "SELECT citation_status, formalization_status, review_status FROM ingested_document_nodes WHERE id = 'bad'",
+            [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap();
+        assert_eq!(cit, "uncited", "orphan citation_recorded must be sanitized");
+        assert_eq!(form, "prose_only", "orphan formalization_target_linked must be sanitized");
+        assert_eq!(rev, "machine_extracted", "orphan linked_to_dossier_artifact must be sanitized");
+        let ok_cit: String = conn.query_row(
+            "SELECT formalization_status FROM ingested_document_nodes WHERE id = 'ok'", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(ok_cit, "formalization_pending", "clean rows are preserved verbatim");
+
+        // The rebuilt table now structurally rejects a raw decoupled write.
+        let raw = conn.execute(
+            "UPDATE ingested_document_nodes SET citation_status = 'citation_recorded' WHERE id = 'ok'", [],
+        );
+        assert!(raw.is_err(), "post-migration CHECK must reject citation_recorded with no linked reference/claim");
+
+        // Idempotent: a second run is a no-op.
+        migrate_ingested_document_nodes_backed_status_checks(&conn).unwrap();
+        let count2: i64 = conn.query_row("SELECT COUNT(*) FROM ingested_document_nodes", [], |r| r.get(0)).unwrap();
+        assert_eq!(count2, 2);
+    }
 }
