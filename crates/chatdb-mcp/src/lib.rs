@@ -368,6 +368,23 @@ pub struct RunEnvelopeUpdateArgs {
     pub notes: Option<String>,
 }
 
+/// Issue #46: append an auditable host-side cost observation. Every value is
+/// preserved (append-only) rather than overwriting the prior one.
+#[derive(JsonSchema, Deserialize)]
+pub struct RunEnvelopeCostObservationAddArgs {
+    pub run_envelope_id: String,
+    #[serde(default)]
+    pub host_side_cost_micros: Option<i64>,
+    #[serde(default)]
+    pub host_cost_confidence: Option<HostCostConfidence>,
+    /// Free-text provenance, e.g. "provider_receipt_import". Defaults to
+    /// "cost_observation_add".
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
 #[derive(JsonSchema, Deserialize)]
 pub struct RunEnvelopeAttachEpisodeArgs {
     pub run_envelope_id: String,
@@ -2476,6 +2493,49 @@ fn benchmark_result_is_stale(stored_status: &str, current_episode_outcome: Optio
     }
 }
 
+fn host_cost_confidence_str(c: &HostCostConfidence) -> &'static str {
+    match c {
+        HostCostConfidence::ExactProviderReceipt => "exact_provider_receipt",
+        HostCostConfidence::ExactLocalMeter => "exact_local_meter",
+        HostCostConfidence::Estimated => "estimated",
+        HostCostConfidence::Attested => "attested",
+        HostCostConfidence::Unknown => "unknown",
+    }
+}
+
+/// Issue #46: append an immutable host-side cost observation and repoint the
+/// envelope's current observation, atomically. The observation supersedes
+/// (links back to) whatever was current before, so every prior value stays
+/// queryable. run_envelopes' summary columns are kept as a convenience mirror
+/// of the current observation. Never fabricates an exact figure — a NULL cost
+/// stays NULL with its confidence recorded.
+fn append_cost_observation(
+    tx: &Transaction,
+    envelope_id: &str,
+    host_side_cost_micros: Option<i64>,
+    host_cost_confidence: &str,
+    notes: Option<&str>,
+    source: &str,
+    now: &str,
+) -> Result<String, McpError> {
+    let prior: Option<String> = tx.query_row(
+        "SELECT current_cost_observation_id FROM run_envelopes WHERE id = ?1",
+        [envelope_id], |r| r.get(0),
+    ).map_err(rs)?;
+    let obs_id = Uuid::new_v4().to_string();
+    tx.execute(
+        "INSERT INTO run_envelope_cost_observations (
+            id, run_envelope_id, host_side_cost_micros, host_cost_confidence, source, notes, supersedes_observation_id, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![&obs_id, envelope_id, host_side_cost_micros, host_cost_confidence, source, notes, prior.as_deref(), now],
+    ).map_err(rs)?;
+    tx.execute(
+        "UPDATE run_envelopes SET host_side_cost_micros = ?1, host_cost_confidence = ?2, notes = ?3, current_cost_observation_id = ?4, updated_at = ?5 WHERE id = ?6",
+        rusqlite::params![host_side_cost_micros, host_cost_confidence, notes, &obs_id, now, envelope_id],
+    ).map_err(rs)?;
+    Ok(obs_id)
+}
+
 /// The problem version's environment hash, joined through an episode.
 fn episode_env_hash(conn: &Connection, episode_id: &str) -> rusqlite::Result<String> {
     conn.query_row(
@@ -3643,9 +3703,10 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<MathlibSearchLocalArtifactsArgs>("mathlib_search_local_artifacts", "Search THIS ChatDB instance's own previously-verified theorem/def names for a substring match — a local usage_example precedent, not a Mathlib-library result"),
             make_tool::<FormalizationPlanAttachLibrarianResultArgs>("formalization_plan_attach_librarian_result", "Attach a mathlib_search_declarations/mathlib_search_local_artifacts result to a formalization plan item, updating its Mathlib coverage status. A hint attachment, not a re-check — never changes proof status"),
             make_tool::<RunEnvelopeCreateArgs>("run_envelope_create", "Create a run envelope (issues #34/#38): who/what produced a set of episodes — host, model, mode (development/evaluation/benchmark/private_audit/public_report), and host-side cost accounting ChatDB itself cannot observe. Purely descriptive metadata; never affects proof status"),
-            make_tool::<RunEnvelopeUpdateArgs>("run_envelope_update", "Update a run envelope's host-side cost fields or notes after the fact"),
+            make_tool::<RunEnvelopeUpdateArgs>("run_envelope_update", "Update a run envelope's host-side cost fields or notes after the fact. Append-only under the hood (issue #46): a cost correction appends an immutable observation, so the prior value stays queryable via run_envelope_observe"),
+            make_tool::<RunEnvelopeCostObservationAddArgs>("run_envelope_cost_observation_add", "Append an auditable, append-only host-side cost observation to a run envelope (issue #46). Never overwrites a prior observation — the previous value stays queryable; sets the envelope's current selected cost figure while preserving the full supersedes chain"),
             make_tool::<RunEnvelopeAttachEpisodeArgs>("run_envelope_attach_episode", "Tag an existing episode with a run envelope. Metadata only — never changes the episode's outcome/state"),
-            make_tool::<RunEnvelopeObserveArgs>("run_envelope_observe", "Read back a run envelope and every episode tagged with it"),
+            make_tool::<RunEnvelopeObserveArgs>("run_envelope_observe", "Read back a run envelope, every episode tagged with it, and its full append-only host-side cost observation history"),
             make_tool::<BenchmarkSuiteCreateArgs>("benchmark_suite_create", "Register a benchmark suite (e.g. PutnamBench) — manual/structured registration, not automated parsing. Issue #29/#30"),
             make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise"),
             make_tool::<BenchmarkRunCreateArgs>("benchmark_run_create", "Create a benchmark run against a suite. Requires an existing run_envelope_id (call run_envelope_create first — a run should not start unassociated with host/mode/cost tracking). lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results"),
@@ -3761,8 +3822,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of ChatDB's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 60,
-                        "total_tool_count": 60,
+                        "classified_tool_count": 61,
+                        "total_tool_count": 61,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -3919,11 +3980,21 @@ impl ServerHandler for ChatDbMcp {
                                 "required_run_mode": "any"
                             },
                             "run_envelope_update": {
-                                "side_effect": "mutating — overwrites host_side_cost_micros/host_cost_confidence/notes on an existing run_envelopes row IN PLACE",
+                                "side_effect": "mutating — APPEND-ONLY since issue #46: inserts a run_envelope_cost_observations row (source='run_envelope_update') that supersedes the prior current observation, then updates the run_envelopes convenience summary + current_cost_observation_id pointer. The prior value is never destroyed",
                                 "trust_level": "human_attested, same as run_envelope_create — self-declared, with an explicit confidence tier rather than pretending certainty",
                                 "cost_surface": "host_side — this is the correction/refinement path for that same declaration",
                                 "benchmark_safety": "safe_public_output",
-                                "replayability": "NOT replayable in the audit sense: there is no history/versioning of prior values — an update overwrites host_side_cost_micros/host_cost_confidence with no log of what it was before or when it changed. A benchmark_run_observe call made before vs after an update would report genuinely different numbers with no record that a correction happened. Worth a deliberate decision (an append-only revision log?) if run envelopes are ever updated after a report has already been shared, rather than assumed away",
+                                "replayability": "auditable: every cost correction appends an immutable observation (supersedes chain); prior values stay queryable via run_envelope_observe.cost_observations — resolves the append-only-revision-log question this entry previously raised (issue #46)",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "run_envelope_cost_observation_add": {
+                                "side_effect": "mutating — append_only: inserts a run_envelope_cost_observations row and repoints run_envelopes.current_cost_observation_id; never overwrites a prior observation",
+                                "trust_level": "human_attested — same confidence tiers as run_envelope_create/update (exact_provider_receipt/exact_local_meter/estimated/attested/unknown); self-declared host cost, never a measured or proof-authority figure",
+                                "cost_surface": "host_side",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic; the full observation history is durable and queryable",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
@@ -7125,18 +7196,13 @@ impl ServerHandler for ChatDbMcp {
                     RunEnvelopeMode::PrivateAudit => "private_audit",
                     RunEnvelopeMode::PublicReport => "public_report",
                 };
-                let confidence_str = match args.host_cost_confidence.unwrap_or(HostCostConfidence::Unknown) {
-                    HostCostConfidence::ExactProviderReceipt => "exact_provider_receipt",
-                    HostCostConfidence::ExactLocalMeter => "exact_local_meter",
-                    HostCostConfidence::Estimated => "estimated",
-                    HostCostConfidence::Attested => "attested",
-                    HostCostConfidence::Unknown => "unknown",
-                };
+                let confidence_str = host_cost_confidence_str(&args.host_cost_confidence.unwrap_or(HostCostConfidence::Unknown));
 
-                let conn = self.conn.lock().await;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
                 let run_envelope_id = Uuid::new_v4().to_string();
                 let now = Utc::now().to_rfc3339();
-                conn.execute(
+                tx.execute(
                     "INSERT INTO run_envelopes (
                         id, mode, host_name, host_model, benchmark_suite_name,
                         host_side_cost_micros, host_cost_confidence, notes, created_at, updated_at
@@ -7144,11 +7210,19 @@ impl ServerHandler for ChatDbMcp {
                     (&run_envelope_id, mode_str, &args.host_name, &args.host_model, &args.benchmark_suite_name,
                      &args.host_side_cost_micros, confidence_str, &args.notes, &now),
                 ).map_err(rs)?;
+                // Issue #46: every envelope starts with an origin cost observation
+                // so the append-only history has a defined head from creation.
+                let cost_observation_id = append_cost_observation(
+                    &tx, &run_envelope_id, args.host_side_cost_micros, confidence_str,
+                    args.notes.as_deref(), "run_envelope_create", &now,
+                )?;
+                tx.commit().map_err(rs)?;
 
                 let res = serde_json::json!({
                     "run_envelope_id": run_envelope_id,
                     "mode": mode_str,
                     "host_cost_confidence": confidence_str,
+                    "cost_observation_id": cost_observation_id,
                     "created_at": now,
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
@@ -7157,8 +7231,9 @@ impl ServerHandler for ChatDbMcp {
                 let args: RunEnvelopeUpdateArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
 
-                let conn = self.conn.lock().await;
-                let current: Option<(Option<i64>, String, Option<String>)> = conn.query_row(
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let current: Option<(Option<i64>, String, Option<String>)> = tx.query_row(
                     "SELECT host_side_cost_micros, host_cost_confidence, notes FROM run_envelopes WHERE id = ?1",
                     [&args.run_envelope_id],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -7168,27 +7243,64 @@ impl ServerHandler for ChatDbMcp {
                 };
 
                 let new_cost = args.host_side_cost_micros.or(cur_cost);
-                let new_confidence = match args.host_cost_confidence {
-                    Some(HostCostConfidence::ExactProviderReceipt) => "exact_provider_receipt".to_string(),
-                    Some(HostCostConfidence::ExactLocalMeter) => "exact_local_meter".to_string(),
-                    Some(HostCostConfidence::Estimated) => "estimated".to_string(),
-                    Some(HostCostConfidence::Attested) => "attested".to_string(),
-                    Some(HostCostConfidence::Unknown) => "unknown".to_string(),
+                let new_confidence = match &args.host_cost_confidence {
+                    Some(c) => host_cost_confidence_str(c).to_string(),
                     None => cur_confidence,
                 };
                 let new_notes = args.notes.or(cur_notes);
                 let now = Utc::now().to_rfc3339();
 
-                conn.execute(
-                    "UPDATE run_envelopes SET host_side_cost_micros = ?1, host_cost_confidence = ?2, notes = ?3, updated_at = ?4 WHERE id = ?5",
-                    (&new_cost, &new_confidence, &new_notes, &now, &args.run_envelope_id),
-                ).map_err(rs)?;
+                // Issue #46: append a new observation (source='run_envelope_update')
+                // rather than overwriting in place, so the prior value stays
+                // queryable. The helper also updates the convenience summary.
+                let cost_observation_id = append_cost_observation(
+                    &tx, &args.run_envelope_id, new_cost, &new_confidence,
+                    new_notes.as_deref(), "run_envelope_update", &now,
+                )?;
+                tx.commit().map_err(rs)?;
 
                 let res = serde_json::json!({
                     "run_envelope_id": args.run_envelope_id,
                     "host_side_cost_micros": new_cost,
                     "host_cost_confidence": new_confidence,
+                    "cost_observation_id": cost_observation_id,
                     "updated_at": now,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "run_envelope_cost_observation_add" => {
+                let args: RunEnvelopeCostObservationAddArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                let confidence_str = host_cost_confidence_str(&args.host_cost_confidence.unwrap_or(HostCostConfidence::Unknown));
+                let source = args.source.clone().unwrap_or_else(|| "cost_observation_add".to_string());
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let exists: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM run_envelopes WHERE id = ?1", [&args.run_envelope_id], |row| row.get(0),
+                ).map_err(rs)?;
+                if exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
+                }
+                let prior: Option<String> = tx.query_row(
+                    "SELECT current_cost_observation_id FROM run_envelopes WHERE id = ?1",
+                    [&args.run_envelope_id], |r| r.get(0),
+                ).map_err(rs)?;
+                let now = Utc::now().to_rfc3339();
+                let cost_observation_id = append_cost_observation(
+                    &tx, &args.run_envelope_id, args.host_side_cost_micros, confidence_str,
+                    args.notes.as_deref(), &source, &now,
+                )?;
+                tx.commit().map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "run_envelope_id": args.run_envelope_id,
+                    "cost_observation_id": cost_observation_id,
+                    "host_side_cost_micros": args.host_side_cost_micros,
+                    "host_cost_confidence": confidence_str,
+                    "source": source,
+                    "supersedes_observation_id": prior,
+                    "created_at": now,
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
@@ -7230,14 +7342,14 @@ impl ServerHandler for ChatDbMcp {
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
 
                 let conn = self.conn.lock().await;
-                let row: Option<(String, Option<String>, Option<String>, Option<String>, Option<i64>, String, Option<String>, String, String)> = conn.query_row(
+                let row: Option<(String, Option<String>, Option<String>, Option<String>, Option<i64>, String, Option<String>, String, String, Option<String>)> = conn.query_row(
                     "SELECT mode, host_name, host_model, benchmark_suite_name, host_side_cost_micros,
-                            host_cost_confidence, notes, created_at, updated_at
+                            host_cost_confidence, notes, created_at, updated_at, current_cost_observation_id
                      FROM run_envelopes WHERE id = ?1",
                     [&args.run_envelope_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?)),
                 ).optional().map_err(rs)?;
-                let Some((mode, host_name, host_model, benchmark_suite_name, host_side_cost_micros, host_cost_confidence, notes, created_at, updated_at)) = row else {
+                let Some((mode, host_name, host_model, benchmark_suite_name, host_side_cost_micros, host_cost_confidence, notes, created_at, updated_at, current_cost_observation_id)) = row else {
                     return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
                 };
 
@@ -7249,6 +7361,24 @@ impl ServerHandler for ChatDbMcp {
                         "episode_id": row.get::<_, String>(0)?,
                         "outcome": row.get::<_, Option<String>>(1)?,
                         "state": row.get::<_, String>(2)?,
+                    }))
+                }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+                drop(estmt);
+
+                // Issue #46: the full append-only host-side cost history.
+                let mut cstmt = conn.prepare(
+                    "SELECT id, host_side_cost_micros, host_cost_confidence, source, notes, supersedes_observation_id, created_at
+                     FROM run_envelope_cost_observations WHERE run_envelope_id = ?1 ORDER BY created_at ASC, id ASC"
+                ).map_err(rs)?;
+                let cost_observations: Vec<serde_json::Value> = cstmt.query_map([&args.run_envelope_id], |row| {
+                    Ok(serde_json::json!({
+                        "cost_observation_id": row.get::<_, String>(0)?,
+                        "host_side_cost_micros": row.get::<_, Option<i64>>(1)?,
+                        "host_cost_confidence": row.get::<_, String>(2)?,
+                        "source": row.get::<_, String>(3)?,
+                        "notes": row.get::<_, Option<String>>(4)?,
+                        "supersedes_observation_id": row.get::<_, Option<String>>(5)?,
+                        "created_at": row.get::<_, String>(6)?,
                     }))
                 }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
 
@@ -7264,6 +7394,8 @@ impl ServerHandler for ChatDbMcp {
                     "created_at": created_at,
                     "updated_at": updated_at,
                     "episodes": episodes,
+                    "current_cost_observation_id": current_cost_observation_id,
+                    "cost_observations": cost_observations,
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
@@ -7865,12 +7997,12 @@ impl ServerHandler for ChatDbMcp {
                 // three-tier monetary rollup that never merges a
                 // self-reported (attested) or estimated figure into an
                 // "exact total" claim.
-                let (host_side_cost_micros, host_cost_confidence): (Option<i64>, Option<String>) = match &run_envelope_id {
+                let (host_side_cost_micros, host_cost_confidence, cost_observation_id): (Option<i64>, Option<String>, Option<String>) = match &run_envelope_id {
                     Some(env_id) => conn.query_row(
-                        "SELECT host_side_cost_micros, host_cost_confidence FROM run_envelopes WHERE id = ?1",
-                        [env_id], |row| Ok((row.get(0)?, row.get(1)?)),
-                    ).optional().map_err(rs)?.unwrap_or((None, None)),
-                    None => (None, None),
+                        "SELECT host_side_cost_micros, host_cost_confidence, current_cost_observation_id FROM run_envelopes WHERE id = ?1",
+                        [env_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    ).optional().map_err(rs)?.unwrap_or((None, None, None)),
+                    None => (None, None, None),
                 };
 
                 // Bucket every known monetary figure by its own confidence
@@ -7930,6 +8062,7 @@ impl ServerHandler for ChatDbMcp {
                 let cost_summary = serde_json::json!({
                     "host_side_cost_micros": host_side_cost_micros,
                     "host_cost_confidence": host_cost_confidence,
+                    "cost_observation_id": cost_observation_id,
                     "model_call_reported_cost_micros": model_call_reported_cost_micros,
                     "model_call_cost_confidence": model_call_cost_confidence,
                     "verifier_wall_time_ms": verifier_wall_time_ms,
@@ -8193,7 +8326,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 60);
+        assert_eq!(list_res.tools.len(), 61);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -12385,6 +12518,65 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed["notes"], "original note", "an update that omits notes must not clear it");
         assert_eq!(observed["host_side_cost_micros"], 10i64);
+    }
+
+    /// Issue #46: a host-side cost correction is append-only — the prior value
+    /// is preserved as a superseded observation, never overwritten, and the
+    /// current pointer/summary track the latest observation.
+    #[tokio::test]
+    async fn test_run_envelope_cost_observation_append_preserves_prior_value() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "benchmark", "host_side_cost_micros": 1000i64, "host_cost_confidence": "estimated",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let envelope_id = created["run_envelope_id"].as_str().unwrap().to_string();
+        let origin_obs_id = created["cost_observation_id"].as_str().unwrap().to_string();
+
+        // A later, more precise observation supersedes the estimate.
+        let added = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_cost_observation_add").with_arguments(serde_json::json!({
+            "run_envelope_id": envelope_id, "host_side_cost_micros": 2000i64,
+            "host_cost_confidence": "exact_local_meter", "source": "provider_receipt_import",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let new_obs_id = added["cost_observation_id"].as_str().unwrap().to_string();
+        assert_eq!(added["supersedes_observation_id"], origin_obs_id, "new observation must point back at the prior current: {added:?}");
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_observe").with_arguments(serde_json::json!({
+            "run_envelope_id": envelope_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let history = observed["cost_observations"].as_array().unwrap();
+        assert_eq!(history.len(), 2, "origin + append must both be preserved: {observed:?}");
+        // The prior 1000/estimated value is still queryable in the history.
+        assert!(history.iter().any(|o| o["host_side_cost_micros"] == 1000 && o["host_cost_confidence"] == "estimated"),
+            "the superseded estimate must remain in the history: {history:?}");
+        // The current pointer + convenience summary track the latest observation.
+        assert_eq!(observed["current_cost_observation_id"], new_obs_id);
+        assert_eq!(observed["host_side_cost_micros"], 2000i64);
+        assert_eq!(observed["host_cost_confidence"], "exact_local_meter");
+    }
+
+    /// Issue #46: run_envelope_update itself is append-only under the hood — a
+    /// correction records a run_envelope_update-sourced observation while the
+    /// original origin observation stays present.
+    #[tokio::test]
+    async fn test_run_envelope_update_appends_observation() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "benchmark",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let envelope_id = created["run_envelope_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_update").with_arguments(serde_json::json!({
+            "run_envelope_id": envelope_id, "host_side_cost_micros": 42_000_000i64, "host_cost_confidence": "estimated",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_observe").with_arguments(serde_json::json!({
+            "run_envelope_id": envelope_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let sources: Vec<&str> = observed["cost_observations"].as_array().unwrap().iter().map(|o| o["source"].as_str().unwrap()).collect();
+        assert!(sources.contains(&"run_envelope_create"), "origin observation must survive the correction: {sources:?}");
+        assert!(sources.contains(&"run_envelope_update"), "the update must append its own observation: {sources:?}");
+        assert_eq!(observed["host_side_cost_micros"], 42_000_000i64);
     }
 
     #[tokio::test]

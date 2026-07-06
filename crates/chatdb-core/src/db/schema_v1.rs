@@ -995,11 +995,37 @@ CREATE TABLE IF NOT EXISTS run_envelopes (
     host_side_cost_micros INTEGER,
     host_cost_confidence TEXT NOT NULL,
     notes TEXT,
+    -- Issue #46: head of the append-only host-side cost observation chain
+    -- (also added to pre-existing DBs by migrate_add_current_cost_observation_column).
+    current_cost_observation_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     CHECK(mode IN ('development', 'evaluation', 'benchmark', 'private_audit', 'public_report')),
     CHECK(host_cost_confidence IN ('exact_provider_receipt', 'exact_local_meter', 'estimated', 'attested', 'unknown'))
 );
+
+-- Append-only host-side cost observations (issue #46): a run envelope's
+-- host-side cost figure is often a CORRECTION of an earlier estimate (an
+-- estimate replaced by a provider receipt, etc.). Overwriting host_side_cost_
+-- micros in place destroys the audit trail. Instead every value is recorded as
+-- an immutable observation that supersedes (points back to) the one it
+-- replaces; run_envelopes.host_side_cost_micros/host_cost_confidence remain as
+-- a convenience mirror of the CURRENT observation (run_envelopes.current_cost_
+-- observation_id, added by migration). Same confidence tiers as run_envelopes;
+-- purely descriptive host metadata, never proof authority, never a fabricated
+-- exact figure (a NULL cost stays NULL, its confidence still recorded).
+CREATE TABLE IF NOT EXISTS run_envelope_cost_observations (
+    id TEXT PRIMARY KEY,
+    run_envelope_id TEXT NOT NULL REFERENCES run_envelopes(id),
+    host_side_cost_micros INTEGER,
+    host_cost_confidence TEXT NOT NULL,
+    source TEXT NOT NULL,
+    notes TEXT,
+    supersedes_observation_id TEXT REFERENCES run_envelope_cost_observations(id),
+    created_at TEXT NOT NULL,
+    CHECK(host_cost_confidence IN ('exact_provider_receipt', 'exact_local_meter', 'estimated', 'attested', 'unknown'))
+);
+CREATE INDEX IF NOT EXISTS idx_cost_observations_envelope ON run_envelope_cost_observations(run_envelope_id);
 
 -- PutnamBench benchmark schema (issues #29, #30, designed together since
 -- benchmark_results references benchmark_problems and benchmark_runs
@@ -1275,6 +1301,7 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     migrate_add_prover_ready_statement_columns(conn)?;
     migrate_add_benchmark_fidelity_basis_columns(conn)?;
     migrate_add_lean_result_bytes_column(conn)?;
+    migrate_add_current_cost_observation_column(conn)?;
     // CHECK constraints are baked into a table at creation and CREATE TABLE IF
     // NOT EXISTS cannot update them on a table that already exists — a database
     // that predates the fidelity-vocabulary rewrite (docs/fix_plan_playtest_02.md)
@@ -1732,6 +1759,29 @@ fn migrate_add_lean_result_bytes_column(conn: &Connection) -> rusqlite::Result<(
         .collect();
     if !existing_columns.iter().any(|c| c == "lean_result_bytes") {
         conn.execute("ALTER TABLE action_attempts ADD COLUMN lean_result_bytes INTEGER", [])?;
+    }
+    Ok(())
+}
+
+/// Issue #46: run_envelopes needs a pointer to its CURRENT cost observation so
+/// the append-only observation chain has a defined head. Added by guarded
+/// migration (like the columns above) so a database predating the observation
+/// model gains the column instead of failing on first query.
+fn migrate_add_current_cost_observation_column(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='run_envelopes'",
+        [], |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let existing_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(run_envelopes)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !existing_columns.iter().any(|c| c == "current_cost_observation_id") {
+        conn.execute("ALTER TABLE run_envelopes ADD COLUMN current_cost_observation_id TEXT", [])?;
     }
     Ok(())
 }

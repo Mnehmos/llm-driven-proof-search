@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  60 tools · typed schemas · JSON Schema 2020-12                 │
+│  61 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -116,7 +116,8 @@ Antigravity, or a custom script — should call this first.
 | `mathlib_search_local_artifacts` | Search this instance's own previously-verified theorem/def names for a substring match |
 | `formalization_plan_attach_librarian_result` | Attach a Mathlib librarian result to a formalization plan item, updating its coverage status |
 | `run_envelope_create` | Create a run envelope: host/model/mode (development/evaluation/benchmark/private_audit/public_report) and host-side cost accounting ChatDB cannot itself observe |
-| `run_envelope_update` | Update a run envelope's host-side cost fields or notes after the fact |
+| `run_envelope_update` | Update a run envelope's host-side cost fields or notes after the fact. Append-only (issue #46): a cost correction appends an auditable observation, so the prior value stays queryable |
+| `run_envelope_cost_observation_add` | Append an auditable, append-only host-side cost observation to a run envelope; prior observations stay queryable via `run_envelope_observe` |
 | `run_envelope_attach_episode` | Tag an episode with a run envelope. Metadata only — never changes the episode's outcome/state |
 | `run_envelope_observe` | Read back a run envelope and every episode tagged with it |
 | `benchmark_suite_create` | Register a benchmark suite (e.g. PutnamBench) — name, upstream URL/commit, language |
@@ -628,7 +629,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 60 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 61 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records
