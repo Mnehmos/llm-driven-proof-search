@@ -2766,17 +2766,26 @@ struct BenchmarkLink {
     upstream_problem_id: Option<String>,
 }
 
-/// If this episode's problem_version's root_formal_statement matches (via
-/// root_statement_hash, the same server-computed comparison #30 uses to bind
-/// benchmark_results to episodes) a registered benchmark_problem, returns that
-/// suite's name and (when unambiguous) the upstream problem id. `None` means
-/// this episode has no known link to any tracked benchmark suite.
+/// If this episode's problem_version matches a registered benchmark_problem,
+/// returns that suite's name and (when unambiguous) the upstream problem id.
+/// `None` means this episode has no known link to any tracked benchmark suite.
 ///
-/// `root_statement_hash` has no uniqueness constraint on `benchmark_problems`
-/// — the identical statement text could in principle be registered under more
-/// than one suite (or more than once within a suite). Rather than silently
-/// picking an arbitrary match (nondeterministic, and could misattribute the
-/// WRONG suite name), an ambiguous match still gates — the safe default for a
+/// The match keys on `COALESCE(prover_ready_statement_hash, root_statement_hash)`
+/// — the IDENTICAL statement-identity basis `benchmark_result_record` uses to
+/// bind results to problems (#49). A suite's faithful catalog text
+/// (`root_formal_statement`) is not always the string ChatDB actually submits:
+/// PutnamBench named-binder declarations desugar to a Pi-type form via
+/// `to_pi_form`, and an episode is created from that prover-ready form. Keying
+/// the gate only on `root_statement_hash` would fail to recognize such a real
+/// prover-ready episode as benchmark-linked and let its proof body bypass the
+/// `allow_putnambench_proof_export` gate. The gate and the recorder MUST agree
+/// on what counts as the same benchmark target.
+///
+/// The join hash has no uniqueness constraint on `benchmark_problems` — the
+/// identical statement could in principle be registered under more than one
+/// suite (or more than once within a suite). Rather than silently picking an
+/// arbitrary match (nondeterministic, and could misattribute the WRONG suite
+/// name), an ambiguous match still gates — the safe default for a
 /// contamination policy is to over-restrict, never to under-restrict — but
 /// reports the ambiguity honestly instead of a specific, possibly-wrong name.
 fn benchmark_suite_name_for_episode(conn: &Connection, episode_id: &str) -> Result<Option<BenchmarkLink>, McpError> {
@@ -2787,7 +2796,7 @@ fn benchmark_suite_name_for_episode(conn: &Connection, episode_id: &str) -> Resu
     let Some(pv_hash) = pv_hash else { return Ok(None) };
     let mut stmt = conn.prepare(
         "SELECT DISTINCT s.name, p.upstream_problem_id FROM benchmark_problems p JOIN benchmark_suites s ON s.id = p.suite_id \
-         WHERE p.root_statement_hash = ?1 ORDER BY s.name ASC, p.upstream_problem_id ASC"
+         WHERE COALESCE(p.prover_ready_statement_hash, p.root_statement_hash) = ?1 ORDER BY s.name ASC, p.upstream_problem_id ASC"
     ).map_err(rs)?;
     let rows: Vec<(String, String)> = stmt.query_map([&pv_hash], |row| Ok((row.get(0)?, row.get(1)?)))
         .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
@@ -13846,6 +13855,68 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         let traj_text = serde_json::to_string(&traj_allowed).unwrap();
         assert!(traj_text.contains("trivial"), "with the explicit opt-in, trajectory_export must still include the real payload: {traj_text}");
+    }
+
+    /// Issue #49: the export contamination gate must recognize a benchmark link
+    /// via the SAME statement identity benchmark_result_record uses —
+    /// COALESCE(prover_ready_statement_hash, root_statement_hash). A real
+    /// PutnamBench problem's catalog text is a named-binder declaration whose
+    /// prover-ready Pi-form (what ChatDB actually submits) hashes differently;
+    /// keying only on root_statement_hash let such an episode bypass the gate.
+    #[tokio::test]
+    async fn test_proof_export_recognizes_benchmark_link_via_prover_ready_pi_form() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let theorem_name = "putnam_link_49";
+        // A declaration-form statement whose to_pi_form conversion changes the text.
+        let decl = "theorem putnam_link_49\n(n : ℕ)\n(hn : 0 < n)\n: n + 0 = n :=\nsorry";
+        let reg = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "l49", "theorem_name": theorem_name, "root_formal_statement": decl,
+        }).as_object().unwrap().clone())).await.unwrap());
+        // Guard the test itself: the two hashes must actually differ for this fixture.
+        assert!(!reg["prover_ready_statement_hash"].is_null(), "fixture must convert via to_pi_form: {reg:?}");
+        assert_ne!(reg["root_statement_hash"], reg["prover_ready_statement_hash"], "prover-ready and root hashes must differ for a real test");
+
+        // ChatDB creates the episode from the PROVER-READY Pi-form, not the raw declaration.
+        let pi = to_pi_form(decl, theorem_name).expect("declaration converts").root_theorem_statement;
+        let pv_id = create_problem(&peer, &pi).await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "link49-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "secret_body_49"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // The fix: recognized as benchmark-linked via the prover-ready hash, so gated by default.
+        let denied = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "markdown",
+        }).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "prover-ready-form PutnamBench episode must be recognized as benchmark-linked and gated (#49)");
+        let traj_denied = peer.call_tool(CallToolRequestParams::new("trajectory_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(traj_denied.is_err(), "trajectory_export must gate the prover-ready-form episode too (#49)");
+
+        // The opt-in still works and returns the body; public_summary stays safe.
+        let allowed = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "markdown", "allow_putnambench_proof_export": true,
+        }).as_object().unwrap().clone())).await.unwrap();
+        assert!(allowed.content[0].as_text().unwrap().text.contains("secret_body_49"));
+        let summary = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let s = summary.content[0].as_text().unwrap().text.clone();
+        assert!(!s.contains("secret_body_49"), "public_summary must never contain the proof body");
+        assert!(s.contains("PutnamBench"), "public_summary should identify the linked suite");
     }
 
     #[tokio::test]

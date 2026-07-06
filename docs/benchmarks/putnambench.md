@@ -747,6 +747,12 @@ for a benchmark-linked episode, using the identical `benchmark_suite_name_for_ep
 lookup `proof_export` uses, and errors with the same guidance (use `proof_export`
 with `format="public_summary"` for a disclosure-safe report instead).
 
+The benchmark-link check keys on `COALESCE(prover_ready_statement_hash,
+root_statement_hash)` — the same statement identity `benchmark_result_record`
+uses — so an episode created from the prover-ready Pi-form (not the raw
+named-binder declaration a suite catalogs) is still recognized as
+benchmark-linked and cannot bypass the proof-body gate (#49).
+
 ## What "public" safely includes
 
 Aggregate metrics, problem identifiers (`upstream_problem_id`, `theorem_name`),
