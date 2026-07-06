@@ -263,6 +263,41 @@
       ],
       "prompt_block": "ExtremalCombinatoricsKit: encode K_n edge 2-colorings as BitVec (edgeIdx lexicographic pair order, monoBit triangle checks); tiny searches close by kernel decide, larger ones by bv_decide (external SAT + formally verified LRAT replay — kernel-grade trust, see R(3,3) ≤ 6). For solver-model routes use FiniteCertificateKit + an encoding-soundness lemma (see k5NoMonoCnf_correct → ramsey_two_three_gt_five_via_certificate). Bare solver verdicts are never proof authority.",
       "unsafe_for_public_proof_body_export": false
+    },
+    {
+      "kit_name": "RecurrenceGeneratingFunctionKit",
+      "module_path": "LeanChecker.Kits.RecurrenceGeneratingFunctionKit",
+      "domain": "discrete generating functions & linear recurrences (formal power series over a commutative ring)",
+      "status": "v1",
+      "epistemic_basis": "kernel_verified_only",
+      "canonical_imports": ["Mathlib", "LeanChecker.Kits.RecurrenceGeneratingFunctionKit"],
+      "canonical_open_directives": ["open PowerSeries"],
+      "key_lemmas": [
+        "LeanChecker.RecurrenceGeneratingFunctionKit.closed_form_satisfies_linrec",
+        "LeanChecker.RecurrenceGeneratingFunctionKit.ogf_ext",
+        "LeanChecker.RecurrenceGeneratingFunctionKit.one_sub_X_mul_geom"
+      ],
+      "fixtures": [
+        "powers of 2 satisfy a(n+2)=3a(n+1)-2a(n) via the characteristic-root bridge",
+        "Fibonacci recurrence (discrete anchor)",
+        "OGF coefficient comparison by a ring identity",
+        "finite geometric-sum closed form"
+      ],
+      "known_acceptance_targets": [
+        {
+          "benchmark": "Putnam/Erdős recurrence & generating-function families (no registered suite yet)",
+          "upstream_problem_id": "linear recurrences, rational OGFs, coefficient-comparison identities",
+          "status": "families_identified",
+          "tracking_issue": 90
+        }
+      ],
+      "remaining_route_steps": [
+        "rational-GF partial-fraction closed forms",
+        "Binet-type closed forms over ℝ (bridges to PowerSeriesKit)",
+        "multivariate / exponential generating functions"
+      ],
+      "prompt_block": "RecurrenceGeneratingFunctionKit: discrete/formal counterpart to PowerSeriesKit. closed_form_satisfies_linrec turns a characteristic-root relation r²=pr+q into 'rⁿ solves a(n+2)=p·a(n+1)+q·a(n)' by ring; ogf_ext compares OGF coefficients (PowerSeries.mk); one_sub_X_mul_geom is the telescoping (1−X)·∑Xⁿ=1 bridge. Reuse geom_sum_eq for finite geometric closed forms. Import alongside PowerSeriesKit when a problem mixes formal and analytic sides.",
+      "unsafe_for_public_proof_body_export": false
     }
   ]
 }
