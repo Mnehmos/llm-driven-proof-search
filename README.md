@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  54 tools · typed schemas · JSON Schema 2020-12                 │
+│  56 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -106,6 +106,8 @@ Antigravity, or a custom script — should call this first.
 | `candidate_construction_update_status` | Update a candidate construction's status/trust_status/claimed_properties/known_failures. `kernel_verified_claim_linked` is rejected unless a real kernel-verified layer is already linked |
 | `candidate_construction_link_node` | Attach a candidate construction to a research node, adopting the node's dossier if the construction has none yet |
 | `candidate_construction_link_verification_layer` | Attach a candidate construction to an existing verification layer, adopting the layer's dossier if the construction has none yet |
+| `exposition_add` | Add a human-readable exposition section (problem_summary, construction_intuition, key_lemmas, unverified_bridges, …) linked to a problem/episode/obligation/module/lemma/dossier. `prose_status` (prose/reviewed_prose/formalized) marks epistemic weight — never proof |
+| `exposition_observe` | List exposition artifacts for a problem_version, episode, or dossier. Read-only prose, separate from verified proof |
 | `mathlib_search_declarations` | Search the real pinned Mathlib source tree for declaration names containing a substring (beyond exact-name lookup). Advisory only |
 | `mathlib_search_local_artifacts` | Search this instance's own previously-verified theorem/def names for a substring match |
 | `formalization_plan_attach_librarian_result` | Attach a Mathlib librarian result to a formalization plan item, updating its coverage status |
@@ -215,6 +217,28 @@ A candidate construction can attach to a dossier, a research node, and/or a
 verification layer, or exist attached to none of them. `falsified` and
 `rejected` constructions stay visible in `research_dossier_observe` rather
 than being deleted, since a documented dead end is itself research output.
+
+### Exposition artifacts
+
+Serious mathematical output is not only a Lean file — it needs an explanation
+layer: what the construction means, why the definitions were chosen, what the
+key lemma does, and what remains unformalized. Exposition artifacts capture
+that prose **alongside, and explicitly separate from, kernel-verified proof**.
+Each carries a `prose_status` making its epistemic weight explicit:
+
+- `prose` — raw author narrative.
+- `reviewed_prose` — a human read it.
+- `formalized` — the described claim is backed by a linked formal artifact.
+
+**None of these is kernel verification**, and no exposition artifact ever
+changes an episode outcome, `fidelity_status`, canonical promotion, training
+eligibility, budget, or benchmark state. `proof_export` renders exposition in
+its own `## Exposition (prose — not part of the verified proof)` section,
+never inside the proof tree or the verified-module source, and every section
+is labeled with its `prose_status` so a reader can never mistake reviewed or
+unreviewed narrative for a checked proof. An artifact can attach to a
+problem, an episode, a specific obligation, a verified module, a verified
+helper lemma, and/or a research dossier — every link is optional.
 
 **Benchmark contamination policy:** upstream benchmarks like PutnamBench ask
 that completed formal proofs not be published without first coordinating with
@@ -559,7 +583,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 54 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 56 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records

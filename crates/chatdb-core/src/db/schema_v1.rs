@@ -805,6 +805,53 @@ CREATE INDEX IF NOT EXISTS idx_candidate_constructions_verification_layer ON can
 CREATE INDEX IF NOT EXISTS idx_candidate_constructions_problem_version ON candidate_constructions(problem_version_id);
 CREATE INDEX IF NOT EXISTS idx_candidate_constructions_episode ON candidate_constructions(episode_id);
 
+-- Exposition artifacts (issue #7): human-readable mathematical exposition that
+-- lives ALONGSIDE, and explicitly separate from, kernel-verified proof. A
+-- serious result needs an explanation layer (what the construction means, why
+-- the definitions were chosen, what the key lemma does, what remains
+-- unformalized) -- but prose must never be mistaken for proof. Every artifact
+-- carries a prose_status making its epistemic weight explicit: 'prose' (raw
+-- author narrative), 'reviewed_prose' (a human read it), or 'formalized' (the
+-- described claim is backed by a linked formal artifact). None of these is
+-- kernel verification. These rows are metadata: no exposition artifact changes
+-- an episode outcome, obligation status, fidelity_status, canonical promotion,
+-- training eligibility, budget, or benchmark state. An artifact can attach to a
+-- problem_version, an episode, a specific obligation, a verified module, a
+-- verified helper lemma, and/or a Level 4 research dossier -- every link is
+-- optional.
+CREATE TABLE IF NOT EXISTS exposition_artifacts (
+    id TEXT PRIMARY KEY,
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    obligation_id TEXT REFERENCES episode_obligations(id),
+    verified_module_id TEXT REFERENCES episode_verified_modules(id),
+    verified_lemma_id TEXT REFERENCES episode_verified_lemmas(id),
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    section_kind TEXT NOT NULL,
+    prose_status TEXT NOT NULL DEFAULT 'prose',
+    title TEXT,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    author TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(section_kind IN (
+        'problem_summary',
+        'formalization_explanation',
+        'construction_intuition',
+        'key_lemmas',
+        'proof_strategy',
+        'verified_claim',
+        'unverified_bridges',
+        'reviewer_notes',
+        'next_formalization_targets'
+    )),
+    CHECK(prose_status IN ('prose', 'reviewed_prose', 'formalized'))
+);
+CREATE INDEX IF NOT EXISTS idx_exposition_artifacts_episode ON exposition_artifacts(episode_id);
+CREATE INDEX IF NOT EXISTS idx_exposition_artifacts_problem_version ON exposition_artifacts(problem_version_id);
+CREATE INDEX IF NOT EXISTS idx_exposition_artifacts_dossier ON exposition_artifacts(dossier_id);
+
 -- Run envelopes (issues #34 core concept + #38 cost-surface splitting): a
 -- run envelope separates WHO/WHAT/WHY around a set of episodes from the
 -- episodes themselves -- host identity, run mode (a plain dev/exploratory
