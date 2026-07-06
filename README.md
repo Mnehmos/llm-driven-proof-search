@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  62 tools · typed schemas · JSON Schema 2020-12                 │
+│  67 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -107,6 +107,11 @@ Antigravity, or a custom script — should call this first.
 | `candidate_construction_update_status` | Update a candidate construction's status/trust_status/claimed_properties/known_failures. `kernel_verified_claim_linked` is rejected unless a real kernel-verified layer is already linked |
 | `candidate_construction_link_node` | Attach a candidate construction to a research node, adopting the node's dossier if the construction has none yet |
 | `candidate_construction_link_verification_layer` | Attach a candidate construction to an existing verification layer, adopting the layer's dossier if the construction has none yet |
+| `empirical_search_add` | Record an empirical math-lab search (small-case, counterexample, construction, parameter sweep, finite check, candidate ranking, external tool run, …). Experimental **evidence, never proof** — no field carries kernel evidence, no status certifies an asymptotic/universal theorem |
+| `empirical_search_observe` | Append one search observation (supports/refutes/counterexample_found/no_counterexample/inconclusive), optionally a counterexample witness, to a search's history |
+| `empirical_search_update_status` | Update a search's status/trust_status/results/counterexamples/linked candidates. Falsified/failed/timed-out searches stay visible |
+| `empirical_search_link_candidate` | Link an empirical search to a candidate construction (adopting its dossier). Support ≠ proof of claimed properties |
+| `empirical_search_link_verification_layer` | Link an empirical search to a verification layer (adopting its dossier). The link never makes the layer kernel_verified |
 | `exposition_add` | Add a human-readable exposition section (problem_summary, construction_intuition, key_lemmas, unverified_bridges, …) linked to a problem/episode/obligation/module/lemma/dossier. `prose_status` (prose/reviewed_prose/formalized) marks epistemic weight — never proof |
 | `exposition_observe` | List exposition artifacts for a problem_version, episode, or dossier. Read-only prose, separate from verified proof |
 | `semantic_skeleton_add` | Attach a structured reading of a statement/module/solution (quantifiers, hypotheses, conclusion, definitions, construction map, back-translation, fidelity `risk_flags`) scoped by `review_scope`. Metadata only — never sets `fidelity_status` or substitutes for `problem_submit_fidelity_review` |
@@ -286,6 +291,40 @@ updates a citation's `claim_status`), an expert review mutates no other table.
 anything kernel-verified, never changes an episode outcome, `fidelity_status`,
 canonical promotion, budget, or benchmark state. A `rejected` review records
 an opinion without deleting or downgrading the reviewed artifact.
+
+### Empirical math lab (issue #26)
+
+The empirical math lab records **experimental mathematical evidence** —
+small-case searches, counterexample searches, construction searches, finite
+model checks, parameter sweeps, and candidate rankings. It is the object layer
+candidate constructions are generated, tested, ranked, and falsified against.
+It helps discover patterns, candidates, counterexamples, and next proof
+targets. **It does not prove theorems. It does not certify asymptotic claims.
+It does not replace Lean/kernel verification.**
+
+That boundary is structural, not a convention:
+
+```text
+empirical evidence          ≠ proof
+small-case check            ≠ asymptotic theorem
+no counterexample found     ≠ universal theorem certified
+successful construction     ≠ its claimed properties proved
+candidate ranking           ≠ verified claim
+human-readable result       ≠ kernel verification
+```
+
+An `empirical_searches` row has no column that can hold kernel evidence;
+`has_kernel_evidence` and `is_proof` are always false. `trust_status` tops out
+at `linked_to_formal_target` ("this evidence points at a formalization
+target") — still not a proof. Every link (`dossier`, `research_node`,
+`candidate_construction`, `verification_layer`, `problem_version`, `episode`)
+is optional, so a search can exist before any dossier, candidate, episode, or
+Lean proof. `counterexamples`, `failed`, and `timed_out` searches stay visible
+(a documented dead end is research output). `cost_summary`/`runtime_metadata`
+describe the *external* search run and are isolated from ChatDB's own cost
+surfaces. `research_dossier_observe` surfaces empirical searches in their own
+bucket, separate from proofs, citations, assumptions, candidate constructions,
+expert reviews, semantic skeletons, exposition, and verification layers.
 
 **Benchmark contamination policy:** upstream benchmarks like PutnamBench ask
 that completed formal proofs not be published without first coordinating with
@@ -630,7 +669,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 62 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 67 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records
