@@ -4,3 +4,4 @@ import LeanChecker.Kits.AffineAreaKit
 import LeanChecker.Kits.GeometryAngleKit
 import LeanChecker.Kits.FiniteConvexityKit
 import LeanChecker.Kits.ArithmeticKit
+import LeanChecker.Kits.ExtremalCombinatoricsKit
