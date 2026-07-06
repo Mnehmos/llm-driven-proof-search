@@ -7,3 +7,4 @@ import LeanChecker.Kits.ArithmeticKit
 import LeanChecker.Kits.FiniteCertificateKit
 import LeanChecker.Kits.ExtremalCombinatoricsKit
 import LeanChecker.Kits.RecurrenceGeneratingFunctionKit
+import LeanChecker.Kits.InequalityEstimateKit
