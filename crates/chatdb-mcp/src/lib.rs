@@ -1236,6 +1236,98 @@ pub struct CandidateConstructionLinkVerificationLayerArgs {
     pub verification_layer_id: String,
 }
 
+// -- Empirical math lab (issue #26) -----------------------------------------
+//
+// Records small-case/counterexample/construction searches, finite checks,
+// parameter sweeps, and candidate rankings as research EVIDENCE. Hard rule:
+// empirical evidence is never proof. Every link is optional; no field can
+// carry kernel evidence. cost_summary/runtime_metadata describe the EXTERNAL
+// search run and are isolated from ChatDB's own #38 cost surfaces.
+
+#[derive(JsonSchema, Deserialize)]
+pub struct EmpiricalSearchAddArgs {
+    #[serde(default)]
+    pub dossier_id: Option<String>,
+    #[serde(default)]
+    pub related_node_id: Option<String>,
+    #[serde(default)]
+    pub candidate_construction_id: Option<String>,
+    #[serde(default)]
+    pub verification_layer_id: Option<String>,
+    #[serde(default)]
+    pub problem_version_id: Option<String>,
+    #[serde(default)]
+    pub episode_id: Option<String>,
+    pub search_type: String,
+    pub search_space_description: String,
+    #[serde(default)]
+    pub parameters_json: Option<String>,
+    #[serde(default)]
+    pub generator_description: Option<String>,
+    #[serde(default)]
+    pub checks_json: Option<String>,
+    #[serde(default)]
+    pub results_json: Option<String>,
+    #[serde(default)]
+    pub counterexamples_json: Option<String>,
+    #[serde(default)]
+    pub candidate_construction_ids_json: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub trust_status: Option<String>,
+    #[serde(default)]
+    pub runtime_metadata_json: Option<String>,
+    #[serde(default)]
+    pub cost_summary_json: Option<String>,
+    pub created_by: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct EmpiricalSearchObserveArgs {
+    pub empirical_search_id: String,
+    pub description: String,
+    /// supports_candidate / refutes_candidate / counterexample_found /
+    /// no_counterexample / inconclusive
+    pub result: String,
+    #[serde(default)]
+    pub details_json: Option<String>,
+    /// When result='counterexample_found', the counterexample witness object.
+    #[serde(default)]
+    pub counterexample_json: Option<String>,
+    #[serde(default)]
+    pub observed_by: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct EmpiricalSearchUpdateStatusArgs {
+    pub empirical_search_id: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub trust_status: Option<String>,
+    #[serde(default)]
+    pub results_json: Option<String>,
+    // Note: counterexamples are deliberately NOT updatable here (issue #26
+    // "counterexamples stay visible"). They can only be ADDED, via the
+    // append-only empirical_search_observe, so a recorded witness can never be
+    // erased or overwritten through a status update.
+    #[serde(default)]
+    pub candidate_construction_ids_json: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct EmpiricalSearchLinkCandidateArgs {
+    pub empirical_search_id: String,
+    pub candidate_construction_id: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct EmpiricalSearchLinkVerificationLayerArgs {
+    pub empirical_search_id: String,
+    pub verification_layer_id: String,
+}
+
 // -- Exposition artifacts (issue #7) ----------------------------------------
 //
 // Human-readable mathematical exposition captured alongside, and explicitly
@@ -2083,6 +2175,81 @@ fn candidate_construction_json(conn: &Connection, candidate_construction_id: &st
     result.ok_or_else(|| mcp_invalid_params(format!("unknown candidate_construction_id: {}", candidate_construction_id)))
 }
 
+// -- Empirical math lab (issue #26) -----------------------------------------
+
+const EMPIRICAL_SEARCH_TYPES: &[&str] = &[
+    "small_case_search", "counterexample_search", "construction_search",
+    "parameter_sweep", "finite_model_check", "candidate_ranking",
+    "random_search", "exhaustive_search", "symbolic_search",
+    "external_tool_run", "other",
+];
+const EMPIRICAL_SEARCH_STATUSES: &[&str] = &[
+    "planned", "running", "completed", "completed_with_counterexample",
+    "completed_no_counterexample_found", "failed", "timed_out", "rejected", "superseded",
+];
+const EMPIRICAL_SEARCH_TRUST_STATUSES: &[&str] = &[
+    "unreviewed_empirical", "reproducible_empirical", "human_reviewed_empirical",
+    "linked_to_formal_target", "rejected_empirical",
+];
+const EMPIRICAL_SEARCH_OBSERVATION_RESULTS: &[&str] = &[
+    "supports_candidate", "refutes_candidate", "counterexample_found", "no_counterexample", "inconclusive",
+];
+
+const EMPIRICAL_SEARCH_SELECT: &str = "SELECT id, dossier_id, related_node_id, candidate_construction_id, \
+    verification_layer_id, problem_version_id, episode_id, search_type, search_space_description, \
+    parameters_json, generator_description, checks_json, results_json, counterexamples_json, \
+    candidate_construction_ids_json, status, trust_status, runtime_metadata_json, cost_summary_json, \
+    created_by, created_at, updated_at FROM empirical_searches";
+
+fn map_empirical_search_row(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
+    let parameters_json: String = row.get(9)?;
+    let checks_json: String = row.get(11)?;
+    let results_json: String = row.get(12)?;
+    let counterexamples_json: String = row.get(13)?;
+    let candidate_ids_json: String = row.get(14)?;
+    let runtime_metadata_json: String = row.get(17)?;
+    let cost_summary_json: String = row.get(18)?;
+    let counterexamples = parse_json_or_wrap(&counterexamples_json);
+    let counterexample_found = counterexamples.as_array().is_some_and(|a| !a.is_empty());
+    Ok(serde_json::json!({
+        "empirical_search_id": row.get::<_, String>(0)?,
+        "dossier_id": row.get::<_, Option<String>>(1)?,
+        "related_node_id": row.get::<_, Option<String>>(2)?,
+        "candidate_construction_id": row.get::<_, Option<String>>(3)?,
+        "verification_layer_id": row.get::<_, Option<String>>(4)?,
+        "problem_version_id": row.get::<_, Option<String>>(5)?,
+        "episode_id": row.get::<_, Option<String>>(6)?,
+        "search_type": row.get::<_, String>(7)?,
+        "search_space_description": row.get::<_, String>(8)?,
+        "parameters": parse_json_or_wrap(&parameters_json),
+        "generator_description": row.get::<_, Option<String>>(10)?,
+        "checks": parse_json_or_wrap(&checks_json),
+        "results": parse_json_or_wrap(&results_json),
+        "counterexamples": counterexamples,
+        "counterexample_found": counterexample_found,
+        "candidate_construction_ids": parse_json_or_wrap(&candidate_ids_json),
+        "status": row.get::<_, String>(15)?,
+        "trust_status": row.get::<_, String>(16)?,
+        "runtime_metadata": parse_json_or_wrap(&runtime_metadata_json),
+        "cost_summary": parse_json_or_wrap(&cost_summary_json),
+        // Empirical evidence is NEVER proof. These are always false — the table
+        // has no column that could hold kernel evidence.
+        "is_proof": false,
+        "has_kernel_evidence": false,
+        "created_by": row.get::<_, String>(19)?,
+        "created_at": row.get::<_, String>(20)?,
+        "updated_at": row.get::<_, String>(21)?,
+    }))
+}
+
+fn empirical_search_json(conn: &Connection, id: &str) -> Result<serde_json::Value, McpError> {
+    let sql = format!("{} WHERE id = ?1", EMPIRICAL_SEARCH_SELECT);
+    conn.query_row(&sql, [id], map_empirical_search_row)
+        .optional()
+        .map_err(rs)?
+        .ok_or_else(|| mcp_invalid_params(format!("unknown empirical_search_id: {}", id)))
+}
+
 const EXPOSITION_SECTION_KINDS: &[&str] = &[
     "problem_summary",
     "formalization_explanation",
@@ -2464,6 +2631,13 @@ fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<
     ).map_err(rs)?;
     let expert_reviews = stmt.query_map([dossier_id], map_expert_review_row)
         .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(stmt);
+
+    let mut stmt = conn.prepare(
+        &format!("{} WHERE dossier_id = ?1 ORDER BY created_at ASC, id ASC", EMPIRICAL_SEARCH_SELECT),
+    ).map_err(rs)?;
+    let empirical_searches = stmt.query_map([dossier_id], map_empirical_search_row)
+        .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
 
     let collect_by_status = |items: &[serde_json::Value], key: &str, status: &str| -> Vec<serde_json::Value> {
         items.iter()
@@ -2482,7 +2656,7 @@ fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<
         "unformalized_assumptions": collect_by_status(&assumptions, "assumption_status", "unformalized_assumption"),
         "rejected_assumptions": collect_by_status(&assumptions, "assumption_status", "rejected_unsafe_assumption"),
         "open_gaps": collect_by_status(&nodes, "trust_status", "open_gap"),
-        "policy": "Research dossier state is not proof authority. Only Lean-backed episode/canonical lemma rows are kernel evidence; citations, reviews, empirical layers, assumptions, candidate constructions, exposition prose, semantic skeletons (structured readings, never the fidelity gate), and expert reviews (human-attested ledger entries, never kernel evidence) stay explicitly labeled."
+        "policy": "Research dossier state is not proof authority. Only Lean-backed episode/canonical lemma rows are kernel evidence; citations, reviews, empirical layers, assumptions, candidate constructions, exposition prose, semantic skeletons (structured readings, never the fidelity gate), expert reviews (human-attested ledger entries, never kernel evidence), and empirical searches (experimental evidence: small-case/counterexample/construction searches — never a proof, never a certification of an asymptotic or universal claim) stay explicitly labeled."
     });
 
     Ok(serde_json::json!({
@@ -2505,6 +2679,7 @@ fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<
         "exposition_artifacts": exposition_artifacts,
         "semantic_skeletons": semantic_skeletons,
         "expert_reviews": expert_reviews,
+        "empirical_searches": empirical_searches,
         "trust_boundary": trust_boundary,
     }))
 }
@@ -3809,6 +3984,11 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<CandidateConstructionUpdateStatusArgs>("candidate_construction_update_status", "Update a candidate construction's status, trust_status, claimed_properties, known_failures, and/or next_check. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified"),
             make_tool::<CandidateConstructionLinkNodeArgs>("candidate_construction_link_node", "Attach a candidate construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier"),
             make_tool::<CandidateConstructionLinkVerificationLayerArgs>("candidate_construction_link_verification_layer", "Attach a candidate construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier"),
+            make_tool::<EmpiricalSearchAddArgs>("empirical_search_add", "Record an empirical math-lab search (issue #26): small_case_search/counterexample_search/construction_search/parameter_sweep/finite_model_check/candidate_ranking/random_search/exhaustive_search/symbolic_search/external_tool_run/other. Experimental EVIDENCE, never proof — no field can carry kernel evidence, and no status certifies an asymptotic or universal theorem. Can exist before a dossier, candidate, episode, or Lean proof"),
+            make_tool::<EmpiricalSearchObserveArgs>("empirical_search_observe", "Append one search observation (supports_candidate/refutes_candidate/counterexample_found/no_counterexample/inconclusive), optionally with a counterexample witness, to an empirical search's history. Never changes proof status; a counterexample is preserved, a 'no_counterexample' never certifies a universal claim"),
+            make_tool::<EmpiricalSearchUpdateStatusArgs>("empirical_search_update_status", "Update an empirical search's status/trust_status/results/linked candidates. Counterexamples are NOT updatable here — a recorded witness stays visible (add via empirical_search_observe). Falsified/failed/timed-out searches stay visible. No trust_status implies proof — the strongest, 'linked_to_formal_target', still is not kernel evidence"),
+            make_tool::<EmpiricalSearchLinkCandidateArgs>("empirical_search_link_candidate", "Link an empirical search to a candidate construction (adopting its dossier if the search has none). Empirical support for a construction never proves its claimed properties"),
+            make_tool::<EmpiricalSearchLinkVerificationLayerArgs>("empirical_search_link_verification_layer", "Link an empirical search to a verification layer (adopting its dossier if the search has none). The link records evidence; it can never make the layer kernel_verified"),
             make_tool::<ExpositionAddArgs>("exposition_add", "Add a human-readable mathematical exposition section (problem_summary/formalization_explanation/construction_intuition/key_lemmas/proof_strategy/verified_claim/unverified_bridges/reviewer_notes/next_formalization_targets) linked to a problem, episode, obligation, verified module, verified lemma, and/or dossier. prose_status (prose/reviewed_prose/formalized) marks epistemic weight — prose is never proof and never changes certification or training eligibility"),
             make_tool::<ExpositionObserveArgs>("exposition_observe", "List exposition artifacts for a problem_version, episode, or dossier. Read-only prose, explicitly separate from kernel-verified proof"),
             make_tool::<SemanticSkeletonAddArgs>("semantic_skeleton_add", "Attach a semantic statement skeleton / module-aware fidelity note (issue #6): a structured reading of a root statement, verified module, or source-aligned solution — quantifiers, hypotheses, conclusion, helper definitions, construction/final-answer map, back-translation, and fidelity risk_flags — scoped by review_scope (root_statement_only/module_artifact/source_aligned_solution/computational_check_only/structural_proof). All links optional. semantic_fingerprint_hash is server-computed. Metadata only: never marks anything proved, never sets fidelity_status, never substitutes for problem_submit_fidelity_review"),
@@ -3941,8 +4121,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of ChatDB's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 62,
-                        "total_tool_count": 62,
+                        "classified_tool_count": 67,
+                        "total_tool_count": 67,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -4321,6 +4501,56 @@ impl ServerHandler for ChatDbMcp {
                             "candidate_construction_link_verification_layer": {
                                 "side_effect": "mutating — sets verification_layer_id on one candidate_constructions row; if the construction had no dossier_id yet, adopts the layer's dossier_id",
                                 "trust_level": "verifier_backed linkage only — confirms both rows exist and (if the construction already had a dossier) share it; if the construction's trust_status is already 'kernel_verified_claim_linked' this re-runs enforce_kernel_verified_construction_boundary against the newly linked layer, so re-linking can never quietly leave a kernel_verified_claim_linked construction pointed at a non-kernel_verified layer",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "empirical_search_add": {
+                                "side_effect": "mutating — inserts one empirical_searches row, optionally linked to a dossier/research node/candidate construction/verification layer/problem_version/episode that must already exist (dossier-scoped links must belong to the given dossier)",
+                                "trust_level": "untrusted_input — experimental evidence (small-case/counterexample/construction searches, sweeps, rankings). NEVER proof: the table has no column able to hold kernel evidence, has_kernel_evidence/is_proof are always false, and the strongest trust_status ('linked_to_formal_target') means 'points at a formalization target', not 'proved'. Finite/no-counterexample evidence never certifies an asymptotic or universal theorem",
+                                "cost_surface": "none — cost_summary_json/runtime_metadata_json are self-reported metadata about the EXTERNAL search run, stored verbatim and isolated from ChatDB's own #38 cost surfaces (never merged into benchmark_run_observe)",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none — empirical results can create follow-up formalization targets but never a proof outcome",
+                                "required_run_mode": "any"
+                            },
+                            "empirical_search_observe": {
+                                "side_effect": "mutating — appends one observation (and optionally a counterexample witness) to an empirical_searches row's checks/counterexamples history; touches nothing else",
+                                "trust_level": "untrusted_input — a caller-reported search finding (supports_candidate/refutes_candidate/counterexample_found/no_counterexample/inconclusive); recording 'no_counterexample' is evidence, never certification of a universal claim, and 'supports_candidate' never proves a candidate's claimed properties",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "empirical_search_update_status": {
+                                "side_effect": "mutating — updates status/trust_status/results/linked candidate ids on one empirical_searches row; a falsified/failed/timed_out/rejected search stays visible, never deleted. counterexamples_json is deliberately NOT updatable here — a recorded counterexample witness can only be ADDED (via empirical_search_observe), never erased or overwritten (issue #26 'counterexamples stay visible')",
+                                "trust_level": "untrusted_input — no status or trust_status can claim kernel evidence; a candidate_ranking update never changes proof authority",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "empirical_search_link_candidate": {
+                                "side_effect": "mutating — sets candidate_construction_id on one empirical_searches row, adopting the candidate's dossier if the search had none",
+                                "trust_level": "verifier_backed linkage only — confirms both rows exist and (if both had a dossier) share it; the link records empirical support, which never proves the candidate's claimed properties",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "empirical_search_link_verification_layer": {
+                                "side_effect": "mutating — sets verification_layer_id on one empirical_searches row, adopting the layer's dossier if the search had none",
+                                "trust_level": "verifier_backed linkage only — the link records evidence and can never make the layer kernel_verified (that path is gated by enforce_kernel_verified_research_boundary / the asymptotic evidence boundary, both of which reject empirical/finite evidence)",
                                 "cost_surface": "none",
                                 "benchmark_safety": "safe_public_output",
                                 "replayability": "deterministic",
@@ -6968,6 +7198,257 @@ impl ServerHandler for ChatDbMcp {
                     "dossier": dossier,
                 })).unwrap())]))
             }
+            "empirical_search_add" => {
+                let args: EmpiricalSearchAddArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("search_type", &args.search_type, EMPIRICAL_SEARCH_TYPES)?;
+                if args.search_space_description.trim().is_empty() {
+                    return Err(mcp_invalid_params("search_space_description must be non-empty"));
+                }
+                if args.created_by.trim().is_empty() {
+                    return Err(mcp_invalid_params("created_by must be non-empty"));
+                }
+                let status = args.status.clone().unwrap_or_else(|| "planned".to_string());
+                validate_one_of("status", &status, EMPIRICAL_SEARCH_STATUSES)?;
+                let trust_status = args.trust_status.clone().unwrap_or_else(|| "unreviewed_empirical".to_string());
+                validate_one_of("trust_status", &trust_status, EMPIRICAL_SEARCH_TRUST_STATUSES)?;
+                let parameters_json = args.parameters_json.clone().unwrap_or_else(|| "{}".to_string());
+                let checks_json = args.checks_json.clone().unwrap_or_else(|| "[]".to_string());
+                let results_json = args.results_json.clone().unwrap_or_else(|| "{}".to_string());
+                let counterexamples_json = args.counterexamples_json.clone().unwrap_or_else(|| "[]".to_string());
+                let candidate_ids_json = args.candidate_construction_ids_json.clone().unwrap_or_else(|| "[]".to_string());
+                let runtime_metadata_json = args.runtime_metadata_json.clone().unwrap_or_else(|| "{}".to_string());
+                let cost_summary_json = args.cost_summary_json.clone().unwrap_or_else(|| "{}".to_string());
+                for (field, raw) in [
+                    ("parameters_json", &parameters_json), ("checks_json", &checks_json),
+                    ("results_json", &results_json), ("counterexamples_json", &counterexamples_json),
+                    ("candidate_construction_ids_json", &candidate_ids_json),
+                    ("runtime_metadata_json", &runtime_metadata_json), ("cost_summary_json", &cost_summary_json),
+                ] {
+                    serde_json::from_str::<serde_json::Value>(raw)
+                        .map_err(|e| mcp_invalid_params(format!("{} must be valid JSON: {}", field, e)))?;
+                }
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                if let Some(id) = &args.dossier_id { require_row_exists(&tx, "research_dossiers", id, "dossier_id")?; }
+                if let Some(id) = &args.related_node_id {
+                    match &args.dossier_id {
+                        Some(dossier_id) => require_row_in_dossier(&tx, "research_nodes", id, dossier_id, "related_node_id")?,
+                        None => require_row_exists(&tx, "research_nodes", id, "related_node_id")?,
+                    }
+                }
+                if let Some(id) = &args.candidate_construction_id {
+                    match &args.dossier_id {
+                        Some(dossier_id) => require_row_in_dossier(&tx, "candidate_constructions", id, dossier_id, "candidate_construction_id")?,
+                        None => require_row_exists(&tx, "candidate_constructions", id, "candidate_construction_id")?,
+                    }
+                }
+                if let Some(id) = &args.verification_layer_id {
+                    match &args.dossier_id {
+                        Some(dossier_id) => require_row_in_dossier(&tx, "verification_layers", id, dossier_id, "verification_layer_id")?,
+                        None => require_row_exists(&tx, "verification_layers", id, "verification_layer_id")?,
+                    }
+                }
+                verify_dossier_links(&tx, &args.problem_version_id, &args.episode_id)?;
+
+                let search_id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT INTO empirical_searches (
+                        id, dossier_id, related_node_id, candidate_construction_id, verification_layer_id,
+                        problem_version_id, episode_id, search_type, search_space_description, parameters_json,
+                        generator_description, checks_json, results_json, counterexamples_json,
+                        candidate_construction_ids_json, status, trust_status, runtime_metadata_json,
+                        cost_summary_json, created_by, created_at, updated_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?21)",
+                    rusqlite::params![
+                        &search_id, args.dossier_id.as_deref(), args.related_node_id.as_deref(),
+                        args.candidate_construction_id.as_deref(), args.verification_layer_id.as_deref(),
+                        args.problem_version_id.as_deref(), args.episode_id.as_deref(), &args.search_type,
+                        args.search_space_description.trim(), &parameters_json, args.generator_description.as_deref(),
+                        &checks_json, &results_json, &counterexamples_json, &candidate_ids_json, &status, &trust_status,
+                        &runtime_metadata_json, &cost_summary_json, args.created_by.trim(), &now,
+                    ],
+                ).map_err(rs)?;
+                let search = empirical_search_json(&tx, &search_id)?;
+                let dossier = match &args.dossier_id {
+                    Some(dossier_id) => Some(research_dossier_observe_json(&tx, dossier_id)?),
+                    None => None,
+                };
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "empirical_search_id": search_id,
+                    "empirical_search": search,
+                    "dossier": dossier,
+                })).unwrap())]))
+            }
+            "empirical_search_observe" => {
+                let args: EmpiricalSearchObserveArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("result", &args.result, EMPIRICAL_SEARCH_OBSERVATION_RESULTS)?;
+                if args.description.trim().is_empty() {
+                    return Err(mcp_invalid_params("description must be non-empty"));
+                }
+                let details: serde_json::Value = match &args.details_json {
+                    Some(raw) => serde_json::from_str(raw).map_err(|e| mcp_invalid_params(format!("details_json must be valid JSON: {}", e)))?,
+                    None => serde_json::json!({}),
+                };
+                let counterexample: Option<serde_json::Value> = match &args.counterexample_json {
+                    Some(raw) => Some(serde_json::from_str(raw).map_err(|e| mcp_invalid_params(format!("counterexample_json must be valid JSON: {}", e)))?),
+                    None => None,
+                };
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let existing: Option<(String, String)> = tx.query_row(
+                    "SELECT checks_json, counterexamples_json FROM empirical_searches WHERE id = ?1",
+                    [&args.empirical_search_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).optional().map_err(rs)?;
+                let Some((checks_json, counterexamples_json)) = existing else {
+                    return Err(mcp_invalid_params(format!("unknown empirical_search_id: {}", args.empirical_search_id)));
+                };
+                let now = Utc::now().to_rfc3339();
+                let mut checks: Vec<serde_json::Value> = serde_json::from_str(&checks_json).unwrap_or_default();
+                checks.push(serde_json::json!({
+                    "description": args.description.trim(), "result": args.result, "details": details,
+                    "observed_by": args.observed_by, "observed_at": now,
+                }));
+                let mut counterexamples: Vec<serde_json::Value> = serde_json::from_str(&counterexamples_json).unwrap_or_default();
+                if let Some(ce) = counterexample {
+                    counterexamples.push(serde_json::json!({"witness": ce, "found_at": now, "from_check": args.description.trim()}));
+                }
+                tx.execute(
+                    "UPDATE empirical_searches SET checks_json = ?1, counterexamples_json = ?2, updated_at = ?3 WHERE id = ?4",
+                    (&serde_json::to_string(&checks).unwrap(), &serde_json::to_string(&counterexamples).unwrap(), &now, &args.empirical_search_id),
+                ).map_err(rs)?;
+                let search = empirical_search_json(&tx, &args.empirical_search_id)?;
+                let dossier_id = search.get("dossier_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let dossier = match &dossier_id { Some(d) => Some(research_dossier_observe_json(&tx, d)?), None => None };
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "empirical_search_id": args.empirical_search_id, "empirical_search": search, "dossier": dossier,
+                })).unwrap())]))
+            }
+            "empirical_search_update_status" => {
+                let args: EmpiricalSearchUpdateStatusArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.status.is_none() && args.trust_status.is_none() && args.results_json.is_none()
+                    && args.candidate_construction_ids_json.is_none() {
+                    return Err(mcp_invalid_params("at least one of status, trust_status, results_json, candidate_construction_ids_json must be provided"));
+                }
+                if let Some(s) = &args.status { validate_one_of("status", s, EMPIRICAL_SEARCH_STATUSES)?; }
+                if let Some(s) = &args.trust_status { validate_one_of("trust_status", s, EMPIRICAL_SEARCH_TRUST_STATUSES)?; }
+                for (field, raw) in [
+                    ("results_json", &args.results_json),
+                    ("candidate_construction_ids_json", &args.candidate_construction_ids_json),
+                ] {
+                    if let Some(raw) = raw {
+                        serde_json::from_str::<serde_json::Value>(raw).map_err(|e| mcp_invalid_params(format!("{} must be valid JSON: {}", field, e)))?;
+                    }
+                }
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let exists: i64 = tx.query_row("SELECT COUNT(*) FROM empirical_searches WHERE id = ?1", [&args.empirical_search_id], |r| r.get(0)).map_err(rs)?;
+                if exists == 0 {
+                    return Err(mcp_invalid_params(format!("unknown empirical_search_id: {}", args.empirical_search_id)));
+                }
+                // counterexamples_json is intentionally NOT updatable here — a
+                // recorded counterexample witness must stay visible (issue #26).
+                // Counterexamples are only ever ADDED via empirical_search_observe.
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "UPDATE empirical_searches SET
+                        status = COALESCE(?1, status),
+                        trust_status = COALESCE(?2, trust_status),
+                        results_json = COALESCE(?3, results_json),
+                        candidate_construction_ids_json = COALESCE(?4, candidate_construction_ids_json),
+                        updated_at = ?5
+                     WHERE id = ?6",
+                    (args.status.as_deref(), args.trust_status.as_deref(), args.results_json.as_deref(),
+                     args.candidate_construction_ids_json.as_deref(), &now, &args.empirical_search_id),
+                ).map_err(rs)?;
+                let search = empirical_search_json(&tx, &args.empirical_search_id)?;
+                let dossier_id = search.get("dossier_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let dossier = match &dossier_id { Some(d) => Some(research_dossier_observe_json(&tx, d)?), None => None };
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "empirical_search_id": args.empirical_search_id, "empirical_search": search, "dossier": dossier,
+                })).unwrap())]))
+            }
+            "empirical_search_link_candidate" => {
+                let args: EmpiricalSearchLinkCandidateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let existing_dossier: Option<Option<String>> = tx.query_row(
+                    "SELECT dossier_id FROM empirical_searches WHERE id = ?1", [&args.empirical_search_id], |r| r.get(0),
+                ).optional().map_err(rs)?;
+                let Some(existing_dossier) = existing_dossier else {
+                    return Err(mcp_invalid_params(format!("unknown empirical_search_id: {}", args.empirical_search_id)));
+                };
+                let cc_dossier: Option<Option<String>> = tx.query_row(
+                    "SELECT dossier_id FROM candidate_constructions WHERE id = ?1", [&args.candidate_construction_id], |r| r.get(0),
+                ).optional().map_err(rs)?;
+                let Some(cc_dossier) = cc_dossier else {
+                    return Err(mcp_invalid_params(format!("unknown candidate_construction_id: {}", args.candidate_construction_id)));
+                };
+                // If both already have a dossier, they must match.
+                if let (Some(a), Some(b)) = (&existing_dossier, &cc_dossier) {
+                    if a != b {
+                        return Err(mcp_invalid_params("candidate_construction belongs to a different dossier than this empirical search"));
+                    }
+                }
+                let adopted = existing_dossier.clone().or(cc_dossier);
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "UPDATE empirical_searches SET candidate_construction_id = ?1, dossier_id = COALESCE(dossier_id, ?2), updated_at = ?3 WHERE id = ?4",
+                    (&args.candidate_construction_id, &adopted, &now, &args.empirical_search_id),
+                ).map_err(rs)?;
+                let search = empirical_search_json(&tx, &args.empirical_search_id)?;
+                let dossier_id = search.get("dossier_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let dossier = match &dossier_id { Some(d) => Some(research_dossier_observe_json(&tx, d)?), None => None };
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "empirical_search_id": args.empirical_search_id, "empirical_search": search, "dossier": dossier,
+                })).unwrap())]))
+            }
+            "empirical_search_link_verification_layer" => {
+                let args: EmpiricalSearchLinkVerificationLayerArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let existing_dossier: Option<Option<String>> = tx.query_row(
+                    "SELECT dossier_id FROM empirical_searches WHERE id = ?1", [&args.empirical_search_id], |r| r.get(0),
+                ).optional().map_err(rs)?;
+                let Some(existing_dossier) = existing_dossier else {
+                    return Err(mcp_invalid_params(format!("unknown empirical_search_id: {}", args.empirical_search_id)));
+                };
+                let layer_dossier: Option<String> = tx.query_row(
+                    "SELECT dossier_id FROM verification_layers WHERE id = ?1", [&args.verification_layer_id], |r| r.get(0),
+                ).optional().map_err(rs)?;
+                let Some(layer_dossier) = layer_dossier else {
+                    return Err(mcp_invalid_params(format!("unknown verification_layer_id: {}", args.verification_layer_id)));
+                };
+                if let Some(a) = &existing_dossier {
+                    if a != &layer_dossier {
+                        return Err(mcp_invalid_params("verification_layer belongs to a different dossier than this empirical search"));
+                    }
+                }
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "UPDATE empirical_searches SET verification_layer_id = ?1, dossier_id = COALESCE(dossier_id, ?2), updated_at = ?3 WHERE id = ?4",
+                    (&args.verification_layer_id, &layer_dossier, &now, &args.empirical_search_id),
+                ).map_err(rs)?;
+                let search = empirical_search_json(&tx, &args.empirical_search_id)?;
+                let dossier = research_dossier_observe_json(&tx, &layer_dossier)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "empirical_search_id": args.empirical_search_id, "empirical_search": search, "dossier": dossier,
+                })).unwrap())]))
+            }
             "exposition_add" => {
                 let args: ExpositionAddArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -8625,7 +9106,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 62);
+        assert_eq!(list_res.tools.len(), 67);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -11527,6 +12008,201 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(updated["candidate_construction"]["status"], "under_review", "{:?}", updated);
         assert_eq!(updated["candidate_construction"]["next_check"], "Count unit distances for n up to 40", "{:?}", updated);
+    }
+
+    #[tokio::test]
+    async fn test_empirical_search_exists_standalone_links_and_is_never_proof() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        // An empirical search can exist before a dossier, candidate, episode, or proof.
+        let standalone = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_add").with_arguments(serde_json::json!({
+            "search_type": "small_case_search",
+            "search_space_description": "all graphs on <= 8 vertices",
+            "parameters_json": "{\"max_n\":8}",
+            "created_by": "lab-1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let standalone_id = standalone["empirical_search_id"].as_str().unwrap().to_string();
+        assert!(standalone["dossier"].is_null(), "{:?}", standalone);
+        let es = &standalone["empirical_search"];
+        assert_eq!(es["status"], "planned");
+        assert_eq!(es["trust_status"], "unreviewed_empirical");
+        // The hard boundary: empirical evidence is never proof/kernel evidence.
+        assert_eq!(es["is_proof"], false, "{:?}", es);
+        assert_eq!(es["has_kernel_evidence"], false, "{:?}", es);
+
+        // Can link to a dossier at creation time.
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Empirical lab dossier",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        let cc = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "construction_type": "graph_family", "informal_description": "family F(n)", "created_by": "r",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let cc_id = cc["candidate_construction_id"].as_str().unwrap().to_string();
+        let layer = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "target_kind": "dossier", "target_id": dossier_id,
+            "layer_kind": "construction_search", "status": "empirical",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let layer_id = layer["verification_layer_id"].as_str().unwrap().to_string();
+
+        let attached = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "search_type": "construction_search",
+            "search_space_description": "search for a graph family meeting the bound", "created_by": "lab-1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attached_id = attached["empirical_search_id"].as_str().unwrap().to_string();
+        // The dossier bucket carries it, separate from every other Level-4 bucket.
+        let obs = &attached["dossier"];
+        assert_eq!(obs["empirical_searches"].as_array().unwrap().len(), 1, "{:?}", obs);
+        assert!(obs["candidate_constructions"].as_array().unwrap().len() == 1, "{:?}", obs);
+        assert!(obs.get("trust_boundary").is_some_and(|tb| tb.get("empirical_searches").is_none()),
+            "empirical searches must be their own bucket, not folded into trust_boundary: {:?}", obs["trust_boundary"]);
+
+        // Can link to a candidate construction; a standalone search adopts the candidate's dossier.
+        let linked_cc = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_link_candidate").with_arguments(serde_json::json!({
+            "empirical_search_id": standalone_id, "candidate_construction_id": cc_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(linked_cc["empirical_search"]["candidate_construction_id"], cc_id, "{:?}", linked_cc);
+        assert_eq!(linked_cc["empirical_search"]["dossier_id"], dossier_id, "linking to a candidate must adopt its dossier: {:?}", linked_cc);
+
+        // Can link to a verification layer; the link never confers kernel evidence.
+        let linked_layer = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_link_verification_layer").with_arguments(serde_json::json!({
+            "empirical_search_id": attached_id, "verification_layer_id": layer_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(linked_layer["empirical_search"]["verification_layer_id"], layer_id, "{:?}", linked_layer);
+        assert_eq!(linked_layer["empirical_search"]["has_kernel_evidence"], false, "{:?}", linked_layer);
+    }
+
+    #[tokio::test]
+    async fn test_empirical_search_guardrails_evidence_is_not_proof_and_stays_visible() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Empirical guardrail dossier",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        // An asymptotic candidate construction — finite evidence must never certify it.
+        let cc = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "construction_type": "asymptotic_family", "intended_role": "lower_bound_construction",
+            "informal_description": "family whose size grows super-linearly", "created_by": "r",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let cc_id = cc["candidate_construction_id"].as_str().unwrap().to_string();
+
+        // A completed no-counterexample finite search over the small cases.
+        let search = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "candidate_construction_id": cc_id,
+            "search_type": "finite_model_check", "search_space_description": "check the bound for n <= 30",
+            "status": "completed_no_counterexample_found", "trust_status": "reproducible_empirical", "created_by": "lab-1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let search_id = search["empirical_search_id"].as_str().unwrap().to_string();
+        // A completed no-counterexample finite search does NOT prove anything.
+        assert_eq!(search["empirical_search"]["is_proof"], false, "{:?}", search);
+        assert_eq!(search["empirical_search"]["has_kernel_evidence"], false, "{:?}", search);
+        // ...and the linked asymptotic candidate is unaffected — finite evidence can't certify it.
+        assert_eq!(search["dossier"]["candidate_constructions"][0]["has_kernel_evidence"], false, "finite evidence must not certify an asymptotic construction: {:?}", search["dossier"]);
+        assert_eq!(search["dossier"]["candidate_constructions"][0]["trust_status"], "informal", "{:?}", search["dossier"]);
+
+        // A counterexample search: the found counterexample is preserved.
+        let ce_search = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "search_type": "counterexample_search",
+            "search_space_description": "look for a coloring that breaks the conjecture", "created_by": "lab-1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let ce_id = ce_search["empirical_search_id"].as_str().unwrap().to_string();
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_observe").with_arguments(serde_json::json!({
+            "empirical_search_id": ce_id, "description": "n=9 breaks it", "result": "counterexample_found",
+            "counterexample_json": "{\"n\":9,\"witness\":\"...\"}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let ce = &observed["empirical_search"];
+        assert_eq!(ce["counterexample_found"], true, "{:?}", ce);
+        assert_eq!(ce["counterexamples"].as_array().unwrap().len(), 1, "the counterexample must be preserved: {:?}", ce);
+
+        // A candidate_ranking search does not mutate proof outcomes; failed/timed-out stay visible.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "search_type": "candidate_ranking",
+            "search_space_description": "rank 12 candidate families by empirical fitness", "created_by": "lab-1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let external = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "search_type": "external_tool_run",
+            "search_space_description": "nauty enumeration", "trust_status": "human_reviewed_empirical", "created_by": "lab-1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        // Even a human-reviewed external tool run is still just empirical.
+        assert_eq!(external["empirical_search"]["has_kernel_evidence"], false, "an external tool run stays empirical: {:?}", external);
+
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_update_status").with_arguments(serde_json::json!({
+            "empirical_search_id": search_id, "status": "timed_out",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(failed["empirical_search"]["status"], "timed_out", "{:?}", failed);
+
+        // Dossier observe: all searches remain visible in the empirical bucket, and nothing
+        // in the whole dossier ever became kernel evidence via empirical work.
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let bucket = observed["empirical_searches"].as_array().unwrap();
+        assert_eq!(bucket.len(), 4, "all searches (incl. timed_out + counterexample) stay visible: {:?}", bucket);
+        assert!(bucket.iter().all(|s| s["has_kernel_evidence"] == false && s["is_proof"] == false));
+        let statuses: Vec<&str> = bucket.iter().map(|s| s["status"].as_str().unwrap()).collect();
+        assert!(statuses.contains(&"timed_out"), "a timed_out search must remain visible: {statuses:?}");
+
+        // Structural guarantee via the DB: no problem/episode was ever certified by this lab work.
+        let certified_count: i64 = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT COUNT(*) FROM problem_versions WHERE fidelity_status = 'verified'", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(certified_count, 0, "empirical searches must never produce a verified/certified problem");
+    }
+
+    /// PR #57 review (blocking): a recorded counterexample must STAY VISIBLE —
+    /// empirical_search_update_status cannot erase or overwrite it. Counterexamples
+    /// are only ever ADDED, via the append-only empirical_search_observe.
+    #[tokio::test]
+    async fn test_empirical_search_counterexample_cannot_be_erased_via_update_status() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Counterexample preservation dossier",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        let search = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "search_type": "counterexample_search",
+            "search_space_description": "hunt for a coloring that breaks the conjecture", "created_by": "lab-1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let search_id = search["empirical_search_id"].as_str().unwrap().to_string();
+
+        // Record a counterexample witness via the append-only observe path.
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_observe").with_arguments(serde_json::json!({
+            "empirical_search_id": search_id, "description": "n=9 is a counterexample", "result": "counterexample_found",
+            "counterexample_json": "{\"n\":9,\"witness\":\"K9-coloring\"}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["empirical_search"]["counterexamples"].as_array().unwrap().len(), 1, "{:?}", observed);
+
+        // Attempt to erase it through update_status: counterexamples_json is not a
+        // field of the tool anymore, so it is silently ignored; the status change
+        // still applies, and the witness must remain.
+        let updated = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_update_status").with_arguments(serde_json::json!({
+            "empirical_search_id": search_id,
+            "status": "completed_with_counterexample",
+            "counterexamples_json": "[]",
+            "results_json": "{\"note\":\"attempted to clear the counterexample\"}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(updated["empirical_search"]["status"], "completed_with_counterexample", "{:?}", updated);
+        let ce = updated["empirical_search"]["counterexamples"].as_array().unwrap();
+        assert_eq!(ce.len(), 1, "the recorded counterexample must survive an update_status that tries to clear it: {:?}", updated);
+        assert_eq!(ce[0]["witness"]["n"], 9, "{:?}", ce);
+        assert_eq!(updated["empirical_search"]["counterexample_found"], true, "{:?}", updated);
+
+        // ...and it must still be visible via research_dossier_observe.
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let bucket = observed["empirical_searches"].as_array().unwrap();
+        assert_eq!(bucket.len(), 1, "{:?}", bucket);
+        assert_eq!(bucket[0]["counterexamples"].as_array().unwrap().len(), 1, "counterexample must remain visible in the dossier: {:?}", bucket);
     }
 
     #[tokio::test]

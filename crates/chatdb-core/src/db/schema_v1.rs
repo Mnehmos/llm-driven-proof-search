@@ -987,6 +987,85 @@ CREATE INDEX IF NOT EXISTS idx_expert_reviews_dossier ON expert_reviews(dossier_
 CREATE INDEX IF NOT EXISTS idx_expert_reviews_target ON expert_reviews(review_target_kind, review_target_id);
 CREATE INDEX IF NOT EXISTS idx_expert_reviews_role ON expert_reviews(reviewer_role);
 
+-- Empirical math lab (issue #26): records small-case searches, counterexample
+-- searches, construction searches, finite checks, parameter sweeps, and
+-- candidate rankings as research EVIDENCE. This is the object layer #8's
+-- candidate constructions are generated/tested/ranked/falsified against, and it
+-- is bound by one hard rule: empirical evidence is NEVER proof. The table has
+-- NO column capable of holding kernel evidence; the strongest trust_status is
+-- 'linked_to_formal_target' ("this evidence points at a formalization target"),
+-- which is still not a proof. No row here can set or imply kernel_verified,
+-- certified, proved, statement_fidelity_approved, benchmark_certified, or
+-- training_eligible -- that structural absence, not a CHECK, is the guarantee.
+-- Guardrails (enforced at the MCP layer + by this structure): finite/no-
+-- counterexample evidence cannot certify an asymptotic or universal theorem; a
+-- successful construction search supports but never proves a candidate's
+-- claimed properties; a candidate ranking never changes proof authority;
+-- external tool output stays empirical unless independently kernel-verified
+-- elsewhere. Every link is nullable: a search can exist before any dossier,
+-- candidate, episode, or Lean proof. cost_summary_json/runtime_metadata_json
+-- are self-reported metadata about the EXTERNAL search run, isolated from
+-- ChatDB's own #38 cost surfaces (never merged into benchmark_run_observe).
+CREATE TABLE IF NOT EXISTS empirical_searches (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    related_node_id TEXT REFERENCES research_nodes(id),
+    candidate_construction_id TEXT REFERENCES candidate_constructions(id),
+    verification_layer_id TEXT REFERENCES verification_layers(id),
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    search_type TEXT NOT NULL,
+    search_space_description TEXT NOT NULL,
+    parameters_json TEXT NOT NULL DEFAULT '{}',
+    generator_description TEXT,
+    checks_json TEXT NOT NULL DEFAULT '[]',
+    results_json TEXT NOT NULL DEFAULT '{}',
+    counterexamples_json TEXT NOT NULL DEFAULT '[]',
+    candidate_construction_ids_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'planned',
+    trust_status TEXT NOT NULL DEFAULT 'unreviewed_empirical',
+    runtime_metadata_json TEXT NOT NULL DEFAULT '{}',
+    cost_summary_json TEXT NOT NULL DEFAULT '{}',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(search_type IN (
+        'small_case_search',
+        'counterexample_search',
+        'construction_search',
+        'parameter_sweep',
+        'finite_model_check',
+        'candidate_ranking',
+        'random_search',
+        'exhaustive_search',
+        'symbolic_search',
+        'external_tool_run',
+        'other'
+    )),
+    CHECK(status IN (
+        'planned',
+        'running',
+        'completed',
+        'completed_with_counterexample',
+        'completed_no_counterexample_found',
+        'failed',
+        'timed_out',
+        'rejected',
+        'superseded'
+    )),
+    CHECK(trust_status IN (
+        'unreviewed_empirical',
+        'reproducible_empirical',
+        'human_reviewed_empirical',
+        'linked_to_formal_target',
+        'rejected_empirical'
+    ))
+);
+CREATE INDEX IF NOT EXISTS idx_empirical_searches_dossier ON empirical_searches(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_empirical_searches_candidate ON empirical_searches(candidate_construction_id);
+CREATE INDEX IF NOT EXISTS idx_empirical_searches_verification_layer ON empirical_searches(verification_layer_id);
+CREATE INDEX IF NOT EXISTS idx_empirical_searches_node ON empirical_searches(related_node_id);
+
 -- Run envelopes (issues #34 core concept + #38 cost-surface splitting): a
 -- run envelope separates WHO/WHAT/WHY around a set of episodes from the
 -- episodes themselves -- host identity, run mode (a plain dev/exploratory
