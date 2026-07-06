@@ -3807,7 +3807,7 @@ impl ServerHandler for ChatDbMcp {
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
                                 "required_run_mode": "benchmark",
-                                "note": "since issue #34's first bounded slice (v0.3.13), run_envelope_id is REQUIRED, not optional — a benchmark run cannot exist unassociated with host/mode/cost tracking"
+                                "note": "since issue #34's first bounded slice (v0.3.13), run_envelope_id is REQUIRED, not optional — a benchmark run cannot exist unassociated with host/mode/cost tracking. Since issue #42 the run's run_envelope must itself be mode='benchmark' (a development/evaluation/private_audit/public_report envelope is rejected), and when that envelope declares a benchmark_suite_name it must equal the suite this run targets"
                             },
                             "run_envelope_create": {
                                 "side_effect": "append_only — inserts a run_envelopes row",
@@ -7346,11 +7346,37 @@ impl ServerHandler for ChatDbMcp {
                 // is a plain String, not Option<String>), not just checked
                 // here, so a client's own JSON schema tooling surfaces this
                 // before the call is even made.
-                let env_exists: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM run_envelopes WHERE id = ?1", [&args.run_envelope_id], |row| row.get(0),
-                ).map_err(rs)?;
-                if env_exists == 0 {
+                //
+                // Issue #42: a measured benchmark run must target a
+                // BENCHMARK-mode envelope (a development/evaluation/
+                // private_audit/public_report envelope is rejected), and when
+                // that envelope declares a benchmark_suite_name it must equal
+                // the suite this run targets. This keeps dev/exploratory
+                // envelopes and cross-suite mislabeling out of measured runs.
+                let envelope: Option<(String, Option<String>)> = conn.query_row(
+                    "SELECT mode, benchmark_suite_name FROM run_envelopes WHERE id = ?1",
+                    [&args.run_envelope_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).optional().map_err(rs)?;
+                let Some((envelope_mode, envelope_suite_name)) = envelope else {
                     return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
+                };
+                if envelope_mode != "benchmark" {
+                    return Err(mcp_invalid_params(format!(
+                        "benchmark_run_create requires a benchmark-mode run envelope; run_envelope {} has mode '{}'",
+                        args.run_envelope_id, envelope_mode
+                    )));
+                }
+                if let Some(env_suite) = envelope_suite_name.as_deref() {
+                    let suite_name: String = conn.query_row(
+                        "SELECT name FROM benchmark_suites WHERE id = ?1", [&args.suite_id], |row| row.get(0),
+                    ).map_err(rs)?;
+                    if env_suite != suite_name {
+                        return Err(mcp_invalid_params(format!(
+                            "run envelope's benchmark_suite_name '{}' does not match this run's suite '{}'",
+                            env_suite, suite_name
+                        )));
+                    }
                 }
 
                 let solve_mode_str = match args.solve_mode {
@@ -12417,8 +12443,9 @@ mod tests {
     /// benchmark_run_create requires an existing run_envelope_id (issue #34:
     /// "a benchmark run should not start unless a run envelope exists").
     async fn create_run_envelope(peer: &rmcp::service::Peer<rmcp::RoleClient>) -> String {
+        // benchmark mode so benchmark_run_create's issue-#42 mode gate accepts it.
         let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
-            "mode": "development", "host_name": "test-suite",
+            "mode": "benchmark", "host_name": "test-suite",
         }).as_object().unwrap().clone())).await.unwrap());
         created["run_envelope_id"].as_str().unwrap().to_string()
     }
@@ -12612,6 +12639,59 @@ mod tests {
             "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await;
         assert!(ok.is_ok(), "a real run_envelope_id must be accepted: {:?}", ok.err());
+    }
+
+    /// Issue #42: a measured benchmark run must target a benchmark-mode run
+    /// envelope; a development/evaluation/private_audit/public_report envelope
+    /// is rejected so dev/exploratory runs can't masquerade as measured.
+    #[tokio::test]
+    async fn test_benchmark_run_create_requires_benchmark_mode_envelope() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        for mode in ["development", "evaluation", "private_audit", "public_report"] {
+            let env = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+                "mode": mode, "host_name": "test-host",
+            }).as_object().unwrap().clone())).await.unwrap());
+            let res = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+                "suite_id": suite_id, "run_envelope_id": env["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
+            }).as_object().unwrap().clone())).await;
+            assert!(res.is_err(), "benchmark_run_create must reject a {mode:?}-mode envelope");
+            assert!(format!("{:?}", res.unwrap_err()).contains("benchmark-mode run envelope"), "mode={mode:?}");
+        }
+        // A benchmark-mode envelope with no declared suite name: accepted.
+        let ok_env = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "benchmark", "host_name": "test-host",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let ok = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": ok_env["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await;
+        assert!(ok.is_ok(), "benchmark-mode envelope must be accepted: {:?}", ok.err());
+    }
+
+    /// Issue #42: when a benchmark-mode envelope declares a benchmark_suite_name,
+    /// it must equal the suite the run targets — no cross-suite mislabeling.
+    #[tokio::test]
+    async fn test_benchmark_run_create_rejects_mismatched_suite_name() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let wrong = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "benchmark", "host_name": "test-host", "benchmark_suite_name": "MiniF2F",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let bad = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": wrong["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await;
+        assert!(bad.is_err(), "mismatched benchmark_suite_name must be rejected");
+        assert!(format!("{:?}", bad.unwrap_err()).contains("does not match"));
+
+        let right = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "benchmark", "host_name": "test-host", "benchmark_suite_name": "PutnamBench",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let good = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": right["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await;
+        assert!(good.is_ok(), "matching benchmark_suite_name must be accepted: {:?}", good.err());
     }
 
     /// Issue #38's cost policy, redesigned per explicit product direction:
@@ -13041,6 +13121,79 @@ mod tests {
         assert!(observed["cost_summary"]["model_call_reported_cost_micros"].is_null(),
             "an unsettled (reserved-only) lease has no actual_cost_micros yet and must not contribute a phantom figure: {:?}", observed["cost_summary"]);
         assert!(observed["cost_summary"]["model_call_cost_confidence"].is_null());
+    }
+
+    /// Acceptance criterion for #45: a VOIDED lease must contribute nothing to
+    /// the self-reported model-call total, while a settled lease on the same
+    /// run still contributes its actual_cost_micros. Together with the
+    /// settled-only and reserved-unsettled tests, this covers all three lease
+    /// terminal states. Both leases are made terminal (settled / voided) BEFORE
+    /// episode_step, so neither is auto-settled by attempt_finalize.
+    #[tokio::test]
+    async fn test_benchmark_run_observe_excludes_voided_model_call_leases() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "voided1", "theorem_name": "voided1", "root_formal_statement": "True",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run_envelope_id = create_run_envelope(&peer).await;
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "voided-mix-1",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let action_attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
+
+        // Lease A: settled with a real actual cost -> MUST contribute.
+        let lease_a = tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_reserve").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": action_attempt_id, "runner_id": "test-runner",
+            "declared_model": "test-model", "max_input_tokens": 1000, "max_output_tokens": 500, "reserved_cost_micros": 300,
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_settle").with_arguments(serde_json::json!({
+            "lease_id": lease_a["lease_id"], "actual_cost_micros": 250, "status": "settled",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // Lease B: voided -> MUST NOT contribute (stored actual_cost_micros becomes NULL).
+        let lease_b = tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_reserve").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": action_attempt_id, "runner_id": "test-runner",
+            "declared_model": "test-model", "max_input_tokens": 1000, "max_output_tokens": 500, "reserved_cost_micros": 900,
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("model_call_settle").with_arguments(serde_json::json!({
+            "lease_id": lease_b["lease_id"], "actual_cost_micros": 0, "status": "voided",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": action_attempt_id,
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
+            "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+            "run_id": run["run_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let cs = &observed["cost_summary"];
+        // Only the settled 250 counts; the voided 900-reserved lease is excluded.
+        assert_eq!(cs["model_call_reported_cost_micros"], 250,
+            "voided lease must not inflate the self-reported model-call total: {cs:?}");
+        assert_eq!(cs["model_call_cost_confidence"], "attested");
+        assert_eq!(cs["reported_attested_cost_micros"], 250,
+            "self-reported lease total must stay in the attested bucket, never known_exact: {cs:?}");
+        assert!(cs["known_exact_cost_micros"].is_null(),
+            "self-reported lease cost must never appear as exact: {cs:?}");
     }
 
     #[tokio::test]
