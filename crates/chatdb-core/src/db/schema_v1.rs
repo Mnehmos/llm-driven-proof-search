@@ -36,9 +36,13 @@ CREATE TABLE IF NOT EXISTS problem_versions (
     -- problem_submit_fidelity_review decision can reach 'verified', and only
     -- 'verified' may reach COMPLETE. This is the DB-level backstop for the
     -- proof-soundness-vs-statement-fidelity invariant; see docs/fix_plan_playtest_02.md.
-    CHECK(state NOT IN ('PROVING', 'ROOT_PROVED_COVERAGE_PENDING', 'ROOT_PROVED_COVERAGE_UNCONVERGED') OR fidelity_status IN ('verified', 'attested')),
+    -- 'benchmark_aligned' (issue #43) is proving-capable like 'attested' but
+    -- honestly named: a curated-benchmark hash-alignment basis, NOT independent
+    -- NL review. It is deliberately absent from the COMPLETE check below, so it
+    -- can reach kernel_verified but never 'certified'/COMPLETE.
+    CHECK(state NOT IN ('PROVING', 'ROOT_PROVED_COVERAGE_PENDING', 'ROOT_PROVED_COVERAGE_UNCONVERGED') OR fidelity_status IN ('verified', 'attested', 'benchmark_aligned')),
     CHECK(state <> 'COMPLETE' OR fidelity_status = 'verified'),
-    CHECK(fidelity_status IN ('unreviewed', 'attested', 'verified', 'rejected', 'revoked'))
+    CHECK(fidelity_status IN ('unreviewed', 'attested', 'verified', 'rejected', 'revoked', 'benchmark_aligned'))
 );
 
 -- Fidelity belongs to the problem version, not to any one proof episode: an
@@ -60,7 +64,9 @@ CREATE TABLE IF NOT EXISTS problem_fidelity_reviews (
     signature TEXT,
     created_at TEXT NOT NULL,
     revoked_at TEXT,
-    CHECK(decision IN ('verified', 'rejected'))
+    -- 'benchmark_aligned' (issue #43): the formal_benchmark_hash_alignment basis
+    -- — recorded via problem_record_benchmark_alignment, never a path to certified.
+    CHECK(decision IN ('verified', 'rejected', 'benchmark_aligned'))
 );
 
 CREATE TABLE IF NOT EXISTS canonical_verified_lemmas (
@@ -1312,6 +1318,7 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     // it's a deterministic, permanent rejection of the current code's writes,
     // not a one-time schema gap. See docs/fix_plan_playtest_05.md.
     migrate_fidelity_status_vocabulary(conn)?;
+    migrate_expand_fidelity_status_benchmark_aligned(conn)?;
     migrate_episode_outcome_vocabulary(conn)?;
     conn.execute_batch(V1_SCHEMA)?;
     seed_proof_patterns(conn)?;
@@ -1494,6 +1501,113 @@ fn migrate_fidelity_status_vocabulary(conn: &Connection) -> rusqlite::Result<()>
         DROP TABLE problem_versions;
         ALTER TABLE problem_versions_migrating RENAME TO problem_versions;",
     )?;
+    Ok(())
+}
+
+/// Issue #43: expands the fidelity vocabulary to include `benchmark_aligned`
+/// (problem_versions.fidelity_status and the proving-allowed CHECK) and the
+/// review decision vocabulary (problem_fidelity_reviews.decision). Same
+/// create-copy-drop-rename technique as `migrate_fidelity_status_vocabulary`,
+/// for the same reason: a database that predates #43 would otherwise reject
+/// every `benchmark_aligned` write forever. Strictly additive — every prior
+/// value is preserved verbatim, and the load-bearing
+/// `CHECK(state <> 'COMPLETE' OR fidelity_status = 'verified')` guard is
+/// carried over unchanged, so `benchmark_aligned` can never reach COMPLETE.
+/// Idempotent: no-op once the stored CHECK text already mentions the value.
+fn migrate_expand_fidelity_status_benchmark_aligned(conn: &Connection) -> rusqlite::Result<()> {
+    let pv_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='problem_versions'",
+        [], |row| row.get(0),
+    )?;
+    if pv_exists != 0 {
+        let current_sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='problem_versions'",
+            [], |row| row.get(0),
+        )?;
+        // Only rebuild an already-current-vocabulary table (has 'unreviewed')
+        // that hasn't yet gained 'benchmark_aligned'. A pre-'unreviewed' DB is
+        // handled by migrate_fidelity_status_vocabulary running first.
+        if current_sql.contains("'unreviewed'") && !current_sql.contains("'benchmark_aligned'") {
+            conn.execute_batch(
+                "CREATE TABLE problem_versions_ba_migrating (
+                    id TEXT PRIMARY KEY,
+                    source_problem_text TEXT NOT NULL,
+                    source_problem_hash TEXT NOT NULL,
+                    source_metadata_json TEXT NOT NULL,
+                    root_formal_statement TEXT NOT NULL,
+                    root_statement_hash TEXT NOT NULL,
+                    normalized_root_rendering TEXT NOT NULL,
+                    environment_hash TEXT NOT NULL,
+                    import_manifest_json TEXT NOT NULL DEFAULT '[\"Mathlib.Tactic.Ring\",\"Mathlib.Tactic.NormNum\"]',
+                    import_manifest_hash TEXT NOT NULL DEFAULT '',
+                    fidelity_status TEXT NOT NULL,
+                    fidelity_method TEXT NOT NULL,
+                    fidelity_approval_id TEXT,
+                    root_obligation_id TEXT,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    CHECK(state NOT IN ('PROVING', 'ROOT_PROVED_COVERAGE_PENDING', 'ROOT_PROVED_COVERAGE_UNCONVERGED') OR fidelity_status IN ('verified', 'attested', 'benchmark_aligned')),
+                    CHECK(state <> 'COMPLETE' OR fidelity_status = 'verified'),
+                    CHECK(fidelity_status IN ('unreviewed', 'attested', 'verified', 'rejected', 'revoked', 'benchmark_aligned'))
+                );
+                INSERT INTO problem_versions_ba_migrating (
+                    id, source_problem_text, source_problem_hash, source_metadata_json,
+                    root_formal_statement, root_statement_hash, normalized_root_rendering,
+                    environment_hash, import_manifest_json, import_manifest_hash,
+                    fidelity_status, fidelity_method, fidelity_approval_id,
+                    root_obligation_id, state, created_at
+                )
+                SELECT
+                    id, source_problem_text, source_problem_hash, source_metadata_json,
+                    root_formal_statement, root_statement_hash, normalized_root_rendering,
+                    environment_hash, import_manifest_json, import_manifest_hash,
+                    fidelity_status, fidelity_method, fidelity_approval_id,
+                    root_obligation_id, state, created_at
+                FROM problem_versions;
+                DROP TABLE problem_versions;
+                ALTER TABLE problem_versions_ba_migrating RENAME TO problem_versions;",
+            )?;
+        }
+    }
+
+    let pfr_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='problem_fidelity_reviews'",
+        [], |row| row.get(0),
+    )?;
+    if pfr_exists != 0 {
+        let current_sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='problem_fidelity_reviews'",
+            [], |row| row.get(0),
+        )?;
+        if !current_sql.contains("'benchmark_aligned'") {
+            conn.execute_batch(
+                "CREATE TABLE problem_fidelity_reviews_ba_migrating (
+                    id TEXT PRIMARY KEY,
+                    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+                    source_problem_hash TEXT NOT NULL,
+                    root_statement_hash TEXT NOT NULL,
+                    normalized_rendering_hash TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    approver_id TEXT NOT NULL,
+                    rubric_version TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    notes TEXT,
+                    signature TEXT,
+                    created_at TEXT NOT NULL,
+                    revoked_at TEXT,
+                    CHECK(decision IN ('verified', 'rejected', 'benchmark_aligned'))
+                );
+                INSERT INTO problem_fidelity_reviews_ba_migrating
+                SELECT id, problem_version_id, source_problem_hash, root_statement_hash,
+                       normalized_rendering_hash, decision, method, approver_id, rubric_version,
+                       evidence_json, notes, signature, created_at, revoked_at
+                FROM problem_fidelity_reviews;
+                DROP TABLE problem_fidelity_reviews;
+                ALTER TABLE problem_fidelity_reviews_ba_migrating RENAME TO problem_fidelity_reviews;",
+            )?;
+        }
+    }
     Ok(())
 }
 

@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  61 tools · typed schemas · JSON Schema 2020-12                 │
+│  62 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -68,6 +68,7 @@ Antigravity, or a custom script — should call this first.
 | `environment_describe` | Protocol version, capabilities, tool schemas, Lean gateway readiness |
 | `problem_create` | Register a new problem version (source text + root formal statement). `fidelity_status` starts `unreviewed` |
 | `problem_submit_fidelity_review` | Record an evidence-backed determination that a problem's formal statement represents its source text. The ONLY path to `fidelity_status='verified'` — required for `outcome='certified'` |
+| `problem_record_benchmark_alignment` | Record a `formal_benchmark_hash_alignment` basis (issue #43): the server verifies the problem hash-matches a registered trusted-benchmark target and sets `fidelity_status='benchmark_aligned'`, unlocking proving without `unsafe_dev_attestation`. Hash alignment, **not** NL review — reaches `kernel_verified` but never `certified` |
 | `problem_list` | List known problem versions (includes the hashes a reviewer must submit back unchanged) |
 | `episode_create` | Start an episode from a problem version with `fidelity_status` `verified` or `attested` |
 | `episode_reset` | Nondestructive reset — creates a new episode with `parent_episode_id` |
@@ -629,7 +630,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 61 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 62 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records

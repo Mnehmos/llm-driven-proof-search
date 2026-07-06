@@ -616,6 +616,21 @@ pub struct ProblemSubmitFidelityReviewArgs {
     pub signature: Option<String>,
 }
 
+/// Issue #43: record a `formal_benchmark_hash_alignment` fidelity basis. No
+/// client-supplied hashes — the server recomputes and requires the
+/// problem_version's root_statement_hash to equal the registered benchmark
+/// target hash on a trusted_canonical_source suite.
+#[derive(JsonSchema, Deserialize)]
+pub struct ProblemRecordBenchmarkAlignmentArgs {
+    pub problem_version_id: String,
+    pub benchmark_problem_id: String,
+    pub approver_id: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub signature: Option<String>,
+}
+
 #[derive(JsonSchema, Deserialize)]
 pub struct ProblemListArgs {
     #[serde(default)]
@@ -3220,12 +3235,30 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
         for o in &obligations {
             *counts.entry(o.status.as_str()).or_insert(0) += 1;
         }
+        // Issue #43: surface the three independent claims separately so a
+        // benchmark success (kernel_verified + formal_target_matched) is never
+        // conflated with a discovery claim (kernel_verified + certified +
+        // independent review). formal_target_matched holds when the problem is
+        // benchmark_aligned OR a benchmark_result recorded a canonical hash
+        // match — both mean "the formal target is a registered benchmark
+        // statement", not "an NL review confirmed the source claim".
+        let kernel_verified_claim = matches!(outcome.as_deref(), Some("kernel_verified") | Some("certified"));
+        let certified_claim = outcome.as_deref() == Some("certified");
+        let has_canonical_basis: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM benchmark_results WHERE episode_id = ?1 AND benchmark_fidelity_basis = 'canonical_statement_hash_match')",
+            [episode_id], |row| row.get(0),
+        ).optional().map_err(rs)?.unwrap_or(false);
+        let formal_target_matched = fidelity_status == "benchmark_aligned" || has_canonical_basis;
         let res = serde_json::json!({
             "mode": "public_summary",
             "episode_id": episode_id,
             "root_formal_statement": root_statement,
             "outcome": headline,
             "fidelity_status": fidelity_status,
+            "kernel_verified": kernel_verified_claim,
+            "formal_target_matched": formal_target_matched,
+            "certified": certified_claim,
+            "fidelity_basis": if fidelity_status == "benchmark_aligned" { Some("formal_benchmark_hash_alignment") } else { None },
             "benchmark_suite": link.as_ref().map(|l| l.suite_name.clone()),
             "benchmark_upstream_problem_id": link.as_ref().and_then(|l| l.upstream_problem_id.clone()),
             "obligation_counts_by_status": counts,
@@ -3320,6 +3353,7 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
         "rejected" => "REJECTED",
         "revoked" => "REVOKED",
         "attested" => "ATTESTED (unsafe_dev_attestation — not reviewed)",
+        "benchmark_aligned" => "BENCHMARK-ALIGNED (formal_benchmark_hash_alignment — hash-matched to a registered benchmark target; not independent NL review)",
         _ => "UNVERIFIED",
     };
     let promotion_display = if is_certified { "PROMOTED" } else { "BLOCKED" };
@@ -3655,6 +3689,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EnvironmentDescribeArgs>("environment_describe", "Return environment version, supported protocol, tool schemas, capabilities"),
             make_tool::<ProblemCreateArgs>("problem_create", "Register a new problem version (source text + root formal statement). fidelity_status starts 'unreviewed' — proving requires either a real problem_submit_fidelity_review or the honestly-named unsafe_dev_attestation=true (which can reach outcome=kernel_verified but never 'certified')"),
             make_tool::<ProblemSubmitFidelityReviewArgs>("problem_submit_fidelity_review", "Record an evidence-backed determination of whether a problem's formal statement represents its source text. Requires the CURRENT source/statement/rendering hashes (recomputed server-side; mismatches are rejected as stale). decision='verified' is the ONLY path to outcome='certified' and problem state COMPLETE; 'rejected' blocks it. This is a review record, not a flag flip — proof soundness (Lean kernel) and statement fidelity (this tool) are independent claims"),
+            make_tool::<ProblemRecordBenchmarkAlignmentArgs>("problem_record_benchmark_alignment", "Record a formal_benchmark_hash_alignment fidelity basis (issue #43) for a benchmark-imported problem: the server verifies the problem_version's root_statement_hash equals the registered benchmark target hash — COALESCE(prover_ready_statement_hash, root_statement_hash) — on a trusted_canonical_source suite, then sets fidelity_status='benchmark_aligned' and unlocks proving WITHOUT unsafe_dev_attestation. This is hash alignment to a curated benchmark target, NOT independent natural-language review: it can reach outcome=kernel_verified but NEVER 'certified'/COMPLETE. An untrusted/custom suite is rejected and directed to problem_submit_fidelity_review"),
             make_tool::<ProblemListArgs>("problem_list", "List known problem versions (id, state, fidelity_status, root statement)"),
             make_tool::<EpisodeCreateArgs>("episode_create", "Initialize an episode from a problem version whose fidelity_status is 'verified' or 'attested' + config. Returns first observation"),
             make_tool::<EpisodeResetArgs>("episode_reset", "Nondestructive: creates new episode from existing config, sets parent_episode_id"),
@@ -3825,8 +3860,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of ChatDB's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 61,
-                        "total_tool_count": 61,
+                        "classified_tool_count": 62,
+                        "total_tool_count": 62,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -4322,6 +4357,16 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none directly (a review decision, not a proof body)",
                                 "required_run_mode": "any"
                             },
+                            "problem_record_benchmark_alignment": {
+                                "side_effect": "mutating — inserts a problem_fidelity_reviews row (decision='benchmark_aligned') and sets problem_versions.fidelity_status='benchmark_aligned' + state PROVING (from CREATED). NEVER touches episodes and NEVER sets COMPLETE: unlike problem_submit_fidelity_review it cannot promote anything to 'certified'",
+                                "trust_level": "verifier_backed hash-alignment gate — the server recomputes and REQUIRES the problem_version's root_statement_hash to equal the registered benchmark target hash (COALESCE(prover_ready_statement_hash, root_statement_hash)) on a trusted_canonical_source suite; no client hashes are accepted. This is curated-benchmark hash alignment, explicitly NOT independent NL review — the honestly-named 'benchmark_aligned' status is distinct from 'verified'",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none — the load-bearing CHECK(state<>'COMPLETE' OR fidelity_status='verified') means benchmark_aligned can structurally never reach COMPLETE/certified; it only gates episode creation exactly as 'attested' does",
+                                "required_run_mode": "any"
+                            },
                             "problem_list": {
                                 "side_effect": "read_only",
                                 "trust_level": "untrusted_input pass-through for root_formal_statement (whatever was asserted at problem_create), verifier_backed for state/fidelity_status (both server-controlled transitions)",
@@ -4656,6 +4701,118 @@ impl ServerHandler for ChatDbMcp {
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
+            "problem_record_benchmark_alignment" => {
+                let args: ProblemRecordBenchmarkAlignmentArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.approver_id.trim().is_empty() {
+                    return Err(mcp_invalid_params("approver_id must be non-empty"));
+                }
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+
+                // Problem version: recompute the rendering hash server-side.
+                let pv: Option<(String, String, String, String, String)> = tx.query_row(
+                    "SELECT source_problem_hash, root_statement_hash, normalized_root_rendering, fidelity_status, import_manifest_hash
+                     FROM problem_versions WHERE id = ?1",
+                    [&args.problem_version_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                ).optional().map_err(rs)?;
+                let Some((cur_source_hash, cur_root_hash, cur_rendering, cur_fidelity, import_manifest_hash)) = pv else {
+                    return Err(mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id)));
+                };
+
+                // Benchmark problem + its suite's trust status. The target hash is
+                // the SAME identity benchmark_result_record uses.
+                let bp: Option<(String, Option<String>, String, Option<String>, i64, String, Option<String>)> = tx.query_row(
+                    "SELECT bp.suite_id, bp.upstream_problem_id, bp.root_statement_hash, bp.prover_ready_statement_hash,
+                            s.trusted_canonical_source, s.name, s.upstream_commit
+                     FROM benchmark_problems bp JOIN benchmark_suites s ON s.id = bp.suite_id
+                     WHERE bp.id = ?1",
+                    [&args.benchmark_problem_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+                ).optional().map_err(rs)?;
+                let Some((_suite_id, upstream_problem_id, registered_root_hash, prover_ready_hash, trusted, suite_name, upstream_commit)) = bp else {
+                    return Err(mcp_invalid_params(format!("unknown benchmark_problem_id: {}", args.benchmark_problem_id)));
+                };
+
+                // Only a curated, externally-trusted corpus's own canonical
+                // statement hash is accepted as fidelity evidence here; an
+                // untrusted/custom suite needs a real NL review.
+                if trusted == 0 {
+                    return Err(mcp_invalid_params(
+                        "formal_benchmark_hash_alignment is only valid for a trusted_canonical_source suite; \
+                         an untrusted/custom suite requires a real problem_submit_fidelity_review"
+                    ));
+                }
+
+                // The problem must actually be the registered benchmark target —
+                // same COALESCE(prover_ready, root) identity the recorder uses.
+                let target_hash = prover_ready_hash.clone().unwrap_or_else(|| registered_root_hash.clone());
+                if cur_root_hash != target_hash {
+                    return Err(mcp_invalid_params(format!(
+                        "problem_version root_statement_hash ({}) does not equal the registered benchmark target hash ({}) — \
+                         this problem is not the benchmark's formal target, so hash-alignment fidelity does not apply",
+                        cur_root_hash, target_hash
+                    )));
+                }
+
+                // Never overwrite a settled determination.
+                match cur_fidelity.as_str() {
+                    "unreviewed" | "attested" => {}
+                    other => return Err(mcp_invalid_params(format!(
+                        "refusing to change an existing '{}' fidelity determination via benchmark alignment", other
+                    ))),
+                }
+
+                let cur_rendering_hash = canonical_hash(&cur_rendering).map_err(mcp_internal_error)?;
+                let evidence = serde_json::json!({
+                    "basis": "formal_benchmark_hash_alignment",
+                    "suite": suite_name,
+                    "upstream_commit": upstream_commit,
+                    "upstream_problem_id": upstream_problem_id,
+                    "benchmark_problem_id": args.benchmark_problem_id,
+                    "registered_root_statement_hash": registered_root_hash,
+                    "registered_prover_ready_statement_hash": prover_ready_hash,
+                    "matched_target_hash": target_hash,
+                    "problem_version_root_statement_hash": cur_root_hash,
+                    "import_manifest_hash": import_manifest_hash,
+                });
+                let method = "formal_benchmark_hash_alignment";
+                let review_id = Uuid::new_v4().to_string();
+                tx.execute(
+                    "INSERT INTO problem_fidelity_reviews (
+                        id, problem_version_id, source_problem_hash, root_statement_hash, normalized_rendering_hash,
+                        decision, method, approver_id, rubric_version, evidence_json, notes, signature, created_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, 'benchmark_aligned', ?6, ?7, 'formal_benchmark_hash_alignment/v1', ?8, ?9, ?10, ?11)",
+                    (
+                        &review_id, &args.problem_version_id, &cur_source_hash, &cur_root_hash, &cur_rendering_hash,
+                        method, args.approver_id.trim(), &evidence.to_string(), &args.notes, &args.signature, Utc::now().to_rfc3339(),
+                    ),
+                ).map_err(rs)?;
+                tx.execute(
+                    "UPDATE problem_versions SET fidelity_status = 'benchmark_aligned', fidelity_method = ?1, fidelity_approval_id = ?2 WHERE id = ?3",
+                    (method, &review_id, &args.problem_version_id),
+                ).map_err(rs)?;
+                // Unlocks proving from CREATED. NEVER touches episodes or COMPLETE:
+                // benchmark_aligned can reach kernel_verified but never certified.
+                tx.execute(
+                    "UPDATE problem_versions SET state = 'PROVING' WHERE id = ?1 AND state = 'CREATED'",
+                    [&args.problem_version_id],
+                ).map_err(rs)?;
+                tx.commit().map_err(rs)?;
+
+                let res = serde_json::json!({
+                    "problem_version_id": args.problem_version_id,
+                    "fidelity_review_id": review_id,
+                    "fidelity_status": "benchmark_aligned",
+                    "fidelity_basis": method,
+                    "formal_target_matched": true,
+                    "benchmark_problem_id": args.benchmark_problem_id,
+                    "matched_hash": target_hash,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
             "problem_list" => {
                 let args: ProblemListArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -4704,9 +4861,10 @@ impl ServerHandler for ChatDbMcp {
                 ).optional().map_err(rs)?;
                 match fidelity_status.as_deref() {
                     None => return Err(mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id))),
-                    Some("verified") | Some("attested") => {}
+                    Some("verified") | Some("attested") | Some("benchmark_aligned") => {}
                     Some(other) => return Err(mcp_invalid_params(format!(
-                        "problem_version {} has fidelity_status={}; proving requires 'verified' (call problem_submit_fidelity_review) \
+                        "problem_version {} has fidelity_status={}; proving requires 'verified' (call problem_submit_fidelity_review), \
+                         'benchmark_aligned' (problem_record_benchmark_alignment — a trusted-benchmark hash match), \
                          or 'attested' (problem_create's unsafe_dev_attestation=true — training-quarantined)",
                         args.problem_version_id, other
                     ))),
@@ -8330,7 +8488,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 61);
+        assert_eq!(list_res.tools.len(), 62);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -12699,6 +12857,165 @@ mod tests {
             "mode": "benchmark", "host_name": "test-suite",
         }).as_object().unwrap().clone())).await.unwrap());
         created["run_envelope_id"].as_str().unwrap().to_string()
+    }
+
+    /// Issue #43: a trusted-benchmark hash alignment unlocks proving WITHOUT
+    /// unsafe_dev_attestation — an honest fidelity basis instead of a dev bypass.
+    #[tokio::test]
+    async fn test_benchmark_hash_alignment_unlocks_proving_without_dev_attestation() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "a1", "theorem_name": "a1", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let benchmark_problem_id = bp["benchmark_problem_id"].as_str().unwrap().to_string();
+
+        // No unsafe_dev_attestation -> fidelity_status starts 'unreviewed'.
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "PutnamBench a1", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        assert_eq!(create["fidelity_status"], "unreviewed");
+
+        // Proving is blocked while unreviewed.
+        let blocked = peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await;
+        assert!(blocked.is_err(), "an unreviewed problem must not be provable");
+
+        // Hash alignment sets benchmark_aligned + unlocks proving.
+        let aligned = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_record_benchmark_alignment").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "benchmark_problem_id": benchmark_problem_id, "approver_id": "runner",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(aligned["fidelity_status"], "benchmark_aligned");
+        assert_eq!(aligned["formal_target_matched"], true);
+        assert_eq!(aligned["fidelity_basis"], "formal_benchmark_hash_alignment");
+
+        // Now proving is allowed and reaches kernel_verified.
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let step = claim_and_solve(&peer, &episode_id, "trivial", "align-1").await;
+        assert_eq!(step["outcome"], "kernel_verified");
+    }
+
+    /// Issue #43: benchmark_aligned is NOT independent review — it can never
+    /// reach 'certified'/COMPLETE, and public_summary reports the three claims
+    /// separately.
+    #[tokio::test]
+    async fn test_benchmark_alignment_is_not_independent_review() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "a2", "theorem_name": "a2", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "PutnamBench a2", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("problem_record_benchmark_alignment").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "benchmark_problem_id": bp["benchmark_problem_id"], "approver_id": "runner",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let step = claim_and_solve(&peer, &episode_id, "trivial", "align-2").await;
+        assert_eq!(step["outcome"], "kernel_verified", "must reach kernel_verified, never certified");
+
+        // Structural guarantees: problem never COMPLETE, episode never certified.
+        let (state, fidelity, outcome): (String, String, Option<String>) = {
+            let conn = conn_arc.lock().await;
+            let s: String = conn.query_row("SELECT state FROM problem_versions WHERE id = ?1", [&pv_id], |r| r.get(0)).unwrap();
+            let f: String = conn.query_row("SELECT fidelity_status FROM problem_versions WHERE id = ?1", [&pv_id], |r| r.get(0)).unwrap();
+            let o: Option<String> = conn.query_row("SELECT outcome FROM episodes WHERE id = ?1", [&episode_id], |r| r.get(0)).unwrap();
+            (s, f, o)
+        };
+        assert_ne!(state, "COMPLETE", "benchmark_aligned must never reach COMPLETE");
+        assert_ne!(fidelity, "verified", "benchmark_aligned is not 'verified'");
+        assert_eq!(outcome.as_deref(), Some("kernel_verified"), "never certified via alignment");
+
+        // public_summary reports the three claims separately.
+        let summary = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let s: serde_json::Value = serde_json::from_str(&summary.content[0].as_text().unwrap().text).unwrap();
+        assert_eq!(s["kernel_verified"], true, "{s:?}");
+        assert_eq!(s["formal_target_matched"], true, "{s:?}");
+        assert_eq!(s["certified"], false, "benchmark_aligned must never report certified: {s:?}");
+    }
+
+    /// Issue #43: alignment requires an actual hash match to the benchmark target.
+    #[tokio::test]
+    async fn test_benchmark_alignment_rejects_hash_mismatch() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "a3", "theorem_name": "a3", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "different", "root_formal_statement": "2 + 2 = 4",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let bad = peer.call_tool(CallToolRequestParams::new("problem_record_benchmark_alignment").with_arguments(serde_json::json!({
+            "problem_version_id": create["problem_version_id"], "benchmark_problem_id": bp["benchmark_problem_id"], "approver_id": "runner",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad.is_err(), "a problem that doesn't hash-match the benchmark target must be rejected");
+        assert!(format!("{:?}", bad.unwrap_err()).contains("does not equal the registered benchmark target"));
+    }
+
+    /// Issue #43: an untrusted/custom suite gets no hash-alignment shortcut.
+    #[tokio::test]
+    async fn test_benchmark_alignment_rejects_untrusted_suite() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
+            "name": "CustomUntrusted", "trusted_canonical_source": false,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite["suite_id"], "upstream_problem_id": "u1", "theorem_name": "u1", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let bad = peer.call_tool(CallToolRequestParams::new("problem_record_benchmark_alignment").with_arguments(serde_json::json!({
+            "problem_version_id": create["problem_version_id"], "benchmark_problem_id": bp["benchmark_problem_id"], "approver_id": "runner",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad.is_err(), "an untrusted suite must be rejected");
+        assert!(format!("{:?}", bad.unwrap_err()).contains("problem_submit_fidelity_review"), "the error must point to a real review");
+    }
+
+    /// Issue #43: alignment must not overwrite an existing settled determination.
+    #[tokio::test]
+    async fn test_benchmark_alignment_refuses_to_downgrade_verified() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "a4", "theorem_name": "a4", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        // Make it 'verified' via a real review first.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("problem_submit_fidelity_review").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "decision": "verified", "method": "human_review", "approver_id": "rev", "rubric_version": "v1",
+            "source_problem_hash": create["source_problem_hash"], "root_statement_hash": create["root_statement_hash"],
+            "rendering_hash": create["rendering_hash"], "evidence_json": "{}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let bad = peer.call_tool(CallToolRequestParams::new("problem_record_benchmark_alignment").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "benchmark_problem_id": bp["benchmark_problem_id"], "approver_id": "runner",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad.is_err(), "must refuse to change an existing 'verified' determination");
     }
 
     #[tokio::test]
