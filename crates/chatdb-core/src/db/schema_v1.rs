@@ -1389,6 +1389,11 @@ CREATE TABLE IF NOT EXISTS benchmark_results (
     -- against a fixed vocabulary). Additive metadata for reporting only:
     -- never proof authority, never affects status/score/eligibility.
     gap_categories_json TEXT,
+    -- Issue #92: kit-aware reporting metadata (never proof authority) —
+    -- fully qualified kit lemma names the attempt used (JSON array), and the
+    -- specific kit route step a failed result was missing (free text).
+    kit_lemmas_used_json TEXT,
+    missing_route_step TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(run_id, benchmark_problem_id),
@@ -2414,6 +2419,15 @@ fn migrate_add_benchmark_fidelity_basis_columns(conn: &Connection) -> rusqlite::
         // array of slugs) — pre-existing rows simply have none recorded.
         if !existing_columns.iter().any(|c| c == "gap_categories_json") {
             conn.execute("ALTER TABLE benchmark_results ADD COLUMN gap_categories_json TEXT", [])?;
+        }
+        // Issue #92: kit-aware reporting metadata (never proof authority) —
+        // which kit lemmas the attempt used (client-reported JSON array) and
+        // which kit route step a failure was missing (free text).
+        if !existing_columns.iter().any(|c| c == "kit_lemmas_used_json") {
+            conn.execute("ALTER TABLE benchmark_results ADD COLUMN kit_lemmas_used_json TEXT", [])?;
+        }
+        if !existing_columns.iter().any(|c| c == "missing_route_step") {
+            conn.execute("ALTER TABLE benchmark_results ADD COLUMN missing_route_step TEXT", [])?;
         }
     }
     Ok(())
