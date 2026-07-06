@@ -2371,6 +2371,36 @@ const INGEST_LINK_TARGET_KINDS: &[&str] = &[
     "external_reference", "external_theorem_claim", "research_node", "formalization_plan_item",
 ];
 
+/// The three "backed/linked" node statuses assert that a node is tied to a real
+/// dossier artifact. They are reachable ONLY through `paper_ingest_link_node`,
+/// which sets the corresponding forward-link FK in the same UPDATE. Free-form
+/// extraction/review paths must reject them (PR #58 review, blocker #2) — the
+/// DB CHECK constraints on `ingested_document_nodes` enforce the same invariant
+/// structurally; this handler guard gives a precise error at the API boundary.
+fn reject_link_backed_status(
+    ctx: &str,
+    citation_status: Option<&str>,
+    formalization_status: Option<&str>,
+    review_status: Option<&str>,
+) -> Result<(), McpError> {
+    if citation_status == Some("citation_recorded") {
+        return Err(mcp_invalid_params(format!(
+            "{ctx}citation_status='citation_recorded' cannot be set here — a recorded citation must be established with paper_ingest_link_node, which ties the node to a real external_reference or external_theorem_claim"
+        )));
+    }
+    if formalization_status == Some("formalization_target_linked") {
+        return Err(mcp_invalid_params(format!(
+            "{ctx}formalization_status='formalization_target_linked' cannot be set here — use paper_ingest_link_node to tie the node to a real research_node or formalization_plan_item"
+        )));
+    }
+    if review_status == Some("linked_to_dossier_artifact") {
+        return Err(mcp_invalid_params(format!(
+            "{ctx}review_status='linked_to_dossier_artifact' is set only by paper_ingest_link_node when a node is promoted to a real artifact"
+        )));
+    }
+    Ok(())
+}
+
 const INGESTED_DOCUMENT_SELECT: &str = "SELECT id, dossier_id, title, source_kind, source_ref, source_content_hash, \
     ingest_status, extraction_trust_status, notes, created_by, created_at, updated_at FROM ingested_documents";
 
@@ -7776,6 +7806,15 @@ impl ServerHandler for ChatDbMcp {
                     if let Some(s) = &n.formalization_status { validate_one_of("formalization_status", s, INGEST_FORMALIZATION_STATUSES)?; }
                     if let Some(s) = &n.citation_status { validate_one_of("citation_status", s, INGEST_CITATION_STATUSES)?; }
                     if let Some(s) = &n.review_status { validate_one_of("review_status", s, INGEST_TRUST_STATUSES)?; }
+                    // A backed/linked status is reachable only via paper_ingest_link_node
+                    // (which sets the FK); extraction must not label a node as tied to
+                    // an artifact it is not actually tied to.
+                    reject_link_backed_status(
+                        &format!("nodes[{}].", i),
+                        n.citation_status.as_deref(),
+                        n.formalization_status.as_deref(),
+                        n.review_status.as_deref(),
+                    )?;
                     if let Some(raw) = &n.risk_flags_json {
                         serde_json::from_str::<serde_json::Value>(raw).map_err(|e| mcp_invalid_params(format!("nodes[{}].risk_flags_json must be valid JSON: {}", i, e)))?;
                     }
@@ -7872,6 +7911,14 @@ impl ServerHandler for ChatDbMcp {
                 if let Some(s) = &args.review_status { validate_one_of("review_status", s, INGEST_TRUST_STATUSES)?; }
                 if let Some(s) = &args.formalization_status { validate_one_of("formalization_status", s, INGEST_FORMALIZATION_STATUSES)?; }
                 if let Some(s) = &args.citation_status { validate_one_of("citation_status", s, INGEST_CITATION_STATUSES)?; }
+                // A review transition must never assert a link. The backed/linked
+                // statuses are reachable only via paper_ingest_link_node.
+                reject_link_backed_status(
+                    "",
+                    args.citation_status.as_deref(),
+                    args.formalization_status.as_deref(),
+                    args.review_status.as_deref(),
+                )?;
 
                 let mut conn = self.conn.lock().await;
                 let tx = conn.transaction().map_err(rs)?;
@@ -12989,6 +13036,91 @@ mod tests {
             "document_id": document_id, "node_id": node_ids[0], "target_kind": "external_reference", "target_id": other_ref["reference_id"],
         }).as_object().unwrap().clone())).await;
         assert!(cross.is_err(), "a node cannot be linked to an artifact in a different dossier");
+    }
+
+    /// Issue #27 (PR #58 review, blocker #2): a node can NEVER carry a
+    /// "backed/linked" status without a real forward link. The terminal states
+    /// citation_recorded / formalization_target_linked / linked_to_dossier_artifact
+    /// are reachable ONLY through paper_ingest_link_node — never as a free-form
+    /// label via extract_claims or mark_review_status, and never via a raw DB
+    /// write (the CHECK constraints enforce it structurally).
+    #[tokio::test]
+    async fn test_paper_ingest_backed_status_requires_real_link() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let doc = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_create").with_arguments(serde_json::json!({
+            "title": "Backdoor probe", "source_kind": "manuscript", "created_by": "bot",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let document_id = doc["ingested_document_id"].as_str().unwrap().to_string();
+
+        // extract_claims must reject each backed status supplied directly.
+        for (field, value) in [
+            ("citation_status", "citation_recorded"),
+            ("formalization_status", "formalization_target_linked"),
+            ("review_status", "linked_to_dossier_artifact"),
+        ] {
+            let mut node = serde_json::json!({"node_kind": "lemma", "natural_language_text": "L.", "source_span": "p.1"});
+            node.as_object_mut().unwrap().insert(field.to_string(), serde_json::json!(value));
+            let res = peer.call_tool(CallToolRequestParams::new("paper_ingest_extract_claims").with_arguments(serde_json::json!({
+                "document_id": document_id, "nodes": [node],
+            }).as_object().unwrap().clone())).await;
+            assert!(res.is_err(), "extract_claims must reject {field}={value} (only paper_ingest_link_node may set it)");
+        }
+
+        // A legitimately extracted, unlinked node.
+        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_extract_claims").with_arguments(serde_json::json!({
+            "document_id": document_id,
+            "nodes": [{"node_kind": "lemma", "natural_language_text": "L.", "source_span": "p.1 Lem 1"}]
+        }).as_object().unwrap().clone())).await.unwrap());
+        let node_id = extracted["added_node_ids"][0].as_str().unwrap().to_string();
+
+        // mark_review_status must reject the same backed statuses at the node level.
+        for (field, value) in [
+            ("citation_status", "citation_recorded"),
+            ("formalization_status", "formalization_target_linked"),
+            ("review_status", "linked_to_dossier_artifact"),
+        ] {
+            let res = peer.call_tool(CallToolRequestParams::new("paper_ingest_mark_review_status").with_arguments(serde_json::json!({
+                "document_id": document_id, "node_id": node_id, field: value,
+            }).as_object().unwrap().clone())).await;
+            assert!(res.is_err(), "mark_review_status must reject node {field}={value}");
+        }
+
+        // Structural backstop: even a raw DB write bypassing the handlers cannot
+        // decouple the label from a link — the CHECK constraint rejects it.
+        {
+            let conn = conn_arc.lock().await;
+            let raw_citation = conn.execute(
+                "UPDATE ingested_document_nodes SET citation_status = 'citation_recorded' WHERE id = ?1",
+                [&node_id],
+            );
+            assert!(raw_citation.is_err(), "DB CHECK must reject citation_recorded with no linked reference/claim");
+            let raw_formal = conn.execute(
+                "UPDATE ingested_document_nodes SET formalization_status = 'formalization_target_linked' WHERE id = ?1",
+                [&node_id],
+            );
+            assert!(raw_formal.is_err(), "DB CHECK must reject formalization_target_linked with no linked node/plan item");
+            let raw_review = conn.execute(
+                "UPDATE ingested_document_nodes SET review_status = 'linked_to_dossier_artifact' WHERE id = ?1",
+                [&node_id],
+            );
+            assert!(raw_review.is_err(), "DB CHECK must reject linked_to_dossier_artifact with no forward link at all");
+        }
+
+        // The node is still a plain, unlinked, non-proof extraction.
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_observe").with_arguments(serde_json::json!({
+            "document_id": document_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let node = &observed["ingested_document"]["nodes"][0];
+        assert_eq!(node["citation_status"], "uncited", "{:?}", node);
+        assert_eq!(node["formalization_status"], "prose_only", "{:?}", node);
+        assert!(node["linked_external_reference_id"].is_null(), "{:?}", node);
+        assert_eq!(node["has_kernel_evidence"], false, "{:?}", node);
     }
 
     #[tokio::test]
