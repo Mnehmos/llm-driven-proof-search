@@ -909,6 +909,71 @@ CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_module ON semantic_skeletons(m
 CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_dossier ON semantic_skeletons(dossier_id);
 CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_fingerprint ON semantic_skeletons(semantic_fingerprint_hash);
 
+-- Expert-review artifacts and role-separated research ledger (issue #14): an
+-- ADDITIVE, metadata-only ledger of who reviewed what and what they decided.
+-- Unlike citation_review_add (which updates external_theorem_claims.claim_status),
+-- expert_review_add is a PURE INSERT: a row here NEVER marks anything proved and
+-- never mutates episode outcome, obligation status, certification, budget,
+-- benchmark, or any other table. reviewer_id is caller-supplied free text, NOT an
+-- authenticated principal. A 'domain_expert'/'reviewer' 'approved' decision is
+-- human-attested and stays explicitly distinct from Lean kernel verification --
+-- the same trust boundary citation_reviews and candidate_constructions already
+-- apply. dossier_id is nullable so a review can exist standalone; the
+-- (review_target_kind, review_target_id) pair is polymorphic and validated
+-- per-kind at the MCP layer. The table carries NO column capable of holding
+-- kernel evidence -- that structural absence, not a CHECK, is the proof-safety
+-- guarantee. revoked_at soft-retracts a review without deleting the historical
+-- row (a rejection must not delete the reviewed artifact; a retraction must not
+-- delete the review).
+CREATE TABLE IF NOT EXISTS expert_reviews (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    reviewer_id TEXT NOT NULL,
+    reviewer_role TEXT NOT NULL,
+    expertise_tags_json TEXT NOT NULL DEFAULT '[]',
+    review_target_kind TEXT NOT NULL,
+    review_target_id TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    confidence TEXT,
+    notes TEXT,
+    requested_changes_json TEXT NOT NULL DEFAULT '[]',
+    risk_flags_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    revoked_at TEXT,
+    CHECK(reviewer_role IN (
+        'proposer',
+        'construction_searcher',
+        'formalizer',
+        'prover',
+        'reviewer',
+        'domain_expert',
+        'refuter',
+        'editor',
+        'librarian'
+    )),
+    CHECK(review_target_kind IN (
+        'source_problem',
+        'formal_statement',
+        'construction_artifact',
+        'module_artifact',
+        'external_citation',
+        'asymptotic_extraction',
+        'exposition',
+        'full_dossier'
+    )),
+    CHECK(decision IN (
+        'approved',
+        'approved_with_changes',
+        'needs_changes',
+        'rejected',
+        'abstain'
+    )),
+    CHECK(confidence IS NULL OR confidence IN ('low', 'medium', 'high'))
+);
+CREATE INDEX IF NOT EXISTS idx_expert_reviews_dossier ON expert_reviews(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_expert_reviews_target ON expert_reviews(review_target_kind, review_target_id);
+CREATE INDEX IF NOT EXISTS idx_expert_reviews_role ON expert_reviews(reviewer_role);
+
 -- Run envelopes (issues #34 core concept + #38 cost-surface splitting): a
 -- run envelope separates WHO/WHAT/WHY around a set of episodes from the
 -- episodes themselves -- host identity, run mode (a plain dev/exploratory

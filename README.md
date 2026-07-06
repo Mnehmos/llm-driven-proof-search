@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  58 tools · typed schemas · JSON Schema 2020-12                 │
+│  60 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -110,6 +110,8 @@ Antigravity, or a custom script — should call this first.
 | `exposition_observe` | List exposition artifacts for a problem_version, episode, or dossier. Read-only prose, separate from verified proof |
 | `semantic_skeleton_add` | Attach a structured reading of a statement/module/solution (quantifiers, hypotheses, conclusion, definitions, construction map, back-translation, fidelity `risk_flags`) scoped by `review_scope`. Metadata only — never sets `fidelity_status` or substitutes for `problem_submit_fidelity_review` |
 | `semantic_skeleton_observe` | Append one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive) to a skeleton's review history. `confirms_faithful` is not the root fidelity gate |
+| `expert_review_add` | Record one role-separated review-ledger entry (proposer/formalizer/prover/reviewer/domain_expert/refuter/editor/…) against a polymorphic target (source_problem, formal_statement, construction_artifact, module_artifact, external_citation, exposition, full_dossier, …). Pure insert — never marks anything proved; a human decision stays distinct from kernel verification |
+| `expert_review_observe` | Read review-ledger entries filtered by dossier, target (kind+id), and/or reviewer role. Read-only |
 | `mathlib_search_declarations` | Search the real pinned Mathlib source tree for declaration names containing a substring (beyond exact-name lookup). Advisory only |
 | `mathlib_search_local_artifacts` | Search this instance's own previously-verified theorem/def names for a substring match |
 | `formalization_plan_attach_librarian_result` | Attach a Mathlib librarian result to a formalization plan item, updating its coverage status |
@@ -262,6 +264,26 @@ substitutes for `problem_submit_fidelity_review`. `semantic_skeleton_observe`
 appends module-aware review notes (`confirms_faithful`, `raises_concern`,
 `reports_mismatch`, `inconclusive`) — a `confirms_faithful` note is
 note-taking, not a proof.
+
+### Expert reviews (role-separated ledger)
+
+Serious mathematics gets its credibility from more than one prover: a claim is
+proposed, formalized, proved, refereed, and checked by domain experts.
+**Expert reviews** are a role-separated ledger of who reviewed what and what
+they decided — `reviewer_role` (proposer, construction_searcher, formalizer,
+prover, reviewer, domain_expert, refuter, editor, librarian) against a
+polymorphic `review_target_kind` (source_problem, formal_statement,
+construction_artifact, module_artifact, external_citation,
+asymptotic_extraction, exposition, full_dossier), with a `decision`,
+`confidence`, `expertise_tags`, `requested_changes`, and `risk_flags`.
+
+`expert_review_add` is a **pure insert**: unlike `citation_review_add` (which
+updates a citation's `claim_status`), an expert review mutates no other table.
+`reviewer_id` is free text, not an authenticated principal, and a
+`domain_expert` "approved" decision is human-attested — it never marks
+anything kernel-verified, never changes an episode outcome, `fidelity_status`,
+canonical promotion, budget, or benchmark state. A `rejected` review records
+an opinion without deleting or downgrading the reviewed artifact.
 
 **Benchmark contamination policy:** upstream benchmarks like PutnamBench ask
 that completed formal proofs not be published without first coordinating with
@@ -606,7 +628,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 58 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 60 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records
