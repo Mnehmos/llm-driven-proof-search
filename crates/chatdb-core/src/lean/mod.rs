@@ -158,16 +158,22 @@ impl RealLeanGateway {
         Ok((output.status.success(), lines, stderr_str))
     }
 
-    fn build_import_block(import_manifest: &[String], approved_dependency_ids: &[Uuid]) -> String {
+    /// Renders the manifest's module paths as `import` lines (plus approved
+    /// dependency imports) and returns the manifest's `open` directives
+    /// (issue #62) separately — `import` lines must precede every other
+    /// command, while `open` lines belong after the imports/namespace, so the
+    /// two render at different positions in the file.
+    fn build_import_block(import_manifest: &[String], approved_dependency_ids: &[Uuid]) -> (String, Vec<String>) {
+        let (module_imports, open_directives) = crate::lean::module::partition_import_manifest(import_manifest);
         let mut imports = String::new();
-        for module in import_manifest {
+        for module in &module_imports {
             imports.push_str(&format!("import {}\n", module));
         }
         for dep_id in approved_dependency_ids {
             let dep_first_16 = &dep_id.to_string().replace("-", "")[..16];
             imports.push_str(&format!("import LeanChecker.Verified.O_{}\n", dep_first_16));
         }
-        imports
+        (imports, open_directives)
     }
 }
 
@@ -266,10 +272,17 @@ impl LeanGateway for RealLeanGateway {
 
         // 2. Imports come from the problem's own immutable manifest — never
         // hardcoded here. ALL `import` lines must precede any other command, so
-        // dependency imports go before set_option.
-        let mut imports = Self::build_import_block(import_manifest, approved_dependency_ids);
+        // dependency imports go before set_option. The manifest's `open`
+        // directives (issue #62) render inside the namespace instead, matching
+        // where the upstream benchmark file's own `open` lines sat.
+        let (mut imports, open_directives) = Self::build_import_block(import_manifest, approved_dependency_ids);
         imports.push_str("set_option linter.unusedTactic false\n");
         imports.push_str("set_option linter.unreachableTactic false\n");
+        let open_block = if open_directives.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n\n", open_directives.join("\n"))
+        };
 
         // 3. Construct Lean source code
         // Lean 4.32+ requires the first tactic after `:= by` to be indented
@@ -284,9 +297,10 @@ impl LeanGateway for RealLeanGateway {
         // intentionally use it. Whitespace only — the kernel still decides.
         let indented_proof = normalize_proof(candidate_source, proof_format);
         let file_content = format!(
-            "{}\nnamespace {}\n\ntheorem {} : {} := by\n{}\n\nend {}\n",
+            "{}\nnamespace {}\n\n{}theorem {} : {} := by\n{}\n\nend {}\n",
             imports,
             problem_namespace,
+            open_block,
             theorem_name,
             obligation.lean_statement,
             indented_proof,
@@ -574,15 +588,29 @@ impl LeanGateway for RealLeanGateway {
         if imports.is_empty() {
             return Ok(());
         }
+        let (module_imports, open_directives) = crate::lean::module::partition_import_manifest(imports);
         let mut content = String::new();
-        for module in imports {
+        for module in &module_imports {
             content.push_str(&format!("import {}\n", module));
         }
+        // `open` manifest entries (issue #62) are validated by the same probe:
+        // an unknown namespace in an `open` line is a compile error here, so a
+        // bad open entry is rejected at problem_create rather than surfacing as
+        // a confusing failure on the first proof attempt.
+        for open_directive in &open_directives {
+            content.push_str(open_directive);
+            content.push('\n');
+        }
         // Validating imports means resolving them, which can itself pull in a
-        // large chunk of Mathlib (e.g. NumberTheory modules) — give this more
-        // room than the fast declaration-lookup pass, but well under
-        // verify_exact's 60s since this only elaborates imports, not a proof.
-        let (proc_success, lines, stderr) = self.run_lean_json(&content, "import_probe", Duration::from_secs(45))?;
+        // large chunk of Mathlib (e.g. the full `Mathlib` umbrella) — issue #66:
+        // a COLD elaboration cache makes `import Mathlib` alone take over two
+        // minutes on a workstation, so the old 45s budget rejected perfectly
+        // valid manifests on the first call of a session. 240s covers a cold
+        // umbrella load with margin; the warm path stays fast, and problem_create
+        // additionally skips this probe entirely when the identical manifest
+        // already validated under the same environment (see the manifest-hash
+        // check there).
+        let (proc_success, lines, stderr) = self.run_lean_json(&content, "import_probe", Duration::from_secs(240))?;
         let errors: Vec<String> = lines.iter()
             .filter_map(|v| {
                 let (msg, _kind, severity, _line) = parse_diagnostic_line(v);
@@ -667,9 +695,17 @@ impl RealLeanGateway {
     /// Lean continues past an unresolved `#check` rather than aborting the file),
     /// returning true/false per name in the same order as `names`.
     fn check_pass(&self, names: &[String], imports: &[String], timeout: Duration) -> Result<Vec<bool>, String> {
+        let (module_imports, open_directives) = crate::lean::module::partition_import_manifest(imports);
         let mut content = String::new();
-        for module in imports {
+        for module in &module_imports {
             content.push_str(&format!("import {}\n", module));
+        }
+        // The manifest's `open` context (issue #62) participates in name
+        // resolution here too — a lookup should see exactly the scope a Solve
+        // attempt against this manifest would see.
+        for open_directive in &open_directives {
+            content.push_str(open_directive);
+            content.push('\n');
         }
         content.push('\n');
         let check_start_line = content.matches('\n').count() as i64 + 1; // 1-indexed line of the first #check

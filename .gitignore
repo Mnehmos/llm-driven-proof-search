@@ -20,6 +20,7 @@ campaign_data.redb
 *.swp
 *.swo
 *~
+__pycache__/
 
 # OS
 .DS_Store
@@ -48,5 +49,12 @@ tunnel_client_dir/
 .env
 .env.local
 
+# IGP24 local search/submission artifacts. Keep API keys and unpublished
+# candidate batches out of git.
+/igp24/
+/data/igp24/
+/data/equational-theories-lean-stage2/
+
 # Kilo workspace tooling (machine-local)
 .kilo/
+docs/playtests/exports/

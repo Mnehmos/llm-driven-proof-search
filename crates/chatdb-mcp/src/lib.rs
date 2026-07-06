@@ -23,7 +23,7 @@ use chatdb_proof_core::db::schema_v1;
 use chatdb_proof_core::orchestrator::{lifecycle, attempts, step, trajectories, dataset};
 use chatdb_proof_core::lean::{LeanGateway, RealLeanGateway};
 use chatdb_proof_core::models::action::{TypedAction, ActionRequest, ActionRole, StepDisposition, LeanModuleItem, ModuleTheorem, ProofFormat};
-use chatdb_proof_core::lean::module::assemble_module;
+use chatdb_proof_core::lean::module::{assemble_module, parse_open_directive, partition_import_manifest};
 use chatdb_proof_core::models::episode::{EpisodeOutcome, TerminationReason, TruncationReason};
 use chatdb_proof_core::models::reward::{RewardComponent, RewardComponentId, RewardPolicy};
 use chatdb_proof_core::hashing::canonical_hash;
@@ -469,6 +469,53 @@ pub struct BenchmarkProblemRegisterArgs {
 }
 
 #[derive(JsonSchema, Deserialize)]
+pub struct BenchmarkSuiteObserveArgs {
+    /// Look up by ChatDB suite id. Exactly one of `suite_id` / `name` is required.
+    #[serde(default)]
+    pub suite_id: Option<String>,
+    /// Look up by registered suite name (e.g. "PutnamBench").
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Include every registered problem's full row (statements, prover-ready
+    /// form, import manifest). Defaults true — the point of this tool (issue
+    /// #65) is that a host can read registered problems without a database
+    /// side channel.
+    #[serde(default = "default_true")]
+    pub include_problems: bool,
+}
+fn default_true() -> bool { true }
+
+#[derive(JsonSchema, Deserialize)]
+pub struct BenchmarkProblemObserveArgs {
+    /// Look up by ChatDB benchmark problem id — or omit and give
+    /// (`suite_id`, `upstream_problem_id`) instead.
+    #[serde(default)]
+    pub benchmark_problem_id: Option<String>,
+    #[serde(default)]
+    pub suite_id: Option<String>,
+    #[serde(default)]
+    pub upstream_problem_id: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct BenchmarkSuiteSetTrustArgs {
+    pub suite_id: String,
+    /// The new value of the suite's trusted_canonical_source flag. Same
+    /// honesty contract as benchmark_suite_create's flag: assert true ONLY
+    /// for a real, externally-curated benchmark corpus whose registered
+    /// statements are themselves sufficient fidelity evidence.
+    pub trusted_canonical_source: bool,
+    /// Who is making this trust assertion. Recorded verbatim in the
+    /// append-only audit trail (benchmark_suite_trust_reviews).
+    pub approver_id: String,
+    /// Why. Required (non-empty) when RAISING trust to true — a trust grant
+    /// without recorded justification is exactly the unaudited flag-flip this
+    /// tool exists to prevent.
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
 pub enum BenchmarkSolveMode {
     #[serde(rename = "solve_only")] SolveOnly,
     #[serde(rename = "submit_module_allowed")] SubmitModuleAllowed,
@@ -559,7 +606,38 @@ pub struct BenchmarkResultRecordArgs {
     /// private-audit override) — left undecided rather than guessed at.
     #[serde(default)]
     pub allow_dev_attested: bool,
+    /// Issue #76: structured formalization-gap categories for a failed/
+    /// gave-up result — additive reporting metadata that never affects proof
+    /// soundness, certification, training eligibility, or score. Each entry
+    /// must be one of the fixed vocabulary slugs (see GAP_CATEGORY_VOCABULARY
+    /// in environment_describe / the rejection message): e.g. "math_unknown",
+    /// "library_missing", "statement_elaboration_gap",
+    /// "geometry_case_analysis_missing", "coefficient_uniqueness_missing".
+    /// Distinguishes "the model failed to find the math" from "Lean lacks the
+    /// bridge lemmas" so benchmark reports read as an infrastructure roadmap
+    /// rather than a flat failure count.
+    #[serde(default)]
+    pub gap_categories: Option<Vec<String>>,
 }
+
+/// Issue #76: the fixed formalization-gap taxonomy. A closed vocabulary (not
+/// free text) so aggregate reports can group failures meaningfully;
+/// `final_diagnostic_category` remains the free-text field for anything that
+/// doesn't fit.
+pub const GAP_CATEGORY_VOCABULARY: &[&str] = &[
+    "math_unknown",
+    "library_missing",
+    "statement_elaboration_gap",
+    "statement_elaborates_but_bridge_missing",
+    "tactic_timeout",
+    "tactic_transport_hazard",
+    "geometry_case_analysis_missing",
+    "coefficient_uniqueness_missing",
+    "area_coordinate_scaffold_missing",
+    "convexity_extreme_point_missing",
+    "export_trust_policy_gap",
+    "benchmark_admin_gap",
+];
 
 #[derive(JsonSchema, Deserialize)]
 pub struct BenchmarkRunObserveArgs {
@@ -4067,8 +4145,16 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
             manifest_hash
         ));
     }
-    for module in &import_manifest {
+    // Issue #62: the manifest may carry `open` directives alongside module
+    // paths — imports first (they must precede every other command), then the
+    // open context the proofs were actually verified under.
+    let (export_imports, export_opens) = partition_import_manifest(&import_manifest);
+    for module in &export_imports {
         lean_src.push_str(&format!("import {}\n", module));
+    }
+    for open_directive in &export_opens {
+        lean_src.push_str(open_directive);
+        lean_src.push('\n');
     }
     lean_src.push('\n');
     for o in &lean_order {
@@ -4085,6 +4171,9 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
         // theorem-by-theorem reconstruction when one exists.
         if !rendered_modules.is_empty() || !broken_modules.is_empty() {
             let mut out = String::new();
+            // Issue #70: machine-checkable redaction marker (comment form —
+            // this surface is raw Lean source).
+            out.push_str("-- proof_body_redacted: false\n");
             for (mod_id, reason) in &broken_modules {
                 out.push_str(&format!(
                     "-- WARNING: verified module {} could not be re-rendered ({}) — this export is INCOMPLETE, not a full receipt.\n",
@@ -4104,7 +4193,7 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
             }
             return Ok(out);
         }
-        return Ok(lean_src);
+        return Ok(format!("-- proof_body_redacted: false\n{}", lean_src));
     }
 
     if mode == ExportMode::PublicSummary {
@@ -4142,6 +4231,8 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
         let formal_target_matched = fidelity_status == "benchmark_aligned" || has_canonical_basis;
         let res = serde_json::json!({
             "mode": "public_summary",
+            // Issue #70: machine-checkable — this mode never carries a proof body.
+            "proof_body_redacted": true,
             "episode_id": episode_id,
             "root_formal_statement": root_statement,
             "outcome": headline,
@@ -4203,6 +4294,8 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
         }).collect();
 
         let mut envelope = serde_json::json!({
+            // Issue #70: machine-checkable — RL records carry proof/tactic content.
+            "proof_body_redacted": false,
             "records": record_values,
             "verification_layers": {
                 "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
@@ -4226,6 +4319,28 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
     let is_certified = outcome.as_deref() == Some("certified");
     let is_kernel_verified_only = outcome.as_deref() == Some("kernel_verified");
     let training_eligible = fidelity_status == "verified";
+    // Issue #68: a structured-module export whose re-assembled source does not
+    // hash-match the recorded module_source_hash (or whose module could not be
+    // re-rendered at all) is a STALE RECEIPT. The original verification stands
+    // in the ledger, but THIS export's displayed source is not the recorded
+    // verified bytes — so the stale state must dominate the top-level
+    // title/status, never sit as a footnote under a clean CERTIFIED header.
+    let stale_receipt = rendered_modules.iter().any(|m| m.hash_mismatch) || !broken_modules.is_empty();
+    // Issue #69: a tracked-benchmark episode is training-quarantined by
+    // default regardless of fidelity basis — completed benchmark proofs are
+    // contamination-sensitive, and eligibility for them is an explicit policy
+    // decision, not a side effect of a fidelity review.
+    let benchmark_link_for_labels = benchmark_suite_name_for_episode(conn, episode_id)?;
+    // Issue #69: 'verified' fidelity is only as strong as the review behind
+    // it. Surface the recorded method/approver so a self-review by the
+    // proving host is visibly weaker than an independent review.
+    let fidelity_review_provenance: Option<(String, String)> = conn.query_row(
+        "SELECT method, approver_id FROM problem_fidelity_reviews
+         WHERE problem_version_id = ?1 AND decision = 'verified'
+         ORDER BY created_at DESC LIMIT 1",
+        [&pv_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(rs)?;
 
     let mut md = String::new();
     match mode {
@@ -4261,7 +4376,25 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
         Some(other) => other,
         None => "🔄 IN PROGRESS",
     };
-    md.push_str(&format!("# {} — {}\n\n", headline_marker, source_text.trim()));
+    // Issue #68: stale receipt dominates the headline — the recorded outcome is
+    // shown as history, never as the current clean status of THIS export.
+    let headline = if stale_receipt {
+        format!("⚠️ STALE RECEIPT — SOURCE MISMATCH, REPLAY REQUIRED (recorded outcome: {})", headline_marker)
+    } else {
+        headline_marker.to_string()
+    };
+    md.push_str(&format!("# {} — {}\n\n", headline, source_text.trim()));
+
+    if stale_receipt {
+        md.push_str(
+            "> ⚠️ **STALE RECEIPT.** This export could not reproduce the exact verified module source: \
+             the re-assembled source does not hash-match the recorded `module_source_hash` (or a verified \
+             module failed to re-render). The kernel verification recorded in the ledger still happened — \
+             but the source displayed below is a re-assembly under CURRENT policy, useful for debugging \
+             only, NOT the recorded verified bytes. Do not treat this export as a trustworthy receipt: \
+             retrieve the exact recorded source or run `episode_replay` first.\n\n"
+        );
+    }
 
     if is_kernel_verified_only {
         md.push_str(&format!(
@@ -4281,19 +4414,50 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
         None => "PENDING",
         Some(_) => "INCOMPLETE",
     };
-    let fidelity_display = match fidelity_status.as_str() {
-        "verified" => "VERIFIED",
-        "rejected" => "REJECTED",
-        "revoked" => "REVOKED",
-        "attested" => "ATTESTED (unsafe_dev_attestation — not reviewed)",
-        "benchmark_aligned" => "BENCHMARK-ALIGNED (formal_benchmark_hash_alignment — hash-matched to a registered benchmark target; not independent NL review)",
-        _ => "UNVERIFIED",
+    let fidelity_display: String = match fidelity_status.as_str() {
+        // Issue #69: 'VERIFIED' alone hides who reviewed and how. A fidelity
+        // review authored by the proving host itself is NOT an independent
+        // review, and must be visibly weaker than one.
+        "verified" => match &fidelity_review_provenance {
+            Some((method, approver)) => format!(
+                "VERIFIED (review method: {}; approver: {}) — review strength depends on reviewer independence; a review authored by the proving host itself is NOT an independent review (issue #69)",
+                method, approver
+            ),
+            None => "VERIFIED (review record not found — treat provenance as unknown)".to_string(),
+        },
+        "rejected" => "REJECTED".to_string(),
+        "revoked" => "REVOKED".to_string(),
+        "attested" => "ATTESTED (unsafe_dev_attestation — not reviewed)".to_string(),
+        "benchmark_aligned" => "BENCHMARK-ALIGNED (formal_benchmark_hash_alignment — hash-matched to a registered benchmark target; not independent NL review)".to_string(),
+        _ => "UNVERIFIED".to_string(),
     };
-    let promotion_display = if is_certified { "PROMOTED" } else { "BLOCKED" };
+    // Issue #68: promotion/eligibility rendered as clean/current ONLY on a
+    // fresh receipt; a stale receipt shows the recorded value as history.
+    let promotion_display: String = match (is_certified, stale_receipt) {
+        (true, false) => "PROMOTED".to_string(),
+        (true, true) => "STALE (recorded: PROMOTED — replay required)".to_string(),
+        (false, _) => "BLOCKED".to_string(),
+    };
+    let proof_soundness_display: String = if stale_receipt && matches!(outcome.as_deref(), Some("certified") | Some("kernel_verified")) {
+        "VERIFIED (recorded) — STALE RECEIPT, replay required".to_string()
+    } else {
+        proof_soundness.to_string()
+    };
+    let training_display: String = if stale_receipt && training_eligible {
+        "STALE (recorded: eligible — replay required)".to_string()
+    } else if benchmark_link_for_labels.is_some() {
+        // Issue #69: tracked-benchmark results are quarantined by default —
+        // even a 'verified' fidelity basis does not opt benchmark proof
+        // content into training without an explicit policy decision.
+        "QUARANTINED (tracked benchmark — quarantined by default regardless of fidelity basis; issue #69)".to_string()
+    } else if training_eligible {
+        "eligible".to_string()
+    } else {
+        "QUARANTINED".to_string()
+    };
     md.push_str(&format!(
         "| Proof soundness | Statement fidelity | Canonical promotion | Training eligibility |\n|---|---|---|---|\n| {} | {} | {} | {} |\n\n",
-        proof_soundness, fidelity_display, promotion_display,
-        if training_eligible { "eligible" } else { "QUARANTINED" },
+        proof_soundness_display, fidelity_display, promotion_display, training_display,
     ));
 
     md.push_str(&format!(
@@ -4401,6 +4565,10 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
     md.push_str(&format!("- **Environment hash:** `{}`\n", env_hash));
     md.push_str(&format!("- **Import manifest hash:** `{}`\n", manifest_hash));
     md.push_str(&format!("- **Import manifest:** `{}`\n", manifest_json));
+    // Issue #70: machine-checkable redaction marker. Every export surface
+    // carries one, so tooling can refuse to paste a proof-body-bearing export
+    // into a public artifact without relying on a human reading the banner.
+    md.push_str("- **proof_body_redacted:** false\n");
 
     md.push_str(&format!(
         "\n## Integrity\n\n{} hash-chained trajectory events, `{}…` → `{}…` (GENESIS-anchored). Re-verify anytime with `episode_replay`.\n",
@@ -4650,8 +4818,8 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::default())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.23"))
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.25"))
     }
 
     async fn list_tools(
@@ -4662,7 +4830,7 @@ impl ServerHandler for ChatDbMcp {
         let tools = vec![
             make_tool::<ReadmeFirstArgs>("readme_first", "CALL THIS FIRST, before creating any episode. Explains what ChatDB is (an environment, not a prover), the trust boundary (tracked MCP actions and Lean verifier results are evidence; hidden model reasoning is not), the required proof-search loop, when to use Solve vs SubmitModule, why untracked/side-channel proof checks don't count as valid attempts, and the cost/benchmark-mode boundary"),
             make_tool::<EnvironmentDescribeArgs>("environment_describe", "Return environment version, supported protocol, tool schemas, capabilities"),
-            make_tool::<ProblemCreateArgs>("problem_create", "Register a new problem version (source text + root formal statement). fidelity_status starts 'unreviewed' — proving requires either a real problem_submit_fidelity_review or the honestly-named unsafe_dev_attestation=true (which can reach outcome=kernel_verified but never 'certified')"),
+            make_tool::<ProblemCreateArgs>("problem_create", "Register a new problem version (source text + root formal statement). fidelity_status starts 'unreviewed' — proving requires either a real problem_submit_fidelity_review or the honestly-named unsafe_dev_attestation=true (which can reach outcome=kernel_verified but never 'certified'). problem_imports entries may be Lean module paths AND `open [scoped] <Namespace> ...` directives (issue #62): a statement that relies on scoped notation (ℤ[X], ∠, π) or unqualified names (derivative, volume, ball) needs the upstream open context registered here, or it will not elaborate to the intended mathematics"),
             make_tool::<ProblemSubmitFidelityReviewArgs>("problem_submit_fidelity_review", "Record an evidence-backed determination of whether a problem's formal statement represents its source text. Requires the CURRENT source/statement/rendering hashes (recomputed server-side; mismatches are rejected as stale). decision='verified' is the ONLY path to outcome='certified' and problem state COMPLETE; 'rejected' blocks it. This is a review record, not a flag flip — proof soundness (Lean kernel) and statement fidelity (this tool) are independent claims"),
             make_tool::<ProblemRecordBenchmarkAlignmentArgs>("problem_record_benchmark_alignment", "Record a formal_benchmark_hash_alignment fidelity basis (issue #43) for a benchmark-imported problem: the server verifies the problem_version's root_statement_hash equals the registered benchmark target hash — COALESCE(prover_ready_statement_hash, root_statement_hash) — on a trusted_canonical_source suite, then sets fidelity_status='benchmark_aligned' and unlocks proving WITHOUT unsafe_dev_attestation. This is hash alignment to a curated benchmark target, NOT independent natural-language review: it can reach outcome=kernel_verified but NEVER 'certified'/COMPLETE. An untrusted/custom suite is rejected and directed to problem_submit_fidelity_review"),
             make_tool::<ProblemListArgs>("problem_list", "List known problem versions (id, state, fidelity_status, root statement)"),
@@ -4670,7 +4838,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EpisodeResetArgs>("episode_reset", "Nondestructive: creates new episode from existing config, sets parent_episode_id"),
             make_tool::<EpisodeObserveArgs>("episode_observe", "Get the active observation and pending action request"),
             make_tool::<AttemptClaimArgs>("attempt_claim", "Claim a pending action request to obtain the action_attempt_id + claim_token required by episode_step. Idempotent on idempotency_key"),
-            make_tool::<EpisodeStepArgs>("episode_step", "Submit a typed action against a claimed attempt. `action` is internally tagged — exactly one of: {\"type\":\"solve\",\"proof_term\":\"  norm_num\"} (Lean tactic block proving the target obligation), {\"type\":\"decompose\",\"sub_lemmas\":[\"<lean statement>\", ...]} (split the obligation into child lemmas), {\"type\":\"give_up\"} (terminate the episode). `expected_revision` must equal the episode_revision advertised on the action_request. Settles any lease attached to the attempt atomically"),
+            make_tool::<EpisodeStepArgs>("episode_step", "Submit a typed action against a claimed attempt. `action` is internally tagged — exactly one of: {\"type\":\"solve\",\"proof_term\":\"  norm_num\"} (Lean tactic block proving the target obligation), {\"type\":\"decompose\",\"sub_lemmas\":[\"<lean statement>\", ...]} (split the obligation into child lemmas), {\"type\":\"give_up\"} (terminate the episode). `expected_revision` must equal the episode_revision advertised on the action_request. Settles any lease attached to the attempt atomically. FLATTENED-SEQUENCE TRAP (issue #67): in a flat_tactic_sequence chain, an inline `by` consumes EVERYTHING after it on the line — `have h : T := by omega; have h2 : U := ...` parses the second `have` INSIDE h's completed by-block and dies with 'No goals to be solved' while the outer goal stays unsolved. Always parenthesize an inline by-block that is followed by more tactics: `have h : T := (by omega); have h2 : U := (by omega); linarith`"),
             make_tool::<EpisodeStatusArgs>("episode_status", "Retrieve current episode state, revision, budget, step count"),
             make_tool::<EpisodeCloseArgs>("episode_close", "Gracefully truncate an episode"),
             make_tool::<ModelCallReserveArgs>("model_call_reserve", "Reserve a model-call budget lease and immediately debit bounded episode budget"),
@@ -4742,9 +4910,12 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<RunEnvelopeAttachEpisodeArgs>("run_envelope_attach_episode", "Tag an existing episode with a run envelope. Metadata only — never changes the episode's outcome/state"),
             make_tool::<RunEnvelopeObserveArgs>("run_envelope_observe", "Read back a run envelope, every episode tagged with it, and its full append-only host-side cost observation history"),
             make_tool::<BenchmarkSuiteCreateArgs>("benchmark_suite_create", "Register a benchmark suite (e.g. PutnamBench) — manual/structured registration, not automated parsing. Issue #29/#30"),
-            make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise"),
+            make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise. import_manifest entries may be Lean module paths AND `open [scoped] <Namespace> ...` directives (issue #62) — capture the upstream file's own open context here so registered statements that rely on scoped notation (ℤ[X], ∠, π) elaborate faithfully at proving time"),
+            make_tool::<BenchmarkSuiteObserveArgs>("benchmark_suite_observe", "Read back a registered benchmark suite by suite_id or name (issue #65): the suite row (upstream provenance, trusted_canonical_source), its append-only trust-review history, and — by default — every registered problem's full row (root_formal_statement, prover_ready_statement + hashes, import manifest, goal class). This is the sanctioned way for a host to read registered benchmark content; no database side channel needed"),
+            make_tool::<BenchmarkProblemObserveArgs>("benchmark_problem_observe", "Read back one registered benchmark problem (issue #65) by benchmark_problem_id, or by (suite_id, upstream_problem_id). Returns the full row: root_formal_statement, server-derived prover_ready_statement (the exact bytes problem_create/SubmitModule must receive), both hashes, import manifest (module paths + open directives), goal class, and status"),
+            make_tool::<BenchmarkSuiteSetTrustArgs>("benchmark_suite_set_trust", "Change a suite's trusted_canonical_source flag after creation (issue #65) — the admin path that previously didn't exist, forcing per-problem fidelity reviews when an importer forgot the flag. Same honesty contract as benchmark_suite_create: assert true ONLY for a real, externally-curated corpus. Every change is recorded append-only in benchmark_suite_trust_reviews (approver, previous → new value, notes); raising trust to true REQUIRES non-empty notes. Never affects proof status of existing results — only the fidelity basis future benchmark_result_record calls can claim"),
             make_tool::<BenchmarkRunCreateArgs>("benchmark_run_create", "Create a benchmark run against a suite. Requires an existing run_envelope_id (call run_envelope_create first — a run should not start unassociated with host/mode/cost tracking). lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results"),
-            make_tool::<BenchmarkResultRecordArgs>("benchmark_result_record", "Record (or update) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem"),
+            make_tool::<BenchmarkResultRecordArgs>("benchmark_result_record", "Record (or update) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem. For failed/gave-up results, optionally attach structured gap_categories (issue #76: math_unknown / library_missing / statement_elaboration_gap / statement_elaborates_but_bridge_missing / tactic_timeout / tactic_transport_hazard / geometry_case_analysis_missing / coefficient_uniqueness_missing / area_coordinate_scaffold_missing / convexity_extreme_point_missing / export_trust_policy_gap / benchmark_admin_gap) — reporting metadata that never affects proof authority or score, so failures read as an infrastructure roadmap instead of a flat failure count"),
             make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric. cost_summary separates real metrics (verifier_wall_time_ms/verifier_cpu_time_ms/mcp_action_count/mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms — all real, measured data, null only when genuinely no correlated activity exists yet) from monetary cost (*_cost_micros fields, null unless real money data or a rate card exists — mcp_side_cost_micros/storage_export_cost_micros stay null with no pricing profile decided for either surface). cost_completeness is 'total_cost_known' only when every material cost surface is exact (currently unreachable: mcp_side/storage_export have real metrics but no pricing), 'reported_total_not_exact' when some real monetary signal exists (exact/attested/estimated) but not a complete exact total, else 'total_cost_incomplete'"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
@@ -4802,6 +4973,8 @@ impl ServerHandler for ChatDbMcp {
                         "rule": "Every candidate proof attempt that should count as real proof-search activity MUST go through episode_step, not a side channel.",
                         "solve": "Use the Solve action for a single self-contained tactic/term proof of the current obligation.",
                         "proof_format": "Both Solve and SubmitModule's root_theorem accept an optional proof_format (issue #51). Default 'flat_tactic_sequence' re-bases indentation and flattens accidental nesting — right for a simple sequential tactic list (or use semicolon chaining). Set 'raw_lean_block' ONLY when the proof intentionally relies on Lean's relative-indentation structure (focus bullets `·`, nested case/by blocks); it preserves that nesting. Either way the Lean kernel is the sole authority on whether the proof checks — proof_format only affects leading whitespace transport.",
+                        "inline_by_in_flat_sequences": "Issue #67: in a flattened (single-line/semicolon-chained) tactic sequence — which is ALWAYS what helper theorems get, and what flat_tactic_sequence produces — an inline `by` consumes everything after it: `have h : T := by omega; have h2 : U := by omega; linarith` runs the second `have` and the `linarith` INSIDE h's already-closed by-block, failing with 'No goals to be solved' while the real goal stays unsolved. Parenthesize every inline by-block that is followed by more tactics: `have h : T := (by omega); have h2 : U := (by omega); linarith`. A trailing `by` as the LAST element of the chain is fine unparenthesized.",
+                        "tactic_transport_hazards": "Issue #71, three lessons from the PutnamBench retry: (1) MULTI-LOCATION SIMP/NORM_NUM — `norm_num at h1 h2 h3` (or `... at h ⊢`) processes locations left-to-right and errors with 'No goals to be solved' if an EARLY location turns False and closes the goal before the list is exhausted; in generated/fragile proofs prefer one location per tactic (e.g. one `norm_num at hX` bullet per interval_cases branch) over one large multi-location command. (2) OMEGA AND DIVISIBILITY — `omega` may report 'No usable constraints found' for `∣` facts whose divisor is an unevaluated literal expression (e.g. `2 + -1 ∣ 88` after interval_cases substitution); normalize the divisor (norm_num) first, or discharge the divisibility with norm_num directly. (3) NLINARITH OVER GEOMETRY ATOMS — `nlinarith` over raw `EuclideanGeometry.angle`/`∠` atoms can burn the full 200000-heartbeat budget as a deterministic timeout instead of failing fast; eliminate the geometry into scalar equations via bridge lemmas first, keep nlinarith calls small, and treat any nlinarith over angle atoms as expensive.",
                         "submit_module": "Use SubmitModule for helper definitions, helper theorems, structural or well-founded recursion, and mutually recursive definitions (via MutualGroup) — a small local Lean development, not just one theorem body. See environment_describe's submit_module_boundary for the exact trust rules.",
                         "decompose": "Use Decompose to split the current obligation into child sub-lemma obligations when the root goal is too large to attack directly.",
                         "why_this_matters": "A proof attempt checked some OTHER way (e.g. a bare `lake env lean` invocation outside this episode, or an internal LeanGateway call bypassed around episode_step) and then only submitted as a final winning SubmitModule/Solve loses every failed attempt, every Lean diagnostic, every repair step — the data this environment exists to preserve. Untracked checks do not count as valid benchmark or training attempts, and a run built that way should be reported as incomplete, not as a clean success."
@@ -4821,7 +4994,7 @@ impl ServerHandler for ChatDbMcp {
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
                 let res = serde_json::json!({
-                    "environment_version": "0.3.23",
+                    "environment_version": "0.3.25",
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -4859,8 +5032,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of ChatDB's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 86,
-                        "total_tool_count": 86,
+                        "classified_tool_count": 89,
+                        "total_tool_count": 89,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -5725,6 +5898,37 @@ impl ServerHandler for ChatDbMcp {
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
+                            },
+                            "benchmark_suite_observe": {
+                                "side_effect": "read_only — suite row, its append-only trust-review history, and (by default) every registered problem's full row",
+                                "trust_level": "reads back exactly what registration stored; statements/manifests are the registered bytes, no re-derivation. Issue #65: this replaces the database side channel a host previously needed to read registered benchmark content",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output — registered problem statements are upstream-published benchmark text, never proof bodies",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "benchmark_problem_observe": {
+                                "side_effect": "read_only — one benchmark_problems row by id or (suite_id, upstream_problem_id)",
+                                "trust_level": "reads back exactly what registration stored, including the server-derived prover_ready_statement a prover must submit byte-for-byte",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output — upstream-published statement text, never a proof body",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "benchmark_suite_set_trust": {
+                                "side_effect": "mutating — flips benchmark_suites.trusted_canonical_source and appends one benchmark_suite_trust_reviews audit row per REAL change (a same-value call is a recorded-as-unchanged no-op)",
+                                "trust_level": "human_attested — the same honest self-declared assertion as benchmark_suite_create's flag (ChatDB never verifies the upstream corpus itself), but now auditable: approver_id and notes are mandatory context, and raising trust to true REQUIRES non-empty notes. Issue #65: the admin path that previously didn't exist, which forced per-problem fidelity self-reviews when an importer forgot the flag",
+                                "cost_surface": "none",
+                                "benchmark_safety": "changes the fidelity basis FUTURE benchmark_result_record calls can claim (hash-match against a trusted suite); never retroactively upgrades or downgrades an already-recorded result",
+                                "replayability": "deterministic; the audit table is append-only, so the flag's full history is reconstructible",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any — but the trust assertion itself is a maintainer-level act; the audit row is what makes that accountable",
+                                "unresolved_design_question": "should raising trust additionally require a second, distinct approver (two-person rule)? Left open — single-approver-with-audit matches the rest of the attestation surface today"
                             }
                         }
                     }
@@ -5750,26 +5954,58 @@ impl ServerHandler for ChatDbMcp {
                     )));
                 }
 
-                let extra_imports = args.problem_imports.unwrap_or_default();
-                if extra_imports.len() > 50 {
-                    return Err(mcp_invalid_params("problem_imports: at most 50 modules per problem"));
+                let raw_extra_imports = args.problem_imports.unwrap_or_default();
+                if raw_extra_imports.len() > 50 {
+                    return Err(mcp_invalid_params("problem_imports: at most 50 entries per problem"));
                 }
-                for m in &extra_imports {
-                    if !valid_lean_module_path(m) {
+                // Issue #62: an entry is either a Lean module path (rendered
+                // as `import <path>`) or an `open` directive (rendered inside
+                // the assembled namespace, activating scoped notation such as
+                // `ℤ[X]`/`∠`/`π` exactly as the upstream benchmark file's own
+                // `open` preamble did). Open entries are stored in their
+                // CANONICAL token form so the manifest hash pins exactly what
+                // will be rendered.
+                let mut extra_imports: Vec<String> = Vec::with_capacity(raw_extra_imports.len());
+                for m in &raw_extra_imports {
+                    if valid_lean_module_path(m) {
+                        extra_imports.push(m.clone());
+                    } else if let Some(canonical_open) = parse_open_directive(m) {
+                        extra_imports.push(canonical_open);
+                    } else {
                         return Err(mcp_invalid_params(format!(
-                            "problem_imports entry {:?} is not a valid Lean module path — must be dot-separated identifier segments only (letters, digits, underscore), no whitespace, comments, or command syntax",
+                            "problem_imports entry {:?} is neither a valid Lean module path (dot-separated identifier segments) nor a valid open directive (`open [scoped] <Namespace> [<Namespace> ...]`) — no whitespace beyond token separators, comments, or command syntax",
                             m
                         )));
                     }
                 }
-                if !extra_imports.is_empty() {
-                    self.gateway.validate_import_manifest(&extra_imports)
-                        .map_err(|e| mcp_invalid_params(format!("problem_imports rejected — {}", e)))?;
-                }
                 let mut import_manifest: Vec<String> = BASE_IMPORT_MANIFEST.iter().map(|s| s.to_string()).collect();
-                import_manifest.extend(extra_imports);
+                import_manifest.extend(extra_imports.iter().cloned());
                 let import_manifest_json = serde_json::to_string(&import_manifest).unwrap();
                 let import_manifest_hash = canonical_hash(&import_manifest).map_err(mcp_internal_error)?;
+                if !extra_imports.is_empty() {
+                    // Issue #66: the compile probe re-validated the identical
+                    // manifest on every problem_create, and on a cold Mathlib
+                    // cache the first probe of a session blew the old timeout.
+                    // A manifest that already validated for an existing
+                    // problem_version under the SAME environment is already
+                    // proven to resolve — skip the probe. Keyed on
+                    // (import_manifest_hash, environment_hash): a different
+                    // toolchain/Mathlib pin gets a fresh probe.
+                    let current_env_hash = self.lean_environment.as_ref().map(|e| e.hash.clone())
+                        .unwrap_or_else(|| "lean-gateway-unavailable".to_string());
+                    let already_validated: bool = {
+                        let conn = self.conn.lock().await;
+                        conn.query_row(
+                            "SELECT EXISTS(SELECT 1 FROM problem_versions WHERE import_manifest_hash = ?1 AND environment_hash = ?2)",
+                            (&import_manifest_hash, &current_env_hash),
+                            |row| row.get::<_, i64>(0),
+                        ).map(|v| v == 1).unwrap_or(false)
+                    };
+                    if !already_validated {
+                        self.gateway.validate_import_manifest(&extra_imports)
+                            .map_err(|e| mcp_invalid_params(format!("problem_imports rejected — {}", e)))?;
+                    }
+                }
 
                 let pv_id = Uuid::new_v4();
                 let source_hash = canonical_hash(&args.source_problem_text).map_err(mcp_internal_error)?;
@@ -9747,7 +9983,26 @@ impl ServerHandler for ChatDbMcp {
                     .ok().map(|form| form.root_theorem_statement);
                 let prover_ready_statement_hash = prover_ready_statement.as_ref()
                     .map(|s| canonical_hash(s)).transpose().map_err(mcp_internal_error)?;
-                let import_manifest_json = serde_json::to_string(&args.import_manifest).unwrap();
+                // Issue #62: a registered manifest entry is either a module
+                // path or an `open` directive (the upstream file's own scoped-
+                // notation context — e.g. PutnamBench's `open Polynomial`).
+                // Both are validated at registration (open entries stored in
+                // canonical token form) so problem_create can adopt the
+                // manifest verbatim.
+                let mut import_manifest: Vec<String> = Vec::with_capacity(args.import_manifest.len());
+                for m in &args.import_manifest {
+                    if valid_lean_module_path(m) {
+                        import_manifest.push(m.clone());
+                    } else if let Some(canonical_open) = parse_open_directive(m) {
+                        import_manifest.push(canonical_open);
+                    } else {
+                        return Err(mcp_invalid_params(format!(
+                            "import_manifest entry {:?} is neither a valid Lean module path nor a valid open directive (`open [scoped] <Namespace> [<Namespace> ...]`)",
+                            m
+                        )));
+                    }
+                }
+                let import_manifest_json = serde_json::to_string(&import_manifest).unwrap();
                 let problem_id = Uuid::new_v4().to_string();
                 let now = Utc::now().to_rfc3339();
                 conn.execute(
@@ -9775,6 +10030,179 @@ impl ServerHandler for ChatDbMcp {
                     "goal_class": goal_class,
                     "brute_force_admissible": brute_force_admissible,
                     "created_at": now,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "benchmark_suite_observe" => {
+                let args: BenchmarkSuiteObserveArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                let conn = self.conn.lock().await;
+                let suite = match (&args.suite_id, &args.name) {
+                    (Some(id), _) => conn.query_row(
+                        "SELECT id, name, upstream_url, upstream_commit, language, trusted_canonical_source, imported_at FROM benchmark_suites WHERE id = ?1",
+                        [id],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, String>(6)?)),
+                    ).optional().map_err(rs)?,
+                    (None, Some(name)) => conn.query_row(
+                        "SELECT id, name, upstream_url, upstream_commit, language, trusted_canonical_source, imported_at FROM benchmark_suites WHERE name = ?1",
+                        [name],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, String>(6)?)),
+                    ).optional().map_err(rs)?,
+                    (None, None) => return Err(mcp_invalid_params("provide suite_id or name")),
+                };
+                let Some((suite_id, name, upstream_url, upstream_commit, language, trusted, imported_at)) = suite else {
+                    return Err(mcp_invalid_params("no benchmark suite matches the given suite_id/name"));
+                };
+                let trust_history: Vec<serde_json::Value> = {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, previous_value, new_value, approver_id, notes, created_at
+                         FROM benchmark_suite_trust_reviews WHERE suite_id = ?1 ORDER BY created_at ASC",
+                    ).map_err(rs)?;
+                    let rows = stmt.query_map([&suite_id], |row| Ok(serde_json::json!({
+                        "trust_review_id": row.get::<_, String>(0)?,
+                        "previous_value": row.get::<_, i64>(1)? == 1,
+                        "new_value": row.get::<_, i64>(2)? == 1,
+                        "approver_id": row.get::<_, String>(3)?,
+                        "notes": row.get::<_, Option<String>>(4)?,
+                        "created_at": row.get::<_, String>(5)?,
+                    }))).map_err(rs)?;
+                    rows.collect::<Result<Vec<_>, _>>().map_err(rs)?
+                };
+                let problems: Vec<serde_json::Value> = if args.include_problems {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, upstream_problem_id, theorem_name, source_file_path, root_formal_statement,
+                                root_statement_hash, import_manifest_json, prover_ready_statement,
+                                prover_ready_statement_hash, status, goal_class, brute_force_admissible, created_at
+                         FROM benchmark_problems WHERE suite_id = ?1 ORDER BY upstream_problem_id ASC",
+                    ).map_err(rs)?;
+                    let rows = stmt.query_map([&suite_id], |row| {
+                        let manifest_json: String = row.get(6)?;
+                        Ok(serde_json::json!({
+                            "benchmark_problem_id": row.get::<_, String>(0)?,
+                            "upstream_problem_id": row.get::<_, String>(1)?,
+                            "theorem_name": row.get::<_, String>(2)?,
+                            "source_file_path": row.get::<_, Option<String>>(3)?,
+                            "root_formal_statement": row.get::<_, String>(4)?,
+                            "root_statement_hash": row.get::<_, String>(5)?,
+                            "import_manifest": serde_json::from_str::<serde_json::Value>(&manifest_json).unwrap_or(serde_json::Value::Null),
+                            "prover_ready_statement": row.get::<_, Option<String>>(7)?,
+                            "prover_ready_statement_hash": row.get::<_, Option<String>>(8)?,
+                            "status": row.get::<_, String>(9)?,
+                            "goal_class": row.get::<_, String>(10)?,
+                            "brute_force_admissible": row.get::<_, i64>(11)? == 1,
+                            "created_at": row.get::<_, String>(12)?,
+                        }))
+                    }).map_err(rs)?;
+                    rows.collect::<Result<Vec<_>, _>>().map_err(rs)?
+                } else {
+                    vec![]
+                };
+                let problem_count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM benchmark_problems WHERE suite_id = ?1", [&suite_id], |row| row.get(0),
+                ).map_err(rs)?;
+                let res = serde_json::json!({
+                    "suite_id": suite_id,
+                    "name": name,
+                    "upstream_url": upstream_url,
+                    "upstream_commit": upstream_commit,
+                    "language": language,
+                    "trusted_canonical_source": trusted == 1,
+                    "imported_at": imported_at,
+                    "trust_review_history": trust_history,
+                    "problem_count": problem_count,
+                    "problems": if args.include_problems { serde_json::Value::Array(problems) } else { serde_json::Value::Null },
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            "benchmark_problem_observe" => {
+                let args: BenchmarkProblemObserveArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                let conn = self.conn.lock().await;
+                const PROBLEM_COLS: &str =
+                    "SELECT id, suite_id, upstream_problem_id, theorem_name, source_file_path, root_formal_statement,
+                            root_statement_hash, import_manifest_json, prover_ready_statement,
+                            prover_ready_statement_hash, status, goal_class, brute_force_admissible, created_at, context_hash
+                     FROM benchmark_problems";
+                let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<serde_json::Value> {
+                    let manifest_json: String = row.get(7)?;
+                    Ok(serde_json::json!({
+                        "benchmark_problem_id": row.get::<_, String>(0)?,
+                        "suite_id": row.get::<_, String>(1)?,
+                        "upstream_problem_id": row.get::<_, String>(2)?,
+                        "theorem_name": row.get::<_, String>(3)?,
+                        "source_file_path": row.get::<_, Option<String>>(4)?,
+                        "root_formal_statement": row.get::<_, String>(5)?,
+                        "root_statement_hash": row.get::<_, String>(6)?,
+                        "import_manifest": serde_json::from_str::<serde_json::Value>(&manifest_json).unwrap_or(serde_json::Value::Null),
+                        "prover_ready_statement": row.get::<_, Option<String>>(8)?,
+                        "prover_ready_statement_hash": row.get::<_, Option<String>>(9)?,
+                        "status": row.get::<_, String>(10)?,
+                        "goal_class": row.get::<_, String>(11)?,
+                        "brute_force_admissible": row.get::<_, i64>(12)? == 1,
+                        "created_at": row.get::<_, String>(13)?,
+                        "context_hash": row.get::<_, Option<String>>(14)?,
+                    }))
+                };
+                let row = match (&args.benchmark_problem_id, &args.suite_id, &args.upstream_problem_id) {
+                    (Some(id), _, _) => conn.query_row(
+                        &format!("{} WHERE id = ?1", PROBLEM_COLS), [id], map_row,
+                    ).optional().map_err(rs)?,
+                    (None, Some(suite), Some(upstream)) => conn.query_row(
+                        &format!("{} WHERE suite_id = ?1 AND upstream_problem_id = ?2", PROBLEM_COLS),
+                        [suite, upstream], map_row,
+                    ).optional().map_err(rs)?,
+                    _ => return Err(mcp_invalid_params("provide benchmark_problem_id, or both suite_id and upstream_problem_id")),
+                };
+                let Some(problem) = row else {
+                    return Err(mcp_invalid_params("no benchmark problem matches the given identifiers"));
+                };
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&problem).unwrap())]))
+            }
+            "benchmark_suite_set_trust" => {
+                let args: BenchmarkSuiteSetTrustArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.approver_id.trim().is_empty() {
+                    return Err(mcp_invalid_params("approver_id must be non-empty — trust changes are audited"));
+                }
+                if args.trusted_canonical_source && args.notes.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                    return Err(mcp_invalid_params(
+                        "raising trusted_canonical_source to true requires non-empty notes — record WHY this suite qualifies as an externally-curated canonical corpus (upstream provenance, commit, review basis)",
+                    ));
+                }
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let previous: Option<i64> = tx.query_row(
+                    "SELECT trusted_canonical_source FROM benchmark_suites WHERE id = ?1",
+                    [&args.suite_id], |row| row.get(0),
+                ).optional().map_err(rs)?;
+                let Some(previous) = previous else {
+                    return Err(mcp_invalid_params(format!("unknown suite_id: {}", args.suite_id)));
+                };
+                let new_value = if args.trusted_canonical_source { 1_i64 } else { 0_i64 };
+                let changed = previous != new_value;
+                let trust_review_id = if changed {
+                    let review_id = Uuid::new_v4().to_string();
+                    let now = Utc::now().to_rfc3339();
+                    tx.execute(
+                        "UPDATE benchmark_suites SET trusted_canonical_source = ?1 WHERE id = ?2",
+                        (new_value, &args.suite_id),
+                    ).map_err(rs)?;
+                    tx.execute(
+                        "INSERT INTO benchmark_suite_trust_reviews (id, suite_id, previous_value, new_value, approver_id, notes, created_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        (&review_id, &args.suite_id, previous, new_value, &args.approver_id, &args.notes, &now),
+                    ).map_err(rs)?;
+                    Some(review_id)
+                } else {
+                    None
+                };
+                tx.commit().map_err(rs)?;
+                let res = serde_json::json!({
+                    "suite_id": args.suite_id,
+                    "trusted_canonical_source": new_value == 1,
+                    "previous_value": previous == 1,
+                    "changed": changed,
+                    "trust_review_id": trust_review_id,
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
@@ -10035,6 +10463,25 @@ impl ServerHandler for ChatDbMcp {
                     Some("none")
                 };
 
+                // Issue #76: validate the structured gap taxonomy — a closed
+                // vocabulary, so aggregate reports can group failures. Never
+                // proof authority: it does not touch status/outcome/score.
+                let gap_categories_json: Option<String> = match &args.gap_categories {
+                    None => None,
+                    Some(cats) if cats.is_empty() => None,
+                    Some(cats) => {
+                        for c in cats {
+                            if !GAP_CATEGORY_VOCABULARY.contains(&c.as_str()) {
+                                return Err(mcp_invalid_params(format!(
+                                    "gap_categories entry {:?} is not in the fixed vocabulary {:?} — use final_diagnostic_category for free text",
+                                    c, GAP_CATEGORY_VOCABULARY
+                                )));
+                            }
+                        }
+                        Some(serde_json::to_string(cats).unwrap())
+                    }
+                };
+
                 let existing_id: Option<String> = conn.query_row(
                     "SELECT id FROM benchmark_results WHERE run_id = ?1 AND benchmark_problem_id = ?2",
                     (&args.run_id, &args.benchmark_problem_id),
@@ -10048,24 +10495,25 @@ impl ServerHandler for ChatDbMcp {
                             problem_version_id = ?1, episode_id = ?2, status = ?3, outcome = ?4, pass_at = ?5,
                             attempts_used = ?6, time_to_first_success_ms = ?7, cost_micros = ?8,
                             final_diagnostic_category = ?9, proof_artifact_hash = ?10, trajectory_export_hash = ?11,
-                            replay_status = ?12, benchmark_fidelity_basis = ?13, updated_at = ?14
-                         WHERE id = ?15",
-                        (&args.problem_version_id, &args.episode_id, status_str, &args.outcome, &args.pass_at,
+                            replay_status = ?12, benchmark_fidelity_basis = ?13, gap_categories_json = ?14, updated_at = ?15
+                         WHERE id = ?16",
+                        rusqlite::params![&args.problem_version_id, &args.episode_id, status_str, &args.outcome, &args.pass_at,
                          args.attempts_used, &args.time_to_first_success_ms, &args.cost_micros,
                          &args.final_diagnostic_category, &args.proof_artifact_hash, &args.trajectory_export_hash,
-                         &args.replay_status, &benchmark_fidelity_basis, &now, existing_id),
+                         &args.replay_status, &benchmark_fidelity_basis, &gap_categories_json, &now, existing_id],
                     ).map_err(rs)?;
                 } else {
                     conn.execute(
                         "INSERT INTO benchmark_results (
                             id, run_id, benchmark_problem_id, problem_version_id, episode_id, status, outcome,
                             pass_at, attempts_used, time_to_first_success_ms, cost_micros, final_diagnostic_category,
-                            proof_artifact_hash, trajectory_export_hash, replay_status, benchmark_fidelity_basis, created_at, updated_at
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17)",
+                            proof_artifact_hash, trajectory_export_hash, replay_status, benchmark_fidelity_basis,
+                            gap_categories_json, created_at, updated_at
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?18)",
                         rusqlite::params![&result_id, &args.run_id, &args.benchmark_problem_id, &args.problem_version_id, &args.episode_id,
                          status_str, &args.outcome, &args.pass_at, args.attempts_used, &args.time_to_first_success_ms,
                          &args.cost_micros, &args.final_diagnostic_category, &args.proof_artifact_hash,
-                         &args.trajectory_export_hash, &args.replay_status, &benchmark_fidelity_basis, &now],
+                         &args.trajectory_export_hash, &args.replay_status, &benchmark_fidelity_basis, &gap_categories_json, &now],
                     ).map_err(rs)?;
                 }
 
@@ -10075,6 +10523,7 @@ impl ServerHandler for ChatDbMcp {
                     "benchmark_problem_id": args.benchmark_problem_id,
                     "benchmark_fidelity_basis": benchmark_fidelity_basis,
                     "status": status_str,
+                    "gap_categories": args.gap_categories,
                     "updated": existing_id.is_some(),
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
@@ -10098,7 +10547,7 @@ impl ServerHandler for ChatDbMcp {
                 let mut rstmt = conn.prepare(
                     "SELECT r.benchmark_problem_id, p.theorem_name, r.status, r.outcome, r.pass_at, r.attempts_used,
                             r.time_to_first_success_ms, r.cost_micros, r.final_diagnostic_category, r.replay_status,
-                            r.benchmark_fidelity_basis, r.episode_id, e.outcome
+                            r.benchmark_fidelity_basis, r.episode_id, e.outcome, r.gap_categories_json
                      FROM benchmark_results r JOIN benchmark_problems p ON p.id = r.benchmark_problem_id
                      LEFT JOIN episodes e ON e.id = r.episode_id
                      WHERE r.run_id = ?1 ORDER BY p.upstream_problem_id ASC"
@@ -10112,6 +10561,10 @@ impl ServerHandler for ChatDbMcp {
                     let stored_status: String = row.get(2)?;
                     let current_episode_outcome: Option<String> = row.get(12)?;
                     let stale_result = benchmark_result_is_stale(&stored_status, current_episode_outcome.as_deref());
+                    // Issue #76: structured gap taxonomy, when recorded.
+                    let gap_categories: serde_json::Value = row.get::<_, Option<String>>(13)?
+                        .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
+                        .unwrap_or(serde_json::Value::Null);
                     Ok((serde_json::json!({
                         "benchmark_problem_id": row.get::<_, String>(0)?,
                         "theorem_name": row.get::<_, String>(1)?,
@@ -10127,9 +10580,29 @@ impl ServerHandler for ChatDbMcp {
                         "final_diagnostic_category": row.get::<_, Option<String>>(8)?,
                         "replay_status": row.get::<_, Option<String>>(9)?,
                         "benchmark_fidelity_basis": row.get::<_, Option<String>>(10)?,
+                        "gap_categories": gap_categories,
                     }), row.get::<_, Option<String>>(11)?))
                 }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
                 let results: Vec<serde_json::Value> = rows.iter().map(|(v, _)| v.clone()).collect();
+
+                // Issue #69: group by trust basis so aggregates never collapse
+                // distinct trust bases into one solved/certified bucket; issue
+                // #76: count gap categories so failures read as an
+                // infrastructure roadmap, not a flat failure count.
+                let mut results_by_trust_basis: std::collections::BTreeMap<String, std::collections::BTreeMap<String, i64>> = Default::default();
+                let mut gap_category_counts: std::collections::BTreeMap<String, i64> = Default::default();
+                for (v, _) in &rows {
+                    let basis = v["benchmark_fidelity_basis"].as_str().unwrap_or("none").to_string();
+                    let status = v["stored_result_status"].as_str().unwrap_or("unknown").to_string();
+                    *results_by_trust_basis.entry(basis).or_default().entry(status).or_insert(0) += 1;
+                    if let Some(cats) = v["gap_categories"].as_array() {
+                        for c in cats {
+                            if let Some(c) = c.as_str() {
+                                *gap_category_counts.entry(c.to_string()).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                }
 
                 // Issue #38's cost policy (redesigned after real product
                 // direction): verifier_wall_time_ms/verifier_cpu_time_ms sum
@@ -10281,6 +10754,16 @@ impl ServerHandler for ChatDbMcp {
                     "certified_count": results.iter().filter(|r| r["status"] == "certified").count(),
                     "average_attempts_per_result": if total > 0 { total_attempts as f64 / total as f64 } else { 0.0 },
                     "aggregate_basis": "stored_result_status — solved_count/solved_rate/pass_at_1_rate/kernel_verified_count/certified_count are computed from the benchmark_results.status recorded at result time, NOT the (possibly newer) current_episode_outcome; per-row stale_result flags where the underlying episode has since advanced (issue #50)",
+                    // Issue #69: never collapse distinct trust bases into one
+                    // solved bucket — a canonical_statement_hash_match proof
+                    // and a problem_fidelity_verified proof are different
+                    // claims and are reported separately.
+                    "results_by_trust_basis": results_by_trust_basis,
+                    // Issue #76: failures grouped by structured gap category —
+                    // an infrastructure/formalization roadmap, distinct from
+                    // model-capacity failure (math_unknown). Additive
+                    // metadata; never affects any score above.
+                    "gap_category_counts": gap_category_counts,
                 });
 
                 // Issue #38's cost policy, redesigned per explicit product
@@ -10620,7 +11103,9 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 86);
+        // 86 through v0.3.23 + benchmark_suite_observe / benchmark_problem_observe /
+        // benchmark_suite_set_trust (issue #65).
+        assert_eq!(list_res.tools.len(), 89);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -11185,6 +11670,87 @@ mod tests {
         assert_eq!(status["invalid_action_count"], 1, "{:?}", status);
     }
 
+    /// Issue #64 end-to-end: when the target statement hash matches a REGISTERED
+    /// benchmark problem, a module declaration that binds a free identifier of
+    /// that statement is rejected at policy; the `_solution` slot stays allowed;
+    /// and an ad-hoc (unregistered) statement keeps the documented
+    /// root-references-helpers shape.
+    #[tokio::test]
+    async fn test_submit_module_shadow_guard_applies_to_benchmark_statements_only() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
+            "name": "ShadowGuardSuite",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let suite_id = suite["suite_id"].as_str().unwrap().to_string();
+
+        // Drives one attested problem to a single submit_module step.
+        let run_module_step = |statement: String, action: serde_json::Value| {
+            let peer = peer.clone();
+            async move {
+                let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+                    "source_problem_text": format!("toy: {statement}"), "root_formal_statement": statement,
+                    "unsafe_dev_attestation": true,
+                }).as_object().unwrap().clone())).await.unwrap());
+                let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+                let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                    "problem_version_id": pv_id, "max_steps": 5,
+                }).as_object().unwrap().clone())).await.unwrap());
+                let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+                let request_id = ep["next_action_request"]["id"].as_str().unwrap().to_string();
+                let revision = ep["next_action_request"]["episode_revision"].as_i64().unwrap();
+                let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+                    "episode_id": episode_id, "action_request_id": request_id,
+                    "idempotency_key": "shadow-guard", "expected_revision": revision,
+                }).as_object().unwrap().clone())).await.unwrap());
+                tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+                    "episode_id": episode_id,
+                    "action_attempt_id": claim["action_attempt_id"].as_str().unwrap(),
+                    "expected_revision": revision, "claim_token": claim["claim_token"].as_str().unwrap(),
+                    "action": action, "cost_micros": 100,
+                }).as_object().unwrap().clone())).await.unwrap())
+            }
+        };
+
+        // 1. Registered statement + shadowing helper def → policy rejection.
+        let registered_stmt = "shadow_target 0 = shadow_target 0";
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "shadow_e2e", "theorem_name": "shadow_e2e",
+            "root_formal_statement": registered_stmt,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let step = run_module_step(registered_stmt.to_string(), serde_json::json!({
+            "type": "submit_module",
+            "module_items": [{"item_kind": "def", "name": "shadow_target", "type_signature": "Nat → Nat", "body": "fun n => n"}],
+            "root_theorem": {"name": "root", "statement": registered_stmt, "proof_term": "rfl"},
+        })).await;
+        assert_eq!(step["accepted"], false, "shadowing a registered statement's identifier must be rejected: {step:?}");
+        assert!(step["rejection_diagnostic"].as_str().unwrap_or("").contains("shadows"),
+            "the rejection must name the shadowing policy: {step:?}");
+
+        // 2. Registered find-the-value statement + `_solution` def → allowed through policy (MockGateway passes it).
+        let solution_stmt = "demo_solution = demo_solution";
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "solution_e2e", "theorem_name": "solution_e2e",
+            "root_formal_statement": solution_stmt,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let step = run_module_step(solution_stmt.to_string(), serde_json::json!({
+            "type": "submit_module",
+            "module_items": [{"item_kind": "def", "name": "demo_solution", "type_signature": "Nat", "body": "0"}],
+            "root_theorem": {"name": "root", "statement": solution_stmt, "proof_term": "rfl"},
+        })).await;
+        assert_eq!(step["accepted"], true, "the _solution slot must stay allowed for registered statements: {step:?}");
+
+        // 3. Ad-hoc (unregistered) statement referencing its own helper → allowed.
+        let adhoc_stmt = "adhoc_helper 1 = adhoc_helper 1";
+        let step = run_module_step(adhoc_stmt.to_string(), serde_json::json!({
+            "type": "submit_module",
+            "module_items": [{"item_kind": "def", "name": "adhoc_helper", "type_signature": "Nat → Nat", "body": "fun n => n"}],
+            "root_theorem": {"name": "root", "statement": adhoc_stmt, "proof_term": "rfl"},
+        })).await;
+        assert_eq!(step["accepted"], true, "an ad-hoc statement keeps the root-references-helpers shape: {step:?}");
+    }
+
     /// Drives one attested-problem episode all the way to a single submit_module
     /// step and returns the step-result JSON. Keeps the rejection-matrix tests to
     /// the essential difference — the module payload — instead of repeating the
@@ -11427,6 +11993,57 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap();
         let md = md_res.content[0].as_text().unwrap().text.clone();
         assert!(md.contains("WARNING") && md.contains("hash mismatch"), "dossier must flag the hash mismatch: {md}");
+
+        // Issue #68: the stale state must DOMINATE the top-level status, not
+        // sit as a footnote under a clean headline.
+        let headline = md.lines().find(|l| l.starts_with("# ")).unwrap_or("");
+        assert!(headline.contains("STALE RECEIPT"), "stale receipt must own the headline: {headline}");
+        assert!(!headline.starts_with("# ✅"), "no clean checkmark headline on a stale receipt: {headline}");
+        assert!(md.contains("REPLAY REQUIRED"), "{md}");
+        assert!(md.contains("STALE RECEIPT, replay required") || md.contains("VERIFIED (recorded)"),
+            "proof soundness must be shown as recorded/stale, not clean/current: {md}");
+        assert!(!md.contains("| PROMOTED |"), "promotion must not render as clean/current on a stale receipt: {md}");
+        assert!(md.contains("NOT the recorded verified bytes"), "the export must explain the displayed source is not the recorded source: {md}");
+    }
+
+    /// Issue #68 control: a matching source hash still renders the normal
+    /// verified receipt with no stale downgrade.
+    #[tokio::test]
+    async fn test_proof_export_fresh_module_receipt_is_not_downgraded() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "fresh receipt check", "root_formal_statement": "True",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let request_id = ep["next_action_request"]["id"].as_str().unwrap().to_string();
+        let revision = ep["next_action_request"]["episode_revision"].as_i64().unwrap();
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "fresh-receipt-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"].as_str().unwrap(),
+            "expected_revision": revision, "claim_token": claim["claim_token"].as_str().unwrap(),
+            "action": {"type": "submit_module", "module_items": [],
+                       "root_theorem": {"name": "root", "statement": "True", "proof_term": "trivial"}},
+            "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let md_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap();
+        let md = md_res.content[0].as_text().unwrap().text.clone();
+        let headline = md.lines().find(|l| l.starts_with("# ")).unwrap_or("");
+        assert!(!headline.contains("STALE RECEIPT"), "a fresh receipt must not be downgraded: {headline}");
+        assert!(!md.contains("hash mismatch"), "{md}");
+        // Issue #70: every body-exposing export carries the machine-checkable marker.
+        assert!(md.contains("**proof_body_redacted:** false"), "{md}");
     }
 
     /// Issue #3 acceptance: a helper def passes and the root theorem uses it — the
@@ -15668,6 +16285,223 @@ mod tests {
 
         let after = { let c = conn_arc.lock().await; snapshot(&c) };
         assert_eq!(before, after, "no librarian tool call may change episodes or episode_obligations in any way");
+    }
+
+    // -- MCP capabilities (issue #61) ----------------------------------------
+
+    /// Issue #61: a spec-compliant MCP host only calls tools/list when the
+    /// initialize response advertises the tools capability. With
+    /// `ServerCapabilities::default()` the server was invisible to every
+    /// compliant host (Claude Code registered zero tools) even though
+    /// tools/list itself worked when called unconditionally.
+    #[test]
+    fn get_info_advertises_tools_capability() {
+        let info = test_handler().get_info();
+        assert!(info.capabilities.tools.is_some(),
+            "initialize must advertise the tools capability or spec-compliant hosts never fetch the tool list");
+    }
+
+    // -- Benchmark suite observe / trust admin (issue #65) -------------------
+
+    #[tokio::test]
+    async fn test_benchmark_suite_trust_admin_and_observe() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
+            "name": "TrustAdminSuite", "upstream_url": "https://example.org/suite", "upstream_commit": "abc123",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let suite_id = suite["suite_id"].as_str().unwrap().to_string();
+        assert_eq!(suite["trusted_canonical_source"], false, "trust must default to false");
+
+        // Raising trust WITHOUT notes is rejected — the grant must be justified.
+        let err = peer.call_tool(CallToolRequestParams::new("benchmark_suite_set_trust").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "trusted_canonical_source": true, "approver_id": "maintainer",
+        }).as_object().unwrap().clone())).await.expect_err("trust grant without notes must be rejected");
+        assert!(format!("{err:?}").contains("notes"), "{err:?}");
+
+        let granted = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_set_trust").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "trusted_canonical_source": true, "approver_id": "maintainer",
+            "notes": "externally curated corpus, upstream commit abc123 reviewed",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(granted["changed"], true);
+        assert_eq!(granted["previous_value"], false);
+        assert_eq!(granted["trusted_canonical_source"], true);
+        assert!(granted["trust_review_id"].is_string(), "a change must produce an audit row id");
+
+        // A no-op set (same value) is not silently recorded as a change.
+        let noop = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_set_trust").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "trusted_canonical_source": true, "approver_id": "maintainer", "notes": "same value",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(noop["changed"], false);
+        assert!(noop["trust_review_id"].is_null());
+
+        // Register a problem whose manifest carries an open directive (issue #62).
+        let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "toy_0001", "theorem_name": "toy_0001",
+            "root_formal_statement": "1 + 1 = 2",
+            "import_manifest": ["Mathlib", "open   Polynomial"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let problem_id = registered["benchmark_problem_id"].as_str().unwrap().to_string();
+
+        // Observe the suite: trust flag, audit history, and the problem row.
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_observe").with_arguments(serde_json::json!({
+            "name": "TrustAdminSuite",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["suite_id"].as_str().unwrap(), suite_id);
+        assert_eq!(observed["trusted_canonical_source"], true);
+        let history = observed["trust_review_history"].as_array().unwrap();
+        assert_eq!(history.len(), 1, "exactly one audit row for one real change: {history:?}");
+        assert_eq!(history[0]["approver_id"], "maintainer");
+        assert_eq!(observed["problem_count"], 1);
+        let problems = observed["problems"].as_array().unwrap();
+        assert_eq!(problems[0]["upstream_problem_id"], "toy_0001");
+        assert_eq!(problems[0]["import_manifest"].as_array().unwrap()[1], "open Polynomial",
+            "the open entry must be stored in canonical token form");
+
+        // Observe one problem by (suite_id, upstream_problem_id) and by id.
+        let by_pair = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_observe").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "toy_0001",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(by_pair["benchmark_problem_id"].as_str().unwrap(), problem_id);
+        assert_eq!(by_pair["root_formal_statement"], "1 + 1 = 2");
+        let by_id = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_observe").with_arguments(serde_json::json!({
+            "benchmark_problem_id": problem_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(by_id["upstream_problem_id"], "toy_0001");
+    }
+
+    /// Issues #69/#70/#71/#76 in one flow: structured gap categories are
+    /// validated/stored/aggregated, run observation groups by trust basis,
+    /// the public summary carries the machine-checkable redaction marker, and
+    /// readme_first exposes the retry tactic lessons.
+    #[tokio::test]
+    async fn test_gap_categories_trust_grouping_and_redaction_marker() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        // readme_first guidance (issue #71) is visible.
+        let readme = tool_json(&peer.call_tool(CallToolRequestParams::new("readme_first")).await.unwrap());
+        let hazards = readme["proof_attempts"]["tactic_transport_hazards"].as_str().unwrap();
+        assert!(hazards.contains("norm_num at h1 h2 h3"), "{hazards}");
+        assert!(hazards.contains("omega"), "{hazards}");
+        assert!(hazards.contains("nlinarith"), "{hazards}");
+
+        // A run with one failed result carrying structured gap categories.
+        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
+            "name": "GapTaxonomySuite",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let suite_id = suite["suite_id"].as_str().unwrap().to_string();
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "gap_0001", "theorem_name": "gap_0001",
+            "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let problem_id = problem["benchmark_problem_id"].as_str().unwrap().to_string();
+        let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            "mode": "benchmark", "benchmark_suite_name": "GapTaxonomySuite",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": envelope["run_envelope_id"].as_str().unwrap(),
+            "solve_mode": "submit_module_allowed", "attempt_budget": 2,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run_id = run["run_id"].as_str().unwrap().to_string();
+
+        // Unknown category is rejected with the vocabulary in the message.
+        let err = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run_id, "benchmark_problem_id": problem_id, "status": "failed", "attempts_used": 1,
+            "gap_categories": ["not_a_real_category"],
+        }).as_object().unwrap().clone())).await.expect_err("unknown gap category must be rejected");
+        assert!(format!("{err:?}").contains("math_unknown"), "rejection must list the vocabulary: {err:?}");
+
+        // Valid categories are stored and echoed.
+        let recorded = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run_id, "benchmark_problem_id": problem_id, "status": "failed", "attempts_used": 2,
+            "gap_categories": ["geometry_case_analysis_missing", "tactic_timeout"],
+            "final_diagnostic_category": "free text detail",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(recorded["gap_categories"].as_array().unwrap().len(), 2);
+
+        // Observation surfaces the categories, the counts, and trust grouping.
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+            "run_id": run_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let result = &observed["results"].as_array().unwrap()[0];
+        assert_eq!(result["gap_categories"].as_array().unwrap().len(), 2, "{result}");
+        assert_eq!(observed["metrics"]["gap_category_counts"]["tactic_timeout"], 1, "{:?}", observed["metrics"]);
+        assert_eq!(observed["metrics"]["gap_category_counts"]["geometry_case_analysis_missing"], 1, "{:?}", observed["metrics"]);
+        assert_eq!(observed["metrics"]["results_by_trust_basis"]["none"]["failed"], 1,
+            "aggregates must group by trust basis: {:?}", observed["metrics"]);
+        // Gap categories never affect the score.
+        assert_eq!(observed["metrics"]["solved_count"], 0);
+
+        // Issue #70: public_summary carries the machine-checkable redaction
+        // marker and no proof body (via an attested throwaway episode).
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "redaction marker check", "root_formal_statement": "2 + 2 = 4",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": create["problem_version_id"].as_str().unwrap(), "max_steps": 3,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let summary = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": ep["episode_id"].as_str().unwrap(), "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(summary["proof_body_redacted"], true, "{summary}");
+    }
+
+    /// Issue #62 at the problem_create surface: an `open` entry is accepted,
+    /// canonicalized, and lands in the stored manifest after the base imports.
+    #[tokio::test]
+    async fn test_problem_create_accepts_open_directive_entries() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "toy", "root_formal_statement": "1 + 1 = 2",
+            "problem_imports": ["Mathlib", "open  scoped   BigOperators"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let manifest: Vec<String> = created["import_manifest"].as_array().unwrap()
+            .iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert!(manifest.contains(&"open scoped BigOperators".to_string()),
+            "open entry must be stored canonicalized: {manifest:?}");
+
+        // An entry that is neither a module path nor a valid open directive is rejected.
+        let err = peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "toy2", "root_formal_statement": "2 + 2 = 4",
+            "problem_imports": ["open Foo, Bar"],
+        }).as_object().unwrap().clone())).await.expect_err("comma is not valid in an open directive");
+        assert!(format!("{err:?}").contains("neither a valid Lean module path"), "{err:?}");
+    }
+
+    /// Issue #66: an import manifest that already validated for an existing
+    /// problem_version under the same environment must not trigger another
+    /// compile probe.
+    #[tokio::test]
+    async fn test_problem_create_skips_revalidation_of_known_manifest() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static VALIDATIONS: AtomicUsize = AtomicUsize::new(0);
+
+        struct CountingGateway;
+        impl LeanGateway for CountingGateway {
+            fn verify_exact(&self, _o: &Obligation, _c: &str, _d: &[Uuid], _e: &str, _m: &[String], _f: ProofFormat) -> Result<LeanVerificationResult, String> {
+                Err("not used in this test".to_string())
+            }
+            fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> {
+                VALIDATIONS.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let client = connected_client(test_handler_with_gateway(CountingGateway)).await;
+        let peer = client.peer();
+        let mk = |text: &str| serde_json::json!({
+            "source_problem_text": text, "root_formal_statement": "1 + 1 = 2",
+            "problem_imports": ["Mathlib"],
+        }).as_object().unwrap().clone();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(mk("first"))).await.unwrap());
+        assert_eq!(VALIDATIONS.load(Ordering::SeqCst), 1, "first sight of a manifest must be probed");
+        tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(mk("second"))).await.unwrap());
+        assert_eq!(VALIDATIONS.load(Ordering::SeqCst), 1,
+            "an identical manifest under the same environment must not be re-probed (issue #66)");
     }
 
     // -- Run envelopes (issues #34, #38) -------------------------------------

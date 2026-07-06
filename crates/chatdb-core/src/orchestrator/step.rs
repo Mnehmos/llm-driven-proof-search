@@ -270,7 +270,28 @@ pub fn attempt_prepare(
             reserve_cost_budget(tx, &episode_id_str, cost_micros)?;
             mark_attempt_executing(tx, attempt_id, &now, &episode_id_str, cost_micros)?;
 
-            match crate::lean::module::assemble_module(&problem_namespace, &stmt_hash, module_items, root_theorem, &import_manifest) {
+            // Issue #64: when the target statement is a REGISTERED BENCHMARK
+            // statement (its hash matches a benchmark problem's target hash),
+            // the statement author is the upstream suite, not this module's
+            // author — so no module declaration may bind a name the statement
+            // references free (except the `_solution` slot), or the module
+            // could capture an intended-global identifier and prove a
+            // different proposition under the same hash. Client-authored
+            // (ad-hoc) statements keep the documented root-references-helpers
+            // SubmitModule shape.
+            let statement_is_benchmark_registered: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM benchmark_problems
+                               WHERE COALESCE(prover_ready_statement_hash, root_statement_hash) = ?1)",
+                [&stmt_hash],
+                |row| row.get::<_, i64>(0),
+            )? == 1;
+            let shadow_guard = if statement_is_benchmark_registered {
+                crate::lean::module::check_no_root_statement_shadowing(module_items, root_theorem)
+            } else {
+                Ok(())
+            };
+
+            match shadow_guard.and_then(|_| crate::lean::module::assemble_module(&problem_namespace, &stmt_hash, module_items, root_theorem, &import_manifest)) {
                 Err(policy_err) => {
                     // Deterministic policy rejection (bad name, prohibited construct,
                     // root hash mismatch, ...). A normal rejected attempt — never a
