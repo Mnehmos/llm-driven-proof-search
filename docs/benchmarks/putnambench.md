@@ -747,6 +747,67 @@ for a benchmark-linked episode, using the identical `benchmark_suite_name_for_ep
 lookup `proof_export` uses, and errors with the same guidance (use `proof_export`
 with `format="public_summary"` for a disclosure-safe report instead).
 
+The benchmark-link check keys on `COALESCE(prover_ready_statement_hash,
+root_statement_hash)` — the same statement identity `benchmark_result_record`
+uses — so an episode created from the prover-ready Pi-form (not the raw
+named-binder declaration a suite catalogs) is still recognized as
+benchmark-linked and cannot bypass the proof-body gate (#49).
+
+## Fidelity basis: formal_benchmark_hash_alignment (issue #43)
+
+A benchmark-imported problem no longer needs `unsafe_dev_attestation` to be
+provable. Because a `trusted_canonical_source` suite (like PutnamBench) is an
+externally-curated corpus, a problem whose server-computed `root_statement_hash`
+equals the registered benchmark target hash — `COALESCE(prover_ready_statement_hash,
+root_statement_hash)`, the same identity `benchmark_result_record` uses — is
+admitted on the honestly-named basis **`formal_benchmark_hash_alignment`**, via
+`problem_record_benchmark_alignment`. This sets `fidelity_status='benchmark_aligned'`
+and unlocks proving.
+
+This is **hash alignment to a curated target, not independent review.** It is
+deliberately weaker than `verified`:
+
+- It can reach `outcome=kernel_verified` but **never** `certified` / problem
+  state `COMPLETE` — the DB-level `CHECK(state <> 'COMPLETE' OR fidelity_status
+  = 'verified')` guard makes that structurally impossible.
+- The server recomputes every hash; no client-supplied hash is accepted.
+- An untrusted/custom suite is rejected and directed to a real
+  `problem_submit_fidelity_review`.
+- Training eligibility stays quarantined (`training_eligible` still requires
+  `verified`).
+
+`proof_export(format="public_summary")` reports the three independent claims
+separately so a benchmark success is never conflated with a discovery claim:
+
+- **`kernel_verified`** — Lean accepted a proof of the formal statement.
+- **`formal_target_matched`** — the formal statement is a registered benchmark
+  target (`benchmark_aligned`, or a recorded `canonical_statement_hash_match`).
+- **`certified`** — statement fidelity was independently reviewed (`verified`).
+
+`benchmark_success = kernel_verified + formal_target_matched`;
+`discovery_claim = kernel_verified + certified + independent_review`.
+
+## Stored result vs current episode outcome (issue #50)
+
+A benchmark result is a **historical report** — `benchmark_results.status` is
+recorded at result time and never rewritten. But `problem_submit_fidelity_review`
+can retroactively promote the referenced episode `kernel_verified` → `certified`
+*after* that row was recorded. To surface this without silently mutating
+history, `benchmark_run_observe` reports, per result:
+
+- `stored_result_status` — the status recorded at result time (also mirrored as
+  `status` for back-compat), never rewritten.
+- `current_episode_outcome` — the referenced episode's live outcome (e.g. after
+  a retroactive fidelity-review promotion).
+- `stale_result` — `true` when the two diverge within the proof vocabulary
+  (`kernel_verified` vs `certified`). Benign differences (a non-proof status
+  vs some other outcome) are never flagged.
+
+Aggregate metrics (`solved_count`, `pass_at_1_rate`, `kernel_verified_count`,
+`certified_count`, …) remain computed from `stored_result_status` — see the
+`aggregate_basis` field in the metrics block — so a run's reported numbers are
+stable even as individual episodes are later promoted.
+
 ## What "public" safely includes
 
 Aggregate metrics, problem identifiers (`upstream_problem_id`, `theorem_name`),

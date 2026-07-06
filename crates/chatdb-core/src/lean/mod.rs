@@ -10,7 +10,8 @@ use crate::models::{
 use uuid::Uuid;
 
 pub mod module;
-use module::{AssembledModule, normalize_and_indent};
+use module::{AssembledModule, normalize_proof};
+use crate::models::action::ProofFormat;
 
 pub trait LeanGateway {
     fn verify_exact(
@@ -20,6 +21,7 @@ pub trait LeanGateway {
         approved_dependency_ids: &[Uuid],
         environment: &str,
         import_manifest: &[String],
+        proof_format: ProofFormat,
     ) -> Result<LeanVerificationResult, String>;
 
     /// Confirms every module in `imports` actually resolves (catches typos /
@@ -251,6 +253,7 @@ impl LeanGateway for RealLeanGateway {
         approved_dependency_ids: &[Uuid],
         environment: &str,
         import_manifest: &[String],
+        proof_format: ProofFormat,
     ) -> Result<LeanVerificationResult, String> {
         let start_time = Instant::now();
 
@@ -272,12 +275,14 @@ impl LeanGateway for RealLeanGateway {
         // Lean 4.32+ requires the first tactic after `:= by` to be indented
         // relative to the theorem — a proof block at column 0 is parsed as an
         // empty `by` block followed by stray identifiers, failing every proof.
-        // normalize_and_indent also fixes issue #41: a naturally-formatted
-        // multi-line proof whose lines don't already share one indentation
-        // level (e.g. the first tactic flush, the rest indented) was silently
-        // reinterpreted by Lean's whitespace-sensitive parser as nesting
-        // rather than sequencing — see its doc comment in lean/module.rs.
-        let indented_proof = normalize_and_indent(candidate_source);
+        // normalize_proof applies the caller's declared transport format
+        // (issue #51): the default flat_tactic_sequence also fixes issue #41 (a
+        // naturally-formatted multi-line proof whose lines don't already share
+        // one indentation level was silently reinterpreted by Lean's
+        // whitespace-sensitive parser as nesting rather than sequencing);
+        // raw_lean_block instead preserves relative indentation for proofs that
+        // intentionally use it. Whitespace only — the kernel still decides.
+        let indented_proof = normalize_proof(candidate_source, proof_format);
         let file_content = format!(
             "{}\nnamespace {}\n\ntheorem {} : {} := by\n{}\n\nend {}\n",
             imports,
@@ -756,7 +761,7 @@ mod tests {
         };
 
         // This should fail to prove since 1 = 2 is false.
-        let res = gateway.verify_exact(&obligation, "rfl", &[], "envhash", &default_manifest());
+        let res = gateway.verify_exact(&obligation, "rfl", &[], "envhash", &default_manifest(), ProofFormat::FlatTacticSequence);
         if let Ok(res_val) = res {
             assert!(matches!(res_val.outcome, LeanVerificationOutcome::KernelFail));
         }
@@ -780,14 +785,14 @@ mod tests {
     /// be untouched. No partial commit.
     #[test]
     fn verify_module_does_not_write_on_failure() {
-        use crate::models::action::ModuleTheorem;
+        use crate::models::action::{ModuleTheorem, ProofFormat};
         let tmp = tempfile::tempdir().unwrap();
         let lean_project = tmp.path().to_path_buf();
         let gateway = RealLeanGateway::new(lean_project.clone(), PathBuf::from("Z:\\definitely\\nonexistent\\bin"));
 
         let stmt = "1 + 1 = 2";
         let root_hash = crate::hashing::canonical_hash(&stmt.to_string()).unwrap();
-        let root = ModuleTheorem { name: "r".to_string(), statement: stmt.to_string(), proof_term: "norm_num".to_string() };
+        let root = ModuleTheorem { name: "r".to_string(), statement: stmt.to_string(), proof_term: "norm_num".to_string(), proof_format: ProofFormat::FlatTacticSequence };
         let asm = module::assemble_module("ChatDB.P_test", &root_hash, &[], &root, &default_manifest()).unwrap();
 
         let res = gateway.verify_module(&asm, "envhash").unwrap();

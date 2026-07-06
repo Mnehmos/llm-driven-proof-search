@@ -1,6 +1,6 @@
 use chatdb_proof_core::orchestrator::{lifecycle, attempts, step};
 use chatdb_proof_core::lean::LeanGateway;
-use chatdb_proof_core::models::{Obligation, LeanVerificationOutcome, LeanVerificationResult, action::TypedAction};
+use chatdb_proof_core::models::{Obligation, LeanVerificationOutcome, LeanVerificationResult, action::TypedAction, action::ProofFormat};
 use rusqlite::Connection;
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use uuid::Uuid;
@@ -15,6 +15,7 @@ impl LeanGateway for MockGateway {
         _approved_dependency_ids: &[Uuid],
         _environment: &str,
         _import_manifest: &[String],
+        _proof_format: ProofFormat,
     ) -> Result<LeanVerificationResult, String> {
         if candidate_source.contains("sorry") {
             Ok(LeanVerificationResult {
@@ -68,6 +69,7 @@ impl LeanGateway for CountingGateway {
         _approved_dependency_ids: &[Uuid],
         _environment: &str,
         _import_manifest: &[String],
+        _proof_format: ProofFormat,
     ) -> Result<LeanVerificationResult, String> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(LeanVerificationResult {
@@ -142,7 +144,7 @@ fn test_atomic_step() {
     let gateway = MockGateway;
     
     // Action 1: solve with sorry (invalid)
-    let action_bad = TypedAction::Solve { proof_term: "sorry".to_string() };
+    let action_bad = TypedAction::Solve { proof_term: "sorry".to_string(), proof_format: ProofFormat::FlatTacticSequence };
     
     let outcome = step::attempt_commit(
         &tx, claim_res.attempt_id, 0, &claim_res.claim_token, &action_bad, &gateway, 10
@@ -213,7 +215,7 @@ fn test_over_budget_solve_is_denied_before_gateway_execution() {
 
     let calls = Arc::new(AtomicUsize::new(0));
     let gateway = CountingGateway { calls: calls.clone() };
-    let action = TypedAction::Solve { proof_term: "rfl".to_string() };
+    let action = TypedAction::Solve { proof_term: "rfl".to_string(), proof_format: ProofFormat::FlatTacticSequence };
     let err = step::attempt_commit(
         &tx, claim_res.attempt_id, 0, &claim_res.claim_token, &action, &gateway, 10
     ).unwrap_err();

@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  42 tools · typed schemas · JSON Schema 2020-12                 │
+│  62 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -68,6 +68,7 @@ Antigravity, or a custom script — should call this first.
 | `environment_describe` | Protocol version, capabilities, tool schemas, Lean gateway readiness |
 | `problem_create` | Register a new problem version (source text + root formal statement). `fidelity_status` starts `unreviewed` |
 | `problem_submit_fidelity_review` | Record an evidence-backed determination that a problem's formal statement represents its source text. The ONLY path to `fidelity_status='verified'` — required for `outcome='certified'` |
+| `problem_record_benchmark_alignment` | Record a `formal_benchmark_hash_alignment` basis (issue #43): the server verifies the problem hash-matches a registered trusted-benchmark target and sets `fidelity_status='benchmark_aligned'`, unlocking proving without `unsafe_dev_attestation`. Hash alignment, **not** NL review — reaches `kernel_verified` but never `certified` |
 | `problem_list` | List known problem versions (includes the hashes a reviewer must submit back unchanged) |
 | `episode_create` | Start an episode from a problem version with `fidelity_status` `verified` or `attested` |
 | `episode_reset` | Nondestructive reset — creates a new episode with `parent_episode_id` |
@@ -94,11 +95,30 @@ Antigravity, or a custom script — should call this first.
 | `formalization_plan_add_item` | Add a planning item (concept, missing_definition, missing_lemma, planned_module, or external_citation) to a plan |
 | `formalization_plan_attach_lookup` | Attach a `lean_declaration_lookup` result to a plan item, updating its Mathlib coverage status |
 | `formalization_plan_promote_item_to_obligation` | Link a plan item to an episode_obligation that already exists (created via a normal `Decompose` action). Never creates the obligation itself |
+| `research_dossier_create` | Create a Level 4 research dossier, optionally linked to a problem version, an episode, or neither. Metadata only |
+| `research_dossier_observe` | Read a dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets |
+| `research_node_add` | Add a typed research node (`definition`, `proposition`, `lemma`, `theorem`, `remark`, `reference`, `open_gap`) with explicit trust status |
+| `external_reference_add` | Add an external reference and optionally one theorem claim. Citations are never kernel verification |
+| `assumption_boundary_add` | Add an unformalized or rejected unsafe assumption boundary |
+| `citation_review_add` | Record human review of an external theorem claim. Human review remains distinct from Lean verification |
+| `verification_layer_set` | Set an independent verification layer (`blocked`, `failed`, `cited`, `human_reviewed`, etc.) for a dossier target |
+| `candidate_construction_add` | Propose a candidate mathematical construction (`graph_family`, `counterexample`, `coloring`, etc.). Can exist before a dossier, node, Lean theorem, or episode. A research artifact, not a proof certificate |
+| `candidate_construction_observe` | Record one empirical check (`supports`/`refutes`/`inconclusive`) against a candidate construction. Never changes proof status |
+| `candidate_construction_update_status` | Update a candidate construction's status/trust_status/claimed_properties/known_failures. `kernel_verified_claim_linked` is rejected unless a real kernel-verified layer is already linked |
+| `candidate_construction_link_node` | Attach a candidate construction to a research node, adopting the node's dossier if the construction has none yet |
+| `candidate_construction_link_verification_layer` | Attach a candidate construction to an existing verification layer, adopting the layer's dossier if the construction has none yet |
+| `exposition_add` | Add a human-readable exposition section (problem_summary, construction_intuition, key_lemmas, unverified_bridges, …) linked to a problem/episode/obligation/module/lemma/dossier. `prose_status` (prose/reviewed_prose/formalized) marks epistemic weight — never proof |
+| `exposition_observe` | List exposition artifacts for a problem_version, episode, or dossier. Read-only prose, separate from verified proof |
+| `semantic_skeleton_add` | Attach a structured reading of a statement/module/solution (quantifiers, hypotheses, conclusion, definitions, construction map, back-translation, fidelity `risk_flags`) scoped by `review_scope`. Metadata only — never sets `fidelity_status` or substitutes for `problem_submit_fidelity_review` |
+| `semantic_skeleton_observe` | Append one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive) to a skeleton's review history. `confirms_faithful` is not the root fidelity gate |
+| `expert_review_add` | Record one role-separated review-ledger entry (proposer/formalizer/prover/reviewer/domain_expert/refuter/editor/…) against a polymorphic target (source_problem, formal_statement, construction_artifact, module_artifact, external_citation, exposition, full_dossier, …). Pure insert — never marks anything proved; a human decision stays distinct from kernel verification |
+| `expert_review_observe` | Read review-ledger entries filtered by dossier, target (kind+id), and/or reviewer role. Read-only |
 | `mathlib_search_declarations` | Search the real pinned Mathlib source tree for declaration names containing a substring (beyond exact-name lookup). Advisory only |
 | `mathlib_search_local_artifacts` | Search this instance's own previously-verified theorem/def names for a substring match |
 | `formalization_plan_attach_librarian_result` | Attach a Mathlib librarian result to a formalization plan item, updating its coverage status |
 | `run_envelope_create` | Create a run envelope: host/model/mode (development/evaluation/benchmark/private_audit/public_report) and host-side cost accounting ChatDB cannot itself observe |
-| `run_envelope_update` | Update a run envelope's host-side cost fields or notes after the fact |
+| `run_envelope_update` | Update a run envelope's host-side cost fields or notes after the fact. Append-only (issue #46): a cost correction appends an auditable observation, so the prior value stays queryable |
+| `run_envelope_cost_observation_add` | Append an auditable, append-only host-side cost observation to a run envelope; prior observations stay queryable via `run_envelope_observe` |
 | `run_envelope_attach_episode` | Tag an episode with a run envelope. Metadata only — never changes the episode's outcome/state |
 | `run_envelope_observe` | Read back a run envelope and every episode tagged with it |
 | `benchmark_suite_create` | Register a benchmark suite (e.g. PutnamBench) — name, upstream URL/commit, language |
@@ -130,6 +150,143 @@ remaining budget.
   continue to include only settled `actual_cost_micros` as attested
   `model_call_reported_cost_micros`, never as exact cost.
 
+## Level 4 Research Substrate
+
+Research dossiers are paper-scale working records for definitions, lemmas,
+theorems, remarks, references, and open gaps. A dossier can be linked to a
+`problem_version`, linked to an `episode`, linked to both, or created before
+either exists.
+
+The Level 4 substrate is explicit about trust boundaries:
+
+- `proved_in_episode` means there is a linked Lean-verified episode lemma.
+- `imported_from_mathlib` means the claim is attributed to Mathlib, not locally
+  proved by this episode.
+- `external_citation_unreviewed` and `external_citation_human_reviewed` are
+  citation states, not proof states.
+- `unformalized_assumption` and `rejected_unsafe_assumption` remain visible as
+  assumptions or rejected assumptions.
+- `verification_layers` track independent review/construction/formalization
+  layers and can be `blocked` or `failed` without failing the whole dossier.
+
+No cited, reviewed, empirical, or assumed artifact is represented as kernel
+verified unless it is linked to an actual Lean-verified artifact. These tables
+are research bookkeeping and do not mutate episode outcome, obligation status,
+budget state, fidelity status, or benchmark results.
+
+### Candidate construction artifacts
+
+Candidate constructions are proposed mathematical objects — graph families,
+point configurations, colorings, field towers, lattices, counterexamples,
+asymptotic families, algebraic objects, combinatorial designs, and so on. They
+are the first durable object layer for **motivated discovery**: beyond *what*
+object is proposed, each records *why* it was proposed and what to do with it,
+encoding the loop
+
+```text
+observation → motivated move → proposed object → intended role → next check
+```
+
+via the fields `motivating_move` (`generalize`, `specialize`, `decompose`,
+`search_extremal_example`, `search_counterexample`, `introduce_invariant`,
+`reduce_to_known_theorem`, …), `source_observation`, `intended_role`
+(`witness`, `counterexample`, `extremal_example`, `lower_bound_construction`,
+`formalization_target`, `bridge_to_existing_theorem`, …), `strategy_context`,
+`why_this_might_work`, `why_this_might_fail`, `next_check`, and
+`future_challenge_relevance`. The object itself lives in `informal_description`,
+`parameters_json`, and `construction_json`; `verification_targets_json` records
+what a later system should check.
+
+A candidate construction can exist before there is a research dossier written
+up, before there is a Lean theorem, before there is an episode, and before
+there is empirical search machinery to generate one automatically (that
+machinery is issue #26's empirical math lab; this substrate only holds the
+objects it will produce and judge). Every link — `dossier_id`,
+`related_node_id`, `verification_layer_id`, `problem_version_id`,
+`episode_id` — is optional.
+
+Candidate constructions are **not proof certificates**. Their `trust_status`
+makes that explicit:
+
+- `informal`, `empirical_evidence`, `cited`, `human_reviewed`, and
+  `formalized_statement_exists` are all states short of kernel verification —
+  empirical support, human review, a citation, or even an existing formal
+  statement are each distinct from, and never imply, being proved.
+- `kernel_verified_claim_linked` is the only state that claims kernel
+  evidence, and it is rejected unless the construction's
+  `verification_layer_id` names a `verification_layers` row whose own status
+  is already `kernel_verified` (itself only reachable through real
+  Lean-backed evidence — see above). A candidate construction can link to
+  real evidence; it can never manufacture it.
+
+A candidate construction can attach to a dossier, a research node, and/or a
+verification layer, or exist attached to none of them. `falsified` and
+`rejected` constructions stay visible in `research_dossier_observe` rather
+than being deleted, since a documented dead end is itself research output.
+
+### Exposition artifacts
+
+Serious mathematical output is not only a Lean file — it needs an explanation
+layer: what the construction means, why the definitions were chosen, what the
+key lemma does, and what remains unformalized. Exposition artifacts capture
+that prose **alongside, and explicitly separate from, kernel-verified proof**.
+Each carries a `prose_status` making its epistemic weight explicit:
+
+- `prose` — raw author narrative.
+- `reviewed_prose` — a human read it.
+- `formalized` — the described claim is backed by a linked formal artifact.
+
+**None of these is kernel verification**, and no exposition artifact ever
+changes an episode outcome, `fidelity_status`, canonical promotion, training
+eligibility, budget, or benchmark state. `proof_export` renders exposition in
+its own `## Exposition (prose — not part of the verified proof)` section,
+never inside the proof tree or the verified-module source, and every section
+is labeled with its `prose_status` so a reader can never mistake reviewed or
+unreviewed narrative for a checked proof. An artifact can attach to a
+problem, an episode, a specific obligation, a verified module, a verified
+helper lemma, and/or a research dossier — every link is optional.
+
+### Semantic skeletons (module-aware fidelity)
+
+Statement fidelity can't stay a single flat approval over one root
+proposition: a module can prove a correct formal theorem while the real source
+claim still rests on prose-only bridges (integer encoding, a bijection, a
+final-answer extraction, a domain restriction). A **semantic skeleton** is a
+structured reading of what a statement, verified module, or source-aligned
+solution actually says — `quantifiers`, `hypotheses`, `conclusion`,
+`definitions`, `construction_map`, a natural-language `backtranslation`, and
+fidelity `risk_flags` — scoped by `review_scope` (`root_statement_only`,
+`module_artifact`, `source_aligned_solution`, `computational_check_only`,
+`structural_proof`). Its `semantic_fingerprint_hash` is server-computed over
+the normalized content, never client-supplied.
+
+A skeleton is **descriptive metadata, never the fidelity gate**: it has no
+column that can hold kernel evidence, never sets `fidelity_status`, and never
+substitutes for `problem_submit_fidelity_review`. `semantic_skeleton_observe`
+appends module-aware review notes (`confirms_faithful`, `raises_concern`,
+`reports_mismatch`, `inconclusive`) — a `confirms_faithful` note is
+note-taking, not a proof.
+
+### Expert reviews (role-separated ledger)
+
+Serious mathematics gets its credibility from more than one prover: a claim is
+proposed, formalized, proved, refereed, and checked by domain experts.
+**Expert reviews** are a role-separated ledger of who reviewed what and what
+they decided — `reviewer_role` (proposer, construction_searcher, formalizer,
+prover, reviewer, domain_expert, refuter, editor, librarian) against a
+polymorphic `review_target_kind` (source_problem, formal_statement,
+construction_artifact, module_artifact, external_citation,
+asymptotic_extraction, exposition, full_dossier), with a `decision`,
+`confidence`, `expertise_tags`, `requested_changes`, and `risk_flags`.
+
+`expert_review_add` is a **pure insert**: unlike `citation_review_add` (which
+updates a citation's `claim_status`), an expert review mutates no other table.
+`reviewer_id` is free text, not an authenticated principal, and a
+`domain_expert` "approved" decision is human-attested — it never marks
+anything kernel-verified, never changes an episode outcome, `fidelity_status`,
+canonical promotion, budget, or benchmark state. A `rejected` review records
+an opinion without deleting or downgrading the reviewed artifact.
+
 **Benchmark contamination policy:** upstream benchmarks like PutnamBench ask
 that completed formal proofs not be published without first coordinating with
 their maintainers. See [docs/benchmarks/putnambench.md](docs/benchmarks/putnambench.md)
@@ -140,7 +297,7 @@ enforce this.
 
 As of v0.3.x, `episode_step` accepts more than a single theorem body:
 
-- **`Solve { proof_term }`** — one theorem: `theorem O_<id> : <statement> := by <proof_term>`. Good for a self-contained tactic proof.
+- **`Solve { proof_term, proof_format? }`** — one theorem: `theorem O_<id> : <statement> := by <proof_term>`. Good for a self-contained tactic proof. `proof_format` (issue #51) is an optional whitespace-transport hint: `flat_tactic_sequence` (default) flattens accidental nesting; `raw_lean_block` preserves the proof's relative indentation for intentional focus-bullet/nested-block structure. It only affects leading whitespace — the Lean kernel remains the sole authority. `SubmitModule`'s `root_theorem` accepts the same field.
 - **`SubmitModule { module_items, root_theorem }`** — a small local Lean *development*: helper `def`s, helper `theorem`s, and a root theorem, assembled by the server into one namespaced module and verified as a unit. `module_items` is a list of:
   - `LeanModuleItem::Def { name, type_signature, body }` — `def <name> : <type_signature> := <body>`
   - `LeanModuleItem::Theorem { name, statement, proof_term }` — `theorem <name> : <statement> := by <proof_term>`
@@ -473,7 +630,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 42 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 62 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records

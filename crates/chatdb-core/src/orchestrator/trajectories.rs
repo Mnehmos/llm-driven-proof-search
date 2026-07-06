@@ -290,6 +290,15 @@ pub fn replay_trajectory(
 
         let proof_term = payload.get("action").and_then(|a| a.get("proof_term")).and_then(|s| s.as_str())
             .ok_or_else(|| "trajectory event missing action.proof_term".to_string())?;
+        // Issue #51: replay must re-verify with the SAME transport format the
+        // original attempt used, or a raw_lean_block proof's recorded outcome
+        // wouldn't reproduce. Absent (older trajectories) -> flat default.
+        let proof_format: crate::models::action::ProofFormat = payload.get("action")
+            .and_then(|a| a.get("proof_format"))
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| format!("invalid action.proof_format in trajectory: {}", e))?
+            .unwrap_or_default();
         let lean_statement = payload.get("lean_statement").and_then(|s| s.as_str())
             .ok_or_else(|| "trajectory event missing lean_statement".to_string())?;
         let statement_hash = payload.get("statement_hash").and_then(|s| s.as_str()).unwrap_or("").to_string();
@@ -334,7 +343,7 @@ pub fn replay_trajectory(
         let import_manifest: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
 
         let result = lean_gateway
-            .verify_exact(&obl, proof_term, &dep_ids, &lean_environment_hash, &import_manifest)
+            .verify_exact(&obl, proof_term, &dep_ids, &lean_environment_hash, &import_manifest, proof_format)
             .map_err(|e| format!("replay verification failed: {}", e))?;
 
         let replayed_outcome = result.outcome.to_string();
@@ -371,7 +380,7 @@ mod module_replay_tests {
     use super::*;
     use crate::lean::LeanGateway;
     use crate::lean::module::{assemble_module, AssembledModule};
-    use crate::models::action::{LeanModuleItem, ModuleTheorem, TypedAction};
+    use crate::models::action::{LeanModuleItem, ModuleTheorem, ProofFormat, TypedAction};
     use crate::models::{LeanVerificationResult, LeanModuleVerificationResult, LeanVerificationOutcome, Obligation};
 
     /// Minimal gateway: modules always kernel-pass (policy already ran in
@@ -379,7 +388,7 @@ mod module_replay_tests {
     /// without a real Lean toolchain.
     struct PassGw;
     impl LeanGateway for PassGw {
-        fn verify_exact(&self, _o: &Obligation, _s: &str, _d: &[Uuid], _e: &str, _m: &[String]) -> Result<LeanVerificationResult, String> {
+        fn verify_exact(&self, _o: &Obligation, _s: &str, _d: &[Uuid], _e: &str, _m: &[String], _f: ProofFormat) -> Result<LeanVerificationResult, String> {
             Err("not used".to_string())
         }
         fn verify_module(&self, assembled: &AssembledModule, environment: &str) -> Result<LeanModuleVerificationResult, String> {
@@ -426,7 +435,7 @@ mod module_replay_tests {
         ).unwrap();
 
         let items = vec![LeanModuleItem::Def { name: "z".to_string(), type_signature: "Nat".to_string(), body: "0".to_string() }];
-        let root = ModuleTheorem { name: "root".to_string(), statement: root_stmt.to_string(), proof_term: "trivial".to_string() };
+        let root = ModuleTheorem { name: "root".to_string(), statement: root_stmt.to_string(), proof_term: "trivial".to_string(), proof_format: ProofFormat::FlatTacticSequence };
         let asm = assemble_module(&namespace, &root_hash, &items, &root, &manifest()).unwrap();
 
         let action = TypedAction::SubmitModule { module_items: items, root_theorem: root };

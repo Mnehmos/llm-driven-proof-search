@@ -238,11 +238,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let import_manifest: Vec<String> = serde_json::from_str(&cat.import_manifest_json).unwrap_or_default();
+        // Issue #43: PutnamBench is a trusted_canonical_source suite, so a
+        // problem is admitted on formal_benchmark_hash_alignment (the problem's
+        // root statement hash-matches the registered benchmark target) rather
+        // than unsafe_dev_attestation — an honest benchmark fidelity basis, not
+        // a dev bypass. It still can never reach 'certified' (that needs
+        // independent NL review), only kernel_verified.
         let pv_res = match call(&peer, "problem_create", serde_json::json!({
             "source_problem_text": format!("PutnamBench {}", planned.upstream_problem_id),
             "root_formal_statement": cat.submit_statement,
             "problem_imports": import_manifest,
-            "unsafe_dev_attestation": true,
         })).await {
             Ok(r) => r,
             Err(e) => {
@@ -256,6 +261,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
         let pv_id = pv_res["problem_version_id"].as_str().unwrap().to_string();
+
+        if let Err(e) = call(&peer, "problem_record_benchmark_alignment", serde_json::json!({
+            "problem_version_id": pv_id,
+            "benchmark_problem_id": cat.benchmark_problem_id,
+            "approver_id": "putnam_runner",
+        })).await {
+            eprintln!("INFRA ERROR {}: problem_record_benchmark_alignment failed: {}", planned.upstream_problem_id, e);
+            call(&peer, "benchmark_result_record", serde_json::json!({
+                "run_id": run_id, "benchmark_problem_id": cat.benchmark_problem_id,
+                "status": "infra_error", "attempts_used": 0,
+            })).await.ok();
+            results.push(ResultRow { upstream_problem_id: planned.upstream_problem_id.clone(), status: "infra_error".to_string(), pass_at: None, attempts_used: 0 });
+            continue;
+        }
 
         let ep_res = call(&peer, "episode_create", serde_json::json!({
             "problem_version_id": pv_id, "max_steps": attempt_budget + 1,
