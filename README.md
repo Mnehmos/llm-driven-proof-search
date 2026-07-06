@@ -178,7 +178,16 @@ The Level 4 substrate is explicit about trust boundaries:
 - `unformalized_assumption` and `rejected_unsafe_assumption` remain visible as
   assumptions or rejected assumptions.
 - `verification_layers` track independent review/construction/formalization
-  layers and can be `blocked` or `failed` without failing the whole dossier.
+  layers (arithmetic construction, geometric criterion, packing/size bound,
+  asymptotic extraction, formal module, statement fidelity, external review, …)
+  and can be `blocked` or `failed` without failing the whole dossier. A layer
+  reaches `kernel_verified` only for a `formal_module`/`statement_fidelity`
+  layer backed by a real Lean pass — a search/construction/packing layer never
+  can. The markdown-family `proof_export` modes render a **Verification layers**
+  table for the dossier(s) attached to the episode or its problem, so the export
+  reports the true per-layer state, not only the episode outcome. Layer status
+  is **additive metadata**: a kernel-verified root theorem does not imply every
+  layer is verified, and layer completeness never gates `certified`.
 
 No cited, reviewed, empirical, or assumed artifact is represented as kernel
 verified unless it is linked to an actual Lean-verified artifact. These tables
