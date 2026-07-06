@@ -4443,13 +4443,22 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
     } else {
         proof_soundness.to_string()
     };
-    let training_display: String = if stale_receipt && training_eligible {
-        "STALE (recorded: eligible — replay required)".to_string()
-    } else if benchmark_link_for_labels.is_some() {
+    // Codex review on PR #77: the benchmark quarantine must WIN over the
+    // stale-receipt "recorded: eligible" rendering — a tracked-benchmark
+    // episode was never eligible under issue #69's default, so a stale
+    // receipt on one stays QUARANTINED (with the stale note appended),
+    // never "recorded: eligible".
+    let training_display: String = if benchmark_link_for_labels.is_some() {
         // Issue #69: tracked-benchmark results are quarantined by default —
         // even a 'verified' fidelity basis does not opt benchmark proof
         // content into training without an explicit policy decision.
-        "QUARANTINED (tracked benchmark — quarantined by default regardless of fidelity basis; issue #69)".to_string()
+        if stale_receipt {
+            "QUARANTINED (tracked benchmark — quarantined by default regardless of fidelity basis; issue #69) — STALE RECEIPT, replay required".to_string()
+        } else {
+            "QUARANTINED (tracked benchmark — quarantined by default regardless of fidelity basis; issue #69)".to_string()
+        }
+    } else if stale_receipt && training_eligible {
+        "STALE (recorded: eligible — replay required)".to_string()
     } else if training_eligible {
         "eligible".to_string()
     } else {
@@ -6002,7 +6011,13 @@ impl ServerHandler for ChatDbMcp {
                         ).map(|v| v == 1).unwrap_or(false)
                     };
                     if !already_validated {
-                        self.gateway.validate_import_manifest(&extra_imports)
+                        // Codex review on PR #77: probe the FULL persisted
+                        // manifest (base + extras), not extra_imports alone —
+                        // an `open` directive whose namespace comes from a
+                        // base-manifest import would otherwise be falsely
+                        // rejected here even though the problem's real
+                        // manifest elaborates it fine.
+                        self.gateway.validate_import_manifest(&import_manifest)
                             .map_err(|e| mcp_invalid_params(format!("problem_imports rejected — {}", e)))?;
                     }
                 }
