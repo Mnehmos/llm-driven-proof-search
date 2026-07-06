@@ -3771,11 +3771,53 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
     if mode == ExportMode::TrainingExport {
         let ep_uuid = Uuid::parse_str(episode_id).map_err(|e| mcp_invalid_params(format!("invalid episode_id: {}", e)))?;
         let records = dataset::export_rl(conn, ep_uuid).map_err(mcp_internal_error)?;
-        let mut values: Vec<serde_json::Value> = records.iter().map(|r| serde_json::to_value(r).unwrap()).collect();
-        for v in values.iter_mut() {
-            trajectories::scrub_value(v);
-        }
-        return Ok(serde_json::to_string_pretty(&values).unwrap());
+        let record_values: Vec<serde_json::Value> = records.iter().map(|r| serde_json::to_value(r).unwrap()).collect();
+
+        // Per-layer verification status (issue #13): the dataset export carries
+        // the dossier's layer state too, not only per-step RL records. Kept
+        // structured and non-public — no proof bodies, and the real target id is
+        // replaced by a stable redacted handle (a hash prefix) so a training
+        // consumer can correlate layers on the same target without the raw id.
+        let mut lstmt = conn.prepare(
+            "SELECT vl.layer_kind, vl.status, vl.target_kind, vl.target_id, vl.summary
+             FROM verification_layers vl
+             JOIN research_dossiers d ON vl.dossier_id = d.id
+             WHERE d.episode_id = ?1 OR d.problem_version_id = ?2
+             ORDER BY vl.target_kind ASC, vl.layer_kind ASC, vl.status ASC",
+        ).map_err(rs)?;
+        let layer_rows: Vec<(String, String, String, String, Option<String>)> = lstmt
+            .query_map((episode_id, &pv_id), |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))
+            .map_err(rs)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(rs)?;
+        drop(lstmt);
+        let kernel_verified_layer_count = layer_rows.iter().filter(|(_, status, ..)| status == "kernel_verified").count();
+        let layers: Vec<serde_json::Value> = layer_rows.iter().map(|(layer_kind, status, target_kind, target_id, summary)| {
+            let target_handle = canonical_hash(target_id)
+                .map(|h| h.chars().take(12).collect::<String>())
+                .unwrap_or_else(|_| "unknown".to_string());
+            serde_json::json!({
+                "layer_kind": layer_kind,
+                "status": status,
+                "target_kind": target_kind,
+                "target_handle": target_handle,
+                "summary": summary,
+            })
+        }).collect();
+
+        let mut envelope = serde_json::json!({
+            "records": record_values,
+            "verification_layers": {
+                "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+                "kernel_verified_layer_count": kernel_verified_layer_count,
+                "total_layer_count": layer_rows.len(),
+                "layers": layers,
+            },
+        });
+        // One recursive scrub over the whole envelope (records + layer metadata)
+        // strips any credential-shaped keys.
+        trajectories::scrub_value(&mut envelope);
+        return Ok(serde_json::to_string_pretty(&envelope).unwrap());
     }
 
     // Markdown dossier. Proof soundness (did Lean verify this exact formal
@@ -4126,6 +4168,48 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
                     heading, section_kind, status_tag, author, content.trim(),
                 ));
             }
+        }
+    }
+
+    // Verification layers (issue #13): the per-layer status of the research
+    // dossier(s) attached to this episode or its problem_version. A serious
+    // proof separates into layers checked independently (arithmetic
+    // construction, geometric criterion, packing bound, asymptotic extraction,
+    // formal module, statement fidelity, ...). This table is ADDITIVE metadata
+    // only: a kernel-verified root theorem does NOT imply every layer is
+    // verified, and layer completeness NEVER gates `certified` (that stays root
+    // kernel pass + statement-fidelity review). Rendered in the markdown-family
+    // exports; public_summary/training_export return earlier and never carry it.
+    {
+        let mut lstmt = conn.prepare(
+            "SELECT vl.layer_kind, vl.status, vl.target_kind, vl.target_id, vl.summary
+             FROM verification_layers vl
+             JOIN research_dossiers d ON vl.dossier_id = d.id
+             WHERE d.episode_id = ?1 OR d.problem_version_id = ?2
+             ORDER BY vl.target_kind ASC, vl.layer_kind ASC, vl.status ASC",
+        ).map_err(rs)?;
+        let layers: Vec<(String, String, String, String, Option<String>)> = lstmt
+            .query_map((episode_id, &pv_id), |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))
+            .map_err(rs)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(rs)?;
+        if !layers.is_empty() {
+            let kernel_verified_count = layers.iter().filter(|(_, status, ..)| status == "kernel_verified").count();
+            md.push_str("\n## Verification layers (additive metadata — never a certification gate)\n\n");
+            md.push_str(&format!(
+                "Per-layer status is **descriptive only**: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates `certified`. **{} of {} layer(s)** here are `kernel_verified`; the rest are cited, empirical, human-reviewed, blocked, or still gaps.\n\n",
+                kernel_verified_count, layers.len(),
+            ));
+            md.push_str("| Layer | Status | Target | Summary |\n|---|---|---|---|\n");
+            for (layer_kind, status, target_kind, target_id, summary) in &layers {
+                let short_target = target_id.get(..8).unwrap_or(target_id.as_str());
+                md.push_str(&format!(
+                    "| {} | {} | {}:{} | {} |\n",
+                    layer_kind, status, target_kind, short_target,
+                    summary.as_deref().unwrap_or("").replace('|', "\\|").replace('\n', " "),
+                ));
+            }
+            md.push('\n');
         }
     }
 
@@ -11981,6 +12065,115 @@ mod tests {
         assert!(md2.contains("suggested_hint"), "{md2}");
     }
 
+    /// Issue #13 gap-fill (criteria #4 + #5): the markdown/paper_dossier export
+    /// carries the dossier's per-layer verification status — not only the
+    /// episode outcome — and a kernel-verified ROOT theorem does NOT imply every
+    /// layer is verified (nor does layer completeness gate `certified`).
+    #[tokio::test]
+    async fn test_proof_export_carries_per_layer_status_and_root_pass_is_not_all_layers() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        // Drive an episode to a kernel-verified ROOT.
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "layered proof", "root_formal_statement": "True", "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let step = claim_and_solve(&peer, &episode_id, "trivial", "layered-root").await;
+        assert_eq!(step["outcome"], "kernel_verified", "root must be kernel-verified: {:?}", step);
+
+        // A dossier attached to this episode with several INDEPENDENT layers:
+        // one formal_module actually kernel_verified, the rest still open.
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Layered dossier", "problem_version_id": pv_id, "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "target_kind": "episode", "target_id": episode_id,
+            "layer_kind": "formal_module", "status": "kernel_verified", "summary": "Root theorem compiled.",
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "target_kind": "dossier", "target_id": dossier_id,
+            "layer_kind": "construction_search", "status": "blocked", "summary": "Need a sharper construction.",
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "target_kind": "dossier", "target_id": dossier_id,
+            "layer_kind": "packing_or_size_bound", "status": "empirical", "summary": "Bound only checked numerically.",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let md_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "markdown",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let md = md_res.content[0].as_text().unwrap().text.clone();
+
+        // The export surfaces a per-layer section, not only the episode outcome...
+        assert!(md.contains("## Verification layers"), "export must carry a verification-layer section: {md}");
+        assert!(md.contains("formal_module") && md.contains("construction_search") && md.contains("packing_or_size_bound"), "{md}");
+        assert!(md.contains("blocked") && md.contains("empirical"), "{md}");
+        // ...and states plainly that a root kernel pass does not verify every layer.
+        assert!(md.contains("1 of 3 layer(s)"), "exactly one of three layers is kernel_verified despite the root pass: {md}");
+        assert!(md.to_lowercase().contains("never gates") || md.contains("additive metadata"), "layers must be labeled non-gating: {md}");
+
+        // The redacted public_summary must NOT carry the layer table — it returns
+        // before the markdown builder; lock that in so a refactor can't leak it.
+        let pub_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let pub_txt = pub_res.content[0].as_text().unwrap().text.clone();
+        assert!(!pub_txt.contains("Verification layers"), "public_summary must stay redacted, no layer table: {pub_txt}");
+    }
+
+    /// Issue #13 gap-fill (criterion #6): a unit-distance-style fixture that
+    /// instantiates all FIVE named verification layers as distinct rows — field
+    /// tower & norm-one (arithmetic_construction), geometric projection
+    /// (geometric_criterion), packing bound (packing_or_size_bound), asymptotic
+    /// extraction (asymptotic_extraction) — covering the two layer kinds that
+    /// previously had zero test coverage. None is (or can be) kernel_verified.
+    #[tokio::test]
+    async fn test_unit_distance_five_named_verification_layers_fixture() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Unit-distance verification layers",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+
+        // Field tower and norm-one are both arithmetic_construction, so they hang
+        // off distinct node targets (UNIQUE(dossier, target, layer_kind)).
+        let node_ft = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "node_type": "lemma", "title": "Field tower", "trust_status": "unformalized_assumption",
+        }).as_object().unwrap().clone())).await.unwrap())["node_id"].as_str().unwrap().to_string();
+        let node_n1 = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "node_type": "lemma", "title": "Norm-one elements", "trust_status": "unformalized_assumption",
+        }).as_object().unwrap().clone())).await.unwrap())["node_id"].as_str().unwrap().to_string();
+
+        let layers = [
+            ("node", node_ft.as_str(), "arithmetic_construction", "informal", "Field tower F_k of degree 2^k."),
+            ("node", node_n1.as_str(), "arithmetic_construction", "empirical", "Norm-one elements realize the distances."),
+            ("dossier", dossier_id.as_str(), "geometric_criterion", "cited", "Szemerédi–Trotter incidence projection."),
+            ("dossier", dossier_id.as_str(), "packing_or_size_bound", "empirical", "Packing bound checked numerically."),
+            ("dossier", dossier_id.as_str(), "asymptotic_extraction", "informal", "Extract super-linear growth."),
+        ];
+        let mut observed = serde_json::Value::Null;
+        for (tk, tid, lk, st, summary) in layers {
+            observed = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+                "dossier_id": dossier_id, "target_kind": tk, "target_id": tid, "layer_kind": lk, "status": st, "summary": summary,
+            }).as_object().unwrap().clone())).await.unwrap())["dossier"].clone();
+        }
+        let layer_arr = observed["verification_layers"].as_array().unwrap();
+        assert_eq!(layer_arr.len(), 5, "all five named layers must be present: {:?}", layer_arr);
+        let kinds: std::collections::HashSet<&str> = layer_arr.iter().map(|l| l["layer_kind"].as_str().unwrap()).collect();
+        for expected in ["arithmetic_construction", "geometric_criterion", "packing_or_size_bound", "asymptotic_extraction"] {
+            assert!(kinds.contains(expected), "missing named layer kind {expected}: {:?}", kinds);
+        }
+        // These structural/empirical layers are never kernel_verified.
+        assert!(layer_arr.iter().all(|l| l["status"] != "kernel_verified"), "{:?}", layer_arr);
+    }
+
     // -- Draft artifacts + formalization planning (issues #23, #10) ---------
 
     async fn create_problem(peer: &rmcp::service::Peer<rmcp::RoleClient>, statement: &str) -> String {
@@ -16592,15 +16785,42 @@ mod tests {
             "action": {"type": "solve", "proof_term": "norm_num"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
 
+        // Issue #13: the dataset export must also carry the dossier's per-layer
+        // verification status. Attach a dossier with one (non-verified) layer.
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "training export layers", "problem_version_id": pv_id, "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "target_kind": "dossier", "target_id": dossier_id,
+            "layer_kind": "construction_search", "status": "blocked", "summary": "needs a sharper construction",
+        }).as_object().unwrap().clone())).await.unwrap());
+
         let res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
             "episode_id": episode_id, "format": "training_export", "allow_putnambench_proof_export": true,
         }).as_object().unwrap().clone())).await.unwrap();
         let text = res.content[0].as_text().unwrap().text.clone();
         let parsed: serde_json::Value = serde_json::from_str(&text).expect("training_export must be valid JSON");
-        let arr = parsed.as_array().expect("training_export must be a JSON array");
-        assert!(!arr.is_empty(), "training_export must contain at least one record");
-        assert!(arr[0].get("action").is_some(), "each record must carry an action field: {text}");
-        assert!(arr[0].get("reward").is_some(), "each record must carry a reward field: {text}");
+
+        // Per-step RL records live under `records`.
+        let records = parsed["records"].as_array().expect("training_export must carry a records array");
+        assert!(!records.is_empty(), "training_export must contain at least one record");
+        assert!(records[0].get("action").is_some(), "each record must carry an action field: {text}");
+        assert!(records[0].get("reward").is_some(), "each record must carry a reward field: {text}");
+
+        // Per-layer verification status lives under `verification_layers`.
+        let vl = &parsed["verification_layers"];
+        assert_eq!(vl["total_layer_count"], 1, "{text}");
+        assert_eq!(vl["kernel_verified_layer_count"], 0, "{text}");
+        assert!(vl["policy"].as_str().is_some_and(|p| p.contains("does not imply")), "policy note must be present: {text}");
+        let layers = vl["layers"].as_array().expect("verification_layers.layers must be an array");
+        assert_eq!(layers.len(), 1, "{text}");
+        assert_eq!(layers[0]["layer_kind"], "construction_search", "{text}");
+        assert_eq!(layers[0]["status"], "blocked", "{text}");
+        assert_eq!(layers[0]["target_kind"], "dossier", "{text}");
+        // The target is a redacted handle — present, and NOT the raw target id.
+        let handle = layers[0]["target_handle"].as_str().expect("target_handle must be present");
+        assert!(!handle.is_empty() && handle != dossier_id, "target_handle must be a redacted stand-in, not the raw id: {text}");
     }
 
     #[tokio::test]
