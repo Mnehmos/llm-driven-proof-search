@@ -1,0 +1,132 @@
+{
+  "registry_version": "1.0.0",
+  "updated": "2026-07-06",
+  "purpose": "Issue #83: versioned catalog of LeanChecker.Kits modules — which kit to import, which canonical lemmas exist, which benchmark gaps each kit targets, and which fixtures prove it is alive. Metadata only: a registry entry never grants proof authority; kits provide tools, and the kernel decides outcomes.",
+  "usage": "Add the module_path to problem_imports alongside canonical_open_directives, then reference key_lemmas by their fully qualified names. Each entry's prompt_block is a one-line context string suitable for an external prover.",
+  "kits": [
+    {
+      "kit_name": "GeometryAngleKit",
+      "module_path": "LeanChecker.Kits.GeometryAngleKit",
+      "domain": "synthetic Euclidean geometry — unoriented/oriented angle bridges",
+      "status": "v2",
+      "canonical_imports": ["Mathlib", "LeanChecker.Kits.GeometryAngleKit"],
+      "canonical_open_directives": ["open Real EuclideanGeometry", "open scoped EuclideanSpace"],
+      "key_lemmas": [
+        "LeanChecker.GeometryAngleKit.base_angle_eq_pi_sub_apex_div_two",
+        "LeanChecker.GeometryAngleKit.angle_add_angle_eq_pi_of_sbtw",
+        "LeanChecker.GeometryAngleKit.three_ray_angle_decomposition"
+      ],
+      "fixtures": [
+        "1965 A1 scalar endgame (linarith from the two kit equations)",
+        "1965 A1 Y-side scalar equation via three-ray decomposition"
+      ],
+      "known_acceptance_targets": [
+        {
+          "benchmark": "PutnamBench",
+          "upstream_problem_id": "putnam_1965_a1",
+          "status": "closed_kernel_verified_pass_at_1",
+          "evidence": "run 1c806569, episode 5f124078, result 5c4d5db4 (2026-07-06)"
+        }
+      ],
+      "remaining_route_steps": [],
+      "prompt_block": "GeometryAngleKit: isosceles base-angle and Sbtw supplementary bridges turn configuration hypotheses into scalar equations; three_ray_angle_decomposition (needs Fact finrank=2 + Module.Oriented instances) gives the universal three-rays-at-a-vertex constraint. Endgame is always linarith, never nlinarith over angle atoms.",
+      "unsafe_for_public_proof_body_export": false
+    },
+    {
+      "kit_name": "AffineAreaKit",
+      "module_path": "LeanChecker.Kits.AffineAreaKit",
+      "domain": "affine plane geometry — cevian/Routh area ratios via coordinates",
+      "status": "v1",
+      "canonical_imports": ["Mathlib", "LeanChecker.Kits.AffineAreaKit"],
+      "canonical_open_directives": [],
+      "key_lemmas": [
+        "LeanChecker.AffineAreaKit.triangleDet",
+        "LeanChecker.AffineAreaKit.divPoint",
+        "LeanChecker.AffineAreaKit.divPoint_mem_segment",
+        "LeanChecker.AffineAreaKit.divPoint_ratio",
+        "LeanChecker.AffineAreaKit.triangleDet_translate"
+      ],
+      "fixtures": [
+        "one-seventh triangle (Routh k=2) area ratio by norm_num over coordinates",
+        "k=2 division point coordinates"
+      ],
+      "known_acceptance_targets": [
+        {
+          "benchmark": "PutnamBench",
+          "upstream_problem_id": "putnam_1962_a3",
+          "status": "open",
+          "tracking_issue": 85
+        }
+      ],
+      "remaining_route_steps": [
+        "affine normalization of a noncollinear triangle to the frame (0,0),(1,0),(0,1)",
+        "cevian intersection coordinates for general k",
+        "measure bridge: volume (convexHull {a,b,c}) = |triangleDet a b c| / 2 (ENNReal)"
+      ],
+      "prompt_block": "AffineAreaKit: signed-area determinant and ratio-k division points with segment membership; endgame is norm_num/ring over explicit coordinates, never a raw fight with volume(convexHull ...). The volume bridge is the missing v2 piece.",
+      "unsafe_for_public_proof_body_export": false
+    },
+    {
+      "kit_name": "PowerSeriesKit",
+      "module_path": "LeanChecker.Kits.PowerSeriesKit",
+      "domain": "real analysis — power-series coefficient uniqueness",
+      "status": "v1",
+      "canonical_imports": ["Mathlib", "LeanChecker.Kits.PowerSeriesKit"],
+      "canonical_open_directives": ["open FormalMultilinearSeries"],
+      "key_lemmas": [
+        "LeanChecker.PowerSeriesKit.coeff_eq_of_hasFPowerSeriesAt",
+        "LeanChecker.PowerSeriesKit.coeff_eq_of_locally_eq_sum",
+        "LeanChecker.PowerSeriesKit.ofScalarsSum_eq_tsum_mul"
+      ],
+      "fixtures": [
+        "locally equal tsum power series have equal coefficients (benchmark-shaped phrasing)"
+      ],
+      "known_acceptance_targets": [
+        {
+          "benchmark": "PutnamBench",
+          "upstream_problem_id": "putnam_1970_a1",
+          "status": "open",
+          "tracking_issue": 86
+        }
+      ],
+      "remaining_route_steps": [
+        "ball-to-series bridge: from pointwise tsum convergence on ball 0 c to HasFPowerSeriesAt f (ofScalars ℝ p) 0",
+        "coefficient formula for exp(ax)*cos(bx) via the complex exponential",
+        "zero-set dichotomy from rationality/periodicity of arctan(b/a)/π"
+      ],
+      "prompt_block": "PowerSeriesKit: pins an arbitrary coefficient sequence to THE power-series coefficients of f from local agreement of sums — turns '∑ p n x^n = f x near 0' into coefficient equations. The ball-to-HasFPowerSeriesAt bridge is the missing v2 piece.",
+      "unsafe_for_public_proof_body_export": false
+    },
+    {
+      "kit_name": "FiniteConvexityKit",
+      "module_path": "LeanChecker.Kits.FiniteConvexityKit",
+      "domain": "finite planar convexity — Happy-Ending-style convex position",
+      "status": "v1",
+      "canonical_imports": ["Mathlib", "LeanChecker.Kits.FiniteConvexityKit"],
+      "canonical_open_directives": [],
+      "key_lemmas": [
+        "LeanChecker.FiniteConvexityKit.ConvexPosition",
+        "LeanChecker.FiniteConvexityKit.not_mem_convexHull_of_forall_le",
+        "LeanChecker.FiniteConvexityKit.convexPosition_of_separation"
+      ],
+      "fixtures": [
+        "unit square corners in convex position via explicit separating functionals"
+      ],
+      "known_acceptance_targets": [
+        {
+          "benchmark": "PutnamBench",
+          "upstream_problem_id": "putnam_1962_a1",
+          "status": "open",
+          "tracking_issue": 87
+        }
+      ],
+      "remaining_route_steps": [
+        "hull-size case split for 5 points with no 3 collinear (3/4/5 extreme points)",
+        "hull ≥ 4: four hull vertices are in convex position via extremality",
+        "hull = 3: two interior points plus two vertices on one side of their line"
+      ],
+      "prompt_block": "FiniteConvexityKit: ConvexPosition in the benchmark's exact shape plus a per-point linear-separation criterion — reduces convex-position goals to exhibiting one separating functional per point. The hull-size case split is the missing v2 piece.",
+      "unsafe_for_public_proof_body_export": false
+    }
+  ]
+}

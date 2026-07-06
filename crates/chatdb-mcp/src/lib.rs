@@ -5002,8 +5002,20 @@ impl ServerHandler for ChatDbMcp {
             }
             "environment_describe" => {
                 let action_schema = schemars::schema_for!(TypedAction);
+                // Issue #83: the kit registry ships inside the binary (compile-time
+                // embed of lean-checker/LeanChecker/Kits/registry.json) so the
+                // metadata an agent plans against cannot drift from the kit modules
+                // the same checkout actually compiles. Registry entries are
+                // metadata only — they never grant proof authority.
+                let kit_registry: serde_json::Value = serde_json::from_str(include_str!(
+                    "../../../lean-checker/LeanChecker/Kits/registry.json"
+                ))
+                .unwrap_or_else(|e| {
+                    serde_json::json!({"error": format!("kit registry parse failure: {e}")})
+                });
                 let res = serde_json::json!({
                     "environment_version": "0.3.25",
+                    "kit_registry": kit_registry,
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
                     "schema_versions": {
@@ -11145,6 +11157,31 @@ mod tests {
         assert!(json["lean_environment"].is_null(), "no lean-checker at the dummy test path -> no environment to report");
         assert!(json["action_schema"].is_object(), "environment_describe must expose the TypedAction schema");
         assert_eq!(json["action_examples"][0]["type"], "solve");
+
+        // Issue #83: the embedded kit registry must parse (a parse failure is
+        // reported as {"error": ...} — that shape failing here means the JSON
+        // file is broken) and every kit entry must carry the planning fields an
+        // agent needs to pick and import a kit without reading its source.
+        let registry = &json["kit_registry"];
+        assert!(registry["error"].is_null(), "kit registry must parse cleanly: {registry}");
+        let kits = registry["kits"].as_array().expect("kit_registry.kits must be an array");
+        assert!(kits.len() >= 4, "all four v1 kits must be registered, got {}", kits.len());
+        for kit in kits {
+            for field in ["kit_name", "module_path", "domain", "status", "prompt_block"] {
+                assert!(kit[field].is_string(), "kit entry missing {field}: {kit}");
+            }
+            assert!(kit["key_lemmas"].as_array().is_some_and(|l| !l.is_empty()),
+                "kit entry needs at least one key lemma: {kit}");
+            assert!(kit["fixtures"].as_array().is_some_and(|f| !f.is_empty()),
+                "kit entry needs at least one liveness fixture: {kit}");
+            assert!(kit["known_acceptance_targets"].is_array(),
+                "kit entry needs benchmark acceptance targets: {kit}");
+            assert!(kit["module_path"].as_str().unwrap().starts_with("LeanChecker.Kits."),
+                "module_path must be a LeanChecker.Kits module: {kit}");
+        }
+        let geo = kits.iter().find(|k| k["kit_name"] == "GeometryAngleKit").expect("GeometryAngleKit registered");
+        assert_eq!(geo["known_acceptance_targets"][0]["status"], "closed_kernel_verified_pass_at_1",
+            "the 1965 A1 closure must be recorded as evidence the registry tracks real outcomes");
 
         // Issue #34's tool-classification audit: an honest count, tied to the
         // REAL number of registered tools (list_res.tools.len(), asserted
