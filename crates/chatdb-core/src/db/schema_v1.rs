@@ -530,6 +530,160 @@ CREATE TABLE IF NOT EXISTS draft_moves (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_formalization_plan_items_promoted_obligation
     ON formalization_plan_items(promoted_obligation_id) WHERE promoted_obligation_id IS NOT NULL;
 
+-- Level 4 research substrate (issues #9, #11, #13): paper-scale research
+-- state, external citation/assumption boundaries, and independent verification
+-- layers. These tables are deliberately metadata-only: no row here can mark an
+-- episode obligation proved, create a canonical lemma, certify a problem, or
+-- change a proof outcome. Kernel verification still lives only in the existing
+-- Lean-backed episode/canonical tables.
+CREATE TABLE IF NOT EXISTS research_dossiers (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(status IN ('draft', 'active', 'blocked', 'completed', 'abandoned'))
+);
+
+CREATE TABLE IF NOT EXISTS research_sections (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    section_order INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(dossier_id, section_order)
+);
+
+CREATE TABLE IF NOT EXISTS research_nodes (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    section_id TEXT REFERENCES research_sections(id),
+    node_order INTEGER NOT NULL,
+    node_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    statement TEXT,
+    content TEXT,
+    trust_status TEXT NOT NULL,
+    linked_obligation_id TEXT REFERENCES episode_obligations(id),
+    linked_verified_lemma_id TEXT REFERENCES episode_verified_lemmas(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(dossier_id, node_order),
+    CHECK(node_type IN ('definition', 'proposition', 'lemma', 'theorem', 'remark', 'reference', 'open_gap')),
+    CHECK(trust_status IN (
+        'open_gap',
+        'proved_in_episode',
+        'imported_from_mathlib',
+        'external_citation_unreviewed',
+        'external_citation_human_reviewed',
+        'unformalized_assumption',
+        'rejected_unsafe_assumption'
+    )),
+    CHECK(trust_status <> 'proved_in_episode' OR linked_verified_lemma_id IS NOT NULL)
+);
+
+CREATE TABLE IF NOT EXISTS external_references (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    title TEXT NOT NULL,
+    authors TEXT,
+    venue TEXT,
+    year TEXT,
+    url TEXT,
+    doi TEXT,
+    raw_citation TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS external_theorem_claims (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    reference_id TEXT REFERENCES external_references(id),
+    node_id TEXT REFERENCES research_nodes(id),
+    label TEXT NOT NULL,
+    statement TEXT NOT NULL,
+    claim_status TEXT NOT NULL,
+    mathlib_name TEXT,
+    proved_episode_id TEXT REFERENCES episodes(id),
+    proved_lemma_id TEXT REFERENCES episode_verified_lemmas(id),
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(claim_status IN (
+        'proved_in_episode',
+        'imported_from_mathlib',
+        'external_citation_unreviewed',
+        'external_citation_human_reviewed',
+        'unformalized_assumption',
+        'rejected_unsafe_assumption'
+    )),
+    CHECK(claim_status <> 'proved_in_episode' OR proved_lemma_id IS NOT NULL),
+    CHECK(claim_status <> 'imported_from_mathlib' OR mathlib_name IS NOT NULL)
+);
+
+CREATE TABLE IF NOT EXISTS assumption_boundaries (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    node_id TEXT REFERENCES research_nodes(id),
+    label TEXT NOT NULL,
+    statement TEXT NOT NULL,
+    assumption_status TEXT NOT NULL,
+    rationale TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(assumption_status IN ('unformalized_assumption', 'rejected_unsafe_assumption'))
+);
+
+CREATE TABLE IF NOT EXISTS citation_reviews (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    external_theorem_claim_id TEXT NOT NULL REFERENCES external_theorem_claims(id),
+    reviewer_id TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    review_status TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    CHECK(decision IN ('human_reviewed', 'rejected', 'needs_formalization')),
+    CHECK(review_status IN ('external_citation_unreviewed', 'external_citation_human_reviewed', 'rejected_unsafe_assumption'))
+);
+
+CREATE TABLE IF NOT EXISTS verification_layers (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    target_kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    layer_kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    summary TEXT,
+    evidence_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(dossier_id, target_kind, target_id, layer_kind),
+    CHECK(target_kind IN ('dossier', 'node', 'assumption', 'external_theorem_claim', 'problem_version', 'episode')),
+    CHECK(layer_kind IN (
+        'construction_search',
+        'arithmetic_construction',
+        'geometric_criterion',
+        'packing_or_size_bound',
+        'asymptotic_extraction',
+        'formal_module',
+        'statement_fidelity',
+        'external_review',
+        'exposition_review'
+    )),
+    CHECK(status IN ('not_started', 'informal', 'empirical', 'cited', 'human_reviewed', 'kernel_verified', 'failed', 'blocked', 'rejected')),
+    CHECK(status <> 'kernel_verified' OR layer_kind IN ('formal_module', 'statement_fidelity'))
+);
+CREATE INDEX IF NOT EXISTS idx_research_dossiers_problem_version ON research_dossiers(problem_version_id);
+CREATE INDEX IF NOT EXISTS idx_research_dossiers_episode ON research_dossiers(episode_id);
+CREATE INDEX IF NOT EXISTS idx_research_nodes_dossier ON research_nodes(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_external_claims_dossier ON external_theorem_claims(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_assumption_boundaries_dossier ON assumption_boundaries(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_verification_layers_dossier ON verification_layers(dossier_id);
+
 -- Run envelopes (issues #34 core concept + #38 cost-surface splitting): a
 -- run envelope separates WHO/WHAT/WHY around a set of episodes from the
 -- episodes themselves -- host identity, run mode (a plain dev/exploratory

@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  42 tools · typed schemas · JSON Schema 2020-12                 │
+│  49 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -94,6 +94,13 @@ Antigravity, or a custom script — should call this first.
 | `formalization_plan_add_item` | Add a planning item (concept, missing_definition, missing_lemma, planned_module, or external_citation) to a plan |
 | `formalization_plan_attach_lookup` | Attach a `lean_declaration_lookup` result to a plan item, updating its Mathlib coverage status |
 | `formalization_plan_promote_item_to_obligation` | Link a plan item to an episode_obligation that already exists (created via a normal `Decompose` action). Never creates the obligation itself |
+| `research_dossier_create` | Create a Level 4 research dossier, optionally linked to a problem version, an episode, or neither. Metadata only |
+| `research_dossier_observe` | Read a dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets |
+| `research_node_add` | Add a typed research node (`definition`, `proposition`, `lemma`, `theorem`, `remark`, `reference`, `open_gap`) with explicit trust status |
+| `external_reference_add` | Add an external reference and optionally one theorem claim. Citations are never kernel verification |
+| `assumption_boundary_add` | Add an unformalized or rejected unsafe assumption boundary |
+| `citation_review_add` | Record human review of an external theorem claim. Human review remains distinct from Lean verification |
+| `verification_layer_set` | Set an independent verification layer (`blocked`, `failed`, `cited`, `human_reviewed`, etc.) for a dossier target |
 | `mathlib_search_declarations` | Search the real pinned Mathlib source tree for declaration names containing a substring (beyond exact-name lookup). Advisory only |
 | `mathlib_search_local_artifacts` | Search this instance's own previously-verified theorem/def names for a substring match |
 | `formalization_plan_attach_librarian_result` | Attach a Mathlib librarian result to a formalization plan item, updating its coverage status |
@@ -129,6 +136,30 @@ remaining budget.
 - Reserved-but-unsettled costs remain reservations. Benchmark cost summaries
   continue to include only settled `actual_cost_micros` as attested
   `model_call_reported_cost_micros`, never as exact cost.
+
+## Level 4 Research Substrate
+
+Research dossiers are paper-scale working records for definitions, lemmas,
+theorems, remarks, references, and open gaps. A dossier can be linked to a
+`problem_version`, linked to an `episode`, linked to both, or created before
+either exists.
+
+The Level 4 substrate is explicit about trust boundaries:
+
+- `proved_in_episode` means there is a linked Lean-verified episode lemma.
+- `imported_from_mathlib` means the claim is attributed to Mathlib, not locally
+  proved by this episode.
+- `external_citation_unreviewed` and `external_citation_human_reviewed` are
+  citation states, not proof states.
+- `unformalized_assumption` and `rejected_unsafe_assumption` remain visible as
+  assumptions or rejected assumptions.
+- `verification_layers` track independent review/construction/formalization
+  layers and can be `blocked` or `failed` without failing the whole dossier.
+
+No cited, reviewed, empirical, or assumed artifact is represented as kernel
+verified unless it is linked to an actual Lean-verified artifact. These tables
+are research bookkeeping and do not mutate episode outcome, obligation status,
+budget state, fidelity status, or benchmark results.
 
 **Benchmark contamination policy:** upstream benchmarks like PutnamBench ask
 that completed formal proofs not be published without first coordinating with
@@ -473,7 +504,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 42 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 49 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records
