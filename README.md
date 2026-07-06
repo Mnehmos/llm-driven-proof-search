@@ -184,10 +184,15 @@ The Level 4 substrate is explicit about trust boundaries:
   reaches `kernel_verified` only for a `formal_module`/`statement_fidelity`
   layer backed by a real Lean pass — a search/construction/packing layer never
   can. The markdown-family `proof_export` modes render a **Verification layers**
-  table for the dossier(s) attached to the episode or its problem, so the export
-  reports the true per-layer state, not only the episode outcome. Layer status
-  is **additive metadata**: a kernel-verified root theorem does not imply every
-  layer is verified, and layer completeness never gates `certified`.
+  table for the dossier(s) attached to the episode or its problem, and
+  `training_export` carries the same per-layer state as structured,
+  redacted metadata (`layer_kind`/`status`/`target_kind`/redacted
+  `target_handle`/`summary` plus `kernel_verified_layer_count`/
+  `total_layer_count` and the non-gating policy note) alongside its `records`
+  array — so every export reports the true per-layer state, not only the
+  episode outcome. Layer status is **additive metadata**: a kernel-verified
+  root theorem does not imply every layer is verified, and layer completeness
+  never gates `certified`.
 
 No cited, reviewed, empirical, or assumed artifact is represented as kernel
 verified unless it is linked to an actual Lean-verified artifact. These tables

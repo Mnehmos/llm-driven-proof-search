@@ -3771,11 +3771,53 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
     if mode == ExportMode::TrainingExport {
         let ep_uuid = Uuid::parse_str(episode_id).map_err(|e| mcp_invalid_params(format!("invalid episode_id: {}", e)))?;
         let records = dataset::export_rl(conn, ep_uuid).map_err(mcp_internal_error)?;
-        let mut values: Vec<serde_json::Value> = records.iter().map(|r| serde_json::to_value(r).unwrap()).collect();
-        for v in values.iter_mut() {
-            trajectories::scrub_value(v);
-        }
-        return Ok(serde_json::to_string_pretty(&values).unwrap());
+        let record_values: Vec<serde_json::Value> = records.iter().map(|r| serde_json::to_value(r).unwrap()).collect();
+
+        // Per-layer verification status (issue #13): the dataset export carries
+        // the dossier's layer state too, not only per-step RL records. Kept
+        // structured and non-public — no proof bodies, and the real target id is
+        // replaced by a stable redacted handle (a hash prefix) so a training
+        // consumer can correlate layers on the same target without the raw id.
+        let mut lstmt = conn.prepare(
+            "SELECT vl.layer_kind, vl.status, vl.target_kind, vl.target_id, vl.summary
+             FROM verification_layers vl
+             JOIN research_dossiers d ON vl.dossier_id = d.id
+             WHERE d.episode_id = ?1 OR d.problem_version_id = ?2
+             ORDER BY vl.target_kind ASC, vl.layer_kind ASC, vl.status ASC",
+        ).map_err(rs)?;
+        let layer_rows: Vec<(String, String, String, String, Option<String>)> = lstmt
+            .query_map((episode_id, &pv_id), |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))
+            .map_err(rs)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(rs)?;
+        drop(lstmt);
+        let kernel_verified_layer_count = layer_rows.iter().filter(|(_, status, ..)| status == "kernel_verified").count();
+        let layers: Vec<serde_json::Value> = layer_rows.iter().map(|(layer_kind, status, target_kind, target_id, summary)| {
+            let target_handle = canonical_hash(target_id)
+                .map(|h| h.chars().take(12).collect::<String>())
+                .unwrap_or_else(|_| "unknown".to_string());
+            serde_json::json!({
+                "layer_kind": layer_kind,
+                "status": status,
+                "target_kind": target_kind,
+                "target_handle": target_handle,
+                "summary": summary,
+            })
+        }).collect();
+
+        let mut envelope = serde_json::json!({
+            "records": record_values,
+            "verification_layers": {
+                "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+                "kernel_verified_layer_count": kernel_verified_layer_count,
+                "total_layer_count": layer_rows.len(),
+                "layers": layers,
+            },
+        });
+        // One recursive scrub over the whole envelope (records + layer metadata)
+        // strips any credential-shaped keys.
+        trajectories::scrub_value(&mut envelope);
+        return Ok(serde_json::to_string_pretty(&envelope).unwrap());
     }
 
     // Markdown dossier. Proof soundness (did Lean verify this exact formal
@@ -16743,15 +16785,42 @@ mod tests {
             "action": {"type": "solve", "proof_term": "norm_num"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
 
+        // Issue #13: the dataset export must also carry the dossier's per-layer
+        // verification status. Attach a dossier with one (non-verified) layer.
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "training export layers", "problem_version_id": pv_id, "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "target_kind": "dossier", "target_id": dossier_id,
+            "layer_kind": "construction_search", "status": "blocked", "summary": "needs a sharper construction",
+        }).as_object().unwrap().clone())).await.unwrap());
+
         let res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
             "episode_id": episode_id, "format": "training_export", "allow_putnambench_proof_export": true,
         }).as_object().unwrap().clone())).await.unwrap();
         let text = res.content[0].as_text().unwrap().text.clone();
         let parsed: serde_json::Value = serde_json::from_str(&text).expect("training_export must be valid JSON");
-        let arr = parsed.as_array().expect("training_export must be a JSON array");
-        assert!(!arr.is_empty(), "training_export must contain at least one record");
-        assert!(arr[0].get("action").is_some(), "each record must carry an action field: {text}");
-        assert!(arr[0].get("reward").is_some(), "each record must carry a reward field: {text}");
+
+        // Per-step RL records live under `records`.
+        let records = parsed["records"].as_array().expect("training_export must carry a records array");
+        assert!(!records.is_empty(), "training_export must contain at least one record");
+        assert!(records[0].get("action").is_some(), "each record must carry an action field: {text}");
+        assert!(records[0].get("reward").is_some(), "each record must carry a reward field: {text}");
+
+        // Per-layer verification status lives under `verification_layers`.
+        let vl = &parsed["verification_layers"];
+        assert_eq!(vl["total_layer_count"], 1, "{text}");
+        assert_eq!(vl["kernel_verified_layer_count"], 0, "{text}");
+        assert!(vl["policy"].as_str().is_some_and(|p| p.contains("does not imply")), "policy note must be present: {text}");
+        let layers = vl["layers"].as_array().expect("verification_layers.layers must be an array");
+        assert_eq!(layers.len(), 1, "{text}");
+        assert_eq!(layers[0]["layer_kind"], "construction_search", "{text}");
+        assert_eq!(layers[0]["status"], "blocked", "{text}");
+        assert_eq!(layers[0]["target_kind"], "dossier", "{text}");
+        // The target is a redacted handle — present, and NOT the raw target id.
+        let handle = layers[0]["target_handle"].as_str().expect("target_handle must be present");
+        assert!(!handle.is_empty() && handle != dossier_id, "target_handle must be a redacted stand-in, not the raw id: {text}");
     }
 
     #[tokio::test]
