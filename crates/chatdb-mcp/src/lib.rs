@@ -1308,8 +1308,10 @@ pub struct EmpiricalSearchUpdateStatusArgs {
     pub trust_status: Option<String>,
     #[serde(default)]
     pub results_json: Option<String>,
-    #[serde(default)]
-    pub counterexamples_json: Option<String>,
+    // Note: counterexamples are deliberately NOT updatable here (issue #26
+    // "counterexamples stay visible"). They can only be ADDED, via the
+    // append-only empirical_search_observe, so a recorded witness can never be
+    // erased or overwritten through a status update.
     #[serde(default)]
     pub candidate_construction_ids_json: Option<String>,
 }
@@ -3984,7 +3986,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<CandidateConstructionLinkVerificationLayerArgs>("candidate_construction_link_verification_layer", "Attach a candidate construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier"),
             make_tool::<EmpiricalSearchAddArgs>("empirical_search_add", "Record an empirical math-lab search (issue #26): small_case_search/counterexample_search/construction_search/parameter_sweep/finite_model_check/candidate_ranking/random_search/exhaustive_search/symbolic_search/external_tool_run/other. Experimental EVIDENCE, never proof — no field can carry kernel evidence, and no status certifies an asymptotic or universal theorem. Can exist before a dossier, candidate, episode, or Lean proof"),
             make_tool::<EmpiricalSearchObserveArgs>("empirical_search_observe", "Append one search observation (supports_candidate/refutes_candidate/counterexample_found/no_counterexample/inconclusive), optionally with a counterexample witness, to an empirical search's history. Never changes proof status; a counterexample is preserved, a 'no_counterexample' never certifies a universal claim"),
-            make_tool::<EmpiricalSearchUpdateStatusArgs>("empirical_search_update_status", "Update an empirical search's status/trust_status/results/counterexamples/linked candidates. Falsified/failed/timed-out searches stay visible. No trust_status implies proof — the strongest, 'linked_to_formal_target', still is not kernel evidence"),
+            make_tool::<EmpiricalSearchUpdateStatusArgs>("empirical_search_update_status", "Update an empirical search's status/trust_status/results/linked candidates. Counterexamples are NOT updatable here — a recorded witness stays visible (add via empirical_search_observe). Falsified/failed/timed-out searches stay visible. No trust_status implies proof — the strongest, 'linked_to_formal_target', still is not kernel evidence"),
             make_tool::<EmpiricalSearchLinkCandidateArgs>("empirical_search_link_candidate", "Link an empirical search to a candidate construction (adopting its dossier if the search has none). Empirical support for a construction never proves its claimed properties"),
             make_tool::<EmpiricalSearchLinkVerificationLayerArgs>("empirical_search_link_verification_layer", "Link an empirical search to a verification layer (adopting its dossier if the search has none). The link records evidence; it can never make the layer kernel_verified"),
             make_tool::<ExpositionAddArgs>("exposition_add", "Add a human-readable mathematical exposition section (problem_summary/formalization_explanation/construction_intuition/key_lemmas/proof_strategy/verified_claim/unverified_bridges/reviewer_notes/next_formalization_targets) linked to a problem, episode, obligation, verified module, verified lemma, and/or dossier. prose_status (prose/reviewed_prose/formalized) marks epistemic weight — prose is never proof and never changes certification or training eligibility"),
@@ -4527,7 +4529,7 @@ impl ServerHandler for ChatDbMcp {
                                 "required_run_mode": "any"
                             },
                             "empirical_search_update_status": {
-                                "side_effect": "mutating — updates status/trust_status/results/counterexamples/linked candidate ids on one empirical_searches row; a falsified/failed/timed_out/rejected search stays visible, never deleted",
+                                "side_effect": "mutating — updates status/trust_status/results/linked candidate ids on one empirical_searches row; a falsified/failed/timed_out/rejected search stays visible, never deleted. counterexamples_json is deliberately NOT updatable here — a recorded counterexample witness can only be ADDED (via empirical_search_observe), never erased or overwritten (issue #26 'counterexamples stay visible')",
                                 "trust_level": "untrusted_input — no status or trust_status can claim kernel evidence; a candidate_ranking update never changes proof authority",
                                 "cost_surface": "none",
                                 "benchmark_safety": "safe_public_output",
@@ -7333,13 +7335,13 @@ impl ServerHandler for ChatDbMcp {
                 let args: EmpiricalSearchUpdateStatusArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
                 if args.status.is_none() && args.trust_status.is_none() && args.results_json.is_none()
-                    && args.counterexamples_json.is_none() && args.candidate_construction_ids_json.is_none() {
-                    return Err(mcp_invalid_params("at least one of status, trust_status, results_json, counterexamples_json, candidate_construction_ids_json must be provided"));
+                    && args.candidate_construction_ids_json.is_none() {
+                    return Err(mcp_invalid_params("at least one of status, trust_status, results_json, candidate_construction_ids_json must be provided"));
                 }
                 if let Some(s) = &args.status { validate_one_of("status", s, EMPIRICAL_SEARCH_STATUSES)?; }
                 if let Some(s) = &args.trust_status { validate_one_of("trust_status", s, EMPIRICAL_SEARCH_TRUST_STATUSES)?; }
                 for (field, raw) in [
-                    ("results_json", &args.results_json), ("counterexamples_json", &args.counterexamples_json),
+                    ("results_json", &args.results_json),
                     ("candidate_construction_ids_json", &args.candidate_construction_ids_json),
                 ] {
                     if let Some(raw) = raw {
@@ -7353,18 +7355,20 @@ impl ServerHandler for ChatDbMcp {
                 if exists == 0 {
                     return Err(mcp_invalid_params(format!("unknown empirical_search_id: {}", args.empirical_search_id)));
                 }
+                // counterexamples_json is intentionally NOT updatable here — a
+                // recorded counterexample witness must stay visible (issue #26).
+                // Counterexamples are only ever ADDED via empirical_search_observe.
                 let now = Utc::now().to_rfc3339();
                 tx.execute(
                     "UPDATE empirical_searches SET
                         status = COALESCE(?1, status),
                         trust_status = COALESCE(?2, trust_status),
                         results_json = COALESCE(?3, results_json),
-                        counterexamples_json = COALESCE(?4, counterexamples_json),
-                        candidate_construction_ids_json = COALESCE(?5, candidate_construction_ids_json),
-                        updated_at = ?6
-                     WHERE id = ?7",
+                        candidate_construction_ids_json = COALESCE(?4, candidate_construction_ids_json),
+                        updated_at = ?5
+                     WHERE id = ?6",
                     (args.status.as_deref(), args.trust_status.as_deref(), args.results_json.as_deref(),
-                     args.counterexamples_json.as_deref(), args.candidate_construction_ids_json.as_deref(), &now, &args.empirical_search_id),
+                     args.candidate_construction_ids_json.as_deref(), &now, &args.empirical_search_id),
                 ).map_err(rs)?;
                 let search = empirical_search_json(&tx, &args.empirical_search_id)?;
                 let dossier_id = search.get("dossier_id").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -12151,6 +12155,54 @@ mod tests {
             conn.query_row("SELECT COUNT(*) FROM problem_versions WHERE fidelity_status = 'verified'", [], |r| r.get(0)).unwrap()
         };
         assert_eq!(certified_count, 0, "empirical searches must never produce a verified/certified problem");
+    }
+
+    /// PR #57 review (blocking): a recorded counterexample must STAY VISIBLE —
+    /// empirical_search_update_status cannot erase or overwrite it. Counterexamples
+    /// are only ever ADDED, via the append-only empirical_search_observe.
+    #[tokio::test]
+    async fn test_empirical_search_counterexample_cannot_be_erased_via_update_status() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Counterexample preservation dossier",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        let search = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "search_type": "counterexample_search",
+            "search_space_description": "hunt for a coloring that breaks the conjecture", "created_by": "lab-1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let search_id = search["empirical_search_id"].as_str().unwrap().to_string();
+
+        // Record a counterexample witness via the append-only observe path.
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_observe").with_arguments(serde_json::json!({
+            "empirical_search_id": search_id, "description": "n=9 is a counterexample", "result": "counterexample_found",
+            "counterexample_json": "{\"n\":9,\"witness\":\"K9-coloring\"}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["empirical_search"]["counterexamples"].as_array().unwrap().len(), 1, "{:?}", observed);
+
+        // Attempt to erase it through update_status: counterexamples_json is not a
+        // field of the tool anymore, so it is silently ignored; the status change
+        // still applies, and the witness must remain.
+        let updated = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_update_status").with_arguments(serde_json::json!({
+            "empirical_search_id": search_id,
+            "status": "completed_with_counterexample",
+            "counterexamples_json": "[]",
+            "results_json": "{\"note\":\"attempted to clear the counterexample\"}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(updated["empirical_search"]["status"], "completed_with_counterexample", "{:?}", updated);
+        let ce = updated["empirical_search"]["counterexamples"].as_array().unwrap();
+        assert_eq!(ce.len(), 1, "the recorded counterexample must survive an update_status that tries to clear it: {:?}", updated);
+        assert_eq!(ce[0]["witness"]["n"], 9, "{:?}", ce);
+        assert_eq!(updated["empirical_search"]["counterexample_found"], true, "{:?}", updated);
+
+        // ...and it must still be visible via research_dossier_observe.
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let bucket = observed["empirical_searches"].as_array().unwrap();
+        assert_eq!(bucket.len(), 1, "{:?}", bucket);
+        assert_eq!(bucket[0]["counterexamples"].as_array().unwrap().len(), 1, "counterexample must remain visible in the dossier: {:?}", bucket);
     }
 
     #[tokio::test]
