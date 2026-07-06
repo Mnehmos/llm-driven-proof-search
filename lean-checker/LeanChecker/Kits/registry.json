@@ -144,6 +144,41 @@
       ],
       "prompt_block": "FiniteConvexityKit: ConvexPosition in the benchmark's exact shape; v1 separation criterion (one functional per point) plus v2 extreme-point machinery — any 4 distinct extreme points of convexHull S give the 1962 A1 existential via convexPosition_of_subset_extremePoints + ncard_four. Extreme-point counting is the missing piece.",
       "unsafe_for_public_proof_body_export": false
+    },
+    {
+      "kit_name": "ArithmeticKit",
+      "module_path": "LeanChecker.Kits.ArithmeticKit",
+      "domain": "number theory — divisor sums, valuations, Pell recurrences, modular periodicity",
+      "status": "v1",
+      "epistemic_basis": "kernel_verified_only (no empirical or certificate-backed claims; certificate-backed finite search is issue #88's scope)",
+      "canonical_imports": ["Mathlib", "LeanChecker.Kits.ArithmeticKit"],
+      "canonical_open_directives": ["open ArithmeticFunction", "open scoped ArithmeticFunction.sigma"],
+      "key_lemmas": [
+        "LeanChecker.ArithmeticKit.sigma_one_eq_sum_divisors",
+        "LeanChecker.ArithmeticKit.sigma_mul_of_coprime",
+        "LeanChecker.ArithmeticKit.prime_pow_dvd_iff",
+        "LeanChecker.ArithmeticKit.pell_step"
+      ],
+      "fixtures": [
+        "σ₁(28) = 56 (perfect number) through the coprime factorization 4·7",
+        "last digit of 3^2026 via the period-4 modular cycle",
+        "Pell chain: (3,2) → (17,12) via the recurrence step"
+      ],
+      "known_acceptance_targets": [
+        {
+          "benchmark": "Erdős-style number theory (no registered suite yet)",
+          "upstream_problem_id": "divisor-sum / Pell / modular-periodicity families",
+          "status": "families_identified",
+          "tracking_issue": 89
+        }
+      ],
+      "remaining_route_steps": [
+        "descent schemas for infinite-descent arguments",
+        "multiplicative-function induction over factorizations",
+        "Pell fundamental-solution existence (when a concrete target needs it)"
+      ],
+      "prompt_block": "ArithmeticKit: divisor sums as σ bridges (sigma_one_eq_sum_divisors, sigma_mul_of_coprime for coprime splits), prime-power divisibility as factorization inequalities (prime_pow_dvd_iff), and Pell solution propagation (pell_step via linear_combination). Modular periodicity pattern: factor the exponent through the cycle length, then Nat.mul_mod/Nat.pow_mod.",
+      "unsafe_for_public_proof_body_export": false
     }
   ]
 }
