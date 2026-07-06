@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  67 tools · typed schemas · JSON Schema 2020-12                 │
+│  72 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -112,6 +112,11 @@ Antigravity, or a custom script — should call this first.
 | `empirical_search_update_status` | Update a search's status/trust_status/results/linked candidates. Counterexamples are **not** updatable here (a recorded witness stays visible — add via `empirical_search_observe`). Falsified/failed/timed-out searches stay visible |
 | `empirical_search_link_candidate` | Link an empirical search to a candidate construction (adopting its dossier). Support ≠ proof of claimed properties |
 | `empirical_search_link_verification_layer` | Link an empirical search to a verification layer (adopting its dossier). The link never makes the layer kernel_verified |
+| `paper_ingest_create` | Ingest a paper/manuscript/proof-sketch/exposition as a reviewable source document (issue #27), optionally linked to a dossier. ChatDB does no OCR/LLM extraction — this records the host's **untrusted** extraction. Ingestion is not proof |
+| `paper_ingest_extract_claims` | Append extracted nodes (main_theorem, definition, lemma, construction, reference, open_gap, …) with `source_span`/confidence/status labels. An extracted theorem is **not** statement-fidelity approval; a citation is **not** validation |
+| `paper_ingest_observe` | Read an ingested document with all extracted nodes and their trust labels. Read-only; nothing here is proof |
+| `paper_ingest_link_to_dossier` | Attach an ingested document (and its nodes) to a dossier, so it surfaces in `research_dossier_observe`'s ingestion bucket |
+| `paper_ingest_mark_review_status` | Update a document's ingest/trust status, or (with `node_id`) a node's review/formalization/citation status. `rejected_extraction` stays visible; no status confers proof/fidelity/validation |
 | `exposition_add` | Add a human-readable exposition section (problem_summary, construction_intuition, key_lemmas, unverified_bridges, …) linked to a problem/episode/obligation/module/lemma/dossier. `prose_status` (prose/reviewed_prose/formalized) marks epistemic weight — never proof |
 | `exposition_observe` | List exposition artifacts for a problem_version, episode, or dossier. Read-only prose, separate from verified proof |
 | `semantic_skeleton_add` | Attach a structured reading of a statement/module/solution (quantifiers, hypotheses, conclusion, definitions, construction map, back-translation, fidelity `risk_flags`) scoped by `review_scope`. Metadata only — never sets `fidelity_status` or substitutes for `problem_submit_fidelity_review` |
@@ -325,6 +330,42 @@ describe the *external* search run and are isolated from ChatDB's own cost
 surfaces. `research_dossier_observe` surfaces empirical searches in their own
 bucket, separate from proofs, citations, assumptions, candidate constructions,
 expert reviews, semantic skeletons, exposition, and verification layers.
+
+### Paper/PDF ingestion (issue #27)
+
+The empirical math lab and research substrate become useful *before* a Lean
+formalization exists when ChatDB can turn a paper, manuscript, model-written
+proof sketch, or human exposition into a structured research workspace. Paper
+ingestion records an `ingested_documents` source plus its extracted
+`ingested_document_nodes` (abstract, main_theorem, definition, proposition,
+lemma, proof_step, construction, remark, appendix_fact, reference, open_gap),
+each with a `source_span` back to the paper text, a `confidence`, and
+`formalization_status` / `citation_status` / `review_status` labels.
+
+**ChatDB does no OCR/LLM extraction itself** — no inference code lives here. The
+host performs extraction and records the structured result, which is **untrusted
+by construction**. Ingestion is not verification, and the boundary is
+structural:
+
+```text
+PDF ingestion            ≠ proof
+OCR/LLM extraction        = untrusted
+extracted theorem text   ≠ statement-fidelity approval
+extracted citation       ≠ citation validation
+extracted assumption     ≠ accepted assumption
+```
+
+Neither table has a column that can hold kernel evidence; `is_proof` /
+`has_kernel_evidence` / `is_statement_fidelity_approved` are always false, and
+`formalization_status` is CHECK-constrained to `prose_only` /
+`formalization_pending` / `formalization_target_linked` — it can never reach a
+proved/verified value. `extraction_trust_status` (unreviewed → machine_extracted
+→ human_reviewed_extraction / rejected_extraction / linked_to_dossier_artifact)
+tops out at human review, never Lean verification. A `rejected_extraction` stays
+visible (never deleted). Extracted nodes are *candidates* that must go through
+the normal Lean / fidelity-review / citation / external-theorem paths to gain
+any authority. `research_dossier_observe` shows ingested documents and their
+nodes in their own bucket, separate from every proof-bearing bucket.
 
 **Benchmark contamination policy:** upstream benchmarks like PutnamBench ask
 that completed formal proofs not be published without first coordinating with
@@ -669,7 +710,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 67 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 72 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records

@@ -1066,6 +1066,92 @@ CREATE INDEX IF NOT EXISTS idx_empirical_searches_candidate ON empirical_searche
 CREATE INDEX IF NOT EXISTS idx_empirical_searches_verification_layer ON empirical_searches(verification_layer_id);
 CREATE INDEX IF NOT EXISTS idx_empirical_searches_node ON empirical_searches(related_node_id);
 
+-- Paper/PDF ingestion (issue #27): turns a paper, manuscript, model-written
+-- proof sketch, or human exposition into a REVIEWABLE research workspace inside
+-- a dossier. ChatDB does no OCR/LLM extraction itself (no inference code lives
+-- here) -- the host performs extraction and records the structured result,
+-- which is UNTRUSTED by construction. Ingestion is not verification: an
+-- ingested_documents row and its extracted ingested_document_nodes have NO
+-- column able to hold kernel evidence. extraction_trust_status tops out at
+-- 'human_reviewed_extraction'/'linked_to_dossier_artifact' -- still not proof.
+-- No ingested artifact can mark anything kernel_verified, certified, proved,
+-- statement_fidelity_approved, benchmark_certified, or training_eligible; that
+-- structural absence, not a CHECK, is the guarantee. Extracted theorem text is
+-- NOT statement-fidelity approval, an extracted citation is NOT citation
+-- validation, and an extracted assumption is NOT an accepted assumption -- each
+-- is a candidate that must go through the existing fidelity/citation/review
+-- paths (or Lean) to gain any authority. dossier_id is nullable: a document can
+-- be ingested before it is attached to a dossier.
+CREATE TABLE IF NOT EXISTS ingested_documents (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    title TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_ref TEXT,
+    source_content_hash TEXT,
+    ingest_status TEXT NOT NULL DEFAULT 'planned',
+    extraction_trust_status TEXT NOT NULL DEFAULT 'unreviewed_extraction',
+    notes TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(source_kind IN ('pdf', 'manuscript', 'proof_sketch', 'exposition', 'webpage', 'other')),
+    CHECK(ingest_status IN ('planned', 'ingesting', 'ingested', 'failed', 'superseded')),
+    CHECK(extraction_trust_status IN (
+        'unreviewed_extraction',
+        'machine_extracted',
+        'human_reviewed_extraction',
+        'rejected_extraction',
+        'linked_to_dossier_artifact'
+    ))
+);
+
+-- One extracted node from an ingested document, in document order. Every field
+-- is untrusted extraction. formalization_status can never reach a proved/
+-- verified value here -- 'prose_only' / 'formalization_pending' /
+-- 'formalization_target_linked' only; kernel verification lives in the
+-- episode/canonical tables alone. citation_status/review_status likewise never
+-- confer validation or fidelity approval. source_span traces the node back to
+-- the paper text so a reviewer can check it.
+CREATE TABLE IF NOT EXISTS ingested_document_nodes (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES ingested_documents(id),
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    node_order INTEGER NOT NULL,
+    node_kind TEXT NOT NULL,
+    natural_language_text TEXT NOT NULL,
+    source_span TEXT,
+    confidence TEXT,
+    formalization_status TEXT NOT NULL DEFAULT 'prose_only',
+    citation_status TEXT NOT NULL DEFAULT 'uncited',
+    review_status TEXT NOT NULL DEFAULT 'unreviewed_extraction',
+    risk_flags_json TEXT NOT NULL DEFAULT '[]',
+    -- Optional forward links once a node is promoted through a real path.
+    linked_external_reference_id TEXT REFERENCES external_references(id),
+    linked_external_theorem_claim_id TEXT REFERENCES external_theorem_claims(id),
+    linked_research_node_id TEXT REFERENCES research_nodes(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(document_id, node_order),
+    CHECK(node_kind IN (
+        'abstract', 'main_theorem', 'definition', 'proposition', 'lemma',
+        'proof_step', 'construction', 'remark', 'appendix_fact', 'reference', 'open_gap'
+    )),
+    CHECK(formalization_status IN ('prose_only', 'formalization_pending', 'formalization_target_linked')),
+    CHECK(citation_status IN ('uncited', 'citation_recorded')),
+    CHECK(confidence IS NULL OR confidence IN ('low', 'medium', 'high')),
+    CHECK(review_status IN (
+        'unreviewed_extraction',
+        'machine_extracted',
+        'human_reviewed_extraction',
+        'rejected_extraction',
+        'linked_to_dossier_artifact'
+    ))
+);
+CREATE INDEX IF NOT EXISTS idx_ingested_documents_dossier ON ingested_documents(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_ingested_document_nodes_document ON ingested_document_nodes(document_id);
+CREATE INDEX IF NOT EXISTS idx_ingested_document_nodes_dossier ON ingested_document_nodes(dossier_id);
+
 -- Run envelopes (issues #34 core concept + #38 cost-surface splitting): a
 -- run envelope separates WHO/WHAT/WHY around a set of episodes from the
 -- episodes themselves -- host identity, run mode (a plain dev/exploratory
