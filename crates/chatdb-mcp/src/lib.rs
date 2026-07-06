@@ -618,6 +618,44 @@ pub struct BenchmarkResultRecordArgs {
     /// rather than a flat failure count.
     #[serde(default)]
     pub gap_categories: Option<Vec<String>>,
+    /// Issue #92: fully qualified kit lemma names the attempt actually used
+    /// (e.g. "LeanChecker.GeometryAngleKit.three_ray_angle_decomposition").
+    /// Client-reported planning metadata — never proof authority. Which kits
+    /// were IMPORTED is not taken from the client at all: it is derived
+    /// server-side from the problem_version's import manifest at observe
+    /// time.
+    #[serde(default)]
+    pub kit_lemmas_used: Option<Vec<String>>,
+    /// Issue #92: for a failed/gave-up result, the specific kit route step
+    /// that was missing (free text, ideally matching a registry entry's
+    /// remaining_route_steps — e.g. "FiniteConvexityKit: extreme-point
+    /// counting trichotomy"). Lets aggregate reports read as a kit roadmap.
+    #[serde(default)]
+    pub missing_route_step: Option<String>,
+}
+
+/// Issue #92 (building on #83): the embedded kit registry, parsed. Shared by
+/// environment_describe (full registry) and benchmark_run_observe (acceptance
+/// matrix). Compile-time embed so the metadata cannot drift from the kit
+/// modules the same checkout compiles; parse failure degrades to an error
+/// object rather than panicking.
+fn embedded_kit_registry() -> serde_json::Value {
+    serde_json::from_str(include_str!(
+        "../../../lean-checker/LeanChecker/Kits/registry.json"
+    ))
+    .unwrap_or_else(|e| serde_json::json!({"error": format!("kit registry parse failure: {e}")}))
+}
+
+/// Issue #92: the kit modules actually present in an import manifest — the
+/// server-derived (never client-claimed) answer to "which kits were
+/// available to this attempt". Open directives and non-kit modules are
+/// filtered out.
+fn kits_in_manifest(import_manifest_json: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(import_manifest_json)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| entry.starts_with("LeanChecker.Kits."))
+        .collect()
 }
 
 /// Issue #76: the fixed formalization-gap taxonomy. A closed vocabulary (not
@@ -4828,7 +4866,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 impl ServerHandler for ChatDbMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("chatdb-mcp", "0.3.25"))
+            .with_server_info(Implementation::new("chatdb-mcp", "0.3.26"))
     }
 
     async fn list_tools(
@@ -4924,8 +4962,8 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<BenchmarkProblemObserveArgs>("benchmark_problem_observe", "Read back one registered benchmark problem (issue #65) by benchmark_problem_id, or by (suite_id, upstream_problem_id). Returns the full row: root_formal_statement, server-derived prover_ready_statement (the exact bytes problem_create/SubmitModule must receive), both hashes, import manifest (module paths + open directives), goal class, and status"),
             make_tool::<BenchmarkSuiteSetTrustArgs>("benchmark_suite_set_trust", "Change a suite's trusted_canonical_source flag after creation (issue #65) — the admin path that previously didn't exist, forcing per-problem fidelity reviews when an importer forgot the flag. Same honesty contract as benchmark_suite_create: assert true ONLY for a real, externally-curated corpus. Every change is recorded append-only in benchmark_suite_trust_reviews (approver, previous → new value, notes); raising trust to true REQUIRES non-empty notes. Never affects proof status of existing results — only the fidelity basis future benchmark_result_record calls can claim"),
             make_tool::<BenchmarkRunCreateArgs>("benchmark_run_create", "Create a benchmark run against a suite. Requires an existing run_envelope_id (call run_envelope_create first — a run should not start unassociated with host/mode/cost tracking). lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results"),
-            make_tool::<BenchmarkResultRecordArgs>("benchmark_result_record", "Record (or update) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem. For failed/gave-up results, optionally attach structured gap_categories (issue #76: math_unknown / library_missing / statement_elaboration_gap / statement_elaborates_but_bridge_missing / tactic_timeout / tactic_transport_hazard / geometry_case_analysis_missing / coefficient_uniqueness_missing / area_coordinate_scaffold_missing / convexity_extreme_point_missing / export_trust_policy_gap / benchmark_admin_gap) — reporting metadata that never affects proof authority or score, so failures read as an infrastructure roadmap instead of a flat failure count"),
-            make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric. cost_summary separates real metrics (verifier_wall_time_ms/verifier_cpu_time_ms/mcp_action_count/mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms — all real, measured data, null only when genuinely no correlated activity exists yet) from monetary cost (*_cost_micros fields, null unless real money data or a rate card exists — mcp_side_cost_micros/storage_export_cost_micros stay null with no pricing profile decided for either surface). cost_completeness is 'total_cost_known' only when every material cost surface is exact (currently unreachable: mcp_side/storage_export have real metrics but no pricing), 'reported_total_not_exact' when some real monetary signal exists (exact/attested/estimated) but not a complete exact total, else 'total_cost_incomplete'"),
+            make_tool::<BenchmarkResultRecordArgs>("benchmark_result_record", "Record (or update) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem. For failed/gave-up results, optionally attach structured gap_categories (issue #76: math_unknown / library_missing / statement_elaboration_gap / statement_elaborates_but_bridge_missing / tactic_timeout / tactic_transport_hazard / geometry_case_analysis_missing / coefficient_uniqueness_missing / area_coordinate_scaffold_missing / convexity_extreme_point_missing / export_trust_policy_gap / benchmark_admin_gap) — reporting metadata that never affects proof authority or score, so failures read as an infrastructure roadmap instead of a flat failure count. Issue #92 adds kit-aware reporting: kit_lemmas_used (fully qualified kit lemma names the attempt used) and missing_route_step (which kit route step blocked a failure) — while kits_imported is derived SERVER-SIDE from the linked problem_version's import manifest, never client-claimed"),
+            make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. Issue #92: per-result kit fields (kits_imported server-derived from the manifest, kit_lemmas_used, missing_route_step) plus metrics.failures_by_missing_route_step, metrics.kits_imported_by_problem, and metrics.kit_acceptance_matrix (embedded kit registry targets crossed with this run's outcomes — which problems are blocked by which kit issue). solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric. cost_summary separates real metrics (verifier_wall_time_ms/verifier_cpu_time_ms/mcp_action_count/mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms — all real, measured data, null only when genuinely no correlated activity exists yet) from monetary cost (*_cost_micros fields, null unless real money data or a rate card exists — mcp_side_cost_micros/storage_export_cost_micros stay null with no pricing profile decided for either surface). cost_completeness is 'total_cost_known' only when every material cost surface is exact (currently unreachable: mcp_side/storage_export have real metrics but no pricing), 'reported_total_not_exact' when some real monetary signal exists (exact/attested/estimated) but not a complete exact total, else 'total_cost_incomplete'"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -5007,14 +5045,9 @@ impl ServerHandler for ChatDbMcp {
                 // metadata an agent plans against cannot drift from the kit modules
                 // the same checkout actually compiles. Registry entries are
                 // metadata only — they never grant proof authority.
-                let kit_registry: serde_json::Value = serde_json::from_str(include_str!(
-                    "../../../lean-checker/LeanChecker/Kits/registry.json"
-                ))
-                .unwrap_or_else(|e| {
-                    serde_json::json!({"error": format!("kit registry parse failure: {e}")})
-                });
+                let kit_registry = embedded_kit_registry();
                 let res = serde_json::json!({
-                    "environment_version": "0.3.25",
+                    "environment_version": "0.3.26",
                     "kit_registry": kit_registry,
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
@@ -10509,6 +10542,26 @@ impl ServerHandler for ChatDbMcp {
                     }
                 };
 
+                // Issue #92: kit-aware reporting metadata. kit_lemmas_used /
+                // missing_route_step are stored as given (reporting only,
+                // never proof authority); which kits were IMPORTED is derived
+                // server-side from the problem_version's manifest, not taken
+                // from the client.
+                let kit_lemmas_used_json: Option<String> = match &args.kit_lemmas_used {
+                    None => None,
+                    Some(l) if l.is_empty() => None,
+                    Some(l) => Some(serde_json::to_string(l).unwrap()),
+                };
+                let kits_imported: Vec<String> = match &args.problem_version_id {
+                    Some(pv_id) => conn.query_row(
+                        "SELECT import_manifest_json FROM problem_versions WHERE id = ?1", [pv_id],
+                        |row| row.get::<_, String>(0),
+                    ).optional().map_err(rs)?
+                        .map(|j| kits_in_manifest(&j))
+                        .unwrap_or_default(),
+                    None => Vec::new(),
+                };
+
                 let existing_id: Option<String> = conn.query_row(
                     "SELECT id FROM benchmark_results WHERE run_id = ?1 AND benchmark_problem_id = ?2",
                     (&args.run_id, &args.benchmark_problem_id),
@@ -10522,12 +10575,14 @@ impl ServerHandler for ChatDbMcp {
                             problem_version_id = ?1, episode_id = ?2, status = ?3, outcome = ?4, pass_at = ?5,
                             attempts_used = ?6, time_to_first_success_ms = ?7, cost_micros = ?8,
                             final_diagnostic_category = ?9, proof_artifact_hash = ?10, trajectory_export_hash = ?11,
-                            replay_status = ?12, benchmark_fidelity_basis = ?13, gap_categories_json = ?14, updated_at = ?15
-                         WHERE id = ?16",
+                            replay_status = ?12, benchmark_fidelity_basis = ?13, gap_categories_json = ?14,
+                            kit_lemmas_used_json = ?15, missing_route_step = ?16, updated_at = ?17
+                         WHERE id = ?18",
                         rusqlite::params![&args.problem_version_id, &args.episode_id, status_str, &args.outcome, &args.pass_at,
                          args.attempts_used, &args.time_to_first_success_ms, &args.cost_micros,
                          &args.final_diagnostic_category, &args.proof_artifact_hash, &args.trajectory_export_hash,
-                         &args.replay_status, &benchmark_fidelity_basis, &gap_categories_json, &now, existing_id],
+                         &args.replay_status, &benchmark_fidelity_basis, &gap_categories_json,
+                         &kit_lemmas_used_json, &args.missing_route_step, &now, existing_id],
                     ).map_err(rs)?;
                 } else {
                     conn.execute(
@@ -10535,12 +10590,13 @@ impl ServerHandler for ChatDbMcp {
                             id, run_id, benchmark_problem_id, problem_version_id, episode_id, status, outcome,
                             pass_at, attempts_used, time_to_first_success_ms, cost_micros, final_diagnostic_category,
                             proof_artifact_hash, trajectory_export_hash, replay_status, benchmark_fidelity_basis,
-                            gap_categories_json, created_at, updated_at
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?18)",
+                            gap_categories_json, kit_lemmas_used_json, missing_route_step, created_at, updated_at
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20)",
                         rusqlite::params![&result_id, &args.run_id, &args.benchmark_problem_id, &args.problem_version_id, &args.episode_id,
                          status_str, &args.outcome, &args.pass_at, args.attempts_used, &args.time_to_first_success_ms,
                          &args.cost_micros, &args.final_diagnostic_category, &args.proof_artifact_hash,
-                         &args.trajectory_export_hash, &args.replay_status, &benchmark_fidelity_basis, &gap_categories_json, &now],
+                         &args.trajectory_export_hash, &args.replay_status, &benchmark_fidelity_basis, &gap_categories_json,
+                         &kit_lemmas_used_json, &args.missing_route_step, &now],
                     ).map_err(rs)?;
                 }
 
@@ -10551,6 +10607,9 @@ impl ServerHandler for ChatDbMcp {
                     "benchmark_fidelity_basis": benchmark_fidelity_basis,
                     "status": status_str,
                     "gap_categories": args.gap_categories,
+                    "kits_imported": kits_imported,
+                    "kit_lemmas_used": args.kit_lemmas_used,
+                    "missing_route_step": args.missing_route_step,
                     "updated": existing_id.is_some(),
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
@@ -10574,9 +10633,11 @@ impl ServerHandler for ChatDbMcp {
                 let mut rstmt = conn.prepare(
                     "SELECT r.benchmark_problem_id, p.theorem_name, r.status, r.outcome, r.pass_at, r.attempts_used,
                             r.time_to_first_success_ms, r.cost_micros, r.final_diagnostic_category, r.replay_status,
-                            r.benchmark_fidelity_basis, r.episode_id, e.outcome, r.gap_categories_json
+                            r.benchmark_fidelity_basis, r.episode_id, e.outcome, r.gap_categories_json,
+                            r.kit_lemmas_used_json, r.missing_route_step, pv.import_manifest_json, p.upstream_problem_id
                      FROM benchmark_results r JOIN benchmark_problems p ON p.id = r.benchmark_problem_id
                      LEFT JOIN episodes e ON e.id = r.episode_id
+                     LEFT JOIN problem_versions pv ON pv.id = r.problem_version_id
                      WHERE r.run_id = ?1 ORDER BY p.upstream_problem_id ASC"
                 ).map_err(rs)?;
                 let rows: Vec<(serde_json::Value, Option<String>)> = rstmt.query_map([&args.run_id], |row| {
@@ -10592,9 +10653,20 @@ impl ServerHandler for ChatDbMcp {
                     let gap_categories: serde_json::Value = row.get::<_, Option<String>>(13)?
                         .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
                         .unwrap_or(serde_json::Value::Null);
+                    // Issue #92: kit-aware reporting — lemmas the client
+                    // reported using, the missing route step for failures,
+                    // and the kits actually IMPORTED (server-derived from the
+                    // linked problem_version's manifest, never client-claimed).
+                    let kit_lemmas_used: serde_json::Value = row.get::<_, Option<String>>(14)?
+                        .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
+                        .unwrap_or(serde_json::Value::Null);
+                    let kits_imported: Vec<String> = row.get::<_, Option<String>>(16)?
+                        .map(|j| kits_in_manifest(&j))
+                        .unwrap_or_default();
                     Ok((serde_json::json!({
                         "benchmark_problem_id": row.get::<_, String>(0)?,
                         "theorem_name": row.get::<_, String>(1)?,
+                        "upstream_problem_id": row.get::<_, String>(17)?,
                         "status": stored_status.clone(),                 // unchanged, back-compat
                         "stored_result_status": stored_status,           // #50 explicit vocabulary
                         "current_episode_outcome": current_episode_outcome,
@@ -10608,6 +10680,9 @@ impl ServerHandler for ChatDbMcp {
                         "replay_status": row.get::<_, Option<String>>(9)?,
                         "benchmark_fidelity_basis": row.get::<_, Option<String>>(10)?,
                         "gap_categories": gap_categories,
+                        "kits_imported": kits_imported,
+                        "kit_lemmas_used": kit_lemmas_used,
+                        "missing_route_step": row.get::<_, Option<String>>(15)?,
                     }), row.get::<_, Option<String>>(11)?))
                 }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
                 let results: Vec<serde_json::Value> = rows.iter().map(|(v, _)| v.clone()).collect();
@@ -10627,6 +10702,55 @@ impl ServerHandler for ChatDbMcp {
                             if let Some(c) = c.as_str() {
                                 *gap_category_counts.entry(c.to_string()).or_insert(0) += 1;
                             }
+                        }
+                    }
+                }
+
+                // Issue #92: kit-aware aggregation. Failures group by the
+                // missing kit route step (roadmap view), and the acceptance
+                // matrix crosses the embedded kit registry's benchmark
+                // targets with this run's actual outcomes — which problems
+                // are blocked on which kit issue, and which kit routes are
+                // already vindicated. Reporting only: none of this touches
+                // status, score, or proof authority.
+                let mut failures_by_missing_route_step: std::collections::BTreeMap<String, i64> = Default::default();
+                let mut kits_imported_by_problem: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+                for (v, _) in &rows {
+                    let status = v["stored_result_status"].as_str().unwrap_or("unknown");
+                    if !matches!(status, "kernel_verified" | "certified") {
+                        if let Some(step) = v["missing_route_step"].as_str() {
+                            *failures_by_missing_route_step.entry(step.to_string()).or_insert(0) += 1;
+                        }
+                    }
+                    if let (Some(up), Some(kits)) = (v["upstream_problem_id"].as_str(), v["kits_imported"].as_array()) {
+                        if !kits.is_empty() {
+                            kits_imported_by_problem.insert(
+                                up.to_string(),
+                                kits.iter().filter_map(|k| k.as_str().map(String::from)).collect(),
+                            );
+                        }
+                    }
+                }
+                let registry = embedded_kit_registry();
+                let mut kit_acceptance_matrix: Vec<serde_json::Value> = Vec::new();
+                if let Some(kits) = registry["kits"].as_array() {
+                    for kit in kits {
+                        let kit_name = kit["kit_name"].as_str().unwrap_or("?");
+                        let kit_status = kit["status"].as_str().unwrap_or("?");
+                        for t in kit["known_acceptance_targets"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+                            let upstream = t["upstream_problem_id"].as_str().unwrap_or("?");
+                            let run_result_status = rows.iter()
+                                .find(|(v, _)| v["upstream_problem_id"].as_str() == Some(upstream))
+                                .map(|(v, _)| v["stored_result_status"].as_str().unwrap_or("unknown").to_string());
+                            kit_acceptance_matrix.push(serde_json::json!({
+                                "kit_name": kit_name,
+                                "kit_status": kit_status,
+                                "benchmark": t["benchmark"],
+                                "upstream_problem_id": upstream,
+                                "registry_target_status": t["status"],
+                                "tracking_issue": t["tracking_issue"],
+                                "result_status_in_this_run": run_result_status,
+                            }));
                         }
                     }
                 }
@@ -10791,6 +10915,15 @@ impl ServerHandler for ChatDbMcp {
                     // model-capacity failure (math_unknown). Additive
                     // metadata; never affects any score above.
                     "gap_category_counts": gap_category_counts,
+                    // Issue #92: kit-aware roadmap view. Failures grouped by
+                    // the specific missing kit route step; which kits each
+                    // problem's manifest actually imported (server-derived);
+                    // and the registry-vs-run acceptance matrix showing which
+                    // benchmark problems are blocked by which kit issue.
+                    // Reporting only — never proof authority or score.
+                    "failures_by_missing_route_step": failures_by_missing_route_step,
+                    "kits_imported_by_problem": kits_imported_by_problem,
+                    "kit_acceptance_matrix": kit_acceptance_matrix,
                 });
 
                 // Issue #38's cost policy, redesigned per explicit product
@@ -16465,13 +16598,21 @@ mod tests {
         }).as_object().unwrap().clone())).await.expect_err("unknown gap category must be rejected");
         assert!(format!("{err:?}").contains("math_unknown"), "rejection must list the vocabulary: {err:?}");
 
-        // Valid categories are stored and echoed.
+        // Valid categories are stored and echoed — with issue #92's kit
+        // reporting metadata alongside.
         let recorded = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
             "run_id": run_id, "benchmark_problem_id": problem_id, "status": "failed", "attempts_used": 2,
             "gap_categories": ["geometry_case_analysis_missing", "tactic_timeout"],
             "final_diagnostic_category": "free text detail",
+            "kit_lemmas_used": ["LeanChecker.GeometryAngleKit.base_angle_eq_pi_sub_apex_div_two"],
+            "missing_route_step": "GeometryAngleKit: oriented three-ray decomposition",
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(recorded["gap_categories"].as_array().unwrap().len(), 2);
+        assert_eq!(recorded["kit_lemmas_used"].as_array().unwrap().len(), 1);
+        assert_eq!(recorded["missing_route_step"], "GeometryAngleKit: oriented three-ray decomposition");
+        // No problem_version_id was linked, so the server-derived kit import
+        // list is honestly empty — never a client claim.
+        assert_eq!(recorded["kits_imported"].as_array().unwrap().len(), 0);
 
         // Observation surfaces the categories, the counts, and trust grouping.
         let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
@@ -16479,6 +16620,23 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         let result = &observed["results"].as_array().unwrap()[0];
         assert_eq!(result["gap_categories"].as_array().unwrap().len(), 2, "{result}");
+        // Issue #92: per-result kit fields and run-level kit aggregation.
+        assert_eq!(result["kit_lemmas_used"].as_array().unwrap().len(), 1, "{result}");
+        assert_eq!(result["missing_route_step"], "GeometryAngleKit: oriented three-ray decomposition", "{result}");
+        assert_eq!(
+            observed["metrics"]["failures_by_missing_route_step"]["GeometryAngleKit: oriented three-ray decomposition"], 1,
+            "failed results must group by missing kit route step: {:?}", observed["metrics"]
+        );
+        let matrix = observed["metrics"]["kit_acceptance_matrix"].as_array().unwrap();
+        assert!(matrix.len() >= 4, "every registry kit's acceptance targets appear in the matrix: {matrix:?}");
+        for row in matrix {
+            assert!(row["kit_name"].is_string() && row["upstream_problem_id"].is_string()
+                && row["registry_target_status"].is_string(),
+                "matrix rows carry kit + target + registry status: {row}");
+        }
+        let geo_row = matrix.iter().find(|r| r["kit_name"] == "GeometryAngleKit").unwrap();
+        assert_eq!(geo_row["registry_target_status"], "closed_kernel_verified_pass_at_1",
+            "the matrix reflects the registry's recorded 1965 A1 closure: {geo_row}");
         assert_eq!(observed["metrics"]["gap_category_counts"]["tactic_timeout"], 1, "{:?}", observed["metrics"]);
         assert_eq!(observed["metrics"]["gap_category_counts"]["geometry_case_analysis_missing"], 1, "{:?}", observed["metrics"]);
         assert_eq!(observed["metrics"]["results_by_trust_basis"]["none"]["failed"], 1,
