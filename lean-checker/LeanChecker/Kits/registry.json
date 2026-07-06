@@ -181,11 +181,51 @@
       "unsafe_for_public_proof_body_export": false
     },
     {
+      "kit_name": "FiniteCertificateKit",
+      "module_path": "LeanChecker.Kits.FiniteCertificateKit",
+      "domain": "certificate infrastructure — CNF model, solver-model import, bounded UNSAT, DIMACS export",
+      "status": "v1",
+      "epistemic_basis": "owns obligation A of the A/B separation (docs/kits/certificate-interface.md §1a): certificate checking at rungs 1 (cnfUnsat_of_forall_fin, kernel enumeration) and 3 (cnfSat_of_witness, kernel model re-evaluation); rung 4 general LRAT import planned; DIMACS is exchange only, the Lean Cnf is always the canonical object; rung 5 bare solver output is NEVER proof authority",
+      "canonical_imports": ["Mathlib", "LeanChecker.Kits.FiniteCertificateKit"],
+      "canonical_open_directives": [],
+      "key_lemmas": [
+        "LeanChecker.FiniteCertificateKit.cnfEval",
+        "LeanChecker.FiniteCertificateKit.cnfSat_of_witness",
+        "LeanChecker.FiniteCertificateKit.cnfUnsat_of_forall_fin",
+        "LeanChecker.FiniteCertificateKit.cnfEval_congr",
+        "LeanChecker.FiniteCertificateKit.dimacs"
+      ],
+      "fixtures": [
+        "pigeonhole PHP(2,1) UNSAT by bounded kernel enumeration",
+        "solver-model import checked by kernel evaluation",
+        "byte-exact DIMACS rendering pinned by rfl"
+      ],
+      "certificate_claims": [
+        {"claim": "phpTwoOne_unsat", "rung": 1, "certificate_checker": "kernel_decide", "encoding_soundness_lemma": "stated_directly"},
+        {"claim": "toy_sat", "rung": 3, "certificate_checker": "model_eval", "encoding_soundness_lemma": "stated_directly"}
+      ],
+      "known_acceptance_targets": [
+        {
+          "benchmark": "infrastructure (consumed by domain kits)",
+          "upstream_problem_id": "certificate machinery underneath ExtremalCombinatoricsKit and future Ramsey/Schur/EGZ family kits",
+          "status": "families_identified",
+          "tracking_issue": 88
+        }
+      ],
+      "remaining_route_steps": [
+        "rung 4: Cnf → Std.Sat.CNF bridge + satisfiability-preservation lemma, unlocking general LRAT import at CaDiCaL scale",
+        "one general LRAT UNSAT fixture through the bridge",
+        "certificate artifact hashing flow (hash public via proof_artifact_hash, file private; tracked-benchmark certificates are proof-body material)"
+      ],
+      "prompt_block": "FiniteCertificateKit: the certificate layer under the combinatorics kits. Lean Cnf is canonical; dimacs exports for external solvers; cnfSat_of_witness turns solver models into theorems by kernel re-evaluation (rung 3); cnfUnsat_of_forall_fin kernel-checks bounded UNSAT (rung 1). A checked certificate closes a MATHEMATICAL theorem only together with a family kit's encoding-soundness lemma (obligation B). Bare solver verdicts are never proof authority.",
+      "unsafe_for_public_proof_body_export": false
+    },
+    {
       "kit_name": "ExtremalCombinatoricsKit",
       "module_path": "LeanChecker.Kits.ExtremalCombinatoricsKit",
-      "domain": "extremal combinatorics — colorings, Ramsey/Schur, SAT certificates",
+      "domain": "extremal combinatorics — colorings, Ramsey/Schur, encoding-soundness over FiniteCertificateKit",
       "status": "v1",
-      "epistemic_basis": "trust ladder (docs/kits/certificate-interface.md): rung 1 kernel decide (Schur S(2)=4 both directions, K5 pentagon witness, CNF fixtures), rung 2 verified-LRAT bv_decide (R(3,3) ≤ 6 — external CaDiCaL search, formally verified checker replay), rung 3 kernel-checked solver models (cnfSat_of_witness); rung 4 general LRAT import planned; rung 5 bare solver output is NEVER proof authority",
+      "epistemic_basis": "trust ladder (docs/kits/certificate-interface.md): rung 1 kernel decide (Schur S(2)=4 both directions, K5 pentagon witness, k5NoMonoCnf_correct encoding soundness over all 1024 colorings), rung 2 verified-LRAT bv_decide (R(3,3) ≤ 6 — external CaDiCaL search, formally verified checker replay), rung 3 end-to-end pipeline (ramsey_two_three_gt_five_via_certificate: kernel-checked model + encoding-soundness lemma); rung 5 bare solver output is NEVER proof authority",
       "canonical_imports": ["Mathlib", "LeanChecker.Kits.ExtremalCombinatoricsKit"],
       "canonical_open_directives": [],
       "key_lemmas": [
@@ -193,17 +233,21 @@
         "LeanChecker.ExtremalCombinatoricsKit.monoBit",
         "LeanChecker.ExtremalCombinatoricsKit.ramsey_two_three_le_six",
         "LeanChecker.ExtremalCombinatoricsKit.ramsey_two_three_gt_five",
-        "LeanChecker.ExtremalCombinatoricsKit.schur_two_of_five",
-        "LeanChecker.ExtremalCombinatoricsKit.cnfSat_of_witness",
-        "LeanChecker.ExtremalCombinatoricsKit.cnfUnsat_of_forall_fin",
-        "LeanChecker.ExtremalCombinatoricsKit.cnfEval_congr"
+        "LeanChecker.ExtremalCombinatoricsKit.k5NoMonoCnf_correct",
+        "LeanChecker.ExtremalCombinatoricsKit.ramsey_two_three_gt_five_via_certificate",
+        "LeanChecker.ExtremalCombinatoricsKit.schur_two_of_five"
       ],
       "fixtures": [
         "R(3,3) = 6 pinned both directions: pentagon witness by kernel decide, K6 upper bound by verified-LRAT bv_decide",
+        "A/B separation worked end-to-end: k5NoMonoCnf encoding + soundness lemma + kernel-checked model 665#10 → R(3,3) > 5",
         "Schur S(2) = 4 both directions by kernel decide",
-        "pigeonhole PHP(2,1) UNSAT by bounded kernel enumeration",
-        "solver-model import checked by kernel evaluation",
         "edgeIdx range + injectivity sanity for K6"
+      ],
+      "certificate_claims": [
+        {"claim": "ramsey_two_three_le_six", "rung": 2, "certificate_checker": "bv_decide_lrat", "encoding_soundness_lemma": "stated_directly"},
+        {"claim": "ramsey_two_three_gt_five", "rung": 1, "certificate_checker": "kernel_decide", "encoding_soundness_lemma": "stated_directly"},
+        {"claim": "ramsey_two_three_gt_five_via_certificate", "rung": 3, "certificate_checker": "model_eval", "encoding_soundness_lemma": "LeanChecker.ExtremalCombinatoricsKit.k5NoMonoCnf_correct"},
+        {"claim": "schur_two_of_five", "rung": 1, "certificate_checker": "kernel_decide", "encoding_soundness_lemma": "stated_directly"}
       ],
       "known_acceptance_targets": [
         {
@@ -214,11 +258,10 @@
         }
       ],
       "remaining_route_steps": [
-        "rung 4: Cnf → Std.Sat.CNF bridge + satisfiability-preservation lemma, unlocking general LRAT import at CaDiCaL scale",
-        "per-family encoding-soundness lemmas (statement ↔ CNF encoding); interim pattern: state finite claims over BitVec/Bool so bv_decide applies directly",
-        "DIMACS export helper + certificate artifact hashing flow (report via issue #92 fields, files private)"
+        "family encoding-soundness lemmas at scales where obligation B cannot be kernel-decided (needed once rung 4 lands)",
+        "R(3,4) ≤ 9 at rung 2 as the next Ramsey target; interim pattern: state finite claims over BitVec/Bool so bv_decide applies directly"
       ],
-      "prompt_block": "ExtremalCombinatoricsKit: encode K_n edge 2-colorings as BitVec (edgeIdx for the lexicographic pair order, monoBit for triangle checks); tiny searches close by kernel decide, larger ones by bv_decide (external SAT + formally verified LRAT replay — kernel-grade trust, see R(3,3) ≤ 6). CNF layer: cnfSat_of_witness kernel-checks solver models; cnfUnsat_of_forall_fin kernel-checks bounded UNSAT. Bare solver verdicts are never proof authority.",
+      "prompt_block": "ExtremalCombinatoricsKit: encode K_n edge 2-colorings as BitVec (edgeIdx lexicographic pair order, monoBit triangle checks); tiny searches close by kernel decide, larger ones by bv_decide (external SAT + formally verified LRAT replay — kernel-grade trust, see R(3,3) ≤ 6). For solver-model routes use FiniteCertificateKit + an encoding-soundness lemma (see k5NoMonoCnf_correct → ramsey_two_three_gt_five_via_certificate). Bare solver verdicts are never proof authority.",
       "unsafe_for_public_proof_body_export": false
     }
   ]
