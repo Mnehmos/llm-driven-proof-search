@@ -852,6 +852,63 @@ CREATE INDEX IF NOT EXISTS idx_exposition_artifacts_episode ON exposition_artifa
 CREATE INDEX IF NOT EXISTS idx_exposition_artifacts_problem_version ON exposition_artifacts(problem_version_id);
 CREATE INDEX IF NOT EXISTS idx_exposition_artifacts_dossier ON exposition_artifacts(dossier_id);
 
+-- Semantic statement skeletons and module-aware fidelity notes (issue #6).
+-- ADDITIVE and metadata-only: a row here NEVER marks anything proved, never
+-- sets problem_versions.fidelity_status, never changes an episode outcome,
+-- obligation status, budget, or benchmark state, and never substitutes for the
+-- root problem_submit_fidelity_review gate. It records a STRUCTURED reading of
+-- what a statement/module/solution actually says (quantifiers, hypotheses,
+-- conclusion, helper definitions, construction/final-answer map, a natural-
+-- language back-translation) plus fidelity risk flags, so fidelity review can
+-- inspect module-level structure (helper defs, bijection/construction claims,
+-- final-answer extraction, domain restrictions, prose-only bridges) WITHOUT
+-- weakening the existing root-statement gate. All FK links are nullable: a
+-- skeleton can describe a bare root statement before any dossier/episode/module
+-- exists. review_scope says WHAT was read; risk_flags_json says what looked
+-- wrong; neither is a pass/fail verdict. semantic_fingerprint_hash is
+-- server-computed over the normalized skeleton content, never client-supplied.
+-- The table carries NO status column able to hold kernel evidence -- that
+-- structural absence, not a CHECK, is the proof-safety guarantee.
+CREATE TABLE IF NOT EXISTS semantic_skeletons (
+    id TEXT PRIMARY KEY,
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    root_obligation_id TEXT REFERENCES episode_obligations(id),
+    module_id TEXT REFERENCES episode_verified_modules(id),
+    module_item_id TEXT REFERENCES episode_verified_module_items(id),
+    verified_lemma_id TEXT REFERENCES episode_verified_lemmas(id),
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    node_id TEXT REFERENCES research_nodes(id),
+    root_fidelity_review_id TEXT REFERENCES problem_fidelity_reviews(id),
+    review_scope TEXT NOT NULL,
+    quantifiers_json TEXT NOT NULL DEFAULT '[]',
+    hypotheses_json TEXT NOT NULL DEFAULT '[]',
+    conclusion_json TEXT NOT NULL DEFAULT '{}',
+    definitions_json TEXT NOT NULL DEFAULT '[]',
+    construction_map_json TEXT NOT NULL DEFAULT '[]',
+    backtranslation_text TEXT,
+    risk_flags_json TEXT NOT NULL DEFAULT '[]',
+    review_notes_json TEXT NOT NULL DEFAULT '[]',
+    semantic_fingerprint_hash TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(review_scope IN (
+        'root_statement_only',
+        'module_artifact',
+        'source_aligned_solution',
+        'computational_check_only',
+        'structural_proof'
+    )),
+    -- A module_artifact-scoped skeleton is ABOUT a module, so it must name one.
+    CHECK(review_scope <> 'module_artifact' OR module_id IS NOT NULL OR module_item_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_problem_version ON semantic_skeletons(problem_version_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_episode ON semantic_skeletons(episode_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_module ON semantic_skeletons(module_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_dossier ON semantic_skeletons(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_skeletons_fingerprint ON semantic_skeletons(semantic_fingerprint_hash);
+
 -- Run envelopes (issues #34 core concept + #38 cost-surface splitting): a
 -- run envelope separates WHO/WHAT/WHY around a set of episodes from the
 -- episodes themselves -- host identity, run mode (a plain dev/exploratory

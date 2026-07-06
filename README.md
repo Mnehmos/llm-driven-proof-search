@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  56 tools · typed schemas · JSON Schema 2020-12                 │
+│  58 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -108,6 +108,8 @@ Antigravity, or a custom script — should call this first.
 | `candidate_construction_link_verification_layer` | Attach a candidate construction to an existing verification layer, adopting the layer's dossier if the construction has none yet |
 | `exposition_add` | Add a human-readable exposition section (problem_summary, construction_intuition, key_lemmas, unverified_bridges, …) linked to a problem/episode/obligation/module/lemma/dossier. `prose_status` (prose/reviewed_prose/formalized) marks epistemic weight — never proof |
 | `exposition_observe` | List exposition artifacts for a problem_version, episode, or dossier. Read-only prose, separate from verified proof |
+| `semantic_skeleton_add` | Attach a structured reading of a statement/module/solution (quantifiers, hypotheses, conclusion, definitions, construction map, back-translation, fidelity `risk_flags`) scoped by `review_scope`. Metadata only — never sets `fidelity_status` or substitutes for `problem_submit_fidelity_review` |
+| `semantic_skeleton_observe` | Append one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive) to a skeleton's review history. `confirms_faithful` is not the root fidelity gate |
 | `mathlib_search_declarations` | Search the real pinned Mathlib source tree for declaration names containing a substring (beyond exact-name lookup). Advisory only |
 | `mathlib_search_local_artifacts` | Search this instance's own previously-verified theorem/def names for a substring match |
 | `formalization_plan_attach_librarian_result` | Attach a Mathlib librarian result to a formalization plan item, updating its coverage status |
@@ -239,6 +241,27 @@ is labeled with its `prose_status` so a reader can never mistake reviewed or
 unreviewed narrative for a checked proof. An artifact can attach to a
 problem, an episode, a specific obligation, a verified module, a verified
 helper lemma, and/or a research dossier — every link is optional.
+
+### Semantic skeletons (module-aware fidelity)
+
+Statement fidelity can't stay a single flat approval over one root
+proposition: a module can prove a correct formal theorem while the real source
+claim still rests on prose-only bridges (integer encoding, a bijection, a
+final-answer extraction, a domain restriction). A **semantic skeleton** is a
+structured reading of what a statement, verified module, or source-aligned
+solution actually says — `quantifiers`, `hypotheses`, `conclusion`,
+`definitions`, `construction_map`, a natural-language `backtranslation`, and
+fidelity `risk_flags` — scoped by `review_scope` (`root_statement_only`,
+`module_artifact`, `source_aligned_solution`, `computational_check_only`,
+`structural_proof`). Its `semantic_fingerprint_hash` is server-computed over
+the normalized content, never client-supplied.
+
+A skeleton is **descriptive metadata, never the fidelity gate**: it has no
+column that can hold kernel evidence, never sets `fidelity_status`, and never
+substitutes for `problem_submit_fidelity_review`. `semantic_skeleton_observe`
+appends module-aware review notes (`confirms_faithful`, `raises_concern`,
+`reports_mismatch`, `inconclusive`) — a `confirms_faithful` note is
+note-taking, not a proof.
 
 **Benchmark contamination policy:** upstream benchmarks like PutnamBench ask
 that completed formal proofs not be published without first coordinating with
@@ -583,7 +606,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 56 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 58 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records
