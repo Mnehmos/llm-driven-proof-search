@@ -2,7 +2,7 @@ use chrono::Utc;
 use rusqlite::{Result, Transaction, OptionalExtension};
 use uuid::Uuid;
 
-use crate::models::action::TypedAction;
+use crate::models::action::{TypedAction, ProofFormat};
 use crate::lean::LeanGateway;
 use crate::lean::module::AssembledModule;
 use crate::models::{LeanVerificationOutcome, LeanVerificationResult, LeanModuleVerificationResult, Obligation, Polarity};
@@ -34,6 +34,7 @@ pub enum GatewayRequest {
     Solve {
         obl: Obligation,
         proof_term: String,
+        proof_format: ProofFormat,
         dep_ids: Vec<Uuid>,
         env_hash: String,
         import_manifest: Vec<String>,
@@ -158,7 +159,7 @@ pub fn attempt_prepare(
     )?;
 
     match action {
-        TypedAction::Solve { proof_term } => {
+        TypedAction::Solve { proof_term, proof_format } => {
             let obl_id_str = target_obligation_id
                 .ok_or_else(|| StepError::ActionSchemaInvalid("No target obligation for this request".to_string()))?;
 
@@ -232,7 +233,7 @@ pub fn attempt_prepare(
 
             Ok(PrepOutcome::NeedsGateway {
                 request: GatewayRequest::Solve {
-                    obl, proof_term: proof_term.clone(), dep_ids,
+                    obl, proof_term: proof_term.clone(), proof_format: *proof_format, dep_ids,
                     env_hash: pv_env_hash.clone(), import_manifest,
                 },
                 ctx: FinalizeContext::Solve { obl_id_str, pv_env_hash },
@@ -809,8 +810,8 @@ pub fn attempt_commit(
         PrepOutcome::Done { outcome, .. } => Ok(outcome),
         PrepOutcome::NeedsGateway { request, ctx } => {
             let response = match request {
-                GatewayRequest::Solve { obl, proof_term, dep_ids, env_hash, import_manifest } => {
-                    GatewayResponse::Solve(lean_gateway.verify_exact(&obl, &proof_term, &dep_ids, &env_hash, &import_manifest))
+                GatewayRequest::Solve { obl, proof_term, proof_format, dep_ids, env_hash, import_manifest } => {
+                    GatewayResponse::Solve(lean_gateway.verify_exact(&obl, &proof_term, &dep_ids, &env_hash, &import_manifest, proof_format))
                 }
                 GatewayRequest::SubmitModule { assembled, env_hash } => {
                     GatewayResponse::SubmitModule(lean_gateway.verify_module(&assembled, &env_hash))

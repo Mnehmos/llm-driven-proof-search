@@ -296,7 +296,7 @@ enforce this.
 
 As of v0.3.x, `episode_step` accepts more than a single theorem body:
 
-- **`Solve { proof_term }`** — one theorem: `theorem O_<id> : <statement> := by <proof_term>`. Good for a self-contained tactic proof.
+- **`Solve { proof_term, proof_format? }`** — one theorem: `theorem O_<id> : <statement> := by <proof_term>`. Good for a self-contained tactic proof. `proof_format` (issue #51) is an optional whitespace-transport hint: `flat_tactic_sequence` (default) flattens accidental nesting; `raw_lean_block` preserves the proof's relative indentation for intentional focus-bullet/nested-block structure. It only affects leading whitespace — the Lean kernel remains the sole authority. `SubmitModule`'s `root_theorem` accepts the same field.
 - **`SubmitModule { module_items, root_theorem }`** — a small local Lean *development*: helper `def`s, helper `theorem`s, and a root theorem, assembled by the server into one namespaced module and verified as a unit. `module_items` is a list of:
   - `LeanModuleItem::Def { name, type_signature, body }` — `def <name> : <type_signature> := <body>`
   - `LeanModuleItem::Theorem { name, statement, proof_term }` — `theorem <name> : <statement> := by <proof_term>`

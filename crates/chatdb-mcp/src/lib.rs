@@ -22,7 +22,7 @@ pub use rmcp::ErrorData as McpError;
 use chatdb_proof_core::db::schema_v1;
 use chatdb_proof_core::orchestrator::{lifecycle, attempts, step, trajectories, dataset};
 use chatdb_proof_core::lean::{LeanGateway, RealLeanGateway};
-use chatdb_proof_core::models::action::{TypedAction, ActionRequest, ActionRole, StepDisposition, LeanModuleItem, ModuleTheorem};
+use chatdb_proof_core::models::action::{TypedAction, ActionRequest, ActionRole, StepDisposition, LeanModuleItem, ModuleTheorem, ProofFormat};
 use chatdb_proof_core::lean::module::assemble_module;
 use chatdb_proof_core::models::episode::{EpisodeOutcome, TerminationReason, TruncationReason};
 use chatdb_proof_core::models::reward::{RewardComponent, RewardComponentId, RewardPolicy};
@@ -3767,6 +3767,7 @@ impl ServerHandler for ChatDbMcp {
                     "proof_attempts": {
                         "rule": "Every candidate proof attempt that should count as real proof-search activity MUST go through episode_step, not a side channel.",
                         "solve": "Use the Solve action for a single self-contained tactic/term proof of the current obligation.",
+                        "proof_format": "Both Solve and SubmitModule's root_theorem accept an optional proof_format (issue #51). Default 'flat_tactic_sequence' re-bases indentation and flattens accidental nesting — right for a simple sequential tactic list (or use semicolon chaining). Set 'raw_lean_block' ONLY when the proof intentionally relies on Lean's relative-indentation structure (focus bullets `·`, nested case/by blocks); it preserves that nesting. Either way the Lean kernel is the sole authority on whether the proof checks — proof_format only affects leading whitespace transport.",
                         "submit_module": "Use SubmitModule for helper definitions, helper theorems, structural or well-founded recursion, and mutually recursive definitions (via MutualGroup) — a small local Lean development, not just one theorem body. See environment_describe's submit_module_boundary for the exact trust rules.",
                         "decompose": "Use Decompose to split the current obligation into child sub-lemma obligations when the root goal is too large to attack directly.",
                         "why_this_matters": "A proof attempt checked some OTHER way (e.g. a bare `lake env lean` invocation outside this episode, or an internal LeanGateway call bypassed around episode_step) and then only submitted as a final winning SubmitModule/Solve loses every failed attempt, every Lean diagnostic, every repair step — the data this environment exists to preserve. Untracked checks do not count as valid benchmark or training attempts, and a run built that way should be reported as incomplete, not as a clean success."
@@ -3801,10 +3802,12 @@ impl ServerHandler for ChatDbMcp {
                     "action_schema": action_schema,
                     "action_examples": [
                         {"type": "solve", "proof_term": "  norm_num"},
+                        {"type": "solve", "proof_term": "constructor\n  · exact h1\n  · exact h2", "proof_format": "raw_lean_block"},
                         {"type": "decompose", "sub_lemmas": ["n + 0 = n", "0 + n = n"]},
                         {"type": "submit_module", "module_items": [
                             {"item_kind": "def", "name": "double", "type_signature": "Nat → Nat", "body": "fun n => n + n"}
                         ], "root_theorem": {"name": "root", "statement": "double 2 = 4", "proof_term": "  rfl"}},
+                        {"type": "submit_module", "module_items": [], "root_theorem": {"name": "root", "statement": "p ∧ q", "proof_term": "constructor\n  · exact hp\n  · exact hq", "proof_format": "raw_lean_block"}},
                         {"type": "submit_module", "module_items": [
                             {"item_kind": "mutual_group", "members": [
                                 {"item_kind": "def", "name": "isEven", "type_signature": "Nat → Bool", "body": "fun n => match n with\n  | 0 => true\n  | (k+1) => isOdd k"},
@@ -3813,7 +3816,7 @@ impl ServerHandler for ChatDbMcp {
                         ], "root_theorem": {"name": "root", "statement": "isEven 4 = true", "proof_term": "  rfl"}},
                         {"type": "give_up"}
                     ],
-                    "submit_module_boundary": "The server assembles the Lean file: it owns imports, the ChatDB.P_<problem> namespace, and server set_options. Clients send structured items only — never raw import/namespace/end/set_option lines, and never axiom/opaque/unsafe/instance declarations. Every name is sanitized to a single namespace-local identifier. The root_theorem.statement must canonical-hash to the problem's registered root_statement_hash. Either the whole module passes the kernel and is recorded, or nothing enters the trusted namespace. A `mutual_group` item groups 2+ def/theorem members that must forward-reference each other (e.g. mutually recursive functions) into one server-owned `mutual ... end` block — still never raw Lean from the client.",
+                    "submit_module_boundary": "The server assembles the Lean file: it owns imports, the ChatDB.P_<problem> namespace, and server set_options. Clients send structured items only — never raw import/namespace/end/set_option lines, and never axiom/opaque/unsafe/instance declarations. Every name is sanitized to a single namespace-local identifier. The root_theorem.statement must canonical-hash to the problem's registered root_statement_hash. Either the whole module passes the kernel and is recorded, or nothing enters the trusted namespace. A `mutual_group` item groups 2+ def/theorem members that must forward-reference each other (e.g. mutually recursive functions) into one server-owned `mutual ... end` block — still never raw Lean from the client. The root_theorem accepts an optional proof_format (issue #51): 'flat_tactic_sequence' (default) flattens accidental nesting; 'raw_lean_block' preserves the proof's relative indentation for intentional focus-bullet/nested-block structure. Helper defs/theorems and mutual members are always flattened.",
                     "prover_loop": "problem_create -> problem_submit_fidelity_review (or unsafe_dev_attestation=true for dev use) -> episode_create -> episode_observe -> attempt_claim -> episode_step(action, expected_revision = action_request.episode_revision) -> repeat observe/claim/step until outcome is set",
                     "epistemic_rules": [
                         "An 'unknown_declaration'/'unknown identifier' result under the active import manifest establishes ONLY that the name didn't resolve under that exact import closure. It does NOT establish that the declaration is absent from the pinned library. Before concluding an API is unavailable, call lean_declaration_lookup — do not infer a global capability limit from one local elaboration failure.",
@@ -5033,8 +5036,8 @@ impl ServerHandler for ChatDbMcp {
                         drop(conn); // RELEASE THE LOCK — no other tool call is blocked while Lean runs.
 
                         let response = match request {
-                            step::GatewayRequest::Solve { obl, proof_term, dep_ids, env_hash, import_manifest } => {
-                                step::GatewayResponse::Solve(self.gateway.verify_exact(&obl, &proof_term, &dep_ids, &env_hash, &import_manifest))
+                            step::GatewayRequest::Solve { obl, proof_term, proof_format, dep_ids, env_hash, import_manifest } => {
+                                step::GatewayResponse::Solve(self.gateway.verify_exact(&obl, &proof_term, &dep_ids, &env_hash, &import_manifest, proof_format))
                             }
                             step::GatewayRequest::SubmitModule { assembled, env_hash } => {
                                 step::GatewayResponse::SubmitModule(self.gateway.verify_module(&assembled, &env_hash))
@@ -8199,6 +8202,7 @@ mod tests {
             _approved_dependency_ids: &[Uuid],
             environment: &str,
             _import_manifest: &[String],
+            _proof_format: ProofFormat,
         ) -> Result<LeanVerificationResult, String> {
             let outcome = if candidate_source.contains("sorry") {
                 LeanVerificationOutcome::KernelFail
@@ -8617,6 +8621,7 @@ mod tests {
             _approved_dependency_ids: &[Uuid],
             environment: &str,
             _import_manifest: &[String],
+            _proof_format: ProofFormat,
         ) -> Result<LeanVerificationResult, String> {
             // Returning Err (a normal, non-panicking gateway failure) rather than
             // panicking/asserting: a panic here unwinds inside the spawned server
@@ -9404,7 +9409,7 @@ mod tests {
     /// DOES bump it, exactly as before the prepare/finalize split.
     struct FailingGateway;
     impl LeanGateway for FailingGateway {
-        fn verify_exact(&self, _o: &Obligation, _p: &str, _d: &[Uuid], _e: &str, _m: &[String]) -> Result<LeanVerificationResult, String> {
+        fn verify_exact(&self, _o: &Obligation, _p: &str, _d: &[Uuid], _e: &str, _m: &[String], _f: ProofFormat) -> Result<LeanVerificationResult, String> {
             Err("simulated infrastructure failure: process spawn error".to_string())
         }
         fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> { Ok(()) }
@@ -9481,7 +9486,7 @@ mod tests {
         episode_id: Arc<std::sync::Mutex<Option<String>>>,
     }
     impl LeanGateway for BudgetPeekingGateway {
-        fn verify_exact(&self, obligation: &Obligation, _p: &str, _d: &[Uuid], environment: &str, _m: &[String]) -> Result<LeanVerificationResult, String> {
+        fn verify_exact(&self, obligation: &Obligation, _p: &str, _d: &[Uuid], environment: &str, _m: &[String], _f: ProofFormat) -> Result<LeanVerificationResult, String> {
             let episode_id = self.episode_id.lock().unwrap().clone().expect("episode_id must be set before calling");
             let budget: i64 = {
                 let conn = self.conn.try_lock().expect("DB mutex must be released during the gateway call");
@@ -9574,6 +9579,7 @@ mod tests {
             _d: &[Uuid],
             environment: &str,
             _m: &[String],
+            _proof_format: ProofFormat,
         ) -> Result<LeanVerificationResult, String> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(LeanVerificationResult {

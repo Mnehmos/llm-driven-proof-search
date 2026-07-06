@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::hashing::canonical_hash;
-use crate::models::action::{LeanModuleItem, ModuleTheorem, MutualMember};
+use crate::models::action::{LeanModuleItem, ModuleTheorem, MutualMember, ProofFormat};
 
 /// A token that must never appear (as a whole word) anywhere inside any
 /// client-supplied string. Each would open a fresh top-level Lean command and so
@@ -376,7 +376,9 @@ pub fn assemble_module(
                 declared_so_far.push(name.clone());
             }
             LeanModuleItem::Theorem { name, statement, proof_term } => {
-                source.push_str(&render_theorem(name, statement, proof_term));
+                // Helper theorems are always flattened (issue #51 scopes the
+                // raw-block transport to the root proof only).
+                source.push_str(&render_theorem(name, statement, proof_term, ProofFormat::FlatTacticSequence));
                 item_manifest.push(AssembledItem {
                     order: next_order,
                     kind: "theorem".to_string(),
@@ -422,7 +424,7 @@ pub fn assemble_module(
                             next_order += 1;
                         }
                         MutualMember::Theorem { name, statement, proof_term } => {
-                            group_source.push_str(&render_theorem(name, statement, proof_term));
+                            group_source.push_str(&render_theorem(name, statement, proof_term, ProofFormat::FlatTacticSequence));
                             item_manifest.push(AssembledItem {
                                 order: next_order,
                                 kind: "theorem".to_string(),
@@ -449,7 +451,7 @@ pub fn assemble_module(
     // (the actual goal being proved), not an already-rendered structural
     // block, so it needs the same issue #41 normalization, not the old
     // blind-uniform-add indent() a prior version of this fix missed here.
-    source.push_str(&render_theorem(&root_theorem.name, &root_theorem.statement, &root_theorem.proof_term));
+    source.push_str(&render_theorem(&root_theorem.name, &root_theorem.statement, &root_theorem.proof_term, root_theorem.proof_format));
     item_manifest.push(AssembledItem {
         order: next_order,
         kind: "root_theorem".to_string(),
@@ -490,8 +492,8 @@ fn render_def(name: &str, type_signature: &str, body: &str) -> String {
 
 /// Renders a `theorem` declaration — the `Theorem`/`mutual`-group analogue of
 /// [`render_def`].
-fn render_theorem(name: &str, statement: &str, proof_term: &str) -> String {
-    format!("theorem {} : {} := by\n{}\n\n", name, statement.trim(), normalize_and_indent(proof_term))
+fn render_theorem(name: &str, statement: &str, proof_term: &str, format: ProofFormat) -> String {
+    format!("theorem {} : {} := by\n{}\n\n", name, statement.trim(), normalize_proof(proof_term, format))
 }
 
 /// Indents every line of a string by two spaces, with NO per-line
@@ -553,6 +555,42 @@ pub(crate) fn normalize_and_indent(s: &str) -> String {
     }
 }
 
+/// Issue #51: `raw_lean_block` transport — strip only the COMMON left margin
+/// and re-base it to the module's two-space indent, preserving each line's
+/// RELATIVE indentation. Unlike [`normalize_and_indent`]'s flattening, a proof
+/// that intentionally uses Lean's indentation structure (focus bullets `·`,
+/// nested blocks) keeps its shape. Leading whitespace in submitted proofs is
+/// single-byte spaces, so slicing at the byte offset `min_indent` is safe.
+/// This only rewrites leading whitespace; it never touches tactic text, and
+/// the kernel remains the sole authority on the result.
+fn rebase_preserving_relative_indent(s: &str) -> String {
+    let lines: Vec<&str> = s.lines().collect();
+    let min_indent = lines.iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    lines.iter()
+        .map(|l| {
+            if l.trim().is_empty() {
+                String::new()
+            } else {
+                format!("  {}", &l[min_indent..])
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Dispatch a proof body through the transport format the caller declared
+/// (issue #51). Whitespace-only; the Lean kernel still decides the outcome.
+pub(crate) fn normalize_proof(s: &str, format: ProofFormat) -> String {
+    match format {
+        ProofFormat::FlatTacticSequence => normalize_and_indent(s),
+        ProofFormat::RawLeanBlock => rebase_preserving_relative_indent(s),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,7 +600,11 @@ mod tests {
     }
 
     fn root(statement: &str, proof: &str) -> ModuleTheorem {
-        ModuleTheorem { name: "root_thm".to_string(), statement: statement.to_string(), proof_term: proof.to_string() }
+        ModuleTheorem { name: "root_thm".to_string(), statement: statement.to_string(), proof_term: proof.to_string(), proof_format: ProofFormat::FlatTacticSequence }
+    }
+
+    fn root_fmt(statement: &str, proof: &str, proof_format: ProofFormat) -> ModuleTheorem {
+        ModuleTheorem { name: "root_thm".to_string(), statement: statement.to_string(), proof_term: proof.to_string(), proof_format }
     }
 
     fn root_hash(statement: &str) -> String {
@@ -626,6 +668,40 @@ mod tests {
         let asm = assemble_module("ChatDB.P_abc", &root_hash("1 + 1 = 2"), &[], &r, &manifest()).unwrap();
         assert!(asm.source.contains("theorem root_thm : 1 + 1 = 2 := by\n  intro\n  norm_num"),
             "root theorem's mismatched-indentation proof_term must be flattened to one uniform level, not blindly re-prefixed: {}", asm.source);
+    }
+
+    /// Issue #51: raw_lean_block preserves RELATIVE indentation (focus bullets
+    /// keep their nesting), whereas flat_tactic_sequence flattens it. Same
+    /// input, two transport formats, two different rendered shapes.
+    #[test]
+    fn raw_block_preserves_relative_indentation() {
+        let input = "constructor\n  · exact h1\n  · exact h2";
+        assert_eq!(normalize_proof(input, ProofFormat::RawLeanBlock),
+            "  constructor\n    · exact h1\n    · exact h2",
+            "raw_lean_block must keep the two-space focus-bullet nesting under a re-based margin");
+        assert_eq!(normalize_proof(input, ProofFormat::FlatTacticSequence),
+            "  constructor\n  · exact h1\n  · exact h2",
+            "flat_tactic_sequence must flatten the mismatched nesting to one level (issue #41 behavior)");
+    }
+
+    /// raw_lean_block strips only the COMMON left margin and re-bases it, so a
+    /// pre-indented block keeps its internal relative structure.
+    #[test]
+    fn raw_block_strips_common_margin_and_rebases() {
+        let input = "  intro h\n    cases h";
+        assert_eq!(normalize_proof(input, ProofFormat::RawLeanBlock),
+            "  intro h\n    cases h",
+            "the common 2-space margin is stripped and a 2-space base re-added, so the +2 relative indent survives");
+    }
+
+    /// Issue #51 acceptance at the assembly layer: a raw_lean_block root proof
+    /// reaches the assembled module source with its nesting intact.
+    #[test]
+    fn assemble_module_root_theorem_raw_block_preserves_nesting() {
+        let r = root_fmt("p ∧ q", "constructor\n  · exact h1\n  · exact h2", ProofFormat::RawLeanBlock);
+        let asm = assemble_module("ChatDB.P_abc", &root_hash("p ∧ q"), &[], &r, &manifest()).unwrap();
+        assert!(asm.source.contains("theorem root_thm : p ∧ q := by\n  constructor\n    · exact h1\n    · exact h2"),
+            "raw_lean_block root proof must keep its focus-bullet nesting in the assembled source: {}", asm.source);
     }
 
     #[test]
