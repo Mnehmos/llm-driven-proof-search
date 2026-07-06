@@ -101,16 +101,21 @@
       "kit_name": "FiniteConvexityKit",
       "module_path": "LeanChecker.Kits.FiniteConvexityKit",
       "domain": "finite planar convexity — Happy-Ending-style convex position",
-      "status": "v1",
+      "status": "v2",
       "canonical_imports": ["Mathlib", "LeanChecker.Kits.FiniteConvexityKit"],
       "canonical_open_directives": [],
       "key_lemmas": [
         "LeanChecker.FiniteConvexityKit.ConvexPosition",
         "LeanChecker.FiniteConvexityKit.not_mem_convexHull_of_forall_le",
-        "LeanChecker.FiniteConvexityKit.convexPosition_of_separation"
+        "LeanChecker.FiniteConvexityKit.convexPosition_of_separation",
+        "LeanChecker.FiniteConvexityKit.convexPosition_iff_forall",
+        "LeanChecker.FiniteConvexityKit.not_mem_convexHull_diff_of_extremePoint",
+        "LeanChecker.FiniteConvexityKit.convexPosition_of_subset_extremePoints",
+        "LeanChecker.FiniteConvexityKit.ncard_four"
       ],
       "fixtures": [
-        "unit square corners in convex position via explicit separating functionals"
+        "unit square corners in convex position via explicit separating functionals",
+        "benchmark-shaped witness extraction: four distinct extreme points of the hull yield ∃ T ⊆ S, T.ncard = 4 ∧ ConvexPosition"
       ],
       "known_acceptance_targets": [
         {
@@ -121,11 +126,10 @@
         }
       ],
       "remaining_route_steps": [
-        "hull-size case split for 5 points with no 3 collinear (3/4/5 extreme points)",
-        "hull ≥ 4: four hull vertices are in convex position via extremality",
-        "hull = 3: two interior points plus two vertices on one side of their line"
+        "count extreme points of a 5-point hull with no 3 collinear (3/4/5 trichotomy)",
+        "hull = 3: two interior points plus two vertices on one side of their line (side-of-line case analysis + v1 separation criterion)"
       ],
-      "prompt_block": "FiniteConvexityKit: ConvexPosition in the benchmark's exact shape plus a per-point linear-separation criterion — reduces convex-position goals to exhibiting one separating functional per point. The hull-size case split is the missing v2 piece.",
+      "prompt_block": "FiniteConvexityKit: ConvexPosition in the benchmark's exact shape; v1 separation criterion (one functional per point) plus v2 extreme-point machinery — any 4 distinct extreme points of convexHull S give the 1962 A1 existential via convexPosition_of_subset_extremePoints + ncard_four. Extreme-point counting is the missing piece.",
       "unsafe_for_public_proof_body_export": false
     }
   ]
