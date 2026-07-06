@@ -12075,6 +12075,14 @@ mod tests {
         // ...and states plainly that a root kernel pass does not verify every layer.
         assert!(md.contains("1 of 3 layer(s)"), "exactly one of three layers is kernel_verified despite the root pass: {md}");
         assert!(md.to_lowercase().contains("never gates") || md.contains("additive metadata"), "layers must be labeled non-gating: {md}");
+
+        // The redacted public_summary must NOT carry the layer table — it returns
+        // before the markdown builder; lock that in so a refactor can't leak it.
+        let pub_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let pub_txt = pub_res.content[0].as_text().unwrap().text.clone();
+        assert!(!pub_txt.contains("Verification layers"), "public_summary must stay redacted, no layer table: {pub_txt}");
     }
 
     /// Issue #13 gap-fill (criterion #6): a unit-distance-style fixture that
