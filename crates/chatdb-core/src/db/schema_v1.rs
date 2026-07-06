@@ -1258,6 +1258,26 @@ CREATE TABLE IF NOT EXISTS benchmark_suites (
     imported_at TEXT NOT NULL
 );
 
+-- Issue #65: the trust flag above is a load-bearing fidelity-basis input
+-- (benchmark_result_record accepts a hash match against a trusted suite as
+-- sufficient fidelity evidence), so changing it after creation must leave an
+-- append-only audit trail — who asserted the change, from what value to what
+-- value, and why. benchmark_suite_set_trust writes one row here per change
+-- and never deletes; the current flag on benchmark_suites is just the fold of
+-- this history.
+CREATE TABLE IF NOT EXISTS benchmark_suite_trust_reviews (
+    id TEXT PRIMARY KEY,
+    suite_id TEXT NOT NULL REFERENCES benchmark_suites(id),
+    previous_value INTEGER NOT NULL,
+    new_value INTEGER NOT NULL,
+    approver_id TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    CHECK(previous_value IN (0, 1)),
+    CHECK(new_value IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_benchmark_suite_trust_reviews_suite ON benchmark_suite_trust_reviews(suite_id);
+
 -- root_statement_hash is server-computed (canonical_hash of
 -- root_formal_statement), never trusted from the client -- same "never
 -- trust a client-supplied hash for something the server can independently
@@ -1364,6 +1384,11 @@ CREATE TABLE IF NOT EXISTS benchmark_results (
     -- is rejected outright by benchmark_result_record before a row is ever
     -- written, so this value is never actually persisted today.
     benchmark_fidelity_basis TEXT,
+    -- Issue #76: structured formalization-gap taxonomy for failed/gave-up
+    -- results — a JSON array of category slugs (validated at the MCP layer
+    -- against a fixed vocabulary). Additive metadata for reporting only:
+    -- never proof authority, never affects status/score/eligibility.
+    gap_categories_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(run_id, benchmark_problem_id),
@@ -2384,6 +2409,11 @@ fn migrate_add_benchmark_fidelity_basis_columns(conn: &Connection) -> rusqlite::
             .collect();
         if !existing_columns.iter().any(|c| c == "benchmark_fidelity_basis") {
             conn.execute("ALTER TABLE benchmark_results ADD COLUMN benchmark_fidelity_basis TEXT", [])?;
+        }
+        // Issue #76: structured formalization-gap categories (nullable JSON
+        // array of slugs) — pre-existing rows simply have none recorded.
+        if !existing_columns.iter().any(|c| c == "gap_categories_json") {
+            conn.execute("ALTER TABLE benchmark_results ADD COLUMN gap_categories_json TEXT", [])?;
         }
     }
     Ok(())
