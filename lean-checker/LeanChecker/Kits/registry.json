@@ -298,6 +298,42 @@
       ],
       "prompt_block": "RecurrenceGeneratingFunctionKit: discrete/formal counterpart to PowerSeriesKit. closed_form_satisfies_linrec turns a characteristic-root relation r²=pr+q into 'rⁿ solves a(n+2)=p·a(n+1)+q·a(n)' by ring; ogf_ext compares OGF coefficients (PowerSeries.mk); one_sub_X_mul_geom is the telescoping (1−X)·∑Xⁿ=1 bridge. Reuse geom_sum_eq for finite geometric closed forms. Import alongside PowerSeriesKit when a problem mixes formal and analytic sides.",
       "unsafe_for_public_proof_body_export": false
+    },
+    {
+      "kit_name": "InequalityEstimateKit",
+      "module_path": "LeanChecker.Kits.InequalityEstimateKit",
+      "domain": "contest inequalities & estimates — AM-GM, Cauchy-Schwarz, power-mean bounds",
+      "status": "v1",
+      "epistemic_basis": "kernel_verified_only (no empirical or asymptotic-heuristic claims)",
+      "canonical_imports": ["Mathlib", "LeanChecker.Kits.InequalityEstimateKit"],
+      "canonical_open_directives": ["open Finset"],
+      "key_lemmas": [
+        "LeanChecker.InequalityEstimateKit.two_mul_le_add_sq",
+        "LeanChecker.InequalityEstimateKit.sqrt_mul_le_add_div_two",
+        "LeanChecker.InequalityEstimateKit.cauchy_schwarz",
+        "LeanChecker.InequalityEstimateKit.sq_sum_le_card_mul_sum_sq",
+        "LeanChecker.InequalityEstimateKit.geom_mean3"
+      ],
+      "fixtures": [
+        "x + 1/x ≥ 2 for x>0 via the sqrt AM-GM bridge (beyond nlinarith)",
+        "(a+b+c)² ≤ 3(a²+b²+c²) via the power-mean bridge",
+        "three-variable cube-root AM-GM instance (categorically beyond nlinarith)"
+      ],
+      "known_acceptance_targets": [
+        {
+          "benchmark": "Putnam/Erdős inequality-heavy families (no registered suite yet)",
+          "upstream_problem_id": "AM-GM/Cauchy extremal problems, sum-of-squares bounds, power-mean comparisons",
+          "status": "families_identified",
+          "tracking_issue": 91
+        }
+      ],
+      "remaining_route_steps": [
+        "weighted/general n-variable AM-GM and Jensen convexity bridges",
+        "rearrangement and Chebyshev-sum inequalities",
+        "asymptotic/growth comparison lemmas when a target needs them"
+      ],
+      "prompt_block": "InequalityEstimateKit: named inequalities nlinarith cannot synthesize. two_mul_le_add_sq packages sq_nonneg(a-b); sqrt_mul_le_add_div_two is 2-var AM-GM over Real.sqrt (nlinarith has no sqrt access); geom_mean3 is cube-root AM-GM (fractional powers, categorically beyond nlinarith); cauchy_schwarz / sq_sum_le_card_mul_sum_sq are the Cauchy and power-mean sum bounds. Route: nlinarith [sq_nonneg …] for polynomial goals, positivity for denominator cleanup, this kit for sqrt/rpow/Cauchy estimates.",
+      "unsafe_for_public_proof_body_export": false
     }
   ]
 }
