@@ -179,6 +179,47 @@
       ],
       "prompt_block": "ArithmeticKit: divisor sums as σ bridges (sigma_one_eq_sum_divisors, sigma_mul_of_coprime for coprime splits), prime-power divisibility as factorization inequalities (prime_pow_dvd_iff), and Pell solution propagation (pell_step via linear_combination). Modular periodicity pattern: factor the exponent through the cycle length, then Nat.mul_mod/Nat.pow_mod.",
       "unsafe_for_public_proof_body_export": false
+    },
+    {
+      "kit_name": "ExtremalCombinatoricsKit",
+      "module_path": "LeanChecker.Kits.ExtremalCombinatoricsKit",
+      "domain": "extremal combinatorics — colorings, Ramsey/Schur, SAT certificates",
+      "status": "v1",
+      "epistemic_basis": "trust ladder (docs/kits/certificate-interface.md): rung 1 kernel decide (Schur S(2)=4 both directions, K5 pentagon witness, CNF fixtures), rung 2 verified-LRAT bv_decide (R(3,3) ≤ 6 — external CaDiCaL search, formally verified checker replay), rung 3 kernel-checked solver models (cnfSat_of_witness); rung 4 general LRAT import planned; rung 5 bare solver output is NEVER proof authority",
+      "canonical_imports": ["Mathlib", "LeanChecker.Kits.ExtremalCombinatoricsKit"],
+      "canonical_open_directives": [],
+      "key_lemmas": [
+        "LeanChecker.ExtremalCombinatoricsKit.edgeIdx",
+        "LeanChecker.ExtremalCombinatoricsKit.monoBit",
+        "LeanChecker.ExtremalCombinatoricsKit.ramsey_two_three_le_six",
+        "LeanChecker.ExtremalCombinatoricsKit.ramsey_two_three_gt_five",
+        "LeanChecker.ExtremalCombinatoricsKit.schur_two_of_five",
+        "LeanChecker.ExtremalCombinatoricsKit.cnfSat_of_witness",
+        "LeanChecker.ExtremalCombinatoricsKit.cnfUnsat_of_forall_fin",
+        "LeanChecker.ExtremalCombinatoricsKit.cnfEval_congr"
+      ],
+      "fixtures": [
+        "R(3,3) = 6 pinned both directions: pentagon witness by kernel decide, K6 upper bound by verified-LRAT bv_decide",
+        "Schur S(2) = 4 both directions by kernel decide",
+        "pigeonhole PHP(2,1) UNSAT by bounded kernel enumeration",
+        "solver-model import checked by kernel evaluation",
+        "edgeIdx range + injectivity sanity for K6"
+      ],
+      "known_acceptance_targets": [
+        {
+          "benchmark": "Erdős-style finite combinatorics (no registered suite yet)",
+          "upstream_problem_id": "Schur/Rado, small Ramsey bounds, EGZ instances, SAT-encodable extremal families",
+          "status": "families_identified",
+          "tracking_issue": 88
+        }
+      ],
+      "remaining_route_steps": [
+        "rung 4: Cnf → Std.Sat.CNF bridge + satisfiability-preservation lemma, unlocking general LRAT import at CaDiCaL scale",
+        "per-family encoding-soundness lemmas (statement ↔ CNF encoding); interim pattern: state finite claims over BitVec/Bool so bv_decide applies directly",
+        "DIMACS export helper + certificate artifact hashing flow (report via issue #92 fields, files private)"
+      ],
+      "prompt_block": "ExtremalCombinatoricsKit: encode K_n edge 2-colorings as BitVec (edgeIdx for the lexicographic pair order, monoBit for triangle checks); tiny searches close by kernel decide, larger ones by bv_decide (external SAT + formally verified LRAT replay — kernel-grade trust, see R(3,3) ≤ 6). CNF layer: cnfSat_of_witness kernel-checks solver models; cnfUnsat_of_forall_fin kernel-checks bounded UNSAT. Bare solver verdicts are never proof authority.",
+      "unsafe_for_public_proof_body_export": false
     }
   ]
 }
