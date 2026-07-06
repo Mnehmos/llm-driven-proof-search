@@ -1500,6 +1500,204 @@ CREATE TABLE IF NOT EXISTS trajectory_events (
     UNIQUE(episode_id, event_sequence_number),
     UNIQUE(episode_id, event_hash)
 );
+
+-- Challenge / task / scoring substrate (issue #53): channels AI-generated
+-- mathematical material into small, bounded, typed, scored, reviewable tasks
+-- instead of giant opaque proof dumps. A dossier defines a challenge; a
+-- challenge defines bounded tasks; a task accepts submissions; a submission is
+-- validated, scored, and reviewed; accepted work links back to candidate
+-- constructions / empirical results / verification layers, and reusable method
+-- knowledge is distilled into strategy artifacts.
+--
+-- TRUST BOUNDARY (same discipline as every Level-4 table): none of these tables
+-- has a column that can hold kernel evidence. A scored submission is not a
+-- proof; a validated empirical result is not a proof; a human-reviewed
+-- submission is not a proof; a distilled strategy is not a proof. Only Lean /
+-- kernel verification creates kernel-verified proof authority. Submission
+-- status (validated / scored / accepted / ...) and review decisions are
+-- research bookkeeping and never mutate episode outcome, obligation status,
+-- fidelity status, benchmark results, or canonical lemma authority. A rejected
+-- or superseded submission stays visible (never deleted). Links to a
+-- kernel-verified verification_layer / candidate_construction record provenance
+-- only — they never confer proof authority on the submission itself.
+CREATE TABLE IF NOT EXISTS research_challenges (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    episode_id TEXT REFERENCES episodes(id),
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(status IN ('open', 'closed', 'archived', 'superseded'))
+);
+
+-- A validation protocol: HOW a task's submissions are checked. Reusable and
+-- optional; a task may point at one. The protocol describes a check; running it
+-- (or a human running it) is what validates a submission — the protocol row is
+-- never itself proof.
+CREATE TABLE IF NOT EXISTS validation_protocols (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    challenge_id TEXT REFERENCES research_challenges(id),
+    name TEXT NOT NULL,
+    validation_method TEXT NOT NULL,
+    description TEXT,
+    protocol_json TEXT NOT NULL DEFAULT '{}',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(validation_method IN (
+        'reproducible_script',
+        'property_check',
+        'independent_recompute',
+        'finite_case_check',
+        'symbolic_check',
+        'manual_review',
+        'external_tool',
+        'other'
+    ))
+);
+
+-- A bounded task under a challenge. task_type is the shape of contribution
+-- requested; bounds_json states the explicit bound that keeps it small and
+-- reviewable. status open/closed/superseded — a superseded task stays visible.
+CREATE TABLE IF NOT EXISTS research_tasks (
+    id TEXT PRIMARY KEY,
+    challenge_id TEXT NOT NULL REFERENCES research_challenges(id),
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    validation_protocol_id TEXT REFERENCES validation_protocols(id),
+    task_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    bounds_json TEXT NOT NULL DEFAULT '{}',
+    success_criteria TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(task_type IN (
+        'find_candidate_object',
+        'improve_bound',
+        'find_counterexample',
+        'classify_small_cases',
+        'produce_witness',
+        'minimize_example',
+        'maximize_parameter',
+        'verify_property',
+        'compress_strategy',
+        'distill_method',
+        'formalize_claim'
+    )),
+    CHECK(status IN ('open', 'closed', 'superseded'))
+);
+
+-- A submission to a task. content_json is the untrusted contribution payload.
+-- status walks submitted -> validated/validation_failed -> scored ->
+-- human_reviewed -> accepted/rejected/superseded/merged_into_dossier. It links
+-- to a candidate construction / empirical result / verification layer as
+-- PROVENANCE only. is_proof is structurally false: no column here can hold
+-- kernel evidence, and the linked artifacts keep their own independent trust.
+CREATE TABLE IF NOT EXISTS research_task_submissions (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES research_tasks(id),
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    submitted_by TEXT NOT NULL,
+    content_json TEXT NOT NULL DEFAULT '{}',
+    notes TEXT,
+    status TEXT NOT NULL DEFAULT 'submitted',
+    linked_candidate_construction_id TEXT REFERENCES candidate_constructions(id),
+    linked_empirical_result_id TEXT REFERENCES empirical_searches(id),
+    linked_verification_layer_id TEXT REFERENCES verification_layers(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(status IN (
+        'submitted',
+        'validation_failed',
+        'validated',
+        'scored',
+        'human_reviewed',
+        'accepted',
+        'rejected',
+        'superseded',
+        'merged_into_dossier'
+    ))
+);
+
+-- A score attached to a submission. Descriptive measurement, never proof:
+-- score_value/units/rule record what was measured and how; validation_method
+-- records how it was checked; the linked artifacts are provenance. cost_summary_id
+-- ties the score to a real cost observation when one exists.
+CREATE TABLE IF NOT EXISTS scoring_results (
+    id TEXT PRIMARY KEY,
+    submission_id TEXT NOT NULL REFERENCES research_task_submissions(id),
+    score_value REAL,
+    score_units TEXT,
+    scoring_rule TEXT NOT NULL,
+    validation_method TEXT,
+    reproducibility_notes TEXT,
+    novelty_notes TEXT,
+    cost_summary_id TEXT REFERENCES run_envelope_cost_observations(id),
+    linked_candidate_construction_id TEXT REFERENCES candidate_constructions(id),
+    linked_empirical_result_id TEXT REFERENCES empirical_searches(id),
+    linked_verification_layer_id TEXT REFERENCES verification_layers(id),
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- A human review of a submission. Human review is distinct from kernel
+-- verification. A rejected review keeps the submission visible.
+CREATE TABLE IF NOT EXISTS review_results (
+    id TEXT PRIMARY KEY,
+    submission_id TEXT NOT NULL REFERENCES research_task_submissions(id),
+    reviewer_id TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    review_status TEXT NOT NULL DEFAULT 'human_reviewed',
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    CHECK(decision IN ('accepted', 'rejected', 'needs_changes', 'superseded')),
+    CHECK(review_status IN ('human_reviewed', 'machine_prechecked'))
+);
+
+-- Reusable distilled strategy knowledge: compressed search experience (cheat
+-- sheets, heuristics, counterexample patterns, construction recipes, ...). A
+-- distilled strategy is NOT a proof; trust_status tops out at human_reviewed.
+CREATE TABLE IF NOT EXISTS distilled_strategy_artifacts (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES research_dossiers(id),
+    challenge_id TEXT REFERENCES research_challenges(id),
+    task_id TEXT REFERENCES research_tasks(id),
+    submission_id TEXT REFERENCES research_task_submissions(id),
+    artifact_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    trust_status TEXT NOT NULL DEFAULT 'informal',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(artifact_type IN (
+        'strategy_cheat_sheet',
+        'failed_attempt_summary',
+        'heuristic_rule',
+        'counterexample_pattern',
+        'construction_recipe',
+        'formalization_hint',
+        'review_checklist'
+    )),
+    CHECK(trust_status IN ('informal', 'human_reviewed', 'deprecated', 'superseded'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_challenges_dossier ON research_challenges(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_research_tasks_challenge ON research_tasks(challenge_id);
+CREATE INDEX IF NOT EXISTS idx_research_task_submissions_task ON research_task_submissions(task_id);
+CREATE INDEX IF NOT EXISTS idx_scoring_results_submission ON scoring_results(submission_id);
+CREATE INDEX IF NOT EXISTS idx_review_results_submission ON review_results(submission_id);
+CREATE INDEX IF NOT EXISTS idx_validation_protocols_dossier ON validation_protocols(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_distilled_strategy_artifacts_dossier ON distilled_strategy_artifacts(dossier_id);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
