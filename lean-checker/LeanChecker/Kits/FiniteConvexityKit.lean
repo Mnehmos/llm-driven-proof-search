@@ -92,4 +92,89 @@ theorem unitSquare_convexPosition :
     · norm_num
     · exact absurd (Set.mem_singleton _) hne
 
+/-! ## v2 (issue #87): extreme points and witness extraction
+
+v1 recognizes convex position from explicit separating functionals. The v2
+layer connects `ConvexPosition` to Mathlib's extreme-point machinery so hull
+STRUCTURE (rather than hand-picked functionals) produces witnesses: any
+subset of the extreme points of `convexHull ℝ S` is automatically in convex
+position, and a distinct 4-element subset of extreme points yields the
+benchmark existential in its exact shape (`∃ T ⊆ S, T.ncard = 4 ∧ ¬∃ t ∈ T,
+t ∈ convexHull ℝ (T \ {t})`) — see the fixture.
+
+Route to `putnam_1962_a1` from here (remaining steps):
+1. Count extreme points: for a 5-point set with no 3 collinear, the hull's
+   extreme-point set has size 3, 4, or 5 (Carathéodory/finite Krein-Milman
+   style counting — the genuinely missing piece).
+2. Size ≥ 4: choose any 4 extreme points; `convexPosition_of_subset_extremePoints`
+   plus `ncard_four` finish in the benchmark shape (the fixture below is this
+   step verbatim).
+3. Size = 3: the two non-extreme points lie inside the triangle; the line
+   through them meets two sides, and those two interior points plus the two
+   triangle vertices on one side of that line are in convex position
+   (side-of-line case analysis, then the v1 separation criterion). -/
+
+/-- `ConvexPosition` unfolded to the universally quantified form — the shape
+`convexPosition_of_subset_extremePoints` and hand proofs actually use. -/
+theorem convexPosition_iff_forall {T : Set (ℝ × ℝ)} :
+    ConvexPosition T ↔ ∀ t ∈ T, t ∉ convexHull ℝ (T \ {t}) := by
+  simp [ConvexPosition]
+
+/-- **Extreme-point exclusion**: an extreme point of `convexHull ℝ S` is
+outside the hull of `S` with that point removed. This is the bridge from
+Mathlib hull structure to the benchmark's `t ∈ convexHull ℝ (T \ {t})`
+membership talk. -/
+theorem not_mem_convexHull_diff_of_extremePoint {S : Set (ℝ × ℝ)} {x : ℝ × ℝ}
+    (hx : x ∈ (convexHull ℝ S).extremePoints ℝ) :
+    x ∉ convexHull ℝ (S \ {x}) := by
+  have h := ((convex_convexHull ℝ S).mem_extremePoints_iff_mem_sdiff_convexHull_sdiff).mp hx
+  intro hmem
+  exact h.2 (convexHull_mono (Set.sdiff_subset_sdiff_left (subset_convexHull ℝ S)) hmem)
+
+/-- **Hull-vertex criterion**: any subset of the extreme points of
+`convexHull ℝ S` that is also a subset of `S`'s ambient talk is in convex
+position — no separating functionals needed. This is the step-2 workhorse for
+the Happy-Ending case split. -/
+theorem convexPosition_of_subset_extremePoints {S T : Set (ℝ × ℝ)}
+    (hTS : T ⊆ S) (hT : T ⊆ (convexHull ℝ S).extremePoints ℝ) :
+    ConvexPosition T := by
+  rintro ⟨t, htT, hthull⟩
+  exact not_mem_convexHull_diff_of_extremePoint (hT htT)
+    (convexHull_mono (Set.sdiff_subset_sdiff_left hTS) hthull)
+
+/-- Four pairwise-distinct points have `ncard = 4` — the cardinality half of
+the benchmark existential, packaged so witness extraction is one lemma
+application instead of an `ncard_insert` chain. -/
+theorem ncard_four {a b c d : ℝ × ℝ} (hab : a ≠ b) (hac : a ≠ c) (had : a ≠ d)
+    (hbc : b ≠ c) (hbd : b ≠ d) (hcd : c ≠ d) :
+    ({a, b, c, d} : Set (ℝ × ℝ)).ncard = 4 := by
+  rw [Set.ncard_insert_of_notMem (by
+        simp only [Set.mem_insert_iff, Set.mem_singleton_iff]
+        push Not
+        exact ⟨hab, hac, had⟩),
+      Set.ncard_insert_of_notMem (by
+        simp only [Set.mem_insert_iff, Set.mem_singleton_iff]
+        push Not
+        exact ⟨hbc, hbd⟩),
+      Set.ncard_insert_of_notMem (by simp only [Set.mem_singleton_iff]; exact hcd),
+      Set.ncard_singleton]
+
+/-- Fixture (issue #87 acceptance): **witness extraction in the exact
+benchmark shape**. Four pairwise-distinct members of `S` that are extreme
+points of its hull yield `∃ T ⊆ S, T.ncard = 4 ∧ ¬∃ t ∈ T, t ∈ convexHull ℝ
+(T \ {t})` — the `putnam_1962_a1` goal verbatim. Once the hull-size case
+split lands, the size ≥ 4 branch IS this fixture. -/
+example {S : Set (ℝ × ℝ)} {a b c d : ℝ × ℝ}
+    (haS : a ∈ S) (hbS : b ∈ S) (hcS : c ∈ S) (hdS : d ∈ S)
+    (hab : a ≠ b) (hac : a ≠ c) (had : a ≠ d)
+    (hbc : b ≠ c) (hbd : b ≠ d) (hcd : c ≠ d)
+    (hext : ({a, b, c, d} : Set (ℝ × ℝ)) ⊆ (convexHull ℝ S).extremePoints ℝ) :
+    ∃ T ⊆ S, T.ncard = 4 ∧ ¬∃ t ∈ T, t ∈ convexHull ℝ (T \ {t}) := by
+  have hTS : ({a, b, c, d} : Set (ℝ × ℝ)) ⊆ S := by
+    intro x hx
+    simp only [Set.mem_insert_iff, Set.mem_singleton_iff] at hx
+    rcases hx with rfl | rfl | rfl | rfl <;> assumption
+  exact ⟨{a, b, c, d}, hTS, ncard_four hab hac had hbc hbd hcd,
+    convexPosition_of_subset_extremePoints hTS hext⟩
+
 end LeanChecker.FiniteConvexityKit
