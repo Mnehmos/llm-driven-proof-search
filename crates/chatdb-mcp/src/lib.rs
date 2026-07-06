@@ -1328,6 +1328,159 @@ pub struct EmpiricalSearchLinkVerificationLayerArgs {
     pub verification_layer_id: String,
 }
 
+// -- Challenge / task / scoring substrate (issue #53) -----------------------
+//
+// Channels AI-generated material into small, bounded, typed, scored, reviewable
+// tasks. Every artifact here is research bookkeeping: a scored/validated/
+// accepted submission and a distilled strategy are NEVER proof, a leaderboard
+// rank is not proof authority, and a challenge score alone never confers
+// training eligibility. Only Lean/kernel verification creates proof authority.
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ChallengeCreateArgs {
+    pub dossier_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub problem_version_id: Option<String>,
+    #[serde(default)]
+    pub episode_id: Option<String>,
+    pub created_by: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ChallengeObserveArgs {
+    pub challenge_id: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ChallengeUpdateStatusArgs {
+    pub challenge_id: String,
+    pub status: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ValidationProtocolCreateArgs {
+    pub dossier_id: String,
+    #[serde(default)]
+    pub challenge_id: Option<String>,
+    pub name: String,
+    pub validation_method: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub protocol_json: Option<String>,
+    pub created_by: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct TaskCreateArgs {
+    pub challenge_id: String,
+    pub task_type: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The explicit bound that keeps the task small and reviewable.
+    #[serde(default)]
+    pub bounds_json: Option<String>,
+    #[serde(default)]
+    pub success_criteria: Option<String>,
+    #[serde(default)]
+    pub validation_protocol_id: Option<String>,
+    pub created_by: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct TaskUpdateStatusArgs {
+    pub task_id: String,
+    pub status: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct TaskSubmissionCreateArgs {
+    pub task_id: String,
+    pub submitted_by: String,
+    #[serde(default)]
+    pub content_json: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct TaskSubmissionValidateArgs {
+    pub submission_id: String,
+    /// true -> 'validated', false -> 'validation_failed'. Never proof either way.
+    pub passed: bool,
+    #[serde(default)]
+    pub validation_protocol_id: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct TaskSubmissionScoreArgs {
+    pub submission_id: String,
+    #[serde(default)]
+    pub score_value: Option<f64>,
+    #[serde(default)]
+    pub score_units: Option<String>,
+    pub scoring_rule: String,
+    #[serde(default)]
+    pub validation_method: Option<String>,
+    #[serde(default)]
+    pub reproducibility_notes: Option<String>,
+    #[serde(default)]
+    pub novelty_notes: Option<String>,
+    #[serde(default)]
+    pub cost_summary_id: Option<String>,
+    pub created_by: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct TaskSubmissionReviewArgs {
+    pub submission_id: String,
+    pub reviewer_id: String,
+    pub decision: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct TaskSubmissionLinkArgs {
+    pub submission_id: String,
+    /// candidate_construction | empirical_result | verification_layer
+    pub target_kind: String,
+    pub target_id: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct TaskSubmissionUpdateStatusArgs {
+    pub submission_id: String,
+    /// accepted | rejected | superseded | merged_into_dossier — a rejected or
+    /// superseded submission stays visible.
+    pub status: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct DistilledStrategyAddArgs {
+    pub dossier_id: String,
+    pub artifact_type: String,
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub tags_json: Option<String>,
+    #[serde(default)]
+    pub trust_status: Option<String>,
+    #[serde(default)]
+    pub challenge_id: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub submission_id: Option<String>,
+    pub created_by: String,
+}
+
 // -- Paper/PDF ingestion (issue #27) ----------------------------------------
 //
 // Turns a paper/manuscript/proof-sketch/exposition into reviewable research
@@ -2297,6 +2450,35 @@ const EMPIRICAL_SEARCH_OBSERVATION_RESULTS: &[&str] = &[
     "supports_candidate", "refutes_candidate", "counterexample_found", "no_counterexample", "inconclusive",
 ];
 
+// Challenge/task/scoring substrate (issue #53). None of these vocabularies has
+// a value that confers proof/kernel authority — a scored/validated/accepted
+// submission and a distilled strategy are all research bookkeeping, never proof.
+const CHALLENGE_STATUSES: &[&str] = &["open", "closed", "archived", "superseded"];
+const VALIDATION_METHODS: &[&str] = &[
+    "reproducible_script", "property_check", "independent_recompute",
+    "finite_case_check", "symbolic_check", "manual_review", "external_tool", "other",
+];
+const TASK_TYPES: &[&str] = &[
+    "find_candidate_object", "improve_bound", "find_counterexample", "classify_small_cases",
+    "produce_witness", "minimize_example", "maximize_parameter", "verify_property",
+    "compress_strategy", "distill_method", "formalize_claim",
+];
+const TASK_STATUSES: &[&str] = &["open", "closed", "superseded"];
+// Full submission vocabulary (submitted / validation_failed / validated /
+// scored / human_reviewed / accepted / rejected / superseded /
+// merged_into_dossier) is enforced by the DB CHECK on research_task_submissions
+// and set by the lifecycle handlers, not from free-form caller input.
+const SUBMISSION_TERMINAL_STATUSES: &[&str] = &["accepted", "rejected", "superseded", "merged_into_dossier"];
+const REVIEW_DECISIONS: &[&str] = &["accepted", "rejected", "needs_changes", "superseded"];
+const DISTILLED_ARTIFACT_TYPES: &[&str] = &[
+    "strategy_cheat_sheet", "failed_attempt_summary", "heuristic_rule", "counterexample_pattern",
+    "construction_recipe", "formalization_hint", "review_checklist",
+];
+const DISTILLED_TRUST_STATUSES: &[&str] = &["informal", "human_reviewed", "deprecated", "superseded"];
+const SUBMISSION_LINK_TARGET_KINDS: &[&str] = &[
+    "candidate_construction", "empirical_result", "verification_layer",
+];
+
 const EMPIRICAL_SEARCH_SELECT: &str = "SELECT id, dossier_id, related_node_id, candidate_construction_id, \
     verification_layer_id, problem_version_id, episode_id, search_type, search_space_description, \
     parameters_json, generator_description, checks_json, results_json, counterexamples_json, \
@@ -2350,6 +2532,181 @@ fn empirical_search_json(conn: &Connection, id: &str) -> Result<serde_json::Valu
         .optional()
         .map_err(rs)?
         .ok_or_else(|| mcp_invalid_params(format!("unknown empirical_search_id: {}", id)))
+}
+
+/// Issue #53: assemble a challenge with its tasks -> submissions -> scores /
+/// reviews, plus an outcome grouping (the challenge "export": accepted /
+/// rejected / superseded / open shown separately). Everything is research
+/// bookkeeping — `is_proof` / `has_kernel_evidence` are structurally false on
+/// every challenge, task, and submission, and the policy note is explicit that
+/// a score/acceptance is never proof, a rank is never proof authority, and a
+/// score never confers training eligibility.
+const CHALLENGE_TRUST_POLICY: &str = "A challenge/task/score is research bookkeeping, never proof. An accepted, scored, or validated submission is not a proof; a validated empirical result is not kernel verification; a leaderboard rank is not proof authority; and a challenge score alone never confers training eligibility. Only Lean/kernel verification creates proof authority. A rejected or superseded submission stays visible.";
+
+fn challenge_observe_json(conn: &Connection, challenge_id: &str) -> Result<serde_json::Value, McpError> {
+    let challenge: Option<(String, Option<String>, Option<String>, String, Option<String>, String, String, String, String)> = conn.query_row(
+        "SELECT dossier_id, problem_version_id, episode_id, title, description, status, created_by, created_at, updated_at
+         FROM research_challenges WHERE id = ?1",
+        [challenge_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
+    ).optional().map_err(rs)?;
+    let Some((dossier_id, problem_version_id, episode_id, title, description, status, created_by, created_at, updated_at)) = challenge else {
+        return Err(mcp_invalid_params(format!("unknown challenge_id: {}", challenge_id)));
+    };
+
+    let mut tstmt = conn.prepare(
+        "SELECT id, validation_protocol_id, task_type, title, description, bounds_json, success_criteria, status, created_by, created_at, updated_at
+         FROM research_tasks WHERE challenge_id = ?1 ORDER BY created_at ASC, id ASC",
+    ).map_err(rs)?;
+    #[allow(clippy::type_complexity)]
+    let task_rows: Vec<(String, Option<String>, String, String, Option<String>, String, Option<String>, String, String, String, String)> = tstmt
+        .query_map([challenge_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?)))
+        .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(tstmt);
+
+    let mut tasks: Vec<serde_json::Value> = Vec::new();
+    let mut tasks_by_status: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut open_subs: Vec<String> = Vec::new();
+    let mut accepted_subs: Vec<String> = Vec::new();
+    let mut rejected_subs: Vec<String> = Vec::new();
+    let mut superseded_subs: Vec<String> = Vec::new();
+    let mut merged_subs: Vec<String> = Vec::new();
+
+    for t in &task_rows {
+        let (task_id, vp_id, task_type, ttitle, tdesc, bounds_json, success, tstatus, tby, tca, tua) =
+            (&t.0, &t.1, &t.2, &t.3, &t.4, &t.5, &t.6, &t.7, &t.8, &t.9, &t.10);
+        tasks_by_status.entry(tstatus.clone()).or_default().push(task_id.clone());
+
+        let mut sstmt = conn.prepare(
+            "SELECT id, submitted_by, content_json, notes, status, linked_candidate_construction_id,
+                    linked_empirical_result_id, linked_verification_layer_id, created_at, updated_at
+             FROM research_task_submissions WHERE task_id = ?1 ORDER BY created_at ASC, id ASC",
+        ).map_err(rs)?;
+        #[allow(clippy::type_complexity)]
+        let sub_rows: Vec<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String, String)> = sstmt
+            .query_map([task_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?)))
+            .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        drop(sstmt);
+
+        let mut submissions: Vec<serde_json::Value> = Vec::new();
+        for s in &sub_rows {
+            let (sid, sby, content_json, snotes, sstatus, lcc, lemp, lvl, sca, sua) =
+                (&s.0, &s.1, &s.2, &s.3, &s.4, &s.5, &s.6, &s.7, &s.8, &s.9);
+            match sstatus.as_str() {
+                "accepted" => accepted_subs.push(sid.clone()),
+                "rejected" => rejected_subs.push(sid.clone()),
+                "superseded" => superseded_subs.push(sid.clone()),
+                "merged_into_dossier" => merged_subs.push(sid.clone()),
+                _ => open_subs.push(sid.clone()),
+            }
+            let mut scstmt = conn.prepare(
+                "SELECT id, score_value, score_units, scoring_rule, validation_method, reproducibility_notes,
+                        novelty_notes, cost_summary_id, linked_candidate_construction_id, linked_empirical_result_id,
+                        linked_verification_layer_id, created_by, created_at
+                 FROM scoring_results WHERE submission_id = ?1 ORDER BY created_at ASC, id ASC",
+            ).map_err(rs)?;
+            let scores: Vec<serde_json::Value> = scstmt.query_map([sid], |r| Ok(serde_json::json!({
+                "scoring_result_id": r.get::<_, String>(0)?,
+                "score_value": r.get::<_, Option<f64>>(1)?,
+                "score_units": r.get::<_, Option<String>>(2)?,
+                "scoring_rule": r.get::<_, String>(3)?,
+                "validation_method": r.get::<_, Option<String>>(4)?,
+                "reproducibility_notes": r.get::<_, Option<String>>(5)?,
+                "novelty_notes": r.get::<_, Option<String>>(6)?,
+                "cost_summary_id": r.get::<_, Option<String>>(7)?,
+                "linked_candidate_construction_id": r.get::<_, Option<String>>(8)?,
+                "linked_empirical_result_id": r.get::<_, Option<String>>(9)?,
+                "linked_verification_layer_id": r.get::<_, Option<String>>(10)?,
+                "created_by": r.get::<_, String>(11)?,
+                "created_at": r.get::<_, String>(12)?,
+                "is_proof": false,
+            }))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+            drop(scstmt);
+            let mut rvstmt = conn.prepare(
+                "SELECT id, reviewer_id, decision, review_status, notes, created_at
+                 FROM review_results WHERE submission_id = ?1 ORDER BY created_at ASC, id ASC",
+            ).map_err(rs)?;
+            let reviews: Vec<serde_json::Value> = rvstmt.query_map([sid], |r| Ok(serde_json::json!({
+                "review_result_id": r.get::<_, String>(0)?,
+                "reviewer_id": r.get::<_, String>(1)?,
+                "decision": r.get::<_, String>(2)?,
+                "review_status": r.get::<_, String>(3)?,
+                "notes": r.get::<_, Option<String>>(4)?,
+                "created_at": r.get::<_, String>(5)?,
+                "is_kernel_verification": false,
+            }))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+            drop(rvstmt);
+
+            submissions.push(serde_json::json!({
+                "submission_id": sid,
+                "submitted_by": sby,
+                "content": parse_json_or_wrap(content_json),
+                "notes": snotes,
+                "status": sstatus,
+                "linked_candidate_construction_id": lcc,
+                "linked_empirical_result_id": lemp,
+                "linked_verification_layer_id": lvl,
+                "scores": scores,
+                "reviews": reviews,
+                "is_proof": false,
+                "has_kernel_evidence": false,
+                "created_at": sca,
+                "updated_at": sua,
+            }));
+        }
+
+        tasks.push(serde_json::json!({
+            "task_id": task_id,
+            "validation_protocol_id": vp_id,
+            "task_type": task_type,
+            "title": ttitle,
+            "description": tdesc,
+            "bounds": parse_json_or_wrap(bounds_json),
+            "success_criteria": success,
+            "status": tstatus,
+            "submissions": submissions,
+            "is_proof": false,
+            "created_by": tby,
+            "created_at": tca,
+            "updated_at": tua,
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "challenge_id": challenge_id,
+        "dossier_id": dossier_id,
+        "problem_version_id": problem_version_id,
+        "episode_id": episode_id,
+        "title": title,
+        "description": description,
+        "status": status,
+        "created_by": created_by,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "tasks": tasks,
+        // The challenge export: work grouped by outcome, shown separately.
+        "tasks_by_status": tasks_by_status,
+        "submissions_by_outcome": {
+            "open": open_subs,
+            "accepted": accepted_subs,
+            "rejected": rejected_subs,
+            "superseded": superseded_subs,
+            "merged_into_dossier": merged_subs,
+        },
+        "is_proof": false,
+        "has_kernel_evidence": false,
+        "policy": CHALLENGE_TRUST_POLICY,
+    }))
+}
+
+/// Fetch the dossier_id a submission belongs to (for dossier-scoped link checks).
+fn submission_dossier(conn: &Connection, submission_id: &str) -> Result<String, McpError> {
+    conn.query_row(
+        "SELECT dossier_id FROM research_task_submissions WHERE id = ?1",
+        [submission_id],
+        |r| r.get(0),
+    ).optional().map_err(rs)?
+        .ok_or_else(|| mcp_invalid_params(format!("unknown submission_id: {}", submission_id)))
 }
 
 // -- Paper/PDF ingestion (issue #27) ----------------------------------------
@@ -2876,6 +3233,44 @@ fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<
         ingested_documents.push(ingested_document_json(conn, doc_id)?);
     }
 
+    // Challenge/task/scoring substrate (issue #53): a lightweight index of the
+    // dossier's challenges (full nested tree via challenge_observe) plus its
+    // distilled strategy artifacts. Both are research bookkeeping, never proof.
+    let mut cstmt = conn.prepare(
+        "SELECT id, title, status FROM research_challenges WHERE dossier_id = ?1 ORDER BY created_at ASC, id ASC",
+    ).map_err(rs)?;
+    let challenge_rows: Vec<(String, String, String)> = cstmt.query_map([dossier_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(cstmt);
+    let mut challenges: Vec<serde_json::Value> = Vec::new();
+    for (cid, ctitle, cstatus) in &challenge_rows {
+        let task_count: i64 = conn.query_row("SELECT COUNT(*) FROM research_tasks WHERE challenge_id = ?1", [cid], |r| r.get(0)).map_err(rs)?;
+        let submission_count: i64 = conn.query_row("SELECT COUNT(*) FROM research_task_submissions s JOIN research_tasks t ON s.task_id = t.id WHERE t.challenge_id = ?1", [cid], |r| r.get(0)).map_err(rs)?;
+        let accepted_count: i64 = conn.query_row("SELECT COUNT(*) FROM research_task_submissions s JOIN research_tasks t ON s.task_id = t.id WHERE t.challenge_id = ?1 AND s.status = 'accepted'", [cid], |r| r.get(0)).map_err(rs)?;
+        challenges.push(serde_json::json!({
+            "challenge_id": cid, "title": ctitle, "status": cstatus,
+            "task_count": task_count, "submission_count": submission_count, "accepted_submission_count": accepted_count,
+            "is_proof": false,
+        }));
+    }
+    let mut dstmt = conn.prepare(
+        "SELECT id, artifact_type, title, content_hash, trust_status, challenge_id, task_id, submission_id, created_at
+         FROM distilled_strategy_artifacts WHERE dossier_id = ?1 ORDER BY created_at ASC, id ASC",
+    ).map_err(rs)?;
+    let distilled_strategy_artifacts: Vec<serde_json::Value> = dstmt.query_map([dossier_id], |r| Ok(serde_json::json!({
+        "distilled_strategy_artifact_id": r.get::<_, String>(0)?,
+        "artifact_type": r.get::<_, String>(1)?,
+        "title": r.get::<_, String>(2)?,
+        "content_hash": r.get::<_, String>(3)?,
+        "trust_status": r.get::<_, String>(4)?,
+        "challenge_id": r.get::<_, Option<String>>(5)?,
+        "task_id": r.get::<_, Option<String>>(6)?,
+        "submission_id": r.get::<_, Option<String>>(7)?,
+        "created_at": r.get::<_, String>(8)?,
+        "is_proof": false,
+    }))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(dstmt);
+
     let collect_by_status = |items: &[serde_json::Value], key: &str, status: &str| -> Vec<serde_json::Value> {
         items.iter()
             .filter(|item| item.get(key).and_then(|v| v.as_str()) == Some(status))
@@ -2918,6 +3313,8 @@ fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<
         "expert_reviews": expert_reviews,
         "empirical_searches": empirical_searches,
         "ingested_documents": ingested_documents,
+        "challenges": challenges,
+        "distilled_strategy_artifacts": distilled_strategy_artifacts,
         "trust_boundary": trust_boundary,
     }))
 }
@@ -4311,6 +4708,19 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EmpiricalSearchUpdateStatusArgs>("empirical_search_update_status", "Update an empirical search's status/trust_status/results/linked candidates. Counterexamples are NOT updatable here — a recorded witness stays visible (add via empirical_search_observe). Falsified/failed/timed-out searches stay visible. No trust_status implies proof — the strongest, 'linked_to_formal_target', still is not kernel evidence"),
             make_tool::<EmpiricalSearchLinkCandidateArgs>("empirical_search_link_candidate", "Link an empirical search to a candidate construction (adopting its dossier if the search has none). Empirical support for a construction never proves its claimed properties"),
             make_tool::<EmpiricalSearchLinkVerificationLayerArgs>("empirical_search_link_verification_layer", "Link an empirical search to a verification layer (adopting its dossier if the search has none). The link records evidence; it can never make the layer kernel_verified"),
+            make_tool::<ChallengeCreateArgs>("challenge_create", "Define a challenge in a dossier (issue #53): a bounded, scored, reviewable competition frame for AI-generated math. A challenge/task/score is research bookkeeping, never proof"),
+            make_tool::<ChallengeObserveArgs>("challenge_observe", "Read a challenge with its tasks -> submissions -> scores/reviews, plus the export grouping (accepted/rejected/superseded/open shown separately). Read-only; nothing here is proof"),
+            make_tool::<ChallengeUpdateStatusArgs>("challenge_update_status", "Update a challenge's status (open/closed/archived/superseded). Never touches proof/fidelity/benchmark state"),
+            make_tool::<ValidationProtocolCreateArgs>("validation_protocol_create", "Register a validation protocol (reproducible_script/property_check/independent_recompute/finite_case_check/symbolic_check/manual_review/external_tool/other) a task's submissions can be checked against. A protocol describes a check; it is never itself proof"),
+            make_tool::<TaskCreateArgs>("task_create", "Add a bounded task to a challenge: find_candidate_object/improve_bound/find_counterexample/classify_small_cases/produce_witness/minimize_example/maximize_parameter/verify_property/compress_strategy/distill_method/formalize_claim. bounds_json keeps it small and reviewable"),
+            make_tool::<TaskUpdateStatusArgs>("task_update_status", "Update a task's status (open/closed/superseded). A superseded task stays visible"),
+            make_tool::<TaskSubmissionCreateArgs>("task_submission_create", "Submit a contribution to a task. content_json is the UNTRUSTED payload; the submission starts 'submitted' and is never proof — no field can hold kernel evidence"),
+            make_tool::<TaskSubmissionValidateArgs>("task_submission_validate", "Mark a submission validated (passed) or validation_failed. 'validated' means it passed its declared check, NEVER that a theorem is kernel-verified. A validation_failed submission stays visible"),
+            make_tool::<TaskSubmissionScoreArgs>("task_submission_score", "Record a score (score_value/units/rule, reproducibility/novelty notes, optional cost_summary_id) for a submission and advance it to 'scored'. A score is a measurement, never proof; a rank is not proof authority; a score never confers training eligibility"),
+            make_tool::<TaskSubmissionReviewArgs>("task_submission_review", "Record a human review of a submission (accepted/rejected/needs_changes/superseded). Human review is distinct from kernel verification — 'accepted' means accepted into the dossier as a contribution, never proved. Rejected/superseded stay visible"),
+            make_tool::<TaskSubmissionLinkArgs>("task_submission_link", "Link a submission to a candidate_construction / empirical_result / verification_layer in its dossier as PROVENANCE. Even linking to a kernel_verified layer never makes the submission a proof; the linked artifact keeps its own trust"),
+            make_tool::<TaskSubmissionUpdateStatusArgs>("task_submission_update_status", "Set a submission's outcome (accepted/rejected/superseded/merged_into_dossier) without a full review row. Rejected/superseded stay visible; nothing here confers proof authority"),
+            make_tool::<DistilledStrategyAddArgs>("distilled_strategy_add", "Store a reusable distilled strategy artifact (strategy_cheat_sheet/failed_attempt_summary/heuristic_rule/counterexample_pattern/construction_recipe/formalization_hint/review_checklist). A distilled strategy is NOT a proof; trust_status tops out at human_reviewed"),
             make_tool::<PaperIngestCreateArgs>("paper_ingest_create", "Ingest a paper/manuscript/proof_sketch/exposition as a reviewable source document (issue #27), optionally linked to a dossier. ChatDB does no OCR/LLM extraction — this records the host's UNTRUSTED extraction. Ingestion is not proof: no field can hold kernel evidence"),
             make_tool::<PaperIngestExtractClaimsArgs>("paper_ingest_extract_claims", "Append extracted nodes (abstract/main_theorem/definition/proposition/lemma/proof_step/construction/remark/appendix_fact/reference/open_gap) with source_span, confidence, and status labels to an ingested document. Each node is untrusted extraction — an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT accepted"),
             make_tool::<PaperIngestObserveArgs>("paper_ingest_observe", "Read an ingested document with all its extracted nodes and their trust labels. Read-only; nothing here is proof or kernel evidence"),
@@ -4449,8 +4859,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of ChatDB's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 73,
-                        "total_tool_count": 73,
+                        "classified_tool_count": 86,
+                        "total_tool_count": 86,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -4879,6 +5289,136 @@ impl ServerHandler for ChatDbMcp {
                             "empirical_search_link_verification_layer": {
                                 "side_effect": "mutating — sets verification_layer_id on one empirical_searches row, adopting the layer's dossier if the search had none",
                                 "trust_level": "verifier_backed linkage only — the link records evidence and can never make the layer kernel_verified (that path is gated by enforce_kernel_verified_research_boundary / the asymptotic evidence boundary, both of which reject empirical/finite evidence)",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "challenge_create": {
+                                "side_effect": "mutating — inserts one research_challenges row in an existing dossier",
+                                "trust_level": "untrusted_metadata — a challenge is a competition frame, never proof; no field can hold kernel evidence",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "challenge_observe": {
+                                "side_effect": "read_only — assembles a challenge with its tasks/submissions/scores/reviews and the outcome grouping",
+                                "trust_level": "untrusted_metadata — read-only research bookkeeping; is_proof is structurally false on every row",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "challenge_update_status": {
+                                "side_effect": "mutating — updates one research_challenges.status (open/closed/archived/superseded)",
+                                "trust_level": "untrusted_metadata — status is bookkeeping; never touches proof/fidelity/benchmark state",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "validation_protocol_create": {
+                                "side_effect": "mutating — inserts one validation_protocols row",
+                                "trust_level": "untrusted_metadata — a protocol describes a check; it is never itself proof, and running it never produces kernel evidence",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "task_create": {
+                                "side_effect": "mutating — inserts one research_tasks row under an existing challenge",
+                                "trust_level": "untrusted_metadata — a bounded task, never proof",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "task_update_status": {
+                                "side_effect": "mutating — updates one research_tasks.status (open/closed/superseded); a superseded task stays visible",
+                                "trust_level": "untrusted_metadata — status bookkeeping only",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "task_submission_create": {
+                                "side_effect": "mutating — inserts one research_task_submissions row (status 'submitted') with an UNTRUSTED content payload",
+                                "trust_level": "untrusted_metadata — a submission is an untrusted contribution; no field can hold kernel evidence",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "task_submission_validate": {
+                                "side_effect": "mutating — sets a submission's status to 'validated' or 'validation_failed'; a validation_failed row stays visible",
+                                "trust_level": "human_or_script-attested at most — 'validated' means it passed its declared check, NEVER kernel verification; no status here confers proof",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "task_submission_score": {
+                                "side_effect": "mutating — inserts one scoring_results row and advances an in-progress submission to 'scored' (never past a review outcome)",
+                                "trust_level": "untrusted_metadata — a score is a measurement, never proof; a leaderboard rank is not proof authority, and a score never confers training eligibility",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "task_submission_review": {
+                                "side_effect": "mutating — inserts one review_results row and maps the decision onto the submission's status (accepted/rejected/superseded/human_reviewed); rejected/superseded stay visible",
+                                "trust_level": "human-attested at most — human review is distinct from kernel verification; 'accepted' means accepted into the dossier as a contribution, never proved",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "task_submission_link": {
+                                "side_effect": "mutating — sets one provenance FK (linked_candidate_construction_id / linked_empirical_result_id / linked_verification_layer_id) on a submission; the target must belong to the submission's dossier",
+                                "trust_level": "verifier_backed linkage only — provenance, not authority; even linking to a kernel_verified verification_layer never makes the submission a proof, and the linked artifact keeps its own independent trust",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "task_submission_update_status": {
+                                "side_effect": "mutating — sets a submission's outcome (accepted/rejected/superseded/merged_into_dossier) without a review row; rejected/superseded stay visible",
+                                "trust_level": "untrusted_metadata — an outcome label, never proof authority",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "distilled_strategy_add": {
+                                "side_effect": "mutating — inserts one distilled_strategy_artifacts row (content-hashed)",
+                                "trust_level": "untrusted_metadata — a distilled strategy is reusable method knowledge, NOT a proof; trust_status tops out at human_reviewed",
                                 "cost_surface": "none",
                                 "benchmark_safety": "safe_public_output",
                                 "replayability": "deterministic",
@@ -7837,6 +8377,305 @@ impl ServerHandler for ChatDbMcp {
                     "empirical_search_id": args.empirical_search_id, "empirical_search": search, "dossier": dossier,
                 })).unwrap())]))
             }
+            // -- Challenge / task / scoring substrate (issue #53) ---------------
+            "challenge_create" => {
+                let args: ChallengeCreateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.title.trim().is_empty() { return Err(mcp_invalid_params("title must be non-empty")); }
+                if args.created_by.trim().is_empty() { return Err(mcp_invalid_params("created_by must be non-empty")); }
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                require_row_exists(&tx, "research_dossiers", &args.dossier_id, "dossier_id")?;
+                if let Some(id) = &args.problem_version_id { require_row_exists(&tx, "problem_versions", id, "problem_version_id")?; }
+                if let Some(id) = &args.episode_id { require_row_exists(&tx, "episodes", id, "episode_id")?; }
+                let id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT INTO research_challenges (id, dossier_id, problem_version_id, episode_id, title, description, status, created_by, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'open', ?7, ?8, ?8)",
+                    (&id, &args.dossier_id, args.problem_version_id.as_deref(), args.episode_id.as_deref(), args.title.trim(), args.description.as_deref(), &args.created_by, &now),
+                ).map_err(rs)?;
+                let challenge = challenge_observe_json(&tx, &id)?;
+                let dossier = research_dossier_observe_json(&tx, &args.dossier_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "challenge_id": id, "challenge": challenge, "dossier": dossier,
+                })).unwrap())]))
+            }
+            "challenge_observe" => {
+                let args: ChallengeObserveArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                let conn = self.conn.lock().await;
+                let challenge = challenge_observe_json(&conn, &args.challenge_id)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "challenge": challenge,
+                })).unwrap())]))
+            }
+            "challenge_update_status" => {
+                let args: ChallengeUpdateStatusArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("status", &args.status, CHALLENGE_STATUSES)?;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                require_row_exists(&tx, "research_challenges", &args.challenge_id, "challenge_id")?;
+                let now = Utc::now().to_rfc3339();
+                tx.execute("UPDATE research_challenges SET status = ?1, updated_at = ?2 WHERE id = ?3", (&args.status, &now, &args.challenge_id)).map_err(rs)?;
+                let challenge = challenge_observe_json(&tx, &args.challenge_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "challenge_id": args.challenge_id, "challenge": challenge,
+                })).unwrap())]))
+            }
+            "validation_protocol_create" => {
+                let args: ValidationProtocolCreateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("validation_method", &args.validation_method, VALIDATION_METHODS)?;
+                if args.name.trim().is_empty() { return Err(mcp_invalid_params("name must be non-empty")); }
+                if args.created_by.trim().is_empty() { return Err(mcp_invalid_params("created_by must be non-empty")); }
+                let protocol_json = args.protocol_json.clone().unwrap_or_else(|| "{}".to_string());
+                serde_json::from_str::<serde_json::Value>(&protocol_json).map_err(|e| mcp_invalid_params(format!("protocol_json must be valid JSON: {}", e)))?;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                require_row_exists(&tx, "research_dossiers", &args.dossier_id, "dossier_id")?;
+                if let Some(cid) = &args.challenge_id { require_row_in_dossier(&tx, "research_challenges", cid, &args.dossier_id, "challenge_id")?; }
+                let id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT INTO validation_protocols (id, dossier_id, challenge_id, name, validation_method, description, protocol_json, created_by, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+                    (&id, &args.dossier_id, args.challenge_id.as_deref(), args.name.trim(), &args.validation_method, args.description.as_deref(), &protocol_json, &args.created_by, &now),
+                ).map_err(rs)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "validation_protocol_id": id, "validation_method": args.validation_method,
+                })).unwrap())]))
+            }
+            "task_create" => {
+                let args: TaskCreateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("task_type", &args.task_type, TASK_TYPES)?;
+                if args.title.trim().is_empty() { return Err(mcp_invalid_params("title must be non-empty")); }
+                if args.created_by.trim().is_empty() { return Err(mcp_invalid_params("created_by must be non-empty")); }
+                let bounds_json = args.bounds_json.clone().unwrap_or_else(|| "{}".to_string());
+                serde_json::from_str::<serde_json::Value>(&bounds_json).map_err(|e| mcp_invalid_params(format!("bounds_json must be valid JSON: {}", e)))?;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let dossier_id: Option<String> = tx.query_row("SELECT dossier_id FROM research_challenges WHERE id = ?1", [&args.challenge_id], |r| r.get(0)).optional().map_err(rs)?;
+                let Some(dossier_id) = dossier_id else { return Err(mcp_invalid_params(format!("unknown challenge_id: {}", args.challenge_id))); };
+                if let Some(vp) = &args.validation_protocol_id { require_row_in_dossier(&tx, "validation_protocols", vp, &dossier_id, "validation_protocol_id")?; }
+                let id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT INTO research_tasks (id, challenge_id, dossier_id, validation_protocol_id, task_type, title, description, bounds_json, success_criteria, status, created_by, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'open', ?10, ?11, ?11)",
+                    (&id, &args.challenge_id, &dossier_id, args.validation_protocol_id.as_deref(), &args.task_type, args.title.trim(), args.description.as_deref(), &bounds_json, args.success_criteria.as_deref(), &args.created_by, &now),
+                ).map_err(rs)?;
+                let challenge = challenge_observe_json(&tx, &args.challenge_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "task_id": id, "challenge": challenge,
+                })).unwrap())]))
+            }
+            "task_update_status" => {
+                let args: TaskUpdateStatusArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("status", &args.status, TASK_STATUSES)?;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let challenge_id: Option<String> = tx.query_row("SELECT challenge_id FROM research_tasks WHERE id = ?1", [&args.task_id], |r| r.get(0)).optional().map_err(rs)?;
+                let Some(challenge_id) = challenge_id else { return Err(mcp_invalid_params(format!("unknown task_id: {}", args.task_id))); };
+                let now = Utc::now().to_rfc3339();
+                tx.execute("UPDATE research_tasks SET status = ?1, updated_at = ?2 WHERE id = ?3", (&args.status, &now, &args.task_id)).map_err(rs)?;
+                let challenge = challenge_observe_json(&tx, &challenge_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "task_id": args.task_id, "challenge": challenge,
+                })).unwrap())]))
+            }
+            "task_submission_create" => {
+                let args: TaskSubmissionCreateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.submitted_by.trim().is_empty() { return Err(mcp_invalid_params("submitted_by must be non-empty")); }
+                let content_json = args.content_json.clone().unwrap_or_else(|| "{}".to_string());
+                serde_json::from_str::<serde_json::Value>(&content_json).map_err(|e| mcp_invalid_params(format!("content_json must be valid JSON: {}", e)))?;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let task: Option<(String, String)> = tx.query_row("SELECT dossier_id, challenge_id FROM research_tasks WHERE id = ?1", [&args.task_id], |r| Ok((r.get(0)?, r.get(1)?))).optional().map_err(rs)?;
+                let Some((dossier_id, challenge_id)) = task else { return Err(mcp_invalid_params(format!("unknown task_id: {}", args.task_id))); };
+                let id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT INTO research_task_submissions (id, task_id, dossier_id, submitted_by, content_json, notes, status, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'submitted', ?7, ?7)",
+                    (&id, &args.task_id, &dossier_id, args.submitted_by.trim(), &content_json, args.notes.as_deref(), &now),
+                ).map_err(rs)?;
+                let challenge = challenge_observe_json(&tx, &challenge_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "submission_id": id, "status": "submitted", "is_proof": false, "challenge": challenge,
+                })).unwrap())]))
+            }
+            "task_submission_validate" => {
+                let args: TaskSubmissionValidateArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let dossier_id = submission_dossier(&tx, &args.submission_id)?;
+                if let Some(vp) = &args.validation_protocol_id { require_row_in_dossier(&tx, "validation_protocols", vp, &dossier_id, "validation_protocol_id")?; }
+                // Validation is NOT proof: 'validated' means the submission passed
+                // its declared check, never that a theorem is kernel-verified.
+                let new_status = if args.passed { "validated" } else { "validation_failed" };
+                let now = Utc::now().to_rfc3339();
+                let appended = match &args.notes {
+                    Some(n) if !n.trim().is_empty() => Some(n.trim().to_string()),
+                    _ => None,
+                };
+                tx.execute(
+                    "UPDATE research_task_submissions SET status = ?1, notes = COALESCE(?2, notes), updated_at = ?3 WHERE id = ?4",
+                    (new_status, appended.as_deref(), &now, &args.submission_id),
+                ).map_err(rs)?;
+                let challenge_id: String = tx.query_row("SELECT t.challenge_id FROM research_task_submissions s JOIN research_tasks t ON s.task_id = t.id WHERE s.id = ?1", [&args.submission_id], |r| r.get(0)).map_err(rs)?;
+                let challenge = challenge_observe_json(&tx, &challenge_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "submission_id": args.submission_id, "status": new_status, "is_proof": false, "challenge": challenge,
+                })).unwrap())]))
+            }
+            "task_submission_score" => {
+                let args: TaskSubmissionScoreArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.scoring_rule.trim().is_empty() { return Err(mcp_invalid_params("scoring_rule must be non-empty")); }
+                if args.created_by.trim().is_empty() { return Err(mcp_invalid_params("created_by must be non-empty")); }
+                if let Some(m) = &args.validation_method { validate_one_of("validation_method", m, VALIDATION_METHODS)?; }
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                require_row_exists(&tx, "research_task_submissions", &args.submission_id, "submission_id")?;
+                if let Some(cid) = &args.cost_summary_id { require_row_exists(&tx, "run_envelope_cost_observations", cid, "cost_summary_id")?; }
+                let id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT INTO scoring_results (id, submission_id, score_value, score_units, scoring_rule, validation_method, reproducibility_notes, novelty_notes, cost_summary_id, created_by, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    (&id, &args.submission_id, args.score_value, args.score_units.as_deref(), args.scoring_rule.trim(), args.validation_method.as_deref(), args.reproducibility_notes.as_deref(), args.novelty_notes.as_deref(), args.cost_summary_id.as_deref(), &args.created_by, &now),
+                ).map_err(rs)?;
+                // Recording a score advances an in-progress submission to 'scored'
+                // but never past a review outcome, and NEVER confers proof or
+                // training eligibility — it only writes a scoring_results row.
+                tx.execute(
+                    "UPDATE research_task_submissions SET status = CASE WHEN status IN ('submitted','validated','validation_failed','scored') THEN 'scored' ELSE status END, updated_at = ?1 WHERE id = ?2",
+                    (&now, &args.submission_id),
+                ).map_err(rs)?;
+                let challenge_id: String = tx.query_row("SELECT t.challenge_id FROM research_task_submissions s JOIN research_tasks t ON s.task_id = t.id WHERE s.id = ?1", [&args.submission_id], |r| r.get(0)).map_err(rs)?;
+                let challenge = challenge_observe_json(&tx, &challenge_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "scoring_result_id": id, "submission_id": args.submission_id, "is_proof": false, "challenge": challenge,
+                })).unwrap())]))
+            }
+            "task_submission_review" => {
+                let args: TaskSubmissionReviewArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("decision", &args.decision, REVIEW_DECISIONS)?;
+                if args.reviewer_id.trim().is_empty() { return Err(mcp_invalid_params("reviewer_id must be non-empty")); }
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                require_row_exists(&tx, "research_task_submissions", &args.submission_id, "submission_id")?;
+                let id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT INTO review_results (id, submission_id, reviewer_id, decision, review_status, notes, created_at)
+                     VALUES (?1, ?2, ?3, ?4, 'human_reviewed', ?5, ?6)",
+                    (&id, &args.submission_id, args.reviewer_id.trim(), &args.decision, args.notes.as_deref(), &now),
+                ).map_err(rs)?;
+                // Human review is distinct from kernel verification; 'accepted'
+                // means accepted into the dossier as a contribution, never proved.
+                let new_status = match args.decision.as_str() {
+                    "accepted" => "accepted",
+                    "rejected" => "rejected",
+                    "superseded" => "superseded",
+                    _ => "human_reviewed",
+                };
+                tx.execute("UPDATE research_task_submissions SET status = ?1, updated_at = ?2 WHERE id = ?3", (new_status, &now, &args.submission_id)).map_err(rs)?;
+                let challenge_id: String = tx.query_row("SELECT t.challenge_id FROM research_task_submissions s JOIN research_tasks t ON s.task_id = t.id WHERE s.id = ?1", [&args.submission_id], |r| r.get(0)).map_err(rs)?;
+                let challenge = challenge_observe_json(&tx, &challenge_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "review_result_id": id, "submission_id": args.submission_id, "status": new_status, "is_proof": false, "is_kernel_verification": false, "challenge": challenge,
+                })).unwrap())]))
+            }
+            "task_submission_link" => {
+                let args: TaskSubmissionLinkArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("target_kind", &args.target_kind, SUBMISSION_LINK_TARGET_KINDS)?;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let dossier_id = submission_dossier(&tx, &args.submission_id)?;
+                // The link is PROVENANCE only. Even linking to a kernel_verified
+                // verification_layer never makes the submission a proof; the
+                // linked artifact keeps its own independent trust.
+                let column = match args.target_kind.as_str() {
+                    "candidate_construction" => { require_row_in_dossier(&tx, "candidate_constructions", &args.target_id, &dossier_id, "target_id")?; "linked_candidate_construction_id" }
+                    "empirical_result" => { require_row_in_dossier(&tx, "empirical_searches", &args.target_id, &dossier_id, "target_id")?; "linked_empirical_result_id" }
+                    "verification_layer" => { require_row_in_dossier(&tx, "verification_layers", &args.target_id, &dossier_id, "target_id")?; "linked_verification_layer_id" }
+                    _ => return Err(mcp_invalid_params("unknown target_kind")),
+                };
+                let now = Utc::now().to_rfc3339();
+                let sql = format!("UPDATE research_task_submissions SET {} = ?1, updated_at = ?2 WHERE id = ?3", column);
+                tx.execute(&sql, (&args.target_id, &now, &args.submission_id)).map_err(rs)?;
+                let challenge_id: String = tx.query_row("SELECT t.challenge_id FROM research_task_submissions s JOIN research_tasks t ON s.task_id = t.id WHERE s.id = ?1", [&args.submission_id], |r| r.get(0)).map_err(rs)?;
+                let challenge = challenge_observe_json(&tx, &challenge_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "submission_id": args.submission_id, "target_kind": args.target_kind, "target_id": args.target_id, "is_proof": false, "challenge": challenge,
+                })).unwrap())]))
+            }
+            "task_submission_update_status" => {
+                let args: TaskSubmissionUpdateStatusArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("status", &args.status, SUBMISSION_TERMINAL_STATUSES)?;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                require_row_exists(&tx, "research_task_submissions", &args.submission_id, "submission_id")?;
+                let now = Utc::now().to_rfc3339();
+                tx.execute("UPDATE research_task_submissions SET status = ?1, updated_at = ?2 WHERE id = ?3", (&args.status, &now, &args.submission_id)).map_err(rs)?;
+                let challenge_id: String = tx.query_row("SELECT t.challenge_id FROM research_task_submissions s JOIN research_tasks t ON s.task_id = t.id WHERE s.id = ?1", [&args.submission_id], |r| r.get(0)).map_err(rs)?;
+                let challenge = challenge_observe_json(&tx, &challenge_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "submission_id": args.submission_id, "status": args.status, "is_proof": false, "challenge": challenge,
+                })).unwrap())]))
+            }
+            "distilled_strategy_add" => {
+                let args: DistilledStrategyAddArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("artifact_type", &args.artifact_type, DISTILLED_ARTIFACT_TYPES)?;
+                let trust_status = args.trust_status.clone().unwrap_or_else(|| "informal".to_string());
+                validate_one_of("trust_status", &trust_status, DISTILLED_TRUST_STATUSES)?;
+                if args.title.trim().is_empty() { return Err(mcp_invalid_params("title must be non-empty")); }
+                if args.content.trim().is_empty() { return Err(mcp_invalid_params("content must be non-empty")); }
+                if args.created_by.trim().is_empty() { return Err(mcp_invalid_params("created_by must be non-empty")); }
+                let tags_json = args.tags_json.clone().unwrap_or_else(|| "[]".to_string());
+                serde_json::from_str::<serde_json::Value>(&tags_json).map_err(|e| mcp_invalid_params(format!("tags_json must be valid JSON: {}", e)))?;
+                let content_hash = canonical_hash(&args.content).map_err(mcp_internal_error)?;
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                require_row_exists(&tx, "research_dossiers", &args.dossier_id, "dossier_id")?;
+                if let Some(cid) = &args.challenge_id { require_row_in_dossier(&tx, "research_challenges", cid, &args.dossier_id, "challenge_id")?; }
+                if let Some(tid) = &args.task_id { require_row_in_dossier(&tx, "research_tasks", tid, &args.dossier_id, "task_id")?; }
+                if let Some(sid) = &args.submission_id { require_row_in_dossier(&tx, "research_task_submissions", sid, &args.dossier_id, "submission_id")?; }
+                let id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT INTO distilled_strategy_artifacts (id, dossier_id, challenge_id, task_id, submission_id, artifact_type, title, content, content_hash, tags_json, trust_status, created_by, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+                    (&id, &args.dossier_id, args.challenge_id.as_deref(), args.task_id.as_deref(), args.submission_id.as_deref(), &args.artifact_type, args.title.trim(), args.content.trim(), &content_hash, &tags_json, &trust_status, &args.created_by, &now),
+                ).map_err(rs)?;
+                let dossier = research_dossier_observe_json(&tx, &args.dossier_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "distilled_strategy_artifact_id": id, "artifact_type": args.artifact_type, "trust_status": trust_status, "is_proof": false, "dossier": dossier,
+                })).unwrap())]))
+            }
             "paper_ingest_create" => {
                 let args: PaperIngestCreateArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -9781,7 +10620,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 73);
+        assert_eq!(list_res.tools.len(), 86);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -13314,6 +14153,210 @@ mod tests {
         assert_eq!(node["formalization_status"], "prose_only", "{:?}", node);
         assert!(node["linked_external_reference_id"].is_null(), "{:?}", node);
         assert_eq!(node["has_kernel_evidence"], false, "{:?}", node);
+    }
+
+    /// Issue #53: the full challenge -> task -> submission -> validate -> score ->
+    /// review -> link -> distill lifecycle. Covers acceptance criteria 1-8, and
+    /// (criterion 9 + the maintainer's boundaries) proves nothing here is ever
+    /// mislabeled proof/kernel-verified and no challenge score confers training
+    /// eligibility.
+    #[tokio::test]
+    async fn test_challenge_task_scoring_lifecycle_and_never_proof() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Challenge dossier",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+
+        // (1) A dossier can define a challenge.
+        let challenge = tool_json(&peer.call_tool(CallToolRequestParams::new("challenge_create").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "title": "Beat the current bound", "created_by": "host",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let challenge_id = challenge["challenge_id"].as_str().unwrap().to_string();
+        assert_eq!(challenge["challenge"]["is_proof"], false, "{:?}", challenge);
+
+        // (2) A challenge can define bounded tasks.
+        let task = tool_json(&peer.call_tool(CallToolRequestParams::new("task_create").with_arguments(serde_json::json!({
+            "challenge_id": challenge_id, "task_type": "improve_bound", "title": "Improve the packing bound",
+            "bounds_json": "{\"max_n\": 1000}", "success_criteria": "beat 0.91", "created_by": "host",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let task_id = tool_json(&peer.call_tool(CallToolRequestParams::new("challenge_observe").with_arguments(serde_json::json!({
+            "challenge_id": challenge_id,
+        }).as_object().unwrap().clone())).await.unwrap())["challenge"]["tasks"][0]["task_id"].as_str().unwrap().to_string();
+        assert!(!task_id.is_empty(), "{:?}", task);
+
+        // (3) A task can accept a submission.
+        let sub = tool_json(&peer.call_tool(CallToolRequestParams::new("task_submission_create").with_arguments(serde_json::json!({
+            "task_id": task_id, "submitted_by": "agent-A", "content_json": "{\"bound\": 0.90}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let submission_id = sub["submission_id"].as_str().unwrap().to_string();
+        assert_eq!(sub["status"], "submitted");
+        assert_eq!(sub["is_proof"], false);
+
+        // (4) A submission can be validated and scored.
+        let protocol = tool_json(&peer.call_tool(CallToolRequestParams::new("validation_protocol_create").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "name": "recompute the bound", "validation_method": "reproducible_script", "created_by": "host",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let validated = tool_json(&peer.call_tool(CallToolRequestParams::new("task_submission_validate").with_arguments(serde_json::json!({
+            "submission_id": submission_id, "passed": true, "validation_protocol_id": protocol["validation_protocol_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(validated["status"], "validated");
+        assert_eq!(validated["is_proof"], false, "validated is not proof: {:?}", validated);
+        let scored = tool_json(&peer.call_tool(CallToolRequestParams::new("task_submission_score").with_arguments(serde_json::json!({
+            "submission_id": submission_id, "score_value": 0.90, "score_units": "ratio", "scoring_rule": "lower is better", "created_by": "host",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(scored["is_proof"], false, "a score is never proof: {:?}", scored);
+
+        // (5) A scored submission can link to a candidate construction.
+        let cc = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "construction_type": "point_configuration", "informal_description": "shifted grid", "created_by": "host",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let cc_id = cc["candidate_construction_id"].as_str().or_else(|| cc["candidate_construction"]["candidate_construction_id"].as_str()).unwrap().to_string();
+        let linked = tool_json(&peer.call_tool(CallToolRequestParams::new("task_submission_link").with_arguments(serde_json::json!({
+            "submission_id": submission_id, "target_kind": "candidate_construction", "target_id": cc_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(linked["is_proof"], false, "a provenance link never makes a submission proof: {:?}", linked);
+
+        // (6) Rejected and superseded submissions remain visible.
+        let sub2 = tool_json(&peer.call_tool(CallToolRequestParams::new("task_submission_create").with_arguments(serde_json::json!({
+            "task_id": task_id, "submitted_by": "agent-B",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let sub2_id = sub2["submission_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("task_submission_review").with_arguments(serde_json::json!({
+            "submission_id": sub2_id, "reviewer_id": "human-1", "decision": "rejected",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let sub3 = tool_json(&peer.call_tool(CallToolRequestParams::new("task_submission_create").with_arguments(serde_json::json!({
+            "task_id": task_id, "submitted_by": "agent-C",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let sub3_id = sub3["submission_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("task_submission_update_status").with_arguments(serde_json::json!({
+            "submission_id": sub3_id, "status": "superseded",
+        }).as_object().unwrap().clone())).await.unwrap());
+        // Accept the scored one via review.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("task_submission_review").with_arguments(serde_json::json!({
+            "submission_id": submission_id, "reviewer_id": "human-1", "decision": "accepted",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // (7) The challenge export groups accepted/rejected/superseded/open separately.
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("challenge_observe").with_arguments(serde_json::json!({
+            "challenge_id": challenge_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let by_outcome = &observed["challenge"]["submissions_by_outcome"];
+        assert_eq!(by_outcome["accepted"].as_array().unwrap().len(), 1, "{:?}", by_outcome);
+        assert_eq!(by_outcome["rejected"].as_array().unwrap().len(), 1, "{:?}", by_outcome);
+        assert_eq!(by_outcome["superseded"].as_array().unwrap().len(), 1, "{:?}", by_outcome);
+        assert!(by_outcome["accepted"].as_array().unwrap().contains(&serde_json::json!(submission_id)), "{:?}", by_outcome);
+        // All three submissions stay visible in the tree (rejected/superseded not deleted).
+        let all_subs = observed["challenge"]["tasks"][0]["submissions"].as_array().unwrap();
+        assert_eq!(all_subs.len(), 3, "rejected/superseded submissions must remain visible: {:?}", all_subs);
+
+        // (8) Distilled strategy artifacts can be stored.
+        let distilled = tool_json(&peer.call_tool(CallToolRequestParams::new("distilled_strategy_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "artifact_type": "construction_recipe", "title": "grid-shift recipe",
+            "content": "Shift a triangular lattice by (1/2, ...).", "challenge_id": challenge_id, "created_by": "host",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(distilled["is_proof"], false, "{:?}", distilled);
+        assert_eq!(distilled["trust_status"], "informal");
+
+        // (9) Nothing scored/validated/reviewed/distilled is kernel-verified, and
+        // the whole challenge is explicitly non-proof.
+        assert_eq!(observed["challenge"]["is_proof"], false, "{:?}", observed);
+        assert_eq!(observed["challenge"]["has_kernel_evidence"], false, "{:?}", observed);
+        for task in observed["challenge"]["tasks"].as_array().unwrap() {
+            for s in task["submissions"].as_array().unwrap() {
+                assert_eq!(s["is_proof"], false, "{:?}", s);
+                assert_eq!(s["has_kernel_evidence"], false, "{:?}", s);
+                for sc in s["scores"].as_array().unwrap() { assert_eq!(sc["is_proof"], false, "{:?}", sc); }
+                for rv in s["reviews"].as_array().unwrap() { assert_eq!(rv["is_kernel_verification"], false, "{:?}", rv); }
+            }
+        }
+        assert!(observed["challenge"]["policy"].as_str().is_some_and(|p| p.contains("never confers training eligibility")), "{:?}", observed["challenge"]["policy"]);
+
+        // Dossier observe surfaces challenges + distilled artifacts in their own buckets.
+        let dobs = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(dobs["challenges"].as_array().unwrap().len(), 1, "{:?}", dobs["challenges"]);
+        assert_eq!(dobs["challenges"][0]["accepted_submission_count"], 1, "{:?}", dobs["challenges"]);
+        assert_eq!(dobs["distilled_strategy_artifacts"].as_array().unwrap().len(), 1, "{:?}", dobs["distilled_strategy_artifacts"]);
+        assert!(dobs["trust_boundary"].get("challenges").is_none(), "challenges must be their own bucket, not folded into trust_boundary: {:?}", dobs["trust_boundary"]);
+
+        // Structural: no challenge activity ever certified a problem.
+        let certified: i64 = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT COUNT(*) FROM problem_versions WHERE fidelity_status = 'verified'", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(certified, 0, "challenge/scoring must never certify anything");
+    }
+
+    /// Issue #53: the substrate rejects proof-sounding statuses and cross-dossier
+    /// links, so a scored/reviewed/distilled artifact can never be labeled
+    /// kernel-verified or tied to an artifact outside its dossier.
+    #[tokio::test]
+    async fn test_challenge_substrate_rejects_invalid_statuses_and_cross_dossier_links() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Boundary dossier",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        let challenge = tool_json(&peer.call_tool(CallToolRequestParams::new("challenge_create").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "title": "C", "created_by": "h",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let challenge_id = challenge["challenge_id"].as_str().unwrap().to_string();
+
+        // Unknown task_type is rejected.
+        let bad_type = peer.call_tool(CallToolRequestParams::new("task_create").with_arguments(serde_json::json!({
+            "challenge_id": challenge_id, "task_type": "prove_the_theorem", "title": "x", "created_by": "h",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_type.is_err(), "unknown task_type must be rejected");
+
+        let task = tool_json(&peer.call_tool(CallToolRequestParams::new("task_create").with_arguments(serde_json::json!({
+            "challenge_id": challenge_id, "task_type": "verify_property", "title": "t", "created_by": "h",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let task_id = task["task_id"].as_str().unwrap().to_string();
+        let sub = tool_json(&peer.call_tool(CallToolRequestParams::new("task_submission_create").with_arguments(serde_json::json!({
+            "task_id": task_id, "submitted_by": "a",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let submission_id = sub["submission_id"].as_str().unwrap().to_string();
+
+        // A submission can never be moved to a proof-sounding status.
+        for bad in ["kernel_verified", "certified", "proved"] {
+            let res = peer.call_tool(CallToolRequestParams::new("task_submission_update_status").with_arguments(serde_json::json!({
+                "submission_id": submission_id, "status": bad,
+            }).as_object().unwrap().clone())).await;
+            assert!(res.is_err(), "submission status must never accept a proof value ({bad})");
+        }
+        // A review decision cannot be a proof value.
+        let bad_review = peer.call_tool(CallToolRequestParams::new("task_submission_review").with_arguments(serde_json::json!({
+            "submission_id": submission_id, "reviewer_id": "h", "decision": "kernel_verified",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_review.is_err(), "review decision must never be a proof value");
+        // A distilled artifact cannot claim a proof-sounding trust_status.
+        let bad_distill = peer.call_tool(CallToolRequestParams::new("distilled_strategy_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "artifact_type": "heuristic_rule", "title": "t", "content": "c",
+            "trust_status": "kernel_verified", "created_by": "h",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_distill.is_err(), "distilled trust_status must never be a proof value");
+
+        // A submission cannot be linked to an artifact in a DIFFERENT dossier.
+        let other = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Other",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let other_cc = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
+            "dossier_id": other["dossier_id"], "construction_type": "point_configuration", "informal_description": "foreign", "created_by": "h",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let other_cc_id = other_cc["candidate_construction_id"].as_str().or_else(|| other_cc["candidate_construction"]["candidate_construction_id"].as_str()).unwrap().to_string();
+        let cross = peer.call_tool(CallToolRequestParams::new("task_submission_link").with_arguments(serde_json::json!({
+            "submission_id": submission_id, "target_kind": "candidate_construction", "target_id": other_cc_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(cross.is_err(), "a submission cannot link to an artifact in a different dossier");
     }
 
     #[tokio::test]
