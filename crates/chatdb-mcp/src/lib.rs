@@ -2458,6 +2458,24 @@ fn trusted_canonical_hash_exemption_applies(suite_trusted: bool) -> bool {
     suite_trusted
 }
 
+/// Issue #50: a benchmark result is a historical report and is never mutated
+/// in place. But `problem_submit_fidelity_review` can retroactively promote
+/// the referenced episode `kernel_verified` -> `certified` AFTER the result
+/// row was recorded. This detects that divergence for read-time reporting.
+/// Only proof-claim statuses can be retroactively promoted, so benign
+/// differences (a `skipped`/`failed` result whose episode reached some other
+/// outcome) are NOT flagged stale — only a genuine advance within the proof
+/// vocabulary {kernel_verified, certified}.
+fn benchmark_result_is_stale(stored_status: &str, current_episode_outcome: Option<&str>) -> bool {
+    match current_episode_outcome {
+        Some(outcome) => {
+            let is_proof_status = |s: &str| matches!(s, "kernel_verified" | "certified");
+            is_proof_status(stored_status) && is_proof_status(outcome) && stored_status != outcome
+        }
+        None => false,
+    }
+}
+
 /// The problem version's environment hash, joined through an episode.
 fn episode_env_hash(conn: &Connection, episode_id: &str) -> rusqlite::Result<String> {
     conn.query_row(
@@ -3805,7 +3823,8 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic given the same DB state",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "aggregate_metric",
-                                "required_run_mode": "any (meaningful mainly in benchmark mode, but nothing depends on the caller's declared mode)"
+                                "required_run_mode": "any (meaningful mainly in benchmark mode, but nothing depends on the caller's declared mode)",
+                                "report_semantics": "per result it surfaces stored_result_status (the status recorded at result time) vs current_episode_outcome (the referenced episode's live outcome) and a stale_result flag; the historical benchmark_results.status is never mutated, and aggregate metrics stay computed from stored_result_status (issue #50)"
                             },
                             "benchmark_run_create": {
                                 "side_effect": "mutating — inserts a benchmark_runs row",
@@ -7654,15 +7673,27 @@ impl ServerHandler for ChatDbMcp {
                 let mut rstmt = conn.prepare(
                     "SELECT r.benchmark_problem_id, p.theorem_name, r.status, r.outcome, r.pass_at, r.attempts_used,
                             r.time_to_first_success_ms, r.cost_micros, r.final_diagnostic_category, r.replay_status,
-                            r.benchmark_fidelity_basis, r.episode_id
+                            r.benchmark_fidelity_basis, r.episode_id, e.outcome
                      FROM benchmark_results r JOIN benchmark_problems p ON p.id = r.benchmark_problem_id
+                     LEFT JOIN episodes e ON e.id = r.episode_id
                      WHERE r.run_id = ?1 ORDER BY p.upstream_problem_id ASC"
                 ).map_err(rs)?;
                 let rows: Vec<(serde_json::Value, Option<String>)> = rstmt.query_map([&args.run_id], |row| {
+                    // Issue #50: the historical result status is never rewritten;
+                    // surface it alongside the referenced episode's LIVE outcome
+                    // and a derived stale_result flag so a retroactive
+                    // kernel_verified -> certified promotion is visible without
+                    // mutating benchmark_results.
+                    let stored_status: String = row.get(2)?;
+                    let current_episode_outcome: Option<String> = row.get(12)?;
+                    let stale_result = benchmark_result_is_stale(&stored_status, current_episode_outcome.as_deref());
                     Ok((serde_json::json!({
                         "benchmark_problem_id": row.get::<_, String>(0)?,
                         "theorem_name": row.get::<_, String>(1)?,
-                        "status": row.get::<_, String>(2)?,
+                        "status": stored_status.clone(),                 // unchanged, back-compat
+                        "stored_result_status": stored_status,           // #50 explicit vocabulary
+                        "current_episode_outcome": current_episode_outcome,
+                        "stale_result": stale_result,
                         "outcome": row.get::<_, Option<String>>(3)?,
                         "pass_at": row.get::<_, Option<i64>>(4)?,
                         "attempts_used": row.get::<_, i64>(5)?,
@@ -7824,6 +7855,7 @@ impl ServerHandler for ChatDbMcp {
                     "kernel_verified_count": results.iter().filter(|r| r["status"] == "kernel_verified").count(),
                     "certified_count": results.iter().filter(|r| r["status"] == "certified").count(),
                     "average_attempts_per_result": if total > 0 { total_attempts as f64 / total as f64 } else { 0.0 },
+                    "aggregate_basis": "stored_result_status — solved_count/solved_rate/pass_at_1_rate/kernel_verified_count/certified_count are computed from the benchmark_results.status recorded at result time, NOT the (possibly newer) current_episode_outcome; per-row stale_result flags where the underlying episode has since advanced (issue #50)",
                 });
 
                 // Issue #38's cost policy, redesigned per explicit product
@@ -7982,6 +8014,18 @@ mod tests {
             "a trusted_canonical_source suite's claim always resolves to canonical_statement_hash_match, so the exemption must apply");
         assert!(!trusted_canonical_hash_exemption_applies(false),
             "an untrusted suite gets no exemption — mode-enforcement must still run for it");
+    }
+
+    /// Issue #50: stale-result detection is a read-time derivation over the
+    /// proof vocabulary only; benign status differences are never flagged.
+    #[test]
+    fn test_benchmark_result_is_stale() {
+        assert!(benchmark_result_is_stale("kernel_verified", Some("certified")), "retroactive certification is stale");
+        assert!(!benchmark_result_is_stale("kernel_verified", Some("kernel_verified")), "no divergence is not stale");
+        assert!(!benchmark_result_is_stale("certified", Some("certified")), "matching certified is not stale");
+        assert!(!benchmark_result_is_stale("kernel_verified", None), "no episode -> never stale");
+        assert!(!benchmark_result_is_stale("failed", Some("gave_up")), "non-proof status divergence is not flagged");
+        assert!(!benchmark_result_is_stale("skipped", Some("kernel_verified")), "a skipped result vs a solved episode is not a promotion-staleness case");
     }
 
     /// Issue #38's mode-enforcement policy function, unit-tested directly.
@@ -13758,6 +13802,74 @@ mod tests {
         assert_eq!(observed["metrics"]["solved_count"], 3);
         assert_eq!(observed["metrics"]["solved_rate"], 0.75);
         assert_eq!(observed["metrics"]["pass_at_1_rate"], 0.5, "only p2 and p3 count as genuine pass@1 out of 4 attempted");
+    }
+
+    /// Issue #50: when a fidelity review retroactively promotes an episode
+    /// kernel_verified -> certified AFTER its benchmark result was recorded,
+    /// benchmark_run_observe must surface the divergence (stored_result_status
+    /// vs current_episode_outcome + stale_result=true) WITHOUT rewriting the
+    /// historical benchmark_results.status, and aggregate metrics must stay on
+    /// the stored status.
+    #[tokio::test]
+    async fn test_benchmark_run_observe_marks_stale_result_after_retroactive_certification() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let run_id = run["run_id"].as_str().unwrap().to_string();
+        // Attested problem so proving lands on kernel_verified, not certified.
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "stale-test", "root_formal_statement": "1 + 1 = 2", "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 5,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "stale-1", "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "norm_num"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            "run_id": run_id, "benchmark_problem_id": problem["benchmark_problem_id"], "episode_id": episode_id,
+            "status": "kernel_verified", "attempts_used": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // Before promotion: not stale, current outcome == stored.
+        let before = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({"run_id": run_id}).as_object().unwrap().clone())).await.unwrap());
+        let r0 = &before["results"][0];
+        assert_eq!(r0["stored_result_status"], "kernel_verified");
+        assert_eq!(r0["current_episode_outcome"], "kernel_verified");
+        assert_eq!(r0["stale_result"], false);
+
+        // Retroactive fidelity review promotes episode kernel_verified -> certified.
+        let review = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_submit_fidelity_review").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "decision": "verified", "method": "human_review", "approver_id": "rev-1", "rubric_version": "v1",
+            "source_problem_hash": create["source_problem_hash"], "root_statement_hash": create["root_statement_hash"],
+            "rendering_hash": create["rendering_hash"], "evidence_json": "{}",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(review["fidelity_status"], "verified");
+
+        // After: stored status preserved, current outcome advanced, stale=true.
+        let after = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({"run_id": run_id}).as_object().unwrap().clone())).await.unwrap());
+        let r1 = &after["results"][0];
+        assert_eq!(r1["stored_result_status"], "kernel_verified", "historical result status must NOT be silently rewritten");
+        assert_eq!(r1["status"], "kernel_verified", "back-compat status mirror unchanged");
+        assert_eq!(r1["current_episode_outcome"], "certified", "must reflect the promoted episode outcome");
+        assert_eq!(r1["stale_result"], true, "stored kernel_verified vs current certified is a stale report");
+        // Aggregate metrics stay on stored status.
+        assert_eq!(after["metrics"]["kernel_verified_count"], 1);
+        assert_eq!(after["metrics"]["certified_count"], 0);
     }
 
     #[tokio::test]

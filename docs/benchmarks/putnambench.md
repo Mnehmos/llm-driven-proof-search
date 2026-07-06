@@ -753,6 +753,27 @@ uses — so an episode created from the prover-ready Pi-form (not the raw
 named-binder declaration a suite catalogs) is still recognized as
 benchmark-linked and cannot bypass the proof-body gate (#49).
 
+## Stored result vs current episode outcome (issue #50)
+
+A benchmark result is a **historical report** — `benchmark_results.status` is
+recorded at result time and never rewritten. But `problem_submit_fidelity_review`
+can retroactively promote the referenced episode `kernel_verified` → `certified`
+*after* that row was recorded. To surface this without silently mutating
+history, `benchmark_run_observe` reports, per result:
+
+- `stored_result_status` — the status recorded at result time (also mirrored as
+  `status` for back-compat), never rewritten.
+- `current_episode_outcome` — the referenced episode's live outcome (e.g. after
+  a retroactive fidelity-review promotion).
+- `stale_result` — `true` when the two diverge within the proof vocabulary
+  (`kernel_verified` vs `certified`). Benign differences (a non-proof status
+  vs some other outcome) are never flagged.
+
+Aggregate metrics (`solved_count`, `pass_at_1_rate`, `kernel_verified_count`,
+`certified_count`, …) remain computed from `stored_result_status` — see the
+`aggregate_basis` field in the metrics block — so a run's reported numbers are
+stable even as individual episodes are later promoted.
+
 ## What "public" safely includes
 
 Aggregate metrics, problem identifiers (`upstream_problem_id`, `theorem_name`),
