@@ -1085,6 +1085,78 @@ pub struct VerificationLayerSetArgs {
     pub evidence_json: Option<String>,
 }
 
+// -- Candidate construction artifacts (issue #8) ----------------------------
+//
+// Candidate constructions are proposed mathematical objects -- graph
+// families, colorings, point configurations, counterexamples, and so on --
+// that can exist before a research dossier is written up, before a Lean
+// theorem exists, before an episode exists, and before issue #26's empirical
+// math lab exists to generate/test/rank/falsify them. They are research
+// artifacts: useful for search and planning, never proof certificates.
+// Empirical support, human review, citation, and "a formal statement exists"
+// are all explicitly distinct from kernel verification.
+
+#[derive(JsonSchema, Deserialize)]
+pub struct CandidateConstructionAddArgs {
+    #[serde(default)]
+    pub dossier_id: Option<String>,
+    #[serde(default)]
+    pub related_node_id: Option<String>,
+    #[serde(default)]
+    pub verification_layer_id: Option<String>,
+    pub construction_type: String,
+    pub informal_description: String,
+    #[serde(default)]
+    pub parameters_json: Option<String>,
+    #[serde(default)]
+    pub claimed_properties_json: Option<String>,
+    #[serde(default)]
+    pub known_failures_json: Option<String>,
+    #[serde(default)]
+    pub empirical_checks_json: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub trust_status: Option<String>,
+    pub created_by: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct CandidateConstructionObserveArgs {
+    pub candidate_construction_id: String,
+    pub description: String,
+    pub result: String,
+    #[serde(default)]
+    pub details_json: Option<String>,
+    #[serde(default)]
+    pub observed_by: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct CandidateConstructionUpdateStatusArgs {
+    pub candidate_construction_id: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub trust_status: Option<String>,
+    #[serde(default)]
+    pub claimed_properties_json: Option<String>,
+    #[serde(default)]
+    pub known_failures_json: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct CandidateConstructionLinkNodeArgs {
+    pub candidate_construction_id: String,
+    pub node_id: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct CandidateConstructionLinkVerificationLayerArgs {
+    pub candidate_construction_id: String,
+    pub verification_layer_id: String,
+}
+
 // -- Mathlib librarian (issue #25) -----------------------------------------
 
 #[derive(JsonSchema, Deserialize)]
@@ -1422,6 +1494,16 @@ fn require_row_exists(tx: &Transaction, table: &str, id: &str, label: &str) -> R
     }
 }
 
+fn require_row_in_dossier(tx: &Transaction, table: &str, id: &str, dossier_id: &str, label: &str) -> Result<(), McpError> {
+    let sql = format!("SELECT 1 FROM {} WHERE id = ?1 AND dossier_id = ?2", table);
+    let exists: Option<i64> = tx.query_row(&sql, (id, dossier_id), |row| row.get(0)).optional().map_err(rs)?;
+    if exists.is_some() {
+        Ok(())
+    } else {
+        Err(mcp_invalid_params(format!("unknown {} for dossier: {}", label, id)))
+    }
+}
+
 fn next_order(tx: &Transaction, table: &str, order_col: &str, dossier_id: &str) -> Result<i64, McpError> {
     let sql = format!("SELECT COALESCE(MAX({}), -1) + 1 FROM {} WHERE dossier_id = ?1", order_col, table);
     tx.query_row(&sql, [dossier_id], |row| row.get(0)).map_err(rs)
@@ -1552,6 +1634,117 @@ fn enforce_kernel_verified_research_boundary(
         _ => return Err(mcp_invalid_params("unknown verification target kind")),
     }
     Ok(())
+}
+
+const CANDIDATE_CONSTRUCTION_TYPES: &[&str] = &[
+    "graph_family",
+    "point_configuration",
+    "coloring",
+    "field_tower",
+    "lattice",
+    "counterexample",
+    "asymptotic_family",
+    "algebraic_object",
+    "combinatorial_design",
+    "other",
+];
+const CANDIDATE_CONSTRUCTION_STATUSES: &[&str] = &[
+    "proposed",
+    "under_review",
+    "refined",
+    "empirically_supported",
+    "falsified",
+    "rejected",
+    "linked_to_formal_claim",
+];
+const CANDIDATE_CONSTRUCTION_TRUST_STATUSES: &[&str] = &[
+    "informal",
+    "empirical_evidence",
+    "cited",
+    "human_reviewed",
+    "formalized_statement_exists",
+    "kernel_verified_claim_linked",
+];
+const CANDIDATE_CONSTRUCTION_OBSERVATION_RESULTS: &[&str] = &["supports", "refutes", "inconclusive"];
+
+const CANDIDATE_CONSTRUCTION_SELECT: &str = "SELECT cc.id, cc.dossier_id, cc.related_node_id, cc.verification_layer_id, \
+    cc.construction_type, cc.informal_description, cc.parameters_json, cc.claimed_properties_json, \
+    cc.known_failures_json, cc.empirical_checks_json, cc.status, cc.trust_status, cc.created_by, \
+    cc.created_at, cc.updated_at, vl.status \
+    FROM candidate_constructions cc LEFT JOIN verification_layers vl ON vl.id = cc.verification_layer_id";
+
+/// A candidate construction never mutates proof outcome, so its
+/// trust_status='kernel_verified_claim_linked' is the only claim of kernel
+/// evidence this table can carry -- and it is accepted only when
+/// verification_layer_id names a verification_layers row whose OWN status is
+/// already 'kernel_verified' (itself gated by
+/// enforce_kernel_verified_research_boundary at the point that layer was
+/// set). This mirrors the research_nodes/proved_in_episode pattern: linkage
+/// to real evidence, never creation of it.
+fn enforce_kernel_verified_construction_boundary(
+    tx: &Transaction,
+    verification_layer_id: &Option<String>,
+    trust_status: &str,
+) -> Result<(), McpError> {
+    if trust_status != "kernel_verified_claim_linked" {
+        return Ok(());
+    }
+    let Some(verification_layer_id) = verification_layer_id else {
+        return Err(mcp_invalid_params("trust_status='kernel_verified_claim_linked' requires verification_layer_id"));
+    };
+    let layer_status: Option<String> = tx.query_row(
+        "SELECT status FROM verification_layers WHERE id = ?1",
+        [verification_layer_id],
+        |row| row.get(0),
+    ).optional().map_err(rs)?;
+    match layer_status.as_deref() {
+        Some("kernel_verified") => Ok(()),
+        Some(_) => Err(mcp_invalid_params("trust_status='kernel_verified_claim_linked' requires a verification_layer_id whose own status is kernel_verified")),
+        None => Err(mcp_invalid_params(format!("unknown verification_layer_id: {}", verification_layer_id))),
+    }
+}
+
+fn parse_json_or_wrap(raw: &str) -> serde_json::Value {
+    serde_json::from_str::<serde_json::Value>(raw).unwrap_or_else(|_| serde_json::json!({"raw": raw}))
+}
+
+fn map_candidate_construction_row(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
+    let parameters_json: String = row.get(6)?;
+    let claimed_properties_json: String = row.get(7)?;
+    let known_failures_json: String = row.get(8)?;
+    let empirical_checks_json: String = row.get(9)?;
+    let trust_status: String = row.get(11)?;
+    let verification_layer_status: Option<String> = row.get(15)?;
+    let has_kernel_evidence = trust_status == "kernel_verified_claim_linked"
+        && verification_layer_status.as_deref() == Some("kernel_verified");
+    Ok(serde_json::json!({
+        "candidate_construction_id": row.get::<_, String>(0)?,
+        "dossier_id": row.get::<_, Option<String>>(1)?,
+        "related_node_id": row.get::<_, Option<String>>(2)?,
+        "verification_layer_id": row.get::<_, Option<String>>(3)?,
+        "construction_type": row.get::<_, String>(4)?,
+        "informal_description": row.get::<_, String>(5)?,
+        "parameters": parse_json_or_wrap(&parameters_json),
+        "claimed_properties": parse_json_or_wrap(&claimed_properties_json),
+        "known_failures": parse_json_or_wrap(&known_failures_json),
+        "empirical_checks": parse_json_or_wrap(&empirical_checks_json),
+        "status": row.get::<_, String>(10)?,
+        "trust_status": trust_status,
+        "created_by": row.get::<_, String>(12)?,
+        "created_at": row.get::<_, String>(13)?,
+        "updated_at": row.get::<_, String>(14)?,
+        "verification_layer_status": verification_layer_status,
+        "has_kernel_evidence": has_kernel_evidence,
+    }))
+}
+
+fn candidate_construction_json(conn: &Connection, candidate_construction_id: &str) -> Result<serde_json::Value, McpError> {
+    let sql = format!("{} WHERE cc.id = ?1", CANDIDATE_CONSTRUCTION_SELECT);
+    let result = conn
+        .query_row(&sql, [candidate_construction_id], map_candidate_construction_row)
+        .optional()
+        .map_err(rs)?;
+    result.ok_or_else(|| mcp_invalid_params(format!("unknown candidate_construction_id: {}", candidate_construction_id)))
 }
 
 fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<serde_json::Value, McpError> {
@@ -1698,6 +1891,13 @@ fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<
             "updated_at": row.get::<_, String>(8)?,
         }))
     }).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(stmt);
+
+    let mut stmt = conn.prepare(
+        &format!("{} WHERE cc.dossier_id = ?1 ORDER BY cc.created_at ASC, cc.id ASC", CANDIDATE_CONSTRUCTION_SELECT),
+    ).map_err(rs)?;
+    let candidate_constructions = stmt.query_map([dossier_id], map_candidate_construction_row)
+        .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
 
     let collect_by_status = |items: &[serde_json::Value], key: &str, status: &str| -> Vec<serde_json::Value> {
         items.iter()
@@ -1716,7 +1916,7 @@ fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<
         "unformalized_assumptions": collect_by_status(&assumptions, "assumption_status", "unformalized_assumption"),
         "rejected_assumptions": collect_by_status(&assumptions, "assumption_status", "rejected_unsafe_assumption"),
         "open_gaps": collect_by_status(&nodes, "trust_status", "open_gap"),
-        "policy": "Research dossier state is not proof authority. Only Lean-backed episode/canonical lemma rows are kernel evidence; citations, reviews, empirical layers, and assumptions stay explicitly labeled."
+        "policy": "Research dossier state is not proof authority. Only Lean-backed episode/canonical lemma rows are kernel evidence; citations, reviews, empirical layers, assumptions, and candidate constructions stay explicitly labeled."
     });
 
     Ok(serde_json::json!({
@@ -1735,6 +1935,7 @@ fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<
         "assumption_boundaries": assumptions,
         "citation_reviews": citation_reviews,
         "verification_layers": verification_layers,
+        "candidate_constructions": candidate_constructions,
         "trust_boundary": trust_boundary,
     }))
 }
@@ -2911,6 +3112,11 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<AssumptionBoundaryAddArgs>("assumption_boundary_add", "Add an unformalized or rejected unsafe assumption boundary to a dossier. Assumptions are visible metadata, not proof authority"),
             make_tool::<CitationReviewAddArgs>("citation_review_add", "Record a human citation review for an external theorem claim. Human review remains distinct from Lean kernel verification"),
             make_tool::<VerificationLayerSetArgs>("verification_layer_set", "Set an independent verification layer for a dossier target. Blocked/failed layers do not fail the dossier; cited/reviewed/assumed artifacts cannot be mislabeled kernel_verified"),
+            make_tool::<CandidateConstructionAddArgs>("candidate_construction_add", "Propose a candidate mathematical construction (graph_family/point_configuration/coloring/field_tower/lattice/counterexample/asymptotic_family/algebraic_object/combinatorial_design/other). Can exist before a dossier, node, Lean theorem, or episode. A research artifact, not a proof certificate"),
+            make_tool::<CandidateConstructionObserveArgs>("candidate_construction_observe", "Record one empirical check (supports/refutes/inconclusive) against a candidate construction, appended to its empirical_checks history. Never changes proof status, and 'supports' never implies proved"),
+            make_tool::<CandidateConstructionUpdateStatusArgs>("candidate_construction_update_status", "Update a candidate construction's status and/or trust_status (and optionally its claimed_properties/known_failures). trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified"),
+            make_tool::<CandidateConstructionLinkNodeArgs>("candidate_construction_link_node", "Attach a candidate construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier"),
+            make_tool::<CandidateConstructionLinkVerificationLayerArgs>("candidate_construction_link_verification_layer", "Attach a candidate construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier"),
             make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
             make_tool::<MathlibSearchLocalArtifactsArgs>("mathlib_search_local_artifacts", "Search THIS ChatDB instance's own previously-verified theorem/def names for a substring match — a local usage_example precedent, not a Mathlib-library result"),
             make_tool::<FormalizationPlanAttachLibrarianResultArgs>("formalization_plan_attach_librarian_result", "Attach a mathlib_search_declarations/mathlib_search_local_artifacts result to a formalization plan item, updating its Mathlib coverage status. A hint attachment, not a re-check — never changes proof status"),
@@ -3033,8 +3239,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of ChatDB's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 49,
-                        "total_tool_count": 49,
+                        "classified_tool_count": 54,
+                        "total_tool_count": 54,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -3357,6 +3563,56 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none — this tool can attach kernel_verified only where kernel evidence already exists elsewhere; it cannot manufacture that evidence",
+                                "required_run_mode": "any"
+                            },
+                            "candidate_construction_add": {
+                                "side_effect": "mutating — inserts one candidate_constructions row, optionally linked to a dossier, research node, and/or verification layer that must already exist (and, if a dossier is also given, must already belong to that dossier)",
+                                "trust_level": "untrusted_input — a candidate construction is a proposed mathematical object (informal_description/parameters/claimed_properties), never proof authority; trust_status='kernel_verified_claim_linked' is rejected by enforce_kernel_verified_construction_boundary unless verification_layer_id names a verification_layers row whose own status is already 'kernel_verified'",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "candidate_construction_observe": {
+                                "side_effect": "mutating — appends one entry (description/result/details/observed_by/observed_at) to a candidate construction's empirical_checks_json array; never touches status or trust_status",
+                                "trust_level": "untrusted_input — a caller-reported empirical check result (supports/refutes/inconclusive); recording 'supports' is evidence bookkeeping, not a proof and not a status transition on its own",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "candidate_construction_update_status": {
+                                "side_effect": "mutating — updates status/trust_status/claimed_properties_json/known_failures_json on one existing candidate_constructions row; a falsified/rejected construction is updated in place and stays visible, never deleted",
+                                "trust_level": "untrusted_input for status and for trust_status values other than 'kernel_verified_claim_linked'; that one value is guarded by enforce_kernel_verified_construction_boundary against the construction's EXISTING verification_layer_id (set at creation or via candidate_construction_link_verification_layer), so empirically_supported/human_reviewed/formalized_statement_exists constructions can never be silently promoted to kernel evidence through this tool",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "candidate_construction_link_node": {
+                                "side_effect": "mutating — sets related_node_id on one candidate_constructions row; if the construction had no dossier_id yet, adopts the node's dossier_id (a research_nodes row always belongs to exactly one dossier) rather than leaving the construction orphaned from the node's context",
+                                "trust_level": "verifier_backed linkage only in the sense that both rows are confirmed to exist and (if the construction already had a dossier) to share it — linking a node never itself changes the node's or the construction's trust_status",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "candidate_construction_link_verification_layer": {
+                                "side_effect": "mutating — sets verification_layer_id on one candidate_constructions row; if the construction had no dossier_id yet, adopts the layer's dossier_id",
+                                "trust_level": "verifier_backed linkage only — confirms both rows exist and (if the construction already had a dossier) share it; if the construction's trust_status is already 'kernel_verified_claim_linked' this re-runs enforce_kernel_verified_construction_boundary against the newly linked layer, so re-linking can never quietly leave a kernel_verified_claim_linked construction pointed at a non-kernel_verified layer",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
                                 "required_run_mode": "any"
                             },
                             "mathlib_search_declarations": {
@@ -5457,6 +5713,290 @@ impl ServerHandler for ChatDbMcp {
                     "dossier": observed,
                 })).unwrap())]))
             }
+            "candidate_construction_add" => {
+                let args: CandidateConstructionAddArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("construction_type", &args.construction_type, CANDIDATE_CONSTRUCTION_TYPES)?;
+                if args.informal_description.trim().is_empty() {
+                    return Err(mcp_invalid_params("informal_description must be non-empty"));
+                }
+                if args.created_by.trim().is_empty() {
+                    return Err(mcp_invalid_params("created_by must be non-empty"));
+                }
+                let status = args.status.clone().unwrap_or_else(|| "proposed".to_string());
+                validate_one_of("status", &status, CANDIDATE_CONSTRUCTION_STATUSES)?;
+                let trust_status = args.trust_status.clone().unwrap_or_else(|| "informal".to_string());
+                validate_one_of("trust_status", &trust_status, CANDIDATE_CONSTRUCTION_TRUST_STATUSES)?;
+                let parameters_json = args.parameters_json.clone().unwrap_or_else(|| "{}".to_string());
+                serde_json::from_str::<serde_json::Value>(&parameters_json)
+                    .map_err(|e| mcp_invalid_params(format!("parameters_json must be valid JSON: {}", e)))?;
+                let claimed_properties_json = args.claimed_properties_json.clone().unwrap_or_else(|| "[]".to_string());
+                serde_json::from_str::<serde_json::Value>(&claimed_properties_json)
+                    .map_err(|e| mcp_invalid_params(format!("claimed_properties_json must be valid JSON: {}", e)))?;
+                let known_failures_json = args.known_failures_json.clone().unwrap_or_else(|| "[]".to_string());
+                serde_json::from_str::<serde_json::Value>(&known_failures_json)
+                    .map_err(|e| mcp_invalid_params(format!("known_failures_json must be valid JSON: {}", e)))?;
+                let empirical_checks_json = args.empirical_checks_json.clone().unwrap_or_else(|| "[]".to_string());
+                serde_json::from_str::<serde_json::Value>(&empirical_checks_json)
+                    .map_err(|e| mcp_invalid_params(format!("empirical_checks_json must be valid JSON: {}", e)))?;
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                if let Some(dossier_id) = &args.dossier_id {
+                    require_row_exists(&tx, "research_dossiers", dossier_id, "dossier_id")?;
+                }
+                if let Some(node_id) = &args.related_node_id {
+                    match &args.dossier_id {
+                        Some(dossier_id) => require_row_in_dossier(&tx, "research_nodes", node_id, dossier_id, "related_node_id")?,
+                        None => require_row_exists(&tx, "research_nodes", node_id, "related_node_id")?,
+                    }
+                }
+                if let Some(layer_id) = &args.verification_layer_id {
+                    match &args.dossier_id {
+                        Some(dossier_id) => require_row_in_dossier(&tx, "verification_layers", layer_id, dossier_id, "verification_layer_id")?,
+                        None => require_row_exists(&tx, "verification_layers", layer_id, "verification_layer_id")?,
+                    }
+                }
+                enforce_kernel_verified_construction_boundary(&tx, &args.verification_layer_id, &trust_status)?;
+
+                let candidate_construction_id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT INTO candidate_constructions (
+                        id, dossier_id, related_node_id, verification_layer_id, construction_type, informal_description,
+                        parameters_json, claimed_properties_json, known_failures_json, empirical_checks_json,
+                        status, trust_status, created_by, created_at, updated_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+                    (
+                        &candidate_construction_id,
+                        args.dossier_id.as_deref(),
+                        args.related_node_id.as_deref(),
+                        args.verification_layer_id.as_deref(),
+                        &args.construction_type,
+                        args.informal_description.trim(),
+                        &parameters_json,
+                        &claimed_properties_json,
+                        &known_failures_json,
+                        &empirical_checks_json,
+                        &status,
+                        &trust_status,
+                        args.created_by.trim(),
+                        &now,
+                    ),
+                ).map_err(rs)?;
+                let candidate = candidate_construction_json(&tx, &candidate_construction_id)?;
+                let dossier = match &args.dossier_id {
+                    Some(dossier_id) => Some(research_dossier_observe_json(&tx, dossier_id)?),
+                    None => None,
+                };
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "candidate_construction_id": candidate_construction_id,
+                    "candidate_construction": candidate,
+                    "dossier": dossier,
+                })).unwrap())]))
+            }
+            "candidate_construction_observe" => {
+                let args: CandidateConstructionObserveArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                validate_one_of("result", &args.result, CANDIDATE_CONSTRUCTION_OBSERVATION_RESULTS)?;
+                if args.description.trim().is_empty() {
+                    return Err(mcp_invalid_params("description must be non-empty"));
+                }
+                let details: serde_json::Value = match &args.details_json {
+                    Some(raw) => serde_json::from_str(raw)
+                        .map_err(|e| mcp_invalid_params(format!("details_json must be valid JSON: {}", e)))?,
+                    None => serde_json::json!({}),
+                };
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let existing_checks_json: Option<String> = tx.query_row(
+                    "SELECT empirical_checks_json FROM candidate_constructions WHERE id = ?1",
+                    [&args.candidate_construction_id],
+                    |row| row.get(0),
+                ).optional().map_err(rs)?;
+                let Some(existing_checks_json) = existing_checks_json else {
+                    return Err(mcp_invalid_params(format!("unknown candidate_construction_id: {}", args.candidate_construction_id)));
+                };
+                let mut checks: Vec<serde_json::Value> = serde_json::from_str(&existing_checks_json).unwrap_or_default();
+                let now = Utc::now().to_rfc3339();
+                checks.push(serde_json::json!({
+                    "description": args.description.trim(),
+                    "result": args.result,
+                    "details": details,
+                    "observed_by": args.observed_by,
+                    "observed_at": now,
+                }));
+                let updated_checks_json = serde_json::to_string(&checks).unwrap();
+                tx.execute(
+                    "UPDATE candidate_constructions SET empirical_checks_json = ?1, updated_at = ?2 WHERE id = ?3",
+                    (&updated_checks_json, &now, &args.candidate_construction_id),
+                ).map_err(rs)?;
+                let candidate = candidate_construction_json(&tx, &args.candidate_construction_id)?;
+                let dossier_id = candidate.get("dossier_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let dossier = match &dossier_id {
+                    Some(dossier_id) => Some(research_dossier_observe_json(&tx, dossier_id)?),
+                    None => None,
+                };
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "candidate_construction_id": args.candidate_construction_id,
+                    "candidate_construction": candidate,
+                    "dossier": dossier,
+                })).unwrap())]))
+            }
+            "candidate_construction_update_status" => {
+                let args: CandidateConstructionUpdateStatusArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+                if args.status.is_none() && args.trust_status.is_none()
+                    && args.claimed_properties_json.is_none() && args.known_failures_json.is_none() {
+                    return Err(mcp_invalid_params("at least one of status, trust_status, claimed_properties_json, known_failures_json must be provided"));
+                }
+                if let Some(status) = &args.status {
+                    validate_one_of("status", status, CANDIDATE_CONSTRUCTION_STATUSES)?;
+                }
+                if let Some(trust_status) = &args.trust_status {
+                    validate_one_of("trust_status", trust_status, CANDIDATE_CONSTRUCTION_TRUST_STATUSES)?;
+                }
+                if let Some(claimed_properties_json) = &args.claimed_properties_json {
+                    serde_json::from_str::<serde_json::Value>(claimed_properties_json)
+                        .map_err(|e| mcp_invalid_params(format!("claimed_properties_json must be valid JSON: {}", e)))?;
+                }
+                if let Some(known_failures_json) = &args.known_failures_json {
+                    serde_json::from_str::<serde_json::Value>(known_failures_json)
+                        .map_err(|e| mcp_invalid_params(format!("known_failures_json must be valid JSON: {}", e)))?;
+                }
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let existing: Option<(Option<String>, String)> = tx.query_row(
+                    "SELECT verification_layer_id, trust_status FROM candidate_constructions WHERE id = ?1",
+                    [&args.candidate_construction_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).optional().map_err(rs)?;
+                let Some((existing_verification_layer_id, existing_trust_status)) = existing else {
+                    return Err(mcp_invalid_params(format!("unknown candidate_construction_id: {}", args.candidate_construction_id)));
+                };
+                let trust_status = args.trust_status.clone().unwrap_or(existing_trust_status);
+                enforce_kernel_verified_construction_boundary(&tx, &existing_verification_layer_id, &trust_status)?;
+
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "UPDATE candidate_constructions SET
+                        status = COALESCE(?1, status),
+                        trust_status = COALESCE(?2, trust_status),
+                        claimed_properties_json = COALESCE(?3, claimed_properties_json),
+                        known_failures_json = COALESCE(?4, known_failures_json),
+                        updated_at = ?5
+                     WHERE id = ?6",
+                    (
+                        args.status.as_deref(),
+                        args.trust_status.as_deref(),
+                        args.claimed_properties_json.as_deref(),
+                        args.known_failures_json.as_deref(),
+                        &now,
+                        &args.candidate_construction_id,
+                    ),
+                ).map_err(rs)?;
+                let candidate = candidate_construction_json(&tx, &args.candidate_construction_id)?;
+                let dossier_id = candidate.get("dossier_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let dossier = match &dossier_id {
+                    Some(dossier_id) => Some(research_dossier_observe_json(&tx, dossier_id)?),
+                    None => None,
+                };
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "candidate_construction_id": args.candidate_construction_id,
+                    "candidate_construction": candidate,
+                    "dossier": dossier,
+                })).unwrap())]))
+            }
+            "candidate_construction_link_node" => {
+                let args: CandidateConstructionLinkNodeArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let existing_dossier_id: Option<Option<String>> = tx.query_row(
+                    "SELECT dossier_id FROM candidate_constructions WHERE id = ?1",
+                    [&args.candidate_construction_id],
+                    |row| row.get(0),
+                ).optional().map_err(rs)?;
+                let Some(existing_dossier_id) = existing_dossier_id else {
+                    return Err(mcp_invalid_params(format!("unknown candidate_construction_id: {}", args.candidate_construction_id)));
+                };
+                let node_dossier_id: Option<String> = tx.query_row(
+                    "SELECT dossier_id FROM research_nodes WHERE id = ?1",
+                    [&args.node_id],
+                    |row| row.get(0),
+                ).optional().map_err(rs)?;
+                let Some(node_dossier_id) = node_dossier_id else {
+                    return Err(mcp_invalid_params(format!("unknown node_id: {}", args.node_id)));
+                };
+                if let Some(dossier_id) = &existing_dossier_id {
+                    if dossier_id != &node_dossier_id {
+                        return Err(mcp_invalid_params("node_id belongs to a different dossier than this candidate construction"));
+                    }
+                }
+
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "UPDATE candidate_constructions SET related_node_id = ?1, dossier_id = COALESCE(dossier_id, ?2), updated_at = ?3 WHERE id = ?4",
+                    (&args.node_id, &node_dossier_id, &now, &args.candidate_construction_id),
+                ).map_err(rs)?;
+                let candidate = candidate_construction_json(&tx, &args.candidate_construction_id)?;
+                let dossier = research_dossier_observe_json(&tx, &node_dossier_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "candidate_construction_id": args.candidate_construction_id,
+                    "candidate_construction": candidate,
+                    "dossier": dossier,
+                })).unwrap())]))
+            }
+            "candidate_construction_link_verification_layer" => {
+                let args: CandidateConstructionLinkVerificationLayerArgs = serde_json::from_value(args_val)
+                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                let existing: Option<(Option<String>, String)> = tx.query_row(
+                    "SELECT dossier_id, trust_status FROM candidate_constructions WHERE id = ?1",
+                    [&args.candidate_construction_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).optional().map_err(rs)?;
+                let Some((existing_dossier_id, trust_status)) = existing else {
+                    return Err(mcp_invalid_params(format!("unknown candidate_construction_id: {}", args.candidate_construction_id)));
+                };
+                let layer_dossier_id: Option<String> = tx.query_row(
+                    "SELECT dossier_id FROM verification_layers WHERE id = ?1",
+                    [&args.verification_layer_id],
+                    |row| row.get(0),
+                ).optional().map_err(rs)?;
+                let Some(layer_dossier_id) = layer_dossier_id else {
+                    return Err(mcp_invalid_params(format!("unknown verification_layer_id: {}", args.verification_layer_id)));
+                };
+                if let Some(dossier_id) = &existing_dossier_id {
+                    if dossier_id != &layer_dossier_id {
+                        return Err(mcp_invalid_params("verification_layer_id belongs to a different dossier than this candidate construction"));
+                    }
+                }
+                enforce_kernel_verified_construction_boundary(&tx, &Some(args.verification_layer_id.clone()), &trust_status)?;
+
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "UPDATE candidate_constructions SET verification_layer_id = ?1, dossier_id = COALESCE(dossier_id, ?2), updated_at = ?3 WHERE id = ?4",
+                    (&args.verification_layer_id, &layer_dossier_id, &now, &args.candidate_construction_id),
+                ).map_err(rs)?;
+                let candidate = candidate_construction_json(&tx, &args.candidate_construction_id)?;
+                let dossier = research_dossier_observe_json(&tx, &layer_dossier_id)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "candidate_construction_id": args.candidate_construction_id,
+                    "candidate_construction": candidate,
+                    "dossier": dossier,
+                })).unwrap())]))
+            }
             "mathlib_search_declarations" => {
                 let args: MathlibSearchDeclarationsArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -6632,7 +7172,7 @@ mod tests {
         let client = connected_client(test_handler()).await;
 
         let list_res = client.peer().list_tools(None).await.unwrap();
-        assert_eq!(list_res.tools.len(), 49);
+        assert_eq!(list_res.tools.len(), 54);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -9119,6 +9659,241 @@ mod tests {
             boundary["lean_verified"]["external_theorem_claims"][0]["claim_status"],
             "Mathlib imports and locally proved episode claims must remain distinct"
         );
+    }
+
+    #[tokio::test]
+    async fn test_candidate_construction_can_exist_standalone_and_link_to_dossier_node_and_verification_layer() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        // A candidate construction can exist before a dossier, before a node, before an episode.
+        let standalone = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
+            "construction_type": "graph_family",
+            "informal_description": "A family of Kneser-like graphs indexed by n",
+            "created_by": "researcher-1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let standalone_id = standalone["candidate_construction_id"].as_str().unwrap().to_string();
+        assert!(standalone["dossier"].is_null(), "{:?}", standalone);
+        assert_eq!(standalone["candidate_construction"]["status"], "proposed", "{:?}", standalone);
+        assert_eq!(standalone["candidate_construction"]["trust_status"], "informal", "{:?}", standalone);
+        assert!(standalone["candidate_construction"]["dossier_id"].is_null(), "{:?}", standalone);
+
+        // A candidate construction can link to a dossier at creation time.
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Candidate construction dossier",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        let attached = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+            "construction_type": "counterexample",
+            "informal_description": "Candidate counterexample to the conjectured bound",
+            "created_by": "researcher-1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let attached_id = attached["candidate_construction_id"].as_str().unwrap().to_string();
+        assert_eq!(attached["dossier"]["dossier_id"], dossier_id, "{:?}", attached);
+
+        // research_dossier_observe puts candidate constructions in their own bucket, separate
+        // from proved nodes, citations, assumptions, and verification layers.
+        let observed_dossier = &attached["dossier"];
+        assert_eq!(observed_dossier["candidate_constructions"].as_array().unwrap().len(), 1, "{:?}", observed_dossier);
+        assert!(observed_dossier["nodes"].as_array().unwrap().is_empty(), "{:?}", observed_dossier);
+        assert!(observed_dossier["external_theorem_claims"].as_array().unwrap().is_empty(), "{:?}", observed_dossier);
+        assert!(observed_dossier["assumption_boundaries"].as_array().unwrap().is_empty(), "{:?}", observed_dossier);
+        assert!(observed_dossier["verification_layers"].as_array().unwrap().is_empty(), "{:?}", observed_dossier);
+
+        // A candidate construction can link to a research node; a standalone construction with
+        // no prior dossier adopts the node's dossier rather than staying orphaned.
+        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+            "node_type": "open_gap",
+            "title": "Need a sharper packing bound",
+            "trust_status": "open_gap",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let node_id = node["node_id"].as_str().unwrap().to_string();
+
+        let linked_node = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_link_node").with_arguments(serde_json::json!({
+            "candidate_construction_id": standalone_id,
+            "node_id": node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(linked_node["candidate_construction"]["related_node_id"], node_id, "{:?}", linked_node);
+        assert_eq!(linked_node["candidate_construction"]["dossier_id"], dossier_id, "linking to a node with no prior dossier must adopt the node's dossier: {:?}", linked_node);
+
+        // A candidate construction can link to a verification layer.
+        let layer_result = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+            "target_kind": "dossier",
+            "target_id": dossier_id,
+            "layer_kind": "construction_search",
+            "status": "empirical",
+            "summary": "Brute-force search over small parameter ranges",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let layer_id = layer_result["verification_layer_id"].as_str().unwrap().to_string();
+
+        let linked_layer = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_link_verification_layer").with_arguments(serde_json::json!({
+            "candidate_construction_id": attached_id,
+            "verification_layer_id": layer_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(linked_layer["candidate_construction"]["verification_layer_id"], layer_id, "{:?}", linked_layer);
+        assert_eq!(linked_layer["candidate_construction"]["has_kernel_evidence"], false, "an 'empirical' verification layer must not read as kernel evidence: {:?}", linked_layer);
+    }
+
+    #[tokio::test]
+    async fn test_candidate_construction_trust_boundary_rejects_unearned_kernel_verified_and_keeps_falsified_visible() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(),
+            gateway: Box::new(MockGateway),
+            lean_available: false,
+            lean_environment: None,
+            lean_project_path: PathBuf::from("dummy"),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let step = claim_and_solve(&peer, &episode_id, "trivial", "candidate-construction-claim").await;
+        assert_eq!(step["outcome"], "kernel_verified");
+        let proved_lemma_id: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row(
+                "SELECT id FROM episode_verified_lemmas WHERE episode_id = ?1 LIMIT 1",
+                [&episode_id],
+                |row| row.get(0),
+            ).unwrap()
+        };
+
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Candidate construction trust boundary dossier",
+            "problem_version_id": pv_id,
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+
+        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+            "node_type": "theorem",
+            "title": "root theorem",
+            "trust_status": "proved_in_episode",
+            "linked_verified_lemma_id": proved_lemma_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let node_id = node["node_id"].as_str().unwrap().to_string();
+
+        // A real kernel_verified verification layer, backed by the proved_in_episode node.
+        let kernel_layer = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+            "target_kind": "node",
+            "target_id": node_id,
+            "layer_kind": "formal_module",
+            "status": "kernel_verified",
+            "summary": "Matches the kernel-verified root lemma",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let kernel_layer_id = kernel_layer["verification_layer_id"].as_str().unwrap().to_string();
+
+        // A non-kernel-verified layer, for the negative cases below.
+        let blocked_layer = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+            "target_kind": "dossier",
+            "target_id": dossier_id,
+            "layer_kind": "construction_search",
+            "status": "blocked",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let blocked_layer_id = blocked_layer["verification_layer_id"].as_str().unwrap().to_string();
+
+        let candidate = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+            "construction_type": "counterexample",
+            "informal_description": "Candidate counterexample under empirical review",
+            "created_by": "researcher-1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let candidate_id = candidate["candidate_construction_id"].as_str().unwrap().to_string();
+
+        // A kernel-verified construction status is rejected without real Lean/kernel evidence:
+        // no linked verification layer at all.
+        let no_layer = peer.call_tool(CallToolRequestParams::new("candidate_construction_update_status").with_arguments(serde_json::json!({
+            "candidate_construction_id": candidate_id,
+            "trust_status": "kernel_verified_claim_linked",
+        }).as_object().unwrap().clone())).await;
+        assert!(no_layer.is_err(), "kernel_verified_claim_linked must be rejected without any linked verification layer");
+
+        // ...and rejected even with a linked layer, if that layer's own status isn't kernel_verified.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_link_verification_layer").with_arguments(serde_json::json!({
+            "candidate_construction_id": candidate_id,
+            "verification_layer_id": blocked_layer_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let blocked_reject = peer.call_tool(CallToolRequestParams::new("candidate_construction_update_status").with_arguments(serde_json::json!({
+            "candidate_construction_id": candidate_id,
+            "trust_status": "kernel_verified_claim_linked",
+        }).as_object().unwrap().clone())).await;
+        assert!(blocked_reject.is_err(), "kernel_verified_claim_linked must be rejected when the linked layer's own status is not kernel_verified");
+
+        // An empirically supported construction is not kernel verified, even after a
+        // supporting observation is recorded.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_update_status").with_arguments(serde_json::json!({
+            "candidate_construction_id": candidate_id,
+            "status": "empirically_supported",
+            "trust_status": "empirical_evidence",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_observe").with_arguments(serde_json::json!({
+            "candidate_construction_id": candidate_id,
+            "description": "Checked all graphs on 12 vertices",
+            "result": "supports",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["candidate_construction"]["trust_status"], "empirical_evidence", "{:?}", observed);
+        assert_eq!(observed["candidate_construction"]["has_kernel_evidence"], false, "empirical support must never read as kernel evidence: {:?}", observed);
+        assert_eq!(observed["candidate_construction"]["empirical_checks"].as_array().unwrap().len(), 1, "{:?}", observed);
+
+        // A human-reviewed construction is not kernel verified.
+        let human_reviewed = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_update_status").with_arguments(serde_json::json!({
+            "candidate_construction_id": candidate_id,
+            "trust_status": "human_reviewed",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(human_reviewed["candidate_construction"]["has_kernel_evidence"], false, "{:?}", human_reviewed);
+
+        // A formalized-statement construction is not kernel verified unless kernel evidence exists.
+        let formalized = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_update_status").with_arguments(serde_json::json!({
+            "candidate_construction_id": candidate_id,
+            "trust_status": "formalized_statement_exists",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(formalized["candidate_construction"]["has_kernel_evidence"], false, "{:?}", formalized);
+
+        // Re-link to the REAL kernel_verified layer: now kernel_verified_claim_linked is accepted.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_link_verification_layer").with_arguments(serde_json::json!({
+            "candidate_construction_id": candidate_id,
+            "verification_layer_id": kernel_layer_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let verified = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_update_status").with_arguments(serde_json::json!({
+            "candidate_construction_id": candidate_id,
+            "status": "linked_to_formal_claim",
+            "trust_status": "kernel_verified_claim_linked",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(verified["candidate_construction"]["trust_status"], "kernel_verified_claim_linked", "{:?}", verified);
+        assert_eq!(verified["candidate_construction"]["has_kernel_evidence"], true, "{:?}", verified);
+
+        // A falsified construction remains visible as falsified, not deleted or silently ignored.
+        let falsified_candidate = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+            "construction_type": "coloring",
+            "informal_description": "A candidate 4-coloring that turned out not to work",
+            "created_by": "researcher-1",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let falsified_id = falsified_candidate["candidate_construction_id"].as_str().unwrap().to_string();
+        let falsified = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_update_status").with_arguments(serde_json::json!({
+            "candidate_construction_id": falsified_id,
+            "status": "falsified",
+            "known_failures_json": "[\"fails at n=9\"]",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(falsified["candidate_construction"]["status"], "falsified", "{:?}", falsified);
+        let dossier_observed = &falsified["dossier"];
+        let candidate_constructions = dossier_observed["candidate_constructions"].as_array().unwrap();
+        assert_eq!(candidate_constructions.len(), 2, "{:?}", dossier_observed);
+        let statuses: Vec<&str> = candidate_constructions.iter().map(|c| c["status"].as_str().unwrap()).collect();
+        assert!(statuses.contains(&"falsified"), "falsified constructions must remain visible in dossier observation: {:?}", statuses);
     }
 
     #[tokio::test]

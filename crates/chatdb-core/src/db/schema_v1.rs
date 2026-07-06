@@ -684,6 +684,71 @@ CREATE INDEX IF NOT EXISTS idx_external_claims_dossier ON external_theorem_claim
 CREATE INDEX IF NOT EXISTS idx_assumption_boundaries_dossier ON assumption_boundaries(dossier_id);
 CREATE INDEX IF NOT EXISTS idx_verification_layers_dossier ON verification_layers(dossier_id);
 
+-- Candidate construction artifacts (issue #8): proposed mathematical objects
+-- (graph families, colorings, point configurations, counterexamples, ...)
+-- that can exist before a dossier is written up, before a Lean theorem
+-- exists, before an episode exists, and before #26's empirical math lab
+-- exists to generate/test/rank/falsify them. dossier_id is nullable -- unlike
+-- research_nodes, a candidate construction is meant to be producible by a
+-- future automated search (#26) or ad hoc exploration with no research
+-- write-up yet, mirroring how research_dossiers themselves attach optionally
+-- to a problem_version/episode. A candidate construction is a research
+-- artifact, never proof authority: trust_status='kernel_verified_claim_linked'
+-- is the only status this table can carry that claims kernel evidence, and it
+-- is only reachable (enforced at the MCP layer, mirroring
+-- enforce_kernel_verified_research_boundary) when verification_layer_id names
+-- a verification_layers row whose own status is already 'kernel_verified'.
+CREATE TABLE IF NOT EXISTS candidate_constructions (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT REFERENCES research_dossiers(id),
+    related_node_id TEXT REFERENCES research_nodes(id),
+    verification_layer_id TEXT REFERENCES verification_layers(id),
+    construction_type TEXT NOT NULL,
+    informal_description TEXT NOT NULL,
+    parameters_json TEXT NOT NULL DEFAULT '{}',
+    claimed_properties_json TEXT NOT NULL DEFAULT '[]',
+    known_failures_json TEXT NOT NULL DEFAULT '[]',
+    empirical_checks_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'proposed',
+    trust_status TEXT NOT NULL DEFAULT 'informal',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(construction_type IN (
+        'graph_family',
+        'point_configuration',
+        'coloring',
+        'field_tower',
+        'lattice',
+        'counterexample',
+        'asymptotic_family',
+        'algebraic_object',
+        'combinatorial_design',
+        'other'
+    )),
+    CHECK(status IN (
+        'proposed',
+        'under_review',
+        'refined',
+        'empirically_supported',
+        'falsified',
+        'rejected',
+        'linked_to_formal_claim'
+    )),
+    CHECK(trust_status IN (
+        'informal',
+        'empirical_evidence',
+        'cited',
+        'human_reviewed',
+        'formalized_statement_exists',
+        'kernel_verified_claim_linked'
+    )),
+    CHECK(trust_status <> 'kernel_verified_claim_linked' OR verification_layer_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_candidate_constructions_dossier ON candidate_constructions(dossier_id);
+CREATE INDEX IF NOT EXISTS idx_candidate_constructions_node ON candidate_constructions(related_node_id);
+CREATE INDEX IF NOT EXISTS idx_candidate_constructions_verification_layer ON candidate_constructions(verification_layer_id);
+
 -- Run envelopes (issues #34 core concept + #38 cost-surface splitting): a
 -- run envelope separates WHO/WHAT/WHY around a set of episodes from the
 -- episodes themselves -- host identity, run mode (a plain dev/exploratory

@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  49 tools · typed schemas · JSON Schema 2020-12                 │
+│  54 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -101,6 +101,11 @@ Antigravity, or a custom script — should call this first.
 | `assumption_boundary_add` | Add an unformalized or rejected unsafe assumption boundary |
 | `citation_review_add` | Record human review of an external theorem claim. Human review remains distinct from Lean verification |
 | `verification_layer_set` | Set an independent verification layer (`blocked`, `failed`, `cited`, `human_reviewed`, etc.) for a dossier target |
+| `candidate_construction_add` | Propose a candidate mathematical construction (`graph_family`, `counterexample`, `coloring`, etc.). Can exist before a dossier, node, Lean theorem, or episode. A research artifact, not a proof certificate |
+| `candidate_construction_observe` | Record one empirical check (`supports`/`refutes`/`inconclusive`) against a candidate construction. Never changes proof status |
+| `candidate_construction_update_status` | Update a candidate construction's status/trust_status/claimed_properties/known_failures. `kernel_verified_claim_linked` is rejected unless a real kernel-verified layer is already linked |
+| `candidate_construction_link_node` | Attach a candidate construction to a research node, adopting the node's dossier if the construction has none yet |
+| `candidate_construction_link_verification_layer` | Attach a candidate construction to an existing verification layer, adopting the layer's dossier if the construction has none yet |
 | `mathlib_search_declarations` | Search the real pinned Mathlib source tree for declaration names containing a substring (beyond exact-name lookup). Advisory only |
 | `mathlib_search_local_artifacts` | Search this instance's own previously-verified theorem/def names for a substring match |
 | `formalization_plan_attach_librarian_result` | Attach a Mathlib librarian result to a formalization plan item, updating its coverage status |
@@ -160,6 +165,37 @@ No cited, reviewed, empirical, or assumed artifact is represented as kernel
 verified unless it is linked to an actual Lean-verified artifact. These tables
 are research bookkeeping and do not mutate episode outcome, obligation status,
 budget state, fidelity status, or benchmark results.
+
+### Candidate construction artifacts
+
+Candidate constructions are proposed mathematical objects — graph families,
+point configurations, colorings, field towers, lattices, counterexamples,
+asymptotic families, algebraic objects, combinatorial designs, and so on. They
+are useful for search and research planning: a candidate construction can
+exist before there is a research dossier written up, before there is a Lean
+theorem, before there is an episode, and before there is empirical search
+machinery to generate one automatically (that machinery is issue #26's
+empirical math lab; this substrate only holds the objects it will produce and
+judge).
+
+Candidate constructions are **not proof certificates**. Their `trust_status`
+makes that explicit:
+
+- `informal`, `empirical_evidence`, `cited`, `human_reviewed`, and
+  `formalized_statement_exists` are all states short of kernel verification —
+  empirical support, human review, a citation, or even an existing formal
+  statement are each distinct from, and never imply, being proved.
+- `kernel_verified_claim_linked` is the only state that claims kernel
+  evidence, and it is rejected unless the construction's
+  `verification_layer_id` names a `verification_layers` row whose own status
+  is already `kernel_verified` (itself only reachable through real
+  Lean-backed evidence — see above). A candidate construction can link to
+  real evidence; it can never manufacture it.
+
+A candidate construction can attach to a dossier, a research node, and/or a
+verification layer, or exist attached to none of them. `falsified` and
+`rejected` constructions stay visible in `research_dossier_observe` rather
+than being deleted, since a documented dead end is itself research output.
 
 **Benchmark contamination policy:** upstream benchmarks like PutnamBench ask
 that completed formal proofs not be published without first coordinating with
@@ -504,7 +540,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 49 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 54 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records
