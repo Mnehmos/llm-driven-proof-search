@@ -78,16 +78,21 @@
       "kit_name": "PowerSeriesKit",
       "module_path": "LeanChecker.Kits.PowerSeriesKit",
       "domain": "real analysis — power-series coefficient uniqueness",
-      "status": "v1",
+      "status": "v2",
       "canonical_imports": ["Mathlib", "LeanChecker.Kits.PowerSeriesKit"],
       "canonical_open_directives": ["open FormalMultilinearSeries"],
       "key_lemmas": [
         "LeanChecker.PowerSeriesKit.coeff_eq_of_hasFPowerSeriesAt",
         "LeanChecker.PowerSeriesKit.coeff_eq_of_locally_eq_sum",
-        "LeanChecker.PowerSeriesKit.ofScalarsSum_eq_tsum_mul"
+        "LeanChecker.PowerSeriesKit.ofScalarsSum_eq_tsum_mul",
+        "LeanChecker.PowerSeriesKit.summable_of_tsum_ne_zero",
+        "LeanChecker.PowerSeriesKit.le_radius_ofScalars_of_summable_at",
+        "LeanChecker.PowerSeriesKit.hasFPowerSeriesAt_of_eqOn_ball"
       ],
       "fixtures": [
-        "locally equal tsum power series have equal coefficients (benchmark-shaped phrasing)"
+        "locally equal tsum power series have equal coefficients (benchmark-shaped phrasing)",
+        "raw ball hypotheses + radius bounds imply coefficient equality",
+        "Real.exp coefficients (n!)⁻¹ in the ∑ pₙxⁿ shape"
       ],
       "known_acceptance_targets": [
         {
@@ -98,11 +103,11 @@
         }
       ],
       "remaining_route_steps": [
-        "ball-to-series bridge: from pointwise tsum convergence on ball 0 c to HasFPowerSeriesAt f (ofScalars ℝ p) 0",
-        "coefficient formula for exp(ax)*cos(bx) via the complex exponential",
+        "nonvanishing of exp(ax)cos(bx) near 0 → summability on a small ball → radius bound (bridges exist; assembly per-problem)",
+        "coefficient formula for exp(ax)*cos(bx): p n = re((a+bI)^n)/n! via the complex exponential",
         "zero-set dichotomy from rationality/periodicity of arctan(b/a)/π"
       ],
-      "prompt_block": "PowerSeriesKit: pins an arbitrary coefficient sequence to THE power-series coefficients of f from local agreement of sums — turns '∑ p n x^n = f x near 0' into coefficient equations. The ball-to-HasFPowerSeriesAt bridge is the missing v2 piece.",
+      "prompt_block": "PowerSeriesKit: pins an arbitrary coefficient sequence to THE power-series coefficients of f. v2 handles the raw benchmark hypothesis: summable_of_tsum_ne_zero (tsum≠0 forces summability), le_radius_ofScalars_of_summable_at (plain summability at x bounds radius), hasFPowerSeriesAt_of_eqOn_ball (ball equation → HasFPowerSeriesAt). Endgame: coeff_eq_of_hasFPowerSeriesAt.",
       "unsafe_for_public_proof_body_export": false
     },
     {
