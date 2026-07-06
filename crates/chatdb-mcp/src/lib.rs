@@ -14946,6 +14946,156 @@ mod tests {
         canned_proof_fixtures: Vec<SmokeCannedProofFixture>,
     }
 
+    // -- Serious-math benchmark ladder (issue #5) --------------------------
+    const SERIOUS_MATH_LADDER_FIXTURE: &str = include_str!("../../../benchmarks/serious_math_ladder/ladder.json");
+
+    #[derive(serde::Deserialize)]
+    struct LadderMeta {
+        allowed_tactics: Vec<String>,
+        native_decide_allowed: bool,
+        requires_helper_definitions: bool,
+        requires_structural_lemma: bool,
+        expected_artifact_shape: String,
+        proof_character: String,
+        source_fidelity_status: String,
+        review_notes: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct LadderRung {
+        rung: i64,
+        slug: String,
+        title: String,
+        root_formal_statement: String,
+        import_manifest: Vec<String>,
+        metadata: LadderMeta,
+        gold_attempt: serde_json::Value,
+        expected_status: String,
+        #[serde(default)]
+        native_decide_probe: Option<serde_json::Value>,
+        dossier: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct LadderFile {
+        rungs: Vec<LadderRung>,
+    }
+
+    /// Issue #5 criteria 1/2/3/5: the ladder is schema-complete, covers the
+    /// seven rung classes, includes a helper-definition module rung and a
+    /// native_decide-banned rung, and every rung's dossier exists.
+    #[tokio::test]
+    async fn test_serious_math_ladder_metadata_is_complete_and_covers_required_rungs() {
+        let ladder: LadderFile = serde_json::from_str(SERIOUS_MATH_LADDER_FIXTURE).expect("ladder.json must parse");
+        assert_eq!(ladder.rungs.len(), 7, "the ladder must have seven rung classes");
+        let slugs: Vec<&str> = ladder.rungs.iter().map(|r| r.slug.as_str()).collect();
+        assert_eq!(slugs, ["finite_native_decide", "helper_def_required", "bijection", "counting_induction", "structural_invariant", "construction_plus_lemma", "large_parameter"]);
+
+        let valid_shape = ["single_theorem", "module"];
+        let valid_char = ["computational", "computational_with_construction", "structural"];
+        for (i, r) in ladder.rungs.iter().enumerate() {
+            assert_eq!(r.rung as usize, i + 1, "rungs must be ordered 1..7");
+            assert!(!r.title.trim().is_empty() && !r.root_formal_statement.trim().is_empty(), "rung {} needs a title + statement", r.rung);
+            assert!(!r.import_manifest.is_empty(), "rung {} needs an import manifest", r.rung);
+            assert!(!r.metadata.allowed_tactics.is_empty(), "rung {} needs allowed_tactics", r.rung);
+            assert!(valid_shape.contains(&r.metadata.expected_artifact_shape.as_str()), "rung {} bad shape", r.rung);
+            assert!(valid_char.contains(&r.metadata.proof_character.as_str()), "rung {} bad character", r.rung);
+            assert!(!r.metadata.source_fidelity_status.trim().is_empty() && !r.metadata.review_notes.trim().is_empty());
+            assert!(r.expected_status == "kernel_verified" || r.expected_status == "failed", "rung {} bad expected_status", r.rung);
+            // Every dossier exists and is non-empty.
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/serious_math_ladder").join(&r.dossier);
+            let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("dossier {:?} must exist: {}", path, e));
+            assert!(content.trim().len() > 50, "dossier {} must be substantive", r.dossier);
+            // A native_decide-banned rung must supply a probe; an allowed one must not need one.
+            if !r.metadata.native_decide_allowed {
+                assert!(r.native_decide_probe.is_some(), "rung {} bans native_decide so it must carry a probe", r.rung);
+            }
+        }
+        // Criterion 2: at least one rung needs a helper definition and submits a module with items.
+        assert!(ladder.rungs.iter().any(|r| r.metadata.requires_helper_definitions
+            && r.gold_attempt["type"] == "submit_module"
+            && r.gold_attempt["module_items"].as_array().is_some_and(|a| !a.is_empty())),
+            "at least one rung must require a helper definition via SubmitModule");
+        // Criterion 3: at least one rung bans native_decide.
+        assert!(ladder.rungs.iter().any(|r| !r.metadata.native_decide_allowed), "at least one rung must ban native_decide");
+        // At least one structural rung requiring a structural lemma exists.
+        assert!(ladder.rungs.iter().any(|r| r.metadata.proof_character == "structural" && r.metadata.requires_structural_lemma));
+    }
+
+    /// Issue #5 criterion 4: each gold artifact, driven through the real
+    /// episode_step reducer, produces its fixture's expected_status.
+    #[tokio::test]
+    async fn test_serious_math_ladder_gold_artifacts_produce_expected_status() {
+        let ladder: LadderFile = serde_json::from_str(SERIOUS_MATH_LADDER_FIXTURE).unwrap();
+        for r in &ladder.rungs {
+            let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+            let peer = client.peer();
+            let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+                "source_problem_text": format!("ladder rung {}: {}", r.rung, r.title),
+                "root_formal_statement": r.root_formal_statement,
+                "problem_imports": r.import_manifest,
+                "unsafe_dev_attestation": true,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv["problem_version_id"], "max_steps": 5,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+            let req = &ep["next_action_request"];
+            let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+                "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": format!("rung-{}-gold", r.rung),
+                "expected_revision": req["episode_revision"],
+            }).as_object().unwrap().clone())).await.unwrap());
+            let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+                "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+                "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+                "action": r.gold_attempt, "cost_micros": 1,
+            }).as_object().unwrap().clone())).await.unwrap());
+            assert_eq!(step["outcome"], r.expected_status, "rung {} ({}) gold artifact expected {} but got: {:?}", r.rung, r.slug, r.expected_status, step);
+        }
+    }
+
+    /// Issue #5 criterion 3 (the crux): native_decide-disallowed is ENFORCED by
+    /// the module policy, not merely declared in JSON. Each banned rung's probe
+    /// (a SubmitModule whose proof contains whole-word native_decide) is
+    /// rejected as a prohibited construct before any Lean invocation.
+    #[tokio::test]
+    async fn test_serious_math_ladder_native_decide_disallow_is_enforced_not_just_declared() {
+        let ladder: LadderFile = serde_json::from_str(SERIOUS_MATH_LADDER_FIXTURE).unwrap();
+        let mut probed = 0;
+        for r in &ladder.rungs {
+            let Some(probe) = &r.native_decide_probe else { continue };
+            probed += 1;
+            let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+            let peer = client.peer();
+            let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+                "source_problem_text": format!("ladder rung {} native_decide probe", r.rung),
+                "root_formal_statement": r.root_formal_statement,
+                "problem_imports": r.import_manifest,
+                "unsafe_dev_attestation": true,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv["problem_version_id"], "max_steps": 5,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+            let req = &ep["next_action_request"];
+            let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+                "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": format!("rung-{}-probe", r.rung),
+                "expected_revision": req["episode_revision"],
+            }).as_object().unwrap().clone())).await.unwrap());
+            let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+                "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+                "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+                "action": probe, "cost_micros": 1,
+            }).as_object().unwrap().clone())).await.unwrap());
+            assert_eq!(step["accepted"], false, "rung {} native_decide probe must be rejected: {:?}", r.rung, step);
+            let step_str = serde_json::to_string(&step).unwrap().to_lowercase();
+            assert!(step_str.contains("native_decide") || step_str.contains("prohibited"),
+                "rung {} rejection must be a prohibited-construct/native_decide failure: {}", r.rung, step_str);
+        }
+        assert_eq!(probed, 6, "all six native_decide-banned rungs must be probed");
+    }
+
+
     #[tokio::test]
     async fn test_putnambench_smoke_import_fixtures_register_with_stable_hashes() {
         // Real, embedded PutnamBench problems (not synthetic) — verifies the

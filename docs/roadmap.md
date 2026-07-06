@@ -85,7 +85,13 @@ still open and sit at the Level 2 → Level 3 seam:
 
 - **#5** — a structural-math benchmark ladder for cases `native_decide`
   brute force can't handle, i.e. proof this Level 2 mechanism scales past toy
-  examples.
+  examples. **Shipped:** a checked-in 7-rung ladder
+  ([`benchmarks/serious_math_ladder/`](../benchmarks/serious_math_ladder/),
+  [`docs/benchmarks/serious_math_ladder.md`](benchmarks/serious_math_ladder.md))
+  from a `native_decide`-allowed finite sanity check up to a large-parameter
+  theorem where finite brute force is impossible, with per-rung dossiers and
+  three deterministic tests (metadata completeness; gold artifacts driven
+  through `episode_step`; `native_decide` ban proven *enforced*, not declared).
 - **#6** — module-aware statement fidelity: a module can be root-proof
   kernel-verified while helper definitions carry a prose-only bridge (integer
   encoding, bijection, domain restriction) that fidelity review has never
