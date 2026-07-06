@@ -457,6 +457,15 @@ pub struct BenchmarkProblemRegisterArgs {
     pub import_manifest: Vec<String>,
     #[serde(default)]
     pub context_hash: Option<String>,
+    /// Issue #12: finite_exact (default) / parameterized_family /
+    /// inductive_growth_bound / asymptotic. An asymptotic goal forces
+    /// brute_force_admissible=false.
+    #[serde(default)]
+    pub goal_class: Option<String>,
+    /// Whether finite enumeration is admissible evidence at all. Defaults true,
+    /// but rejected if set true for an asymptotic goal.
+    #[serde(default)]
+    pub brute_force_admissible: Option<bool>,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -978,6 +987,12 @@ pub struct FormalizationPlanAddItemArgs {
     pub description: String,
     #[serde(default)]
     pub mathlib_candidate_names: Vec<String>,
+    /// Issue #12: optional growth-rate role labeling this step distinctly from
+    /// a finite sanity check — growth_lower_bound / growth_upper_bound /
+    /// infinite_family_extraction / sufficiently_large_threshold /
+    /// limit_comparison.
+    #[serde(default)]
+    pub asymptotic_role: Option<String>,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -1839,6 +1854,21 @@ fn enforce_kernel_verified_research_boundary(
             }
         }
         _ => return Err(mcp_invalid_params("unknown verification target kind")),
+    }
+    Ok(())
+}
+
+/// Issue #12: layer kinds that represent a SEARCH / construction / packing-size
+/// bound — the shape a finite or empirical asymptotic check takes. None of them
+/// may claim `kernel_verified`; only a `formal_module` / `statement_fidelity`
+/// layer backed by a real Lean kernel pass can. This is a named, test-targetable
+/// rejection layered on top of the DB CHECK (schema_v1.rs), never a relaxation.
+fn enforce_asymptotic_evidence_boundary(layer_kind: &str, status: &str) -> Result<(), McpError> {
+    if status == "kernel_verified" && !matches!(layer_kind, "formal_module" | "statement_fidelity") {
+        return Err(mcp_invalid_params(
+            "finite/empirical evidence cannot be recorded as kernel_verified for an asymptotic goal; \
+             only a formal_module/statement_fidelity layer backed by a real Lean kernel pass may claim kernel_verified"
+        ));
     }
     Ok(())
 }
@@ -4478,7 +4508,7 @@ impl ServerHandler for ChatDbMcp {
                                 "required_run_mode": "any"
                             },
                             "benchmark_problem_register": {
-                                "side_effect": "mutating — inserts a benchmark_problems row; rejects a duplicate upstream_problem_id within the same suite",
+                                "side_effect": "mutating — inserts a benchmark_problems row (incl. issue #12 goal_class/brute_force_admissible metadata; an asymptotic goal forces brute_force_admissible=false); rejects a duplicate upstream_problem_id within the same suite",
                                 "trust_level": "human_attested for root_formal_statement/theorem_name/import_manifest (exactly what the caller declares — ChatDB doesn't itself parse an upstream benchmark repo), but root_statement_hash and prover_ready_statement/prover_ready_statement_hash are ALWAYS server-derived (canonical_hash / to_pi_form), never accepted from the client — the same anti-fabrication principle as root_statement_hash elsewhere, since a client-supplied prover-ready text could otherwise register an easy proxy statement alongside a hard root statement and have benchmark_result_record's cross-check validate against the wrong one",
                                 "cost_surface": "none",
                                 "benchmark_safety": "safe_public_output — problem metadata (not yet an episode, not yet a proof)",
@@ -6076,6 +6106,10 @@ impl ServerHandler for ChatDbMcp {
                     return Err(mcp_invalid_params(format!("unknown plan_id: {}", args.plan_id)));
                 }
 
+                if let Some(role) = &args.asymptotic_role {
+                    validate_one_of("asymptotic_role", role, &["growth_lower_bound", "growth_upper_bound", "infinite_family_extraction", "sufficiently_large_threshold", "limit_comparison"])?;
+                }
+
                 let next_order: i64 = conn.query_row(
                     "SELECT COALESCE(MAX(item_order), -1) + 1 FROM formalization_plan_items WHERE plan_id = ?1", [&args.plan_id], |row| row.get(0),
                 ).map_err(rs)?;
@@ -6086,15 +6120,16 @@ impl ServerHandler for ChatDbMcp {
                 conn.execute(
                     "INSERT INTO formalization_plan_items (
                         id, plan_id, item_order, kind, description, mathlib_coverage_status,
-                        mathlib_candidate_names_json, lookup_result_json, promoted_obligation_id, status, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, 'unknown', ?6, NULL, NULL, 'open', ?7)",
-                    (&item_id, &args.plan_id, next_order, kind_str, &args.description, &candidate_names_json, &created_at),
+                        mathlib_candidate_names_json, lookup_result_json, promoted_obligation_id, asymptotic_role, status, created_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, 'unknown', ?6, NULL, NULL, ?7, 'open', ?8)",
+                    (&item_id, &args.plan_id, next_order, kind_str, &args.description, &candidate_names_json, &args.asymptotic_role, &created_at),
                 ).map_err(rs)?;
 
                 let res = serde_json::json!({
                     "plan_item_id": item_id,
                     "item_order": next_order,
                     "kind": kind_str,
+                    "asymptotic_role": args.asymptotic_role,
                     "created_at": created_at,
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
@@ -6484,6 +6519,13 @@ impl ServerHandler for ChatDbMcp {
                 validate_one_of("target_kind", &args.target_kind, VERIFICATION_TARGET_KINDS)?;
                 validate_one_of("layer_kind", &args.layer_kind, VERIFICATION_LAYER_KINDS)?;
                 validate_one_of("status", &args.status, VERIFICATION_LAYER_STATUSES)?;
+                // Issue #12: a search/construction/packing-bound layer (the
+                // shape a finite or empirical asymptotic check takes) can never
+                // itself claim kernel_verified — only a formal_module /
+                // statement_fidelity layer backed by a real Lean pass may.
+                // Redundant with the DB CHECK by design (defense in depth + a
+                // precise, test-targetable message); it never relaxes the CHECK.
+                enforce_asymptotic_evidence_boundary(&args.layer_kind, &args.status)?;
                 let evidence_json = args.evidence_json.clone().unwrap_or_else(|| "{}".to_string());
                 serde_json::from_str::<serde_json::Value>(&evidence_json)
                     .map_err(|e| mcp_invalid_params(format!("evidence_json must be valid JSON: {}", e)))?;
@@ -7589,6 +7631,19 @@ impl ServerHandler for ChatDbMcp {
                 if args.root_formal_statement.trim().is_empty() || args.theorem_name.trim().is_empty() {
                     return Err(mcp_invalid_params("theorem_name and root_formal_statement must be non-empty"));
                 }
+                // Issue #12: goal-class metadata. An asymptotic goal is not
+                // decidable by finite enumeration, so it forces
+                // brute_force_admissible=false and rejects an explicit true.
+                let goal_class = args.goal_class.as_deref().unwrap_or("finite_exact");
+                validate_one_of("goal_class", goal_class, &["finite_exact", "parameterized_family", "inductive_growth_bound", "asymptotic"])?;
+                let brute_force_admissible = if goal_class == "asymptotic" {
+                    if args.brute_force_admissible == Some(true) {
+                        return Err(mcp_invalid_params("an asymptotic goal cannot admit finite brute force as evidence; brute_force_admissible must be false"));
+                    }
+                    false
+                } else {
+                    args.brute_force_admissible.unwrap_or(true)
+                };
 
                 let conn = self.conn.lock().await;
                 let suite_exists: i64 = conn.query_row(
@@ -7626,11 +7681,13 @@ impl ServerHandler for ChatDbMcp {
                     "INSERT INTO benchmark_problems (
                         id, suite_id, upstream_problem_id, theorem_name, source_file_path,
                         root_formal_statement, root_statement_hash, import_manifest_json,
-                        context_hash, prover_ready_statement, prover_ready_statement_hash, status, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'imported', ?12)",
-                    (&problem_id, &args.suite_id, &args.upstream_problem_id, &args.theorem_name, &args.source_file_path,
+                        context_hash, prover_ready_statement, prover_ready_statement_hash, status, created_at,
+                        goal_class, brute_force_admissible
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'imported', ?12, ?13, ?14)",
+                    rusqlite::params![&problem_id, &args.suite_id, &args.upstream_problem_id, &args.theorem_name, &args.source_file_path,
                      &args.root_formal_statement, &root_statement_hash, &import_manifest_json, &args.context_hash,
-                     &prover_ready_statement, &prover_ready_statement_hash, &now),
+                     &prover_ready_statement, &prover_ready_statement_hash, &now,
+                     goal_class, brute_force_admissible],
                 ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
                     mcp_invalid_params(format!("problem {:?} is already registered in this suite", args.upstream_problem_id))
                 } else {
@@ -7642,6 +7699,8 @@ impl ServerHandler for ChatDbMcp {
                     "root_statement_hash": root_statement_hash,
                     "prover_ready_statement_hash": prover_ready_statement_hash,
                     "status": "imported",
+                    "goal_class": goal_class,
+                    "brute_force_admissible": brute_force_admissible,
                     "created_at": now,
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
@@ -13016,6 +13075,148 @@ mod tests {
             "problem_version_id": pv_id, "benchmark_problem_id": bp["benchmark_problem_id"], "approver_id": "runner",
         }).as_object().unwrap().clone())).await;
         assert!(bad.is_err(), "must refuse to change an existing 'verified' determination");
+    }
+
+    /// Issue #12: goal_class persists and an asymptotic goal forbids finite
+    /// brute force as admissible evidence.
+    #[tokio::test]
+    async fn test_benchmark_asymptotic_goal_class_persists_and_forbids_brute_force() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let suite_id = create_suite(&peer, "StructuralLadder").await;
+
+        // finite_exact default -> brute force admissible.
+        let finite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "f1", "theorem_name": "f1", "root_formal_statement": "1 + 1 = 2",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(finite["goal_class"], "finite_exact");
+        assert_eq!(finite["brute_force_admissible"], true);
+
+        // asymptotic -> brute_force_admissible forced false.
+        let asymptotic = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "a1", "theorem_name": "a1",
+            "root_formal_statement": "∀ n : ℕ, True", "goal_class": "asymptotic",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(asymptotic["goal_class"], "asymptotic");
+        assert_eq!(asymptotic["brute_force_admissible"], false, "an asymptotic goal must forbid finite brute force");
+
+        // asymptotic + explicit brute_force_admissible=true -> rejected.
+        let bad = peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "a2", "theorem_name": "a2",
+            "root_formal_statement": "∀ n : ℕ, True", "goal_class": "asymptotic", "brute_force_admissible": true,
+        }).as_object().unwrap().clone())).await;
+        assert!(bad.is_err(), "asymptotic goal cannot admit finite brute force");
+
+        // unknown goal_class -> rejected.
+        let bad_class = peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "a3", "theorem_name": "a3",
+            "root_formal_statement": "x", "goal_class": "made_up",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_class.is_err());
+    }
+
+    /// Issue #12: finite/empirical evidence can never be recorded as
+    /// kernel_verified for an asymptotic goal; only formal_module /
+    /// statement_fidelity may claim it.
+    #[tokio::test]
+    async fn test_reject_finite_brute_force_as_asymptotic_evidence() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Asymptotic goal dossier",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "node_type": "theorem", "title": "Growth lower bound", "trust_status": "open_gap",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let node_id = node["node_id"].as_str().unwrap().to_string();
+
+        // An empirical asymptotic_extraction layer is allowed but is NOT kernel evidence.
+        let empirical = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "target_kind": "node", "target_id": node_id,
+            "layer_kind": "asymptotic_extraction", "status": "empirical",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let layer_id = empirical["verification_layer_id"].as_str().unwrap().to_string();
+        let layers = empirical["dossier"]["verification_layers"].as_array().unwrap();
+        assert!(layers.iter().any(|l| l["status"] == "empirical" && l["layer_kind"] == "asymptotic_extraction"), "{layers:?}");
+
+        // A construction_search / packing bound layer must NOT be allowed to claim kernel_verified.
+        for lk in ["construction_search", "packing_or_size_bound", "asymptotic_extraction"] {
+            let bad = peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+                "dossier_id": dossier_id, "target_kind": "node", "target_id": node_id,
+                "layer_kind": lk, "status": "kernel_verified",
+            }).as_object().unwrap().clone())).await;
+            assert!(bad.is_err(), "a {lk} layer must not be allowed to claim kernel_verified for an asymptotic goal");
+        }
+
+        // A candidate asymptotic_family construction linked to the empirical layer has no kernel evidence.
+        let cc = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "verification_layer_id": layer_id,
+            "construction_type": "asymptotic_family", "intended_role": "lower_bound_construction",
+            "informal_description": "A family whose size grows super-linearly", "status": "empirically_supported",
+            "trust_status": "empirical_evidence", "created_by": "r",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(cc["candidate_construction"]["has_kernel_evidence"], false, "empirical asymptotic construction is not kernel evidence: {cc:?}");
+    }
+
+    /// Issue #12: the unit-distance-style ladder — an asymptotic problem whose
+    /// dossier labels growth-rate components (plan steps, an asymptotic_family
+    /// construction, asymptotic verification layers) distinctly from finite
+    /// sanity checks. Asserts the labeling/rows, not a real Lean proof.
+    #[tokio::test]
+    async fn test_unit_distance_asymptotic_ladder_fixture() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "∀ n : ℕ, True").await;
+
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "title": "Unit-distance asymptotic ladder",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let plan_id = plan["plan_id"].as_str().unwrap().to_string();
+
+        // A growth-rate step labeled with an asymptotic_role, and a plain finite step.
+        let growth = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            "plan_id": plan_id, "kind": "planned_module", "description": "edge lower bound c*n^(1+delta)",
+            "asymptotic_role": "growth_lower_bound",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(growth["asymptotic_role"], "growth_lower_bound");
+        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            "plan_id": plan_id, "kind": "missing_lemma", "description": "infinite-family extraction",
+            "asymptotic_role": "infinite_family_extraction",
+        }).as_object().unwrap().clone())).await.unwrap());
+        // A finite sanity step carries no asymptotic_role.
+        let finite = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            "plan_id": plan_id, "kind": "concept", "description": "check small cases n<=6",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert!(finite["asymptotic_role"].is_null(), "a finite sanity step must not be labeled with a growth-rate role");
+        // Bad role rejected.
+        let bad_role = peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            "plan_id": plan_id, "kind": "concept", "description": "x", "asymptotic_role": "made_up",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_role.is_err());
+
+        // Dossier: the asymptotic construction + layers are their own labeled rows.
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+            "title": "Unit-distance ladder dossier", "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "construction_type": "asymptotic_family", "intended_role": "lower_bound_construction",
+            "informal_description": "grid-like point configuration forcing many unit distances", "created_by": "r",
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id, "target_kind": "dossier", "target_id": dossier_id,
+            "layer_kind": "packing_or_size_bound", "status": "empirical",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+            "dossier_id": dossier_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let ccs = observed["candidate_constructions"].as_array().unwrap();
+        assert_eq!(ccs.len(), 1);
+        assert_eq!(ccs[0]["construction_type"], "asymptotic_family");
+        assert_eq!(ccs[0]["has_kernel_evidence"], false, "an asymptotic construction with an empirical layer is not kernel evidence");
+        let layers = observed["verification_layers"].as_array().unwrap();
+        assert!(layers.iter().any(|l| l["layer_kind"] == "packing_or_size_bound" && l["status"] == "empirical"));
     }
 
     #[tokio::test]

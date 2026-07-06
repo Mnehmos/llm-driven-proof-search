@@ -501,12 +501,19 @@ CREATE TABLE IF NOT EXISTS formalization_plan_items (
     mathlib_candidate_names_json TEXT NOT NULL,
     lookup_result_json TEXT,
     promoted_obligation_id TEXT REFERENCES episode_obligations(id),
+    -- Issue #12: optional growth-rate role, so an asymptotic proof's steps
+    -- (a lower/upper growth bound, an infinite-family extraction, a
+    -- sufficiently-large threshold, a limit comparison) are labeled distinctly
+    -- from finite sanity checks. Descriptive only; never proof authority. Added
+    -- to pre-existing DBs by migrate_add_plan_item_asymptotic_role_column.
+    asymptotic_role TEXT,
     status TEXT NOT NULL,
     created_at TEXT NOT NULL,
     UNIQUE(plan_id, item_order),
     CHECK(kind IN ('concept', 'missing_definition', 'missing_lemma', 'planned_module', 'external_citation')),
     CHECK(mathlib_coverage_status IN ('unknown', 'found', 'not_found', 'partial')),
-    CHECK(status IN ('open', 'promoted', 'dropped'))
+    CHECK(status IN ('open', 'promoted', 'dropped')),
+    CHECK(asymptotic_role IS NULL OR asymptotic_role IN ('growth_lower_bound', 'growth_upper_bound', 'infinite_family_extraction', 'sufficiently_large_threshold', 'limit_comparison'))
 );
 
 -- One row per extracted move within a draft, in the order the client
@@ -1084,8 +1091,21 @@ CREATE TABLE IF NOT EXISTS benchmark_problems (
     -- migrate_add_prover_ready_statement_columns for the full rationale.
     prover_ready_statement TEXT,
     prover_ready_statement_hash TEXT,
+    -- Issue #12: goal class distinguishes a finite/exact target from a
+    -- parameterized family, an inductive growth bound, or a genuinely
+    -- asymptotic statement. brute_force_admissible records whether finite
+    -- enumeration is admissible evidence at all — an asymptotic goal is NOT
+    -- decidable by finite brute force, so it is forced to 0. Descriptive
+    -- benchmark metadata; neither column is proof authority. Added to
+    -- pre-existing DBs by migrate_add_benchmark_goal_class_columns (which cannot
+    -- re-add the cross-column CHECK — the MCP handler enforces it for those).
+    goal_class TEXT NOT NULL DEFAULT 'finite_exact',
+    brute_force_admissible INTEGER NOT NULL DEFAULT 1,
     UNIQUE(suite_id, upstream_problem_id),
-    CHECK(status IN ('imported', 'skipped_ambiguous', 'deprecated'))
+    CHECK(status IN ('imported', 'skipped_ambiguous', 'deprecated')),
+    CHECK(goal_class IN ('finite_exact', 'parameterized_family', 'inductive_growth_bound', 'asymptotic')),
+    CHECK(brute_force_admissible IN (0, 1)),
+    CHECK(goal_class <> 'asymptotic' OR brute_force_admissible = 0)
 );
 
 -- run_envelope_id links to the host/model/mode/cost tracking issues
@@ -1308,6 +1328,8 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     migrate_add_benchmark_fidelity_basis_columns(conn)?;
     migrate_add_lean_result_bytes_column(conn)?;
     migrate_add_current_cost_observation_column(conn)?;
+    migrate_add_benchmark_goal_class_columns(conn)?;
+    migrate_add_plan_item_asymptotic_role_column(conn)?;
     // CHECK constraints are baked into a table at creation and CREATE TABLE IF
     // NOT EXISTS cannot update them on a table that already exists — a database
     // that predates the fidelity-vocabulary rewrite (docs/fix_plan_playtest_02.md)
@@ -1873,6 +1895,54 @@ fn migrate_add_lean_result_bytes_column(conn: &Connection) -> rusqlite::Result<(
         .collect();
     if !existing_columns.iter().any(|c| c == "lean_result_bytes") {
         conn.execute("ALTER TABLE action_attempts ADD COLUMN lean_result_bytes INTEGER", [])?;
+    }
+    Ok(())
+}
+
+/// Issue #12: adds benchmark_problems.goal_class + brute_force_admissible to a
+/// pre-existing DB. ALTER TABLE ADD COLUMN cannot re-add the cross-column CHECK
+/// (asymptotic => not brute-force-admissible); that is enforced on fresh DBs by
+/// the CREATE TABLE and at the MCP handler for legacy DBs — same pattern as
+/// trusted_canonical_source.
+fn migrate_add_benchmark_goal_class_columns(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='benchmark_problems'",
+        [], |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(benchmark_problems)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !cols.iter().any(|c| c == "goal_class") {
+        conn.execute("ALTER TABLE benchmark_problems ADD COLUMN goal_class TEXT NOT NULL DEFAULT 'finite_exact'", [])?;
+    }
+    if !cols.iter().any(|c| c == "brute_force_admissible") {
+        conn.execute("ALTER TABLE benchmark_problems ADD COLUMN brute_force_admissible INTEGER NOT NULL DEFAULT 1", [])?;
+    }
+    Ok(())
+}
+
+/// Issue #12: adds formalization_plan_items.asymptotic_role to a pre-existing
+/// DB. The CHECK is enforced on fresh DBs (CREATE TABLE) and by the MCP handler.
+fn migrate_add_plan_item_asymptotic_role_column(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='formalization_plan_items'",
+        [], |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(formalization_plan_items)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !cols.iter().any(|c| c == "asymptotic_role") {
+        conn.execute("ALTER TABLE formalization_plan_items ADD COLUMN asymptotic_role TEXT", [])?;
     }
     Ok(())
 }
