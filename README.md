@@ -21,7 +21,7 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 ┌─────────────────────────────────────────────────────────────────┐
 │                     chatdb-mcp (MCP Server)                     │
 │                                                                 │
-│  73 tools · typed schemas · JSON Schema 2020-12                 │
+│  86 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -112,6 +112,19 @@ Antigravity, or a custom script — should call this first.
 | `empirical_search_update_status` | Update a search's status/trust_status/results/linked candidates. Counterexamples are **not** updatable here (a recorded witness stays visible — add via `empirical_search_observe`). Falsified/failed/timed-out searches stay visible |
 | `empirical_search_link_candidate` | Link an empirical search to a candidate construction (adopting its dossier). Support ≠ proof of claimed properties |
 | `empirical_search_link_verification_layer` | Link an empirical search to a verification layer (adopting its dossier). The link never makes the layer kernel_verified |
+| `challenge_create` | Define a challenge in a dossier (issue #53): a bounded, scored, reviewable competition frame for AI-generated math. Never proof |
+| `challenge_observe` | Read a challenge with its tasks → submissions → scores/reviews, plus the export grouping (accepted/rejected/superseded/open separated). Read-only |
+| `challenge_update_status` | Update a challenge's status (open/closed/archived/superseded). Never touches proof/fidelity/benchmark state |
+| `validation_protocol_create` | Register a validation protocol a task's submissions can be checked against. A protocol describes a check; it is never itself proof |
+| `task_create` | Add a bounded task to a challenge (find_candidate_object, improve_bound, find_counterexample, …). `bounds_json` keeps it small and reviewable |
+| `task_update_status` | Update a task's status (open/closed/superseded). A superseded task stays visible |
+| `task_submission_create` | Submit a contribution to a task. `content_json` is the **untrusted** payload; starts `submitted`, never proof |
+| `task_submission_validate` | Mark a submission `validated` (passed) or `validation_failed`. `validated` means it passed its declared check, **never** kernel verification. Failed stays visible |
+| `task_submission_score` | Record a score (value/units/rule, reproducibility/novelty notes, optional `cost_summary_id`) and advance to `scored`. A score is a measurement, never proof; a rank is not proof authority; a score never confers training eligibility |
+| `task_submission_review` | Record a human review (accepted/rejected/needs_changes/superseded). Human review ≠ kernel verification — `accepted` means accepted into the dossier as a contribution, never proved. Rejected/superseded stay visible |
+| `task_submission_link` | Link a submission to a candidate_construction / empirical_result / verification_layer in its dossier as **provenance**. Even linking to a kernel_verified layer never makes the submission a proof |
+| `task_submission_update_status` | Set a submission's outcome (accepted/rejected/superseded/merged_into_dossier) without a review row. Rejected/superseded stay visible |
+| `distilled_strategy_add` | Store a reusable distilled strategy artifact (cheat_sheet, heuristic_rule, counterexample_pattern, construction_recipe, …). A distilled strategy is **not** a proof; trust_status tops out at human_reviewed |
 | `paper_ingest_create` | Ingest a paper/manuscript/proof-sketch/exposition as a reviewable source document (issue #27), optionally linked to a dossier. ChatDB does no OCR/LLM extraction — this records the host's **untrusted** extraction. Ingestion is not proof |
 | `paper_ingest_extract_claims` | Append extracted nodes (main_theorem, definition, lemma, construction, reference, open_gap, …). Each node **requires** a non-empty `source_span` so it stays traceable to the source; also carries confidence/status labels. An extracted theorem is **not** statement-fidelity approval; a citation is **not** validation |
 | `paper_ingest_observe` | Read an ingested document with all extracted nodes and their trust labels. Read-only; nothing here is proof |
@@ -395,6 +408,50 @@ that completed formal proofs not be published without first coordinating with
 their maintainers. See [docs/benchmarks/putnambench.md](docs/benchmarks/putnambench.md)
 for how `proof_export`'s modes and `allow_putnambench_proof_export` flag
 enforce this.
+
+### Challenge / task / scoring substrate (issue #53)
+
+AI can generate far more mathematical material than humans can review as full
+proofs. Instead of giant opaque proof dumps, ChatDB channels contributions into
+small, bounded, typed, scored, reviewable units:
+
+```text
+research_dossier → challenge → task → submission → validation → score → review → distilled artifact
+```
+
+A dossier defines a `research_challenge`; a challenge defines bounded
+`research_tasks` (`find_candidate_object`, `improve_bound`, `find_counterexample`,
+`classify_small_cases`, `produce_witness`, `minimize_example`,
+`maximize_parameter`, `verify_property`, `compress_strategy`, `distill_method`,
+`formalize_claim`), each with a `bounds_json` that keeps it small; a task accepts
+`research_task_submissions` (untrusted `content_json`); a submission is
+`validated` against a `validation_protocol`, `scored` (`scoring_results`), and
+`reviewed` (`review_results`); accepted work links back to a
+`candidate_construction` / `empirical_result` / `verification_layer` as
+provenance; and reusable method knowledge is compressed into
+`distilled_strategy_artifacts` (`strategy_cheat_sheet`, `heuristic_rule`,
+`counterexample_pattern`, `construction_recipe`, `formalization_hint`, …).
+
+**Trust boundary (structural).** Every table here is research bookkeeping — no
+column can hold kernel evidence:
+
+```text
+challenge/task/score       ≠ proof
+accepted submission        ≠ proof
+scored submission          ≠ proof
+validated empirical result ≠ kernel verification
+leaderboard rank           ≠ proof authority
+distilled strategy         ≠ proof
+```
+
+`is_proof` / `has_kernel_evidence` are always false on every challenge, task,
+submission, score, and review; a challenge **score alone never confers training
+eligibility**; submission status can never reach a proof value; a link to a
+kernel-verified `verification_layer` records provenance only and never makes the
+submission a proof. A rejected or superseded submission stays visible (never
+deleted), and `challenge_observe` exports the work grouped by outcome
+(accepted / rejected / superseded / open shown separately). Only Lean / kernel
+verification creates proof authority; challenge state never gates `certified`.
 
 ## `Solve` vs. `SubmitModule`
 
@@ -733,7 +790,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
 │   └── chatdb-mcp/               # MCP server (thin shell over core)
-│       ├── src/lib.rs            # 73 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
+│       ├── src/lib.rs            # 86 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
 │   ├── adr/                      # Architecture Decision Records
