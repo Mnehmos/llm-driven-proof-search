@@ -58,3 +58,4 @@ tunnel_client_dir/
 # Kilo workspace tooling (machine-local)
 .kilo/
 docs/playtests/exports/
+formal-conjectures/
