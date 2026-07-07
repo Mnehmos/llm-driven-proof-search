@@ -57,8 +57,14 @@ The corpus marks some variants `research solved` but ships no proof. Found in
 this sweep:
 - `#470 erdos_470.variants.weird_pos_density` — weird numbers have positive
   density (Benkoski–Erdős 1974); `sorry` in the corpus.
-- `#1052 even_of_isUnitaryPerfect` — unitary perfect numbers are even;
-  `sorry` in the main corpus (external AlphaProof link only).
+- ✅ **DONE** `#1052 even_of_isUnitaryPerfect` — unitary perfect numbers are
+  even (Subbarao–Warren): **independent proof kernel-verified pass@1**
+  through the tracked loop (2026-07-07; episode `2cc1e02a`, result
+  `27534f5e`), hosted at `lean-checker/LeanChecker/Erdos/Erdos1052.lean`.
+  Cross-check: the corpus's linked AlphaProof reference does NOT replay
+  standalone (depends on formal-conjectures' custom `valid` tactic + older
+  toolchain); ours is the reproducible artifact. Upstream `formal_proof`
+  link PR: prepared on the fork.
 Each is a genuine upstream contribution via the `@[formal_proof]` host
 mechanism, and builds the exact machinery the parent bounty problem needs.
 
