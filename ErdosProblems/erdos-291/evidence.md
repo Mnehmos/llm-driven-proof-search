@@ -19,8 +19,22 @@
   construction lands in the target set for `k = 1, 2` (independent decidable
   confirmation of the general argument).
 
-## Tracked-pipeline status
-Currently verified directly via `lake env lean`. Re-submission through the
-tracked MCP episode pipeline (hash-pinned statement, episode ledger,
-`benchmark_result_record`) is the natural next step to match the audit standard
-of the #1052 / #349 folders — pending.
+## Tracked-pipeline status — SUBMITTED (kernel_verified)
+
+Re-verified through the tracked MCP episode pipeline (dev-attested fidelity
+basis → `kernel_verified`, the honest ceiling for a dev attestation):
+
+| field | value |
+|---|---|
+| problem_version_id | `731bdae8-f2e4-4102-a863-96d0dd0d390f` |
+| root_statement (a, L inlined) | `{n : ℕ \| 1 < Nat.gcd (∑ k ∈ Finset.Icc 1 n, (Finset.Icc 1 n).lcm (fun x => x) / k) ((Finset.Icc 1 n).lcm (fun x => x))}.Infinite` |
+| root_statement_hash | `e22625b4686d07a3e829dc0cee20c17c718f4a1c3a4f1bbc16a9d63848d96b76` |
+| episode_id | `e2320b06-fc24-4f86-909f-793685c3ce61` |
+| outcome | **kernel_verified**, `root_proved`, pass@1 |
+| fidelity basis | `unsafe_dev_attestation` (attested → kernel_verified, never certified) |
+| import manifest | `["Mathlib.Tactic.Ring", "Mathlib.Tactic.NormNum", "Mathlib"]` |
+
+The whole development (`L`, `a` as local `let`s; every lemma inlined as a
+`have`; bridged to the inlined statement by `show`) was submitted as one
+`solve` action with `proof_format: raw_lean_block`, pre-validated locally before
+submission.
