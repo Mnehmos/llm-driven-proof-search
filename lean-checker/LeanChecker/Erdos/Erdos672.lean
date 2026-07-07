@@ -280,4 +280,85 @@ theorem euler_four_ap (n d : ℕ) (hn : 0 < n) (hd : 0 < d) (hnd : n.Coprime d)
     have hB2 : ((n : ℤ) + d) * (n + 2 * d) = 2 * M ^ 2 := by rw [hB, hXval, hd2]; ring
     sorry
 
+/-- **Payoff of the crux (Conrad, *Proofs by Descent*, Cor. 3.13).** The only
+triangular number that is a perfect fourth power is `1`: if `m(m+1) = 2 n⁴` then
+`m ∈ {0, 1}`. This is a genuine application of `no_fermat_sub` (`x⁴ − y⁴ ≠ z²`,
+odd case) together with Mathlib's `not_fermat_42` (`x⁴ + y⁴ ≠ z²`, even case). It
+does NOT depend on the open `euler_four_ap` sorry. -/
+theorem triangular_not_fourth_power (m n : ℕ) (h : m * (m + 1) = 2 * n ^ 4) :
+    m = 0 ∨ m = 1 := by
+  have hcop : m.Coprime (m + 1) :=
+    Nat.dvd_one.mp (by simpa using Nat.dvd_sub' (Nat.gcd_dvd_right m (m + 1)) (Nat.gcd_dvd_left m (m + 1)))
+  rcases Nat.even_or_odd m with ⟨k, hk⟩ | ⟨k, hk⟩
+  · left
+    have hm2 : m = 2 * k := by omega
+    have hkeq : k * (m + 1) = n ^ 4 := by
+      have : 2 * (k * (m + 1)) = 2 * n ^ 4 := by rw [← h, hm2]; ring
+      omega
+    have hcop2 : k.Coprime (m + 1) := by
+      have : (2 * k).Coprime (m + 1) := hm2 ▸ hcop
+      exact (Nat.coprime_mul_iff_left.mp this).2
+    obtain ⟨s, hs⟩ : ∃ s, k = s ^ 4 :=
+      exists_eq_pow_of_mul_eq_pow (by rw [Nat.isUnit_iff]; exact hcop2) hkeq
+    obtain ⟨t, ht⟩ : ∃ t, (m + 1) = t ^ 4 :=
+      exists_eq_pow_of_mul_eq_pow (by rw [Nat.isUnit_iff]; exact hcop2.symm) (by rw [mul_comm]; exact hkeq)
+    by_contra hne
+    have hs0 : s ≠ 0 := by rintro rfl; simp at hs; omega
+    have ht0 : (t : ℤ) ≠ 0 := by
+      have : t ≠ 0 := by rintro rfl; simp at ht
+      exact_mod_cast this
+    have hZ : (t : ℤ) ^ 4 = 2 * (s : ℤ) ^ 4 + 1 := by
+      have e1 : (m : ℤ) + 1 = (t : ℤ) ^ 4 := by exact_mod_cast ht
+      have e2 : (m : ℤ) = 2 * (s : ℤ) ^ 4 := by
+        have : m = 2 * s ^ 4 := by rw [hm2, hs]
+        exact_mod_cast this
+      linarith [e1, e2]
+    exact not_fermat_42 (a := (s : ℤ) ^ 2) (b := (t : ℤ)) (c := (s : ℤ) ^ 4 + 1)
+      (pow_ne_zero 2 (by exact_mod_cast hs0)) ht0 (by linear_combination hZ)
+  · right
+    have hkeq : m * (k + 1) = n ^ 4 := by
+      have hmm : m + 1 = 2 * (k + 1) := by omega
+      have : 2 * (m * (k + 1)) = 2 * n ^ 4 := by rw [← h, hmm]; ring
+      omega
+    have hcop2 : m.Coprime (k + 1) := by
+      have hmm : m + 1 = 2 * (k + 1) := by omega
+      have : m.Coprime (2 * (k + 1)) := hmm ▸ hcop
+      exact (Nat.coprime_mul_iff_right.mp this).2
+    obtain ⟨x, hx⟩ : ∃ x, m = x ^ 4 :=
+      exists_eq_pow_of_mul_eq_pow (by rw [Nat.isUnit_iff]; exact hcop2) hkeq
+    obtain ⟨y, hy⟩ : ∃ y, (k + 1) = y ^ 4 :=
+      exists_eq_pow_of_mul_eq_pow (by rw [Nat.isUnit_iff]; exact hcop2.symm) (by rw [mul_comm]; exact hkeq)
+    by_contra hne
+    have hmge : 3 ≤ m := by omega
+    have hxpos : 1 < x := by
+      rcases Nat.lt_or_ge x 2 with h2 | h2
+      · interval_cases x <;> (norm_num at hx; omega)
+      · omega
+    have hxyN : x ^ 4 + 1 = 2 * y ^ 4 := by
+      have hmm : m + 1 = 2 * y ^ 4 := by omega
+      rw [hx] at hmm; omega
+    have hyge : 2 ≤ y := by
+      have h16 : 2 ^ 4 ≤ x ^ 4 := Nat.pow_le_pow_left (by omega) 4
+      by_contra hy2
+      push_neg at hy2
+      have hy1 : y ^ 4 ≤ 1 ^ 4 := Nat.pow_le_pow_left (by omega) 4
+      omega
+    have hcopZ : IsCoprime ((y : ℤ) ^ 2) (x : ℤ) := by
+      have h4 : (x ^ 4).Coprime (y ^ 4) := by rw [← hx, ← hy]; exact hcop2
+      have hZ4 : IsCoprime ((x : ℤ) ^ 4) ((y : ℤ) ^ 4) := by
+        rw [Int.isCoprime_iff_gcd_eq_one,
+            show ((x : ℤ) ^ 4) = ((x ^ 4 : ℕ) : ℤ) by push_cast; ring,
+            show ((y : ℤ) ^ 4) = ((y ^ 4 : ℕ) : ℤ) by push_cast; ring, Int.gcd_natCast_natCast]
+        exact h4
+      have hxy : IsCoprime (x : ℤ) (y : ℤ) :=
+        (IsCoprime.pow_right_iff (by norm_num)).mp ((IsCoprime.pow_left_iff (by norm_num)).mp hZ4)
+      exact hxy.symm.pow_left
+    have hxne : (x : ℤ) ≠ 0 := by exact_mod_cast (by omega : x ≠ 0)
+    have hcne : (y : ℤ) ^ 4 - 1 ≠ 0 := by
+      have : (2 : ℤ) ≤ (y : ℤ) := by exact_mod_cast hyge
+      nlinarith [this]
+    have hxyZ : (x : ℤ) ^ 4 + 1 = 2 * (y : ℤ) ^ 4 := by exact_mod_cast hxyN
+    exact no_fermat_sub ((y : ℤ) ^ 2) (x : ℤ) ((y : ℤ) ^ 4 - 1) hcopZ hxne hcne
+      (by linear_combination -hxyZ)
+
 end Erdos672

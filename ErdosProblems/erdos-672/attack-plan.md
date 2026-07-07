@@ -115,6 +115,19 @@ Closing this is exactly Fermat's **"no four squares in arithmetic progression"**
   - **case (ii)** `d²=M²−N²`: `A=2N²=n(n+3d)`, `B=2M²=(n+d)(n+2d)`. Note
     `N²+d²=M²` so `(N,d,M)` is a primitive Pythagorean triple. Needs its own
     2×-square-in-AP descent / sub-split on `gcd(n,3)` and parity of `n`.
+
+  **M4 BOTTLENECK, exactly characterized (case i, `gcd(n,3)=1`):** with
+  `d=2uv`, `n(n+3d)=(2u²−v²)²` is a quadratic in `n` whose discriminant is
+  `4(u²+v²)(4u²+v²)` (ring-verified). So an integer `n` exists **iff
+  `(u²+v²)(4u²+v²)` is a perfect square**, i.e. (when the two coprime factors,
+  `gcd = gcd(3,u²+v²)`) **iff `u²+v²` and `4u²+v²` are BOTH perfect squares** —
+  a *concordant forms* pair (`v²+u²=P²`, `v²+(2u)²=Q²`, two Pythagorean triples
+  sharing leg `v`). This is smaller than `(n,d)`, so #672 ⟸ **"no nonzero `u,v`
+  with `u²+v²` and `4u²+v²` both squares"**, a genuine congruent-number-style
+  infinite descent. Mathlib has NO congruent-number theory, so this is a real
+  multi-lemma formalization (the honest remaining wall). The crux `no_fermat_sub`
+  is done; this concordant descent is the piece to build next (do NOT fabricate
+  the descent step — derive it).
 - **M5 ☐** Full file 0/0; erdos-672 docs; commit; track via MCP.
 
 ## Recon notes (Mathlib pins, mathlib@360da6fa)
@@ -128,8 +141,41 @@ Closing this is exactly Fermat's **"no four squares in arithmetic progression"**
   `not_minimal`) for `a⁴+b⁴=c²`; structurally analogous but not directly reusable
   for the minus case.
 
-## Honesty
+## Honesty — DEFINITIVE STATUS (2026-07-07, corrected)
 
-This is **not yet proved**. It is an in-progress multi-session formalization of a
-genuine hard theorem (Euler / Fermat descent), tracked here so progress is
-resumable and the exact open obligation (M3) is explicit.
+**#672 is NOT closable by the `no_fermat_sub` crux. This corrects an earlier
+over-claim that the crux was "the hard 60% of #672."**
+
+Reference: Keith Conrad, *Arithmetic Progressions of Four Squares* and *Proofs by
+Descent*. The facts, now definitive:
+
+- #672 (product of a 4-term AP `=` square, coprime) **implies** "no four rational
+  squares in arithmetic progression" (case (i) of our verified reduction lands
+  exactly there), so #672 is **at least as hard** as that theorem.
+- "No four rational squares in AP" ⟺ the elliptic curve `E : y² = x³ − x² − 4x + 4`
+  (j-invariant `35152/9`) has **rank 0** (Conrad Thm 2.3, 3.4). Proved via
+  Kolyvagin / `L(E,1) ≠ 0`, or Euler's intricate elementary descent on the pair
+  `a²+c²=2b², b²+d²=2c²` (Euler 1780; Conrad does **not** reproduce the explicit
+  descent — he uses the EC route).
+- Our crux `no_fermat_sub` (`x⁴ − y⁴ ≠ z²`) ⟺ the **different** curve
+  `y² = x³ − x` (j = 1728) has rank 0 (Conrad Cor 3.19). The two curves are
+  **non-isogenous** (different j), so there is **no elementary reduction** from
+  one rank-0 fact to the other. `no_fermat_sub` therefore cannot close #672.
+
+**Consequence:** completing #672 requires either (a) formalizing Euler's
+pair-descent — elementary but intricate, construction not readily available, a
+fresh ~200-line high-risk effort; or (b) elliptic-curve rank machinery — Mathlib
+has **no** congruent-number / rank theory for this curve. Both are large,
+genuine projects, honestly out of reach as a "fill."
+
+**What IS banked and correct:** `no_fermat_sub` = Fermat's `x⁴ − y⁴ ≠ z²`, a real
+theorem NOT in Mathlib, kernel-verified. Its honest value is standalone (a
+Mathlib-worthy companion to `not_fermat_42`), plus Conrad's corollaries
+(triangular number = 4th power ⟹ 1; no Pythagorean triple with two square terms).
+The verified `euler_four_ap` reduction (primitive Pythagorean triple `(q,d²,X)` →
+the two cases) is also correct and reusable — it is just that its endpoint is the
+hard four-squares curve, not `no_fermat_sub`.
+
+This file's earlier "M4 reduces to the crux" plan was based on a false premise
+(that four-squares-in-AP reduces to `x⁴−y⁴`). Kept above for the record with this
+correction on top.
