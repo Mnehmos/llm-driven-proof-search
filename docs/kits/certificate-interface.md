@@ -202,7 +202,12 @@ Implementation sequence (status):
    assignment to a `BitVec n`. (The raw `Std.Sat.CNF` importer for
    unbounded/streaming certificates is a deliberate non-goal — see §3.)
 5. ✅ Rung-4 UNSAT fixture at scale: `phpFiveFour_unsat` (PHP(5,4), `2²⁰`).
-6. ⬜ One family encoding-soundness lemma at a scale where rung 1 cannot
-   check obligation B by `decide` (issue #110; Ramsey or Schur).
+6. ✅ Structural family encoding-soundness (issue #110):
+   `ramseyTriangleCnf_correct` proves obligation B by induction over the
+   triangle generator (no assignment enumeration), and
+   `k9_edge_coloring_has_mono_triangle` composes it with `bv_decide`
+   obligation A to close a Ramsey theorem at `2³⁶` — past the `decide`
+   ceiling. The generic gadget (`notAllSame`, `cnfEval_flatMap_notAllSame`)
+   lives in `FiniteCertificateKit` for the next family (Schur/EGZ) to reuse.
 7. ⬜ Then, and only then, harder Erdős examples. R(4,4)-scale is a stress
    test, not an implementation target.
