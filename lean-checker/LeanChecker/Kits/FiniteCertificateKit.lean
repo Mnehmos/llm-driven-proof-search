@@ -168,6 +168,47 @@ theorem cnfUnsat_of_forall_bitvec {n : ℕ} (f : Cnf)
   rw [hcongr, ha] at hbv_false
   exact Bool.false_ne_true hbv_false.symm
 
+/-! ## Structural encoding-soundness helpers (obligation B, issue #110)
+
+Family kits prove their encoding-soundness lemmas (obligation B of the A/B
+separation) by INDUCTION over a CNF generator, never by `decide` over the
+`2ⁿ` assignment space — that is what keeps obligation B tractable at the
+scale where obligation A needs a SAT solver. These are the reusable pieces:
+`cnfEval` distributes over `++`, the two-clause "not all the same" gadget
+evaluates to a Boolean equality test, and a generator that `flatMap`s that
+gadget over a list evaluates to the pointwise `all`. -/
+
+/-- `cnfEval` distributes over clause-list concatenation. -/
+theorem cnfEval_append (asn : ℕ → Bool) (f g : Cnf) :
+    cnfEval asn (f ++ g) = (cnfEval asn f && cnfEval asn g) := by
+  simp [cnfEval, List.all_append]
+
+/-- The "not all three the same colour" gadget: two clauses forbidding
+all-true and all-false on variables `a, b, c`. -/
+def notAllSame (a b c : ℕ) : Cnf :=
+  [[⟨a, false⟩, ⟨b, false⟩, ⟨c, false⟩], [⟨a, true⟩, ⟨b, true⟩, ⟨c, true⟩]]
+
+/-- The gadget evaluates to "the three bits are not all equal" — proved by
+the eight-case split on the three Booleans, not by assignment enumeration. -/
+theorem notAllSame_correct (asn : ℕ → Bool) (a b c : ℕ) :
+    cnfEval asn (notAllSame a b c) = !(asn a == asn b && asn b == asn c) := by
+  simp only [notAllSame, cnfEval, clauseEval, litEval, List.all_cons, List.all_nil,
+    List.any_cons, List.any_nil]
+  cases asn a <;> cases asn b <;> cases asn c <;> rfl
+
+/-- **Structural soundness of a `notAllSame` generator**: a CNF built by
+`flatMap`ping the gadget over a list of index triples evaluates to the
+pointwise `all` of "not all equal" — by induction on the triple list, with
+`asn` held fixed. This is the obligation-B workhorse: the mathematical
+predicate is read off the CNF without touching the assignment space. -/
+theorem cnfEval_flatMap_notAllSame (asn : ℕ → Bool) (ts : List (ℕ × ℕ × ℕ)) :
+    cnfEval asn (ts.flatMap fun t => notAllSame t.1 t.2.1 t.2.2)
+      = ts.all fun t => !(asn t.1 == asn t.2.1 && asn t.2.1 == asn t.2.2) := by
+  induction ts with
+  | nil => rfl
+  | cons hd tl ih =>
+    rw [List.flatMap_cons, cnfEval_append, notAllSame_correct, ih, List.all_cons]
+
 /-! ## DIMACS export (exchange format, never authority) -/
 
 /-- One DIMACS literal token. -/
