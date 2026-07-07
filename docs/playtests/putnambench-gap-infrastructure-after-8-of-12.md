@@ -5,7 +5,7 @@ sample stands after the two 2026-07-06 playtest runs and the issue work they
 produced. Full run reports: `2026-07-05-putnam-genuine-attempt.md` (run
 `8942c216`, 6/12) and `2026-07-06-putnam-retry-six.md` (run `76619de7`, +2).
 No proof bodies are published here or in those reports; complete formal
-proofs live only in the private ledger (`chatdb.db`) and its private audit
+proofs live only in the private ledger (`proofsearch.db`) and its private audit
 exports, per the PutnamBench contamination policy.
 
 ## The headline numbers

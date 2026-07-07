@@ -38,12 +38,12 @@ deterministic sources* and marks a prebuilt offline Mathlib index as
 **Implemented:**
 - **The real, pinned Mathlib source tree.** `mathlib_search_declarations`
   scans every `.lean` file under
-  `<CHATDB_LEAN_PROJECT_PATH>/.lake/packages/mathlib/Mathlib/` (or the legacy
+  `<PROOFSEARCH_LEAN_PROJECT_PATH>/.lake/packages/mathlib/Mathlib/` (or the legacy
   `lake-packages/` Lake layout) for declaration names containing a
   case-insensitive substring. This is the real pinned library — not a mock,
   not a curated subset — so every hit is grounded in what the kernel would
   actually see.
-- **This ChatDB instance's own verified artifacts.**
+- **This LLM-Driven Proof Search Environment instance's own verified artifacts.**
   `mathlib_search_local_artifacts` searches `episode_verified_lemmas` and
   `episode_verified_module_items` for declarations this exact instance has
   already proven — a "this or something like it worked before here"
@@ -106,7 +106,7 @@ Every result carries one of:
 | `exact_match` | The name matches exactly | `mathlib_search_declarations` |
 | `nearby_name` | A similarly-named declaration was found | `mathlib_search_declarations` |
 | `type_match` | Matched by type signature (not by name) | *(none yet — reserved)* |
-| `usage_example` | A prior local ChatDB artifact used this/a similar name | `mathlib_search_local_artifacts` |
+| `usage_example` | A prior local LLM-Driven Proof Search Environment artifact used this/a similar name | `mathlib_search_local_artifacts` |
 | `unknown` | No useful signal | *(a client can supply this manually)* |
 
 ## Tools
@@ -138,7 +138,7 @@ Every result carries one of:
 `mathlib_search_declarations` does a synchronous filesystem scan (no DB lock
 held — it doesn't touch the database at all) rather than an async/streamed
 read, matching this codebase's existing convention of calling `std::fs`
-directly for filesystem checks (see `crates/chatdb-core/src/lean/mod.rs`).
+directly for filesystem checks (see `crates/proofsearch-core/src/lean/mod.rs`).
 Collection is capped at 2000 raw hits internally (independent of the
 caller's requested `limit`) to bound memory for a degenerate very-short
 query; results are sorted (exact matches first, then by name length, then

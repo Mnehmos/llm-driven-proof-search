@@ -12,7 +12,7 @@ Tests are not an afterthought; they are the primary mechanism for verifying corr
 
 ## Verification of Core Invariants
 
-In complex systems (like the ChatDB proof core), core invariants must be strictly enforced.
+In complex systems (like the LLM-Driven Proof Search Environment proof core), core invariants must be strictly enforced.
 
 - Define explicit boundaries and invariants for your modules.
 - Write tests that aggressively challenge these invariants.

@@ -197,40 +197,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chatdb-mcp"
-version = "0.3.26"
-dependencies = [
- "axum",
- "chatdb_proof_core",
- "chrono",
- "clap",
- "rmcp",
- "rusqlite",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "chatdb_proof_core"
-version = "0.3.26"
-dependencies = [
- "chrono",
- "hex",
- "rusqlite",
- "schemars 0.8.22",
- "serde",
- "serde_jcs",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -847,6 +813,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "proofsearch-mcp"
+version = "0.3.27"
+dependencies = [
+ "axum",
+ "chrono",
+ "clap",
+ "proofsearch_core",
+ "rmcp",
+ "rusqlite",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "proofsearch_core"
+version = "0.3.27"
+dependencies = [
+ "chrono",
+ "hex",
+ "rusqlite",
+ "schemars 0.8.22",
+ "serde",
+ "serde_jcs",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

@@ -1,10 +1,10 @@
-# ChatDB — Verifier-Backed RL Environment for LLM-Driven Proof Search
+# LLM-Driven Proof Search Environment — a Verifier-Backed RL Environment
 
 [![Rust](https://img.shields.io/badge/Rust-2024_edition-orange)](https://www.rust-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-2025--11--25-blue)](https://modelcontextprotocol.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-ChatDB is a **synthetic reinforcement learning environment** where an external LLM agent attempts to prove mathematical theorems verified by the [Lean 4](https://lean-lang.org/) kernel. It exposes a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server so that any MCP-compatible host — Claude Desktop, Cline, Roo Code, a custom Python script, or a distributed training loop — can drive proof search episodes without ChatDB ever containing a single line of inference code.
+This is a **synthetic reinforcement learning environment** where an external LLM agent attempts to prove mathematical theorems verified by the [Lean 4](https://lean-lang.org/) kernel. It exposes a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server so that any MCP-compatible host — Claude Desktop, Cline, Roo Code, a custom Python script, or a distributed training loop — can drive proof search episodes without this environment ever containing a single line of inference code.
 
 ## Architecture
 
@@ -19,14 +19,14 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
                          │  Protocol version 2025-11-25
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     chatdb-mcp (MCP Server)                     │
+│                     proofsearch-mcp (MCP Server)                     │
 │                                                                 │
 │  86 tools · typed schemas · JSON Schema 2020-12                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     chatdb-core (Engine)                         │
+│                     proofsearch-core (Engine)                         │
 │                                                                 │
 │  Episode lifecycle · obligation scheduler · crash recovery       │
 │  Atomic step (CAS) · hash-chained trajectories · replay         │
@@ -42,9 +42,9 @@ ChatDB is a **synthetic reinforcement learning environment** where an external L
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Key invariant:** ChatDB contains **no provider SDKs, no API keys, no model routing, no inference calls, no streaming logic, and no provider retry code.** The external host owns all of that. ChatDB is the environment; the host is the policy.
+**Key invariant:** LLM-Driven Proof Search Environment contains **no provider SDKs, no API keys, no model routing, no inference calls, no streaming logic, and no provider retry code.** The external host owns all of that. LLM-Driven Proof Search Environment is the environment; the host is the policy.
 
-As of v0.3.x, ChatDB verifies more than single theorem bodies — see
+As of v0.3.x, LLM-Driven Proof Search Environment verifies more than single theorem bodies — see
 [`Solve` vs. `SubmitModule`](#solve-vs-submitmodule) below and
 [`docs/submit_module.md`](docs/submit_module.md) for the small local Lean
 development this environment now supports (helper defs/theorems, mutual
@@ -125,7 +125,7 @@ Antigravity, or a custom script — should call this first.
 | `task_submission_link` | Link a submission to a candidate_construction / empirical_result / verification_layer in its dossier as **provenance**. Even linking to a kernel_verified layer never makes the submission a proof |
 | `task_submission_update_status` | Set a submission's outcome (accepted/rejected/superseded/merged_into_dossier) without a review row. Rejected/superseded stay visible |
 | `distilled_strategy_add` | Store a reusable distilled strategy artifact (cheat_sheet, heuristic_rule, counterexample_pattern, construction_recipe, …). A distilled strategy is **not** a proof; trust_status tops out at human_reviewed |
-| `paper_ingest_create` | Ingest a paper/manuscript/proof-sketch/exposition as a reviewable source document (issue #27), optionally linked to a dossier. ChatDB does no OCR/LLM extraction — this records the host's **untrusted** extraction. Ingestion is not proof |
+| `paper_ingest_create` | Ingest a paper/manuscript/proof-sketch/exposition as a reviewable source document (issue #27), optionally linked to a dossier. LLM-Driven Proof Search Environment does no OCR/LLM extraction — this records the host's **untrusted** extraction. Ingestion is not proof |
 | `paper_ingest_extract_claims` | Append extracted nodes (main_theorem, definition, lemma, construction, reference, open_gap, …). Each node **requires** a non-empty `source_span` so it stays traceable to the source; also carries confidence/status labels. An extracted theorem is **not** statement-fidelity approval; a citation is **not** validation |
 | `paper_ingest_observe` | Read an ingested document with all extracted nodes and their trust labels. Read-only; nothing here is proof |
 | `paper_ingest_link_to_dossier` | Attach an ingested document (and its nodes) to a dossier, so it surfaces in `research_dossier_observe`'s ingestion bucket |
@@ -140,7 +140,7 @@ Antigravity, or a custom script — should call this first.
 | `mathlib_search_declarations` | Search the real pinned Mathlib source tree for declaration names containing a substring (beyond exact-name lookup). Advisory only |
 | `mathlib_search_local_artifacts` | Search this instance's own previously-verified theorem/def names for a substring match |
 | `formalization_plan_attach_librarian_result` | Attach a Mathlib librarian result to a formalization plan item, updating its coverage status |
-| `run_envelope_create` | Create a run envelope: host/model/mode (development/evaluation/benchmark/private_audit/public_report) and host-side cost accounting ChatDB cannot itself observe |
+| `run_envelope_create` | Create a run envelope: host/model/mode (development/evaluation/benchmark/private_audit/public_report) and host-side cost accounting LLM-Driven Proof Search Environment cannot itself observe |
 | `run_envelope_update` | Update a run envelope's host-side cost fields or notes after the fact. Append-only (issue #46): a cost correction appends an auditable observation, so the prior value stays queryable |
 | `run_envelope_cost_observation_add` | Append an auditable, append-only host-side cost observation to a run envelope; prior observations stay queryable via `run_envelope_observe` |
 | `run_envelope_attach_episode` | Tag an episode with a run envelope. Metadata only — never changes the episode's outcome/state |
@@ -354,7 +354,7 @@ target") — still not a proof. Every link (`dossier`, `research_node`,
 is optional, so a search can exist before any dossier, candidate, episode, or
 Lean proof. `counterexamples`, `failed`, and `timed_out` searches stay visible
 (a documented dead end is research output). `cost_summary`/`runtime_metadata`
-describe the *external* search run and are isolated from ChatDB's own cost
+describe the *external* search run and are isolated from LLM-Driven Proof Search Environment's own cost
 surfaces. `research_dossier_observe` surfaces empirical searches in their own
 bucket, separate from proofs, citations, assumptions, candidate constructions,
 expert reviews, semantic skeletons, exposition, and verification layers.
@@ -362,7 +362,7 @@ expert reviews, semantic skeletons, exposition, and verification layers.
 ### Paper/PDF ingestion (issue #27)
 
 The empirical math lab and research substrate become useful *before* a Lean
-formalization exists when ChatDB can turn a paper, manuscript, model-written
+formalization exists when LLM-Driven Proof Search Environment can turn a paper, manuscript, model-written
 proof sketch, or human exposition into a structured research workspace. Paper
 ingestion records an `ingested_documents` source plus its extracted
 `ingested_document_nodes` (abstract, main_theorem, definition, proposition,
@@ -371,7 +371,7 @@ each with a **required** non-empty `source_span` back to the paper text (so no
 node is untraceable), a `confidence`, and `formalization_status` /
 `citation_status` / `review_status` labels.
 
-**ChatDB does no OCR/LLM extraction itself** — no inference code lives here. The
+**LLM-Driven Proof Search Environment does no OCR/LLM extraction itself** — no inference code lives here. The
 host performs extraction and records the structured result, which is **untrusted
 by construction**. Ingestion is not verification, and the boundary is
 structural:
@@ -412,7 +412,7 @@ enforce this.
 ### Challenge / task / scoring substrate (issue #53)
 
 AI can generate far more mathematical material than humans can review as full
-proofs. Instead of giant opaque proof dumps, ChatDB channels contributions into
+proofs. Instead of giant opaque proof dumps, LLM-Driven Proof Search Environment channels contributions into
 small, bounded, typed, scored, reviewable units:
 
 ```text
@@ -563,11 +563,11 @@ Import manifests are immutable per problem_version and included in every observa
 
 ## Lean Checker Setup
 
-`CHATDB_LEAN_PROJECT_PATH` (default `./lean-checker`) must point at a [Lake](https://github.com/leanprover/lake) project that depends on [Mathlib](https://github.com/leanprover-community/mathlib4). Every problem version has its own immutable **import manifest** — the exact Mathlib modules its proofs (and its `SubmitModule` developments) are checked against, starting from a base of `Mathlib.Tactic.Ring` + `Mathlib.Tactic.NormNum` (`omega` comes with core Lean once any Mathlib module is imported) and extendable per-problem via `problem_create(problem_imports=[...])` — each additional module is validated with a real compile check before the problem is accepted, not merely a name-shape check (`crates/chatdb-core/src/lean/mod.rs`). This is not a single hardcoded import list baked into the gateway; see [Import manifests and "environmental scope collapse"](#import-manifests-and-environmental-scope-collapse) above. Setting up the Lake project itself is a one-time, multi-gigabyte task — do it once per machine, not per session:
+`PROOFSEARCH_LEAN_PROJECT_PATH` (default `./lean-checker`) must point at a [Lake](https://github.com/leanprover/lake) project that depends on [Mathlib](https://github.com/leanprover-community/mathlib4). Every problem version has its own immutable **import manifest** — the exact Mathlib modules its proofs (and its `SubmitModule` developments) are checked against, starting from a base of `Mathlib.Tactic.Ring` + `Mathlib.Tactic.NormNum` (`omega` comes with core Lean once any Mathlib module is imported) and extendable per-problem via `problem_create(problem_imports=[...])` — each additional module is validated with a real compile check before the problem is accepted, not merely a name-shape check (`crates/proofsearch-core/src/lean/mod.rs`). This is not a single hardcoded import list baked into the gateway; see [Import manifests and "environmental scope collapse"](#import-manifests-and-environmental-scope-collapse) above. Setting up the Lake project itself is a one-time, multi-gigabyte task — do it once per machine, not per session:
 
 ```powershell
 # 0. (Optional but recommended on machines with a small C: drive) Keep the multi-GB
-#    toolchain store off the system drive. Match this with CHATDB_ELAN_HOME in the
+#    toolchain store off the system drive. Match this with PROOFSEARCH_ELAN_HOME in the
 #    MCP server env so the server's Lean subprocesses resolve the same store.
 $env:ELAN_HOME = "F:\lean\elan"
 
@@ -588,7 +588,7 @@ theorem t : (1:Nat) + 1 = 2 := by norm_num
 lake env lean --json smoke.lean
 ```
 
-If step 3 prints no `"severity":"error"` JSON lines, the gateway is ready. Point `CHATDB_ELAN_BIN_PATH` at the `.elan/bin` directory containing `lake.exe`/`lean.exe` (default `~/.elan/bin`), and `CHATDB_LEAN_PROJECT_PATH` at the `lean-checker/` directory itself (the one containing `lakefile.toml`). The server checks both paths at startup and reports readiness via `environment_describe`'s `lean_gateway` field (`"ready"` or `"unavailable"`) — an `"unavailable"` warning is also printed to stderr on stdio startup.
+If step 3 prints no `"severity":"error"` JSON lines, the gateway is ready. Point `PROOFSEARCH_ELAN_BIN_PATH` at the `.elan/bin` directory containing `lake.exe`/`lean.exe` (default `~/.elan/bin`), and `PROOFSEARCH_LEAN_PROJECT_PATH` at the `lean-checker/` directory itself (the one containing `lakefile.toml`). The server checks both paths at startup and reports readiness via `environment_describe`'s `lean_gateway` field (`"ready"` or `"unavailable"`) — an `"unavailable"` warning is also printed to stderr on stdio startup.
 
 The gateway copies every kernel-passing proof into `lean-checker/LeanChecker/Verified/O_<id>.lean` and `lake build`s it so later obligations can `import` it as an approved dependency — keep that directory out of `.gitignore` exclusions if you want to inspect proved lemmas after a run.
 
@@ -603,8 +603,8 @@ cargo build --release
 ```
 
 The MCP server binary will be at:
-- Debug: `target/debug/chatdb-mcp.exe`
-- Release: `target/release/chatdb-mcp.exe`
+- Debug: `target/debug/proofsearch-mcp.exe`
+- Release: `target/release/proofsearch-mcp.exe`
 
 ## Run Tests
 
@@ -617,14 +617,14 @@ This runs the full test suite across both crates:
 | Test Suite | What It Verifies |
 |---|---|
 | `p0_migration_baseline` | Schema v0 → v1 migration safety |
-| `architecture_test` | No provider SDKs in `chatdb-core` |
+| `architecture_test` | No provider SDKs in `proofsearch-core` |
 | `phase5_lifecycle_tests` | Episode create / reset / advance lifecycle |
 | `phase6_attempts_tests` | Crash-recovery attempt state machine |
 | `phase8_step_tests` | Atomic CAS step with budget deduction |
 | `phase9_trajectories_tests` | Hash-chained recording and tamper detection |
 | `phase11_dataset_tests` | SFT/RL/DPO export and sanitization |
 | `phase12_conformance_tests` | Production path matches replay path |
-| `chatdb-mcp` lib tests | Full MCP client↔server play-throughs over duplex transport: tool listing, decompose→give_up, solve→certified (mock Lean gateway), solve→kernel_fail (non-terminal), fabricated-claim/stale-revision rejection, idempotent claim retry |
+| `proofsearch-mcp` lib tests | Full MCP client↔server play-throughs over duplex transport: tool listing, decompose→give_up, solve→certified (mock Lean gateway), solve→kernel_fail (non-terminal), fabricated-claim/stale-revision rejection, idempotent claim retry |
 
 ## Register as MCP Server
 
@@ -635,12 +635,12 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "chatdb": {
-      "command": "F:\\Github\\mnehmos.llm-driven-proof-search.environment\\target\\release\\chatdb-mcp.exe",
-      "args": ["chatdb.db"],
+    "proofsearch": {
+      "command": "F:\\Github\\mnehmos.llm-driven-proof-search.environment\\target\\release\\proofsearch-mcp.exe",
+      "args": ["proofsearch.db"],
       "env": {
-        "CHATDB_LEAN_PROJECT_PATH": "F:\\Github\\mnehmos.llm-driven-proof-search.environment\\lean-checker",
-        "CHATDB_ELAN_BIN_PATH": "C:\\Users\\mnehm\\.elan\\bin"
+        "PROOFSEARCH_LEAN_PROJECT_PATH": "F:\\Github\\mnehmos.llm-driven-proof-search.environment\\lean-checker",
+        "PROOFSEARCH_ELAN_BIN_PATH": "C:\\Users\\mnehm\\.elan\\bin"
       }
     }
   }
@@ -654,12 +654,12 @@ Add to your `mcp_settings.json`:
 ```json
 {
   "mcpServers": {
-    "chatdb": {
-      "command": "F:\\path\\to\\target\\release\\chatdb-mcp.exe",
-      "args": ["chatdb.db"],
+    "proofsearch": {
+      "command": "F:\\path\\to\\target\\release\\proofsearch-mcp.exe",
+      "args": ["proofsearch.db"],
       "env": {
-        "CHATDB_LEAN_PROJECT_PATH": "F:\\path\\to\\lean-checker",
-        "CHATDB_ELAN_BIN_PATH": "C:\\Users\\you\\.elan\\bin"
+        "PROOFSEARCH_LEAN_PROJECT_PATH": "F:\\path\\to\\lean-checker",
+        "PROOFSEARCH_ELAN_BIN_PATH": "C:\\Users\\you\\.elan\\bin"
       },
       "disabled": false
     }
@@ -672,14 +672,14 @@ Add to your `mcp_settings.json`:
 ChatGPT requires an HTTP endpoint speaking the MCP SSE transport. Start the server in `http` mode:
 
 ```bash
-chatdb-mcp.exe --transport http --port 8080 chatdb.db
+proofsearch-mcp.exe --transport http --port 8080 proofsearch.db
 ```
 
 Then, use a tunneling solution like the [OpenAI Secure MCP Tunnel](https://github.com/openai/tunnel-client) or `ngrok` to expose it, and register the resulting HTTPS URL in your OpenAI platform settings as a Server URL.
 
 ```bash
 # Example using OpenAI tunnel-client
-tunnel-client run --tunnel-id <YOUR_TUNNEL_ID> --mcp-command "chatdb-mcp.exe --transport http --port 8080 chatdb.db"
+tunnel-client run --tunnel-id <YOUR_TUNNEL_ID> --mcp-command "proofsearch-mcp.exe --transport http --port 8080 proofsearch.db"
 ```
 
 > **Known transport property:** some web/hosted MCP surfaces (observed with claude.ai web connectors)
@@ -694,12 +694,12 @@ tunnel-client run --tunnel-id <YOUR_TUNNEL_ID> --mcp-command "chatdb-mcp.exe --t
 import subprocess, json
 
 proc = subprocess.Popen(
-    ["target/release/chatdb-mcp.exe", "chatdb.db"],
+    ["target/release/proofsearch-mcp.exe", "proofsearch.db"],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     env={
-        "CHATDB_LEAN_PROJECT_PATH": "./lean-checker",
-        "CHATDB_ELAN_BIN_PATH": "~/.elan/bin",
+        "PROOFSEARCH_LEAN_PROJECT_PATH": "./lean-checker",
+        "PROOFSEARCH_ELAN_BIN_PATH": "~/.elan/bin",
     }
 )
 # Send JSON-RPC 2.0 messages over stdin/stdout
@@ -709,10 +709,10 @@ proc = subprocess.Popen(
 
 | Variable | Default | Description |
 |---|---|---|
-| `CHATDB_DB_PATH` | `chatdb.db` | SQLite database path (also settable as first CLI arg) |
-| `CHATDB_LEAN_PROJECT_PATH` | `./lean-checker` | Path to the Lean 4 project used for verification |
-| `CHATDB_ELAN_BIN_PATH` | `~/.elan/bin` | Path to the directory containing the `lake`/`lean` elan proxy binaries |
-| `CHATDB_ELAN_HOME` | *(unset)* | If set, exported as `ELAN_HOME` to Lean subprocesses — the elan **root** where `toolchains/` lives. Use this to keep multi-GB toolchains off the system drive (e.g. `F:\lean\elan`). When unset, elan uses the process env / `~/.elan` |
+| `PROOFSEARCH_DB_PATH` | `proofsearch.db` | SQLite database path (also settable as first CLI arg) |
+| `PROOFSEARCH_LEAN_PROJECT_PATH` | `./lean-checker` | Path to the Lean 4 project used for verification |
+| `PROOFSEARCH_ELAN_BIN_PATH` | `~/.elan/bin` | Path to the directory containing the `lake`/`lean` elan proxy binaries |
+| `PROOFSEARCH_ELAN_HOME` | *(unset)* | If set, exported as `ELAN_HOME` to Lean subprocesses — the elan **root** where `toolchains/` lives. Use this to keep multi-GB toolchains off the system drive (e.g. `F:\lean\elan`). When unset, elan uses the process env / `~/.elan` |
 
 ## Episode Lifecycle
 
@@ -732,7 +732,7 @@ episode_create(problem_version_id)
            ▼                                            │
     ┌──────────────┐                                    │
     │ Host calls   │                                    │
-    │ external LLM │  (outside ChatDB)                  │
+    │ external LLM │  (outside LLM-Driven Proof Search Environment)                  │
     └──────┬───────┘                                    │
            │                                            │
            ▼                                            │
@@ -766,7 +766,7 @@ episode_create(problem_version_id)
 
 ## Dataset Export
 
-ChatDB produces training-grade synthetic data:
+LLM-Driven Proof Search Environment produces training-grade synthetic data:
 
 - **SFT records** — (prompt, completion) pairs from committed steps
 - **RL tuples** — (s, a, r, s', terminated, truncated, info) from trajectory events
@@ -780,7 +780,7 @@ ChatDB produces training-grade synthetic data:
 ```
 ├── Cargo.toml                    # Workspace root
 ├── crates/
-│   ├── chatdb-core/              # Engine library (zero network dependencies)
+│   ├── proofsearch-core/              # Engine library (zero network dependencies)
 │   │   ├── src/
 │   │   │   ├── db/               # Schema, migrations, queries
 │   │   │   ├── lean/             # Sandboxed Lean 4 gateway
@@ -789,7 +789,7 @@ ChatDB produces training-grade synthetic data:
 │   │   │   ├── hashing.rs        # RFC 8785 JCS canonical hashing
 │   │   │   └── schema_export.rs  # JSON Schema 2020-12 generation
 │   │   └── tests/                # Integration test suites
-│   └── chatdb-mcp/               # MCP server (thin shell over core)
+│   └── proofsearch-mcp/               # MCP server (thin shell over core)
 │       ├── src/lib.rs            # 86 tools, rmcp 1.8.0, 2025-11-25 — ServerHandler + tests
 │       └── src/main.rs           # CLI: stdio/http transport wiring only
 ├── docs/
@@ -798,7 +798,7 @@ ChatDB produces training-grade synthetic data:
 │   ├── roadmap.md                # Capability levels (0-6) and what each requires
 │   └── submit_module.md          # SubmitModule / mutual recursion trust boundary and mechanics
 ├── fixtures/                     # Test fixtures
-└── CHATDB_SPEC.md                # Full specification document
+└── PROOFSEARCH_SPEC.md                # Full specification document
 ```
 
 ## Design Decisions
