@@ -22,6 +22,21 @@
 - Strengthens the corpus's `SierpinskiNumber.selfridge_78557` (single number,
   `native_decide`) to infinitude and to pure kernel verification.
 
-## Tracked-pipeline status
-Verified directly via `lake env lean`. MCP tracked submission is a viable next
-step (the proof is `decide`-based, no `native_decide` blocker) — pending.
+## Tracked-pipeline status — SUBMITTED (kernel_verified)
+
+Re-verified through the tracked MCP episode pipeline (dev-attested fidelity
+basis → `kernel_verified`):
+
+| field | value |
+|---|---|
+| problem_version_id | `d94c5069-3e35-4657-8b71-30bc3af375f4` |
+| root_statement (inlined) | `Set.Infinite {k : ℕ \| ¬ 2 ∣ k ∧ ∀ n, 1 < k * 2 ^ n + 1 ∧ ¬ (k * 2 ^ n + 1).Prime}` |
+| root_statement_hash | `6a5b10b0c93e7d8fd566b18d248d995ca66eecfca26c7c4fddbcc158bf32ad24` |
+| episode_id | `d5873431-9857-4e75-ac22-65e69cb40b02` |
+| outcome | **kernel_verified**, `root_proved`, pass@1 |
+| fidelity basis | `unsafe_dev_attestation` (attested → kernel_verified) |
+
+Submitted as one `solve`/`raw_lean_block` action with `sierpinski_of_congr`
+inlined as a local `have`; the two covering `decide`s were wrapped
+`set_option maxHeartbeats 4000000 in decide` (no theorem-level option needed),
+pre-validated locally before submission.
