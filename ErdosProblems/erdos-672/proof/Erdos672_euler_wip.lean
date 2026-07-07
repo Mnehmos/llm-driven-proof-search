@@ -61,18 +61,67 @@ theorem gcd_A_B_dvd_two {n d : ℕ} (hnd : n.Coprime d) :
   have hgcop : g.Coprime (d ^ 2) := Nat.Coprime.coprime_dvd_left hgA hAd2
   exact hgcop.dvd_of_dvd_mul_right hg2d2
 
-/-! ## Crux obligation (M3) — Fermat's `x⁴ − y⁴ ≠ z²`
+/-! ## Crux (M3) — Fermat's `x⁴ − y⁴ ≠ z²`, by infinite descent
 
-Not in Mathlib. To be proved by infinite descent on
-`PythagoreanTriple.coprime_classification`. This is the hard, multi-session part
-of the marathon. -/
+Not in Mathlib; built here on `PythagoreanTriple.coprime_classification`. The
+`b`-odd descent case (`a²b² = (m²+n²)(m²−n²) = m⁴−n⁴`, a strictly smaller
+instance) is **kernel-verified**; the `b`-even case (a second-level
+double-classification descent) is the remaining `sorry`. -/
 
-/-- **CRUX (open).** No positive integers with `x⁴ = y⁴ + z²`; equivalently
-`x⁴ − y⁴` is never a nonzero square. Fermat's "right triangle with square area"
-theorem. -/
-theorem noFourthPowerDiffSq (x y z : ℕ) (hx : 0 < x) (hy : 0 < y) (hxy : x.Coprime y) :
-    x ^ 4 ≠ y ^ 4 + z ^ 2 := by
-  sorry
+/-- **CRUX.** No nonzero `b, c` (with `IsCoprime a b`) satisfy `a⁴ = b⁴ + c²` —
+Fermat's "right triangle with square area" theorem, by infinite descent on
+`a.natAbs`. `b`-odd case done; `b`-even case remaining. -/
+theorem no_fermat_sub :
+    ∀ (a b c : ℤ), IsCoprime a b → b ≠ 0 → c ≠ 0 → a ^ 4 ≠ b ^ 4 + c ^ 2 := by
+  suffices H : ∀ (N : ℕ) (a b c : ℤ), a.natAbs = N → IsCoprime a b → b ≠ 0 → c ≠ 0 →
+      a ^ 4 ≠ b ^ 4 + c ^ 2 by
+    intro a b c; exact H a.natAbs a b c rfl
+  intro N
+  induction N using Nat.strong_induction_on with
+  | _ N ih =>
+    intro a b c hN hcop hb hc heq
+    have ha : a ≠ 0 := by
+      rintro rfl; apply hb
+      have hb4 : b ^ 4 ≤ 0 := by nlinarith [sq_nonneg c]
+      exact pow_eq_zero_iff (by norm_num) |>.mp (le_antisymm hb4 (by positivity))
+    have hbc : IsCoprime b c := by
+      have h1 : IsCoprime b (a ^ 4) := hcop.symm.pow_right
+      have h2 : IsCoprime b (c ^ 2) := by
+        have hce : c ^ 2 = a ^ 4 + b * (-b ^ 3) := by linear_combination -heq
+        rw [hce]; exact h1.add_mul_left_right (-b ^ 3)
+      exact (IsCoprime.pow_right_iff (by norm_num)).mp h2
+    have hpt : PythagoreanTriple (b ^ 2) c (a ^ 2) := by
+      show b ^ 2 * b ^ 2 + c * c = a ^ 2 * a ^ 2; nlinarith [heq]
+    have hgcd : (b ^ 2).gcd c = 1 := Int.isCoprime_iff_gcd_eq_one.mp hbc.pow_left
+    obtain ⟨m, n, hleg, hhyp, hmn, _hpar⟩ :=
+      PythagoreanTriple.coprime_classification.mp ⟨hpt, hgcd⟩
+    have ha2pos : 0 < a ^ 2 := by rcases lt_or_gt_of_ne ha with h | h <;> nlinarith
+    have ha2 : a ^ 2 = m ^ 2 + n ^ 2 := by
+      rcases hhyp with h | h
+      · exact h
+      · exfalso; nlinarith [sq_nonneg m, sq_nonneg n, h, ha2pos]
+    have hcopmn : IsCoprime m n := Int.isCoprime_iff_gcd_eq_one.mpr hmn
+    rcases hleg with ⟨hb2, hc2⟩ | ⟨hb2, hc2⟩
+    · -- b odd: b² = m²−n², c = 2mn  →  m⁴ = n⁴ + (ab)², a strictly smaller instance
+      have hn0 : n ≠ 0 := by rintro rfl; simp at hc2; exact hc hc2
+      have hkey : m ^ 4 = n ^ 4 + (a * b) ^ 2 := by
+        have h : (a * b) ^ 2 = (m ^ 2 + n ^ 2) * (m ^ 2 - n ^ 2) := by
+          rw [mul_pow, ← ha2, ← hb2]
+        rw [h]; ring
+      have hml : m.natAbs < N := by
+        rw [← hN]
+        have hn2 : 0 < n ^ 2 := by rcases lt_or_gt_of_ne hn0 with h | h <;> nlinarith
+        have hlt : m ^ 2 < a ^ 2 := by nlinarith [hn2, ha2]
+        have e1 : ((m.natAbs : ℤ)) ^ 2 = m ^ 2 := by rw [← Int.abs_eq_natAbs]; exact sq_abs m
+        have e2 : ((a.natAbs : ℤ)) ^ 2 = a ^ 2 := by rw [← Int.abs_eq_natAbs]; exact sq_abs a
+        have h1 : m.natAbs ^ 2 < a.natAbs ^ 2 := by
+          have : ((m.natAbs : ℤ)) ^ 2 < ((a.natAbs : ℤ)) ^ 2 := by rw [e1, e2]; exact hlt
+          exact_mod_cast this
+        by_contra hcon
+        exact absurd h1 (not_lt.mpr (Nat.pow_le_pow_left (not_lt.mp hcon) 2))
+      exact ih m.natAbs hml m n (a * b) rfl hcopmn hn0 (mul_ne_zero ha hb) hkey
+    · -- b even: b² = 2mn, c = m²−n². Second-level double-classification descent.
+      sorry
 
 /-! ## Arithmetic core (M4) — depends on the crux -/
 
