@@ -82,8 +82,21 @@ Closing this is exactly Fermat's **"no four squares in arithmetic progression"**
   NOTE (worked out this session): the whole thing may be cleaner stated over ℤ
   as `a^4 = b^4 + c^2` with a well-founded measure `a.natAbs`, since
   `PythagoreanTriple` is ℤ-native.
-- **M4 ☐** Reduce `euler_four_ap` to M3 via the case analysis (gcd(A,B)∈{1,2},
-  parity, `gcd(n,3)`), `exists_eq_pow_of_mul_eq_pow`, and the backbone identities.
+- **M4 ◐** Reduce `euler_four_ap` to the (now-proved) crux `no_fermat_sub`.
+  Structure worked out this session:
+  - `P = q²`, `A·B = q²` with `A = n(n+3d)`, `B = (n+d)(n+2d)`, `gcd(A,B) ∣ 2`.
+  - **Coprime case** (`gcd(A,B)=1`): `A, B` both squares (`exists_eq_pow_of_
+    mul_eq_pow`). With `gcd(n,3)=1`: `n, n+3d` coprime ⟹ both squares; `n+d,
+    n+2d` coprime ⟹ both squares. So `n=e², n+d=g², n+2d=h², n+3d=f²` — **four
+    squares in AP**. Parametrizes as `h² = 2g² − e²`, `f² = 3g² − 2e²`.
+  - **REMAINING sub-obligation**: connect "four squares in AP" to
+    `no_fermat_sub` (`x⁴−y⁴≠z²`). This is Fermat's classical "square-area right
+    triangle" reduction; the exact algebraic bridge (produce `a,b,c` with
+    `a⁴=b⁴+c²` from `e,g,h,f`) needs to be reconstructed carefully — do NOT guess
+    the identity. Also handle the `gcd(A,B)=2` and `gcd(n,3)=3` sub-cases (small
+    factor pulled out, reducing to the same core).
+  - Note: the crux `no_fermat_sub` is the hard 60% and is DONE; M4 is careful
+    classical case-algebra on top of it.
 - **M5 ☐** Full file 0/0; erdos-672 docs; commit; track via MCP.
 
 ## Recon notes (Mathlib pins, mathlib@360da6fa)
