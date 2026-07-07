@@ -24,6 +24,12 @@ ErdosProblems/
 │   ├── attack-plan.md      staged milestones toward the OPEN question
 │   ├── proof/
 │   └── trace/
+├── erdos-349/              Erdős Problem #349 (binary expansion lemma)
+│   ├── whitepaper.md
+│   ├── credit.md
+│   ├── evidence.md         includes the local-corpus-scan discovery method
+│   ├── proof/
+│   └── trace/
 └── shared/                 cross-problem infrastructure notes
     ├── corpus-validation.md
     ├── bounty-board.md
