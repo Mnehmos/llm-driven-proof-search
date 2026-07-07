@@ -2,6 +2,11 @@
 
 **Problem folder whitepaper — 2026-07-07**
 
+> **Status: Erdős Problem #1 is still OPEN.** This folder does not solve
+> it. It independently reproves a *weaker, already-known* bound from the
+> same corpus file and uses it to audit our verification pipeline — the
+> subject of this folder is the pipeline, not the problem.
+
 ## The problem
 
 [erdosproblems.com/1](https://www.erdosproblems.com/1): if `A ⊆ {1,…,N}` is

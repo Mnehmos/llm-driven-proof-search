@@ -36,11 +36,23 @@ lives in each problem's own `whitepaper.md`.
 
 ## Problems in this repository
 
-| Folder | Problem | Status | Result |
-|---|---|---|---|
-| [erdos-1/](erdos-1/whitepaper.md) | [#1](https://www.erdosproblems.com/1) — distinct subset sums | Open (calibration case study) | Weaker known bound independently proven; audit **MATCH** vs. proof on file |
-| [erdos-1052/](erdos-1052/whitepaper.md) | [#1052](https://www.erdosproblems.com/1052) — unitary perfect numbers | Open (finiteness); companion theorem proven | First standalone-reproducible proof that unitary perfect numbers are even; staged attack plan for the open question |
-| [erdos-349/](erdos-349/whitepaper.md) | [#349](https://www.erdosproblems.com/349) — additive completeness of `⌊tαⁿ⌋` | Open (general case); one lemma in the corpus's partial cluster proven | Binary-expansion theorem, found via a local corpus scan (not external research) and closed with a one-line Mathlib corollary |
+**None of these Erdős problems have been solved by us.** Every one is still
+listed OPEN on erdosproblems.com, unchanged. Each folder proves a
+*different, already-known* companion fact that happens to live in the same
+corpus file — a supporting lemma some human mathematician already solved
+(sometimes decades ago), which had no Lean proof yet. That distinction is
+the whole point of the two right-hand columns below: they never describe
+the same thing.
+
+| Folder | Erdős problem (upstream status) | What we actually proved |
+|---|---|---|
+| [erdos-1/](erdos-1/whitepaper.md) | [#1](https://www.erdosproblems.com/1) — distinct subset sums. **Open.** | Not #1 itself. A weaker, already-known bound from the same file, independently reproven; used as a calibration audit (**MATCH** vs. the proof already on file) — this folder is about testing our pipeline, not the problem. |
+| [erdos-1052/](erdos-1052/whitepaper.md) | [#1052](https://www.erdosproblems.com/1052) — are there finitely many unitary perfect numbers? **Open.** | Not #1052 itself. A companion theorem (Subbarao–Warren 1966: unitary perfect numbers are even) — known math since 1966, first standalone-reproducible *Lean* proof of it. A staged attack plan targets further companion facts, not the open question itself. |
+| [erdos-349/](erdos-349/whitepaper.md) | [#349](https://www.erdosproblems.com/349) — for which `(t,α)` is `⌊tαⁿ⌋` additively complete? **Open.** | Not #349 itself. The binary-expansion theorem (elementary, classical) — a supporting fact in the same file, explaining why `(1,2)` is a "good pair," closed with a one-line Mathlib corollary. |
+
+**In short: three infra/companion-lemma wins, zero Erdős problems closed.**
+If that ever changes for a genuinely open question, it will say so
+explicitly, in a table row of its own, not folded into this one.
 
 ## Cross-problem method: calibrate, then produce, then attack
 
