@@ -51,9 +51,10 @@ the same thing.
 | [erdos-349/](erdos-349/whitepaper.md) | [#349](https://www.erdosproblems.com/349) — for which `(t,α)` is `⌊tαⁿ⌋` additively complete? **Open.** | Not #349 itself. Seven already-known theorems from the same file: four named component lemmas plus the corpus's own `integer_isGoodPair_iff` itself — the complete, already-solved characterization of the *integer* sub-case — fully assembled and kernel-verified. |
 | [erdos-291/](erdos-291/whitepaper.md) | [#291](https://www.erdosproblems.com/291) — is `gcd(aₙ,Lₙ)=1` (harmonic-number denominators) infinitely often? **Open.** | Not #291 itself (part i, the `=1` question, is open). The **easy solved companion** (part ii): `gcd(aₙ,Lₙ) > 1` infinitely often (Steinerberger), via the explicit family `n=2·3ᵏ`. Corpus ships it `sorry`; kernel-verified here. |
 | [erdos-399/](erdos-399/whitepaper.md) | [#399](https://www.erdosproblems.com/399) — `n! = xᵏ ± yᵏ` solvable? **Resolved (Barfield, not by us).** | Not the headline. Cambie's **already-known companion**: `n! ≠ x⁴ + y⁴` for coprime `x,y` with `xy>1`, via a mod-8 fourth-power argument. Corpus ships it `sorry`; kernel-verified here. |
+| [erdos-1113/](erdos-1113/whitepaper.md) | [#1113](https://www.erdosproblems.com/1113) — Sierpiński numbers with no finite covering set? **Open.** | Not the open question. The classical **solved companion** (Sierpiński 1960): there are **infinitely many Sierpiński numbers**, via Selfridge's `{3,5,7,13,19,37,73}` covering generalized across `k ≡ 78557 (mod M)`. Corpus ships it `sorry`; kernel-verified here with **pure `decide`** (no `native_decide` — stronger than the corpus's own `selfridge_78557`). |
 
-**In short: five infra/companion-lemma wins (#1, #1052, #349, #291, #399), zero
-Erdős problems closed, one genuine sub-characterization fully assembled (#349's
+**In short: six infra/companion-lemma wins (#1, #1052, #349, #291, #399, #1113),
+zero Erdős problems closed, one genuine sub-characterization fully assembled (#349's
 integer case: `integer_isGoodPair_iff`, all four pieces plus the final iff,
 kernel-verified end to end).** If that ever changes for a genuinely open
 question, it will say so explicitly, in a table row of its own, not folded

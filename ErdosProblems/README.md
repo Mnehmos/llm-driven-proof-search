@@ -75,6 +75,13 @@ relevant) into a new `erdos-<N>/` folder and link it from the project index.
    `n! ≠ x⁴ + y⁴` for coprime `x,y` with `xy > 1` — corpus `sorry`,
    kernel-verified via a mod-8 fourth-power argument. The headline #399
    (does `n! = xᵏ ± yᵏ` have solutions) was already resolved by Barfield.
+6. **Infinitely many Sierpiński numbers** ([erdos-1113/](erdos-1113/whitepaper.md),
+   Sierpiński 1960): `Set.Infinite {k | IsSierpinskiNumber k}` — corpus `sorry`,
+   kernel-verified via Selfridge's `{3,5,7,13,19,37,73}` covering generalized to
+   the residue class `k ≡ 78557 (mod M)`. Uses **only kernel `decide`** (axioms
+   `[propext, Classical.choice, Quot.sound]`, no `native_decide`) — a stronger
+   guarantee than the corpus's own `selfridge_78557`. The open #1113 (a
+   Sierpiński number with no finite covering) is untouched.
 
 ## Verify it yourself
 
