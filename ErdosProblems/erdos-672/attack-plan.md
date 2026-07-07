@@ -49,10 +49,31 @@ Closing this is exactly Fermat's **"no four squares in arithmetic progression"**
 - **M2 ☑** Recon: Mathlib has `not_fermat_42` (`a⁴+b⁴≠c²`) and
   `PythagoreanTriple.coprime_classification` (primitive-triple parametrization),
   but **NOT** `x⁴−y⁴≠z²` nor "four squares in AP". The crux must be built.
-- **M3 ☐ (CRUX)** Prove `noFourthPowerDiffSq : ∀ x y z : ℤ, 0<x → 0<y → x⁴ − y⁴ ≠ z²`
-  (equivalently no 4 squares in AP), by infinite descent on `PythagoreanTriple.
-  coprime_classification`. ~150–200 lines; the hard, multi-session part. This is
-  Fermat's "right triangle with square area" theorem.
+- **M3 ☐ (CRUX)** Prove `noFourthPowerDiffSq`: no positive `a,b,c` with
+  `a⁴ = b⁴ + c²`, `gcd(a,b)=1`. By **strong induction on `a`** (infinite descent).
+  Precise descent (worked out — execute this next session):
+
+  `a⁴ = b⁴ + c²` ⟹ `(a²)² = (b²)² + c²` ⟹ `(b², c, a²)` is a Pythagorean triple.
+  It's primitive: if a prime `p ∣ b²` and `p ∣ c` then `p ∣ a⁴` so `p ∣ a`,
+  contradicting `gcd(a,b)=1`. Apply `PythagoreanTriple.coprime_classification`
+  (over ℤ; cast up). Two parity cases for the leg `b²`:
+  - **`b` odd** (`b² = m²−n²`, `c = 2mn`, `a² = m²+n²`, `gcd(m,n)=1`): then
+    `b² = m²−n²` ⟹ `a²·b² = (m²+n²)(m²−n²) = m⁴ − n⁴`, i.e.
+    **`m⁴ = n⁴ + (a·b)²`** — a *smaller* instance (`m ≤ a²` and in fact
+    `m < a` since `a² = m²+n² > m²`), `gcd(m,n)=1`. Descent ⇒ contradiction.
+  - **`b` even** (`b² = 2mn`, `a² = m²+n²`): `gcd(m,n)=1`, opposite parity, so
+    exactly one of `m,n` even; from `2mn = b²` and coprimality get `m = 2e²`,
+    `n = f²` (or swap), giving `a² = 4e⁴ + f⁴`, i.e. `(2e², f², a)` Pythagorean;
+    re-apply classification to descend (the standard second-level case).
+
+  Foundations available: `PythagoreanTriple.coprime_classification`,
+  `exists_eq_pow_of_mul_eq_pow` (for `2mn = b²` ⟹ each factor a square),
+  `Nat`/`Int` gcd + parity lemmas. ~120–180 lines. Do the `b`-odd descent first
+  (it's the clean one); the `b`-even case is the fiddly second level.
+
+  NOTE (worked out this session): the whole thing may be cleaner stated over ℤ
+  as `a^4 = b^4 + c^2` with a well-founded measure `a.natAbs`, since
+  `PythagoreanTriple` is ℤ-native.
 - **M4 ☐** Reduce `euler_four_ap` to M3 via the case analysis (gcd(A,B)∈{1,2},
   parity, `gcd(n,3)`), `exists_eq_pow_of_mul_eq_pow`, and the backbone identities.
 - **M5 ☐** Full file 0/0; erdos-672 docs; commit; track via MCP.
