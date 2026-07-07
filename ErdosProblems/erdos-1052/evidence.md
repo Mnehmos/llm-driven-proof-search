@@ -38,3 +38,39 @@ toolchain fails: it references the custom tactic `valid` (a
 formal-conjectures `Util` macro absent from Mathlib) and era-specific
 syntax. Grep evidence: `valid` occurs at lines 49 and 66 of the fork's
 `1052.lean`; no such tactic exists in the pinned Mathlib snapshot.
+
+## New work (this session) — local kernel verification, not yet tracked
+
+The four results described in [whitepaper.md](whitepaper.md) (`sigmaStar_mul_of_coprime`,
+`isUnitaryPerfect_87360`, `isUnitaryPerfect_wall`, `omega_odd_le_two_adic_add_one`)
+are verified by direct `lake env lean` compilation of
+[proof/Erdos1052_sigmaStar_and_bounds.lean](proof/Erdos1052_sigmaStar_and_bounds.lean)
+and the living copy `lean-checker/LeanChecker/Erdos/Erdos1052.lean` — both compile
+with zero errors (two harmless library-deprecation warnings only). These have **not**
+been submitted through the tracked MCP episode pipeline yet (no `benchmark_problem_id`,
+episode, or `result_id` to report) — that is the natural next step to bring them to
+the same audit standard as `even_of_isUnitaryPerfect` above.
+
+Reproduce:
+```bash
+cd lean-checker
+lake env lean LeanChecker/Erdos/Erdos1052.lean
+```
+
+## Literature verification (this session)
+
+Checked via web search, not assumed from memory:
+- Subbarao & Warren, "Unitary perfect numbers," Canad. Math. Bull. 9 (1966) — original
+  source for `even_of_isUnitaryPerfect`, confirmed to match our formalized statement.
+- Wall, "New unitary perfect numbers have at least nine odd components," Fibonacci
+  Quarterly 26(4) (1988) — confirmed genuine via MR 0967649 and Zbl 0657.10003
+  (legitimate Mathematical Reviews / Zentralblatt identifiers). Full proof text not
+  accessible (pre-digital print journal); only the theorem statement is used here,
+  not reproduced.
+- A 2026 arXiv preprint found while searching ("Bounded-box reductions in the
+  Subbarao–Warren problem," arXiv:2605.20475) was read in full and assessed as very
+  likely AI-fabricated: invented "3-Higgs prime" terminology beyond the real, much
+  narrower "Higgs prime" concept, zero independent footprint for the named author,
+  and suspiciously precise unverifiable computational claims (exact runtimes,
+  hyper-specific counts) wrapped around genuine citations (Zsigmondy, Ford, Wall,
+  Graham) as camouflage. Discarded; not used for anything in this folder.
