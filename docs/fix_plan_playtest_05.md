@@ -9,7 +9,7 @@ ASCII-only, no-imports payload, which ruled out anything about the request
 itself. `problem_list` and `lean_declaration_lookup` worked fine on the same
 running server.
 
-Reproducing directly against a copy of the actual live `chatdb.db` (not a
+Reproducing directly against a copy of the actual live `proofsearch.db` (not a
 fresh test database) surfaced the real error, which the generic MCP error
 message had been hiding:
 
@@ -19,7 +19,7 @@ CHECK constraint failed: fidelity_status IN ('pending', 'approved', 'revoked')
 
 ## Root cause
 
-`chatdb.db` was created before the proof-soundness-vs-statement-fidelity
+`proofsearch.db` was created before the proof-soundness-vs-statement-fidelity
 rewrite (`docs/fix_plan_playtest_02.md`), which changed the fidelity
 vocabulary from `('pending', 'approved', 'revoked')` to
 `('unreviewed', 'attested', 'verified', 'rejected', 'revoked')` and added
@@ -83,7 +83,7 @@ the only choice that keeps every existing row valid under the new invariants.
   duplication, no failure), and a fresh database accepts the current
   vocabulary directly.
 - `cargo test --workspace`: 35 tests / 15 suites, all passing.
-- Live check: copied the actual `chatdb.db` from the ongoing session (16 real
+- Live check: copied the actual `proofsearch.db` from the ongoing session (16 real
   rows, including an in-progress IMO 2025 P3 attempt), ran it through a
   debug build with the fix. Every pre-existing row's `fidelity_status`
   correctly shows `verified` (was `approved`), row count and content
@@ -92,13 +92,13 @@ the only choice that keeps every existing row valid under the new invariants.
 
 ## Not yet done
 
-The actual running server process for this session's live `chatdb.db` was
+The actual running server process for this session's live `proofsearch.db` was
 started from the release binary before this fix was written, and Windows
 holds an exclusive lock on a running `.exe`, so the release binary could not
 be rebuilt in place while that process is live. The fix is verified correct
 against a copy of the real database via a debug build; the running process
 needs to be restarted (picking up a rebuilt release binary) before the fix
-takes effect against the actual `chatdb.db` the live session is using. The
+takes effect against the actual `proofsearch.db` the live session is using. The
 migration runs automatically and safely on that next startup — no manual
 database surgery is needed.
 

@@ -50,7 +50,7 @@ only on the composite `certified` outcome — a prover that faithfully proves a
 bad formalization is never rewarded as if it solved the real problem, but it
 also isn't penalized for someone else's bad formalization.
 
-**MCP surface** (`chatdb-mcp/src/lib.rs`):
+**MCP surface** (`proofsearch-mcp/src/lib.rs`):
 - `problem_create`'s `approve: bool` bypass is gone. Replaced with
   `unsafe_dev_attestation: bool` — honestly named, sets `fidelity_status='attested'`
   (proving allowed, `certified` never reachable), never silently implies review.
@@ -76,7 +76,7 @@ also isn't penalized for someone else's bad formalization.
   FIDELITY NOT YET VERIFIED`, and an explicitly rejected one states plainly that
   the proof does not certify the source claim.
 
-**Dataset export** (`chatdb-core/orchestrator/dataset.rs`): fixed `export_rl`
+**Dataset export** (`proofsearch-core/orchestrator/dataset.rs`): fixed `export_rl`
 querying the nonexistent `step_committed` event type instead of the runtime's
 actual `action_committed` — RL exports were silently empty for every MCP-driven
 episode. (Reward/terminated/truncated fields in that payload remain a

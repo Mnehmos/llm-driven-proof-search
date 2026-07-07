@@ -8,7 +8,7 @@ where finite brute force is impossible *in principle*.
 `ladder.json` is the checked-in fixture; `dossiers/rung_N_*.md` document each
 rung. The ladder is driven through the real `problem_create → episode_create →
 attempt_claim → episode_step` loop by the tests in
-`crates/chatdb-mcp/src/lib.rs` (`test_serious_math_ladder_*`).
+`crates/proofsearch-mcp/src/lib.rs` (`test_serious_math_ladder_*`).
 
 ## Trust boundary
 
@@ -27,7 +27,7 @@ genuine mathematical validity is what the optional real-Lean gated test checks �
 the same honesty the PutnamBench smoke fixture applies to its canned proofs.
 
 The `native_decide` ban on the module path is a deterministic policy pre-filter
-(`crates/chatdb-core/src/lean/module.rs`, `PROHIBITED_ANYWHERE_TOKENS`), not a
+(`crates/proofsearch-core/src/lean/module.rs`, `PROHIBITED_ANYWHERE_TOKENS`), not a
 metadata-driven judgement. Rungs with `native_decide_allowed=false` carry a
 `native_decide_probe` the tests submit to prove the ban is *enforced*, not
 merely declared.

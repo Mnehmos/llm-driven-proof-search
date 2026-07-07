@@ -28,6 +28,6 @@
   provides the underlying library.
 - **Verification infrastructure.** The LLM-Driven Proof Search Environment
   (this repository): hash-pinned statements, tracked episodes, kernel-gated
-  outcomes. (Note: proof snapshots contain verbatim `ChatDB.P_*` namespace
+  outcomes. (Note: proof snapshots contain verbatim `ProofSearch.P_*` namespace
   strings — legacy internal identifiers preserved byte-exactly because the
   verification hashes cover them.)

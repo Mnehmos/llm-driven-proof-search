@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-06 (session started from the 2026-07-05 rebuild; filename kept per plan)
 **Toolchain:** `leanprover/lean4:v4.32.0-rc1` + `mathlib@360da6fa66c1273b76b6b2d8c5666fd5ac2e3b56` (pinned)
-**Harness:** Claude Code (claude-fable-5) as the *MCP host and prover*, driving `chatdb-mcp` v0.3.23 directly through `mcp__chatdb-proof-search__*` tool calls — no putnam_runner, no bash driving of the server. Every proof attempt went through the tracked `episode_create → episode_observe → attempt_claim → episode_step` loop against the real `RealLeanGateway`.
+**Harness:** Claude Code (claude-fable-5) as the *MCP host and prover*, driving `proofsearch-mcp` v0.3.23 directly through `mcp__proofsearch__*` tool calls — no putnam_runner, no bash driving of the server. Every proof attempt went through the tracked `episode_create → episode_observe → attempt_claim → episode_step` loop against the real `RealLeanGateway`.
 **Fidelity mode:** per-problem `problem_submit_fidelity_review` (see finding 3 — the prescribed `problem_record_benchmark_alignment` was unavailable because the suite import left `trusted_canonical_source=0`). No `unsafe_dev_attestation` anywhere. Successes therefore reach `certified` rather than last run's `kernel_verified` ceiling — with the caveat that the reviewer was the same LLM host (see "Honest calibration").
 **Run:** `benchmark_run_observe` run id `8942c216-9daa-4423-a8bb-82eb4400c32d`, envelope `55122f8e-8513-4136-ab25-28bae7f7f924`, `solve_mode=submit_module_allowed`, `attempt_budget=4`.
 
@@ -34,10 +34,10 @@ The 2026-07-04 baseline (`docs/playtests/2026-07-04-putnambench-first-attempt.md
 ## Environment findings (ordered by severity)
 
 ### 1. The server never advertised the `tools` capability — invisible to every spec-compliant MCP host (fixed this session)
-`ServerHandler::get_info` returned `ServerCapabilities::default()` (i.e. `"capabilities": {}`), so Claude Code — correctly following the MCP spec — never called `tools/list` and the server registered zero tools. Every prior playtest used in-house clients that call `tools/list` unconditionally, which is why this was never seen. One-line fix applied and verified this session ([crates/chatdb-mcp/src/lib.rs](../../crates/chatdb-mcp/src/lib.rs): `ServerCapabilities::builder().enable_tools().build()`); uncommitted in the working tree.
+`ServerHandler::get_info` returned `ServerCapabilities::default()` (i.e. `"capabilities": {}`), so Claude Code — correctly following the MCP spec — never called `tools/list` and the server registered zero tools. Every prior playtest used in-house clients that call `tools/list` unconditionally, which is why this was never seen. One-line fix applied and verified this session ([crates/proofsearch-mcp/src/lib.rs](../../crates/proofsearch-mcp/src/lib.rs): `ServerCapabilities::builder().enable_tools().build()`); uncommitted in the working tree.
 
 ### 2. Registered benchmark statements do not elaborate in the assembled-module context (scoped notation / open-context loss)
-Upstream PutnamBench files carry `open Polynomial Real EuclideanGeometry Metric MeasureTheory ...` preambles. The importer keeps only the statement text; `assemble_module` emits imports + `namespace ChatDB.P_<id>` with **no `open` lines**. Consequences observed live:
+Upstream PutnamBench files carry `open Polynomial Real EuclideanGeometry Metric MeasureTheory ...` preambles. The importer keeps only the statement text; `assemble_module` emits imports + `namespace ProofSearch.P_<id>` with **no `open` lines**. Consequences observed live:
 - `ℤ[X]` (scoped in `Polynomial`) parses as the *global `getElem` indexing notation* — the kernel error for 2016_a1 shows `⊢ ?m.29 j ℤ X` with `X : ?m.1` auto-bound.
 - Unknown lowercase identifiers (`derivative`) get **auto-bound as implicit arguments** — the statement can elaborate to something entirely different from the intended mathematics without failing. This is worse than a parse error.
 - `∠` and `π` are unparseable tokens (1965_a1).

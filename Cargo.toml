@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/chatdb-core",
-    "crates/chatdb-mcp"
+    "crates/proofsearch-core",
+    "crates/proofsearch-mcp"
 ]
 
 [workspace.dependencies]

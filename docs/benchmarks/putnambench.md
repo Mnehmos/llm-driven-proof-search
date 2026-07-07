@@ -5,19 +5,19 @@ Paper: https://arxiv.org/abs/2407.11214
 
 PutnamBench is a set of hand-built Lean 4 (also Isabelle, and a Coq/Rocq
 subset) formalizations of Putnam competition problems — 1692+ formalizations
-of 640 theorems at time of the paper. It sits between ChatDB's own toy
+of 640 theorems at time of the paper. It sits between LLM-Driven Proof Search Environment's own toy
 proof-development tests and genuinely hard, research-grade mathematics:
 undergraduate-competition-level statements, real Mathlib-scale imports, and
 (per the paper) a track record of existing systems solving only a handful.
 That combination — hard enough to be a real yardstick, small enough to
 attempt with a modest budget — is why it's the first external benchmark
-suite ChatDB targets for Level 3/4 readiness.
+suite LLM-Driven Proof Search Environment targets for Level 3/4 readiness.
 
 ## Harness design (issue #28)
 
-### Why this fits ChatDB's existing pieces
+### Why this fits LLM-Driven Proof Search Environment's existing pieces
 
-ChatDB already has the primitives PutnamBench needs: real Lean kernel
+LLM-Driven Proof Search Environment already has the primitives PutnamBench needs: real Lean kernel
 verification, immutable per-problem import manifests, `Solve` (one-theorem
 attempts) and `SubmitModule` (defs + helper theorems + root theorem),
 proof/fidelity separation, module export/replay, and trajectory export. The
@@ -28,7 +28,7 @@ problems, not to add new proving machinery.
 
 Every PutnamBench concept has a home in the schema shipped in v0.3.7:
 
-| PutnamBench concept | ChatDB table/column |
+| PutnamBench concept | LLM-Driven Proof Search Environment table/column |
 |---|---|
 | the benchmark itself | `benchmark_suites` row (name="PutnamBench", `upstream_url`, `upstream_commit` = the PutnamBench repo commit this import was taken from) |
 | one Putnam problem's Lean formalization | `benchmark_problems` row (`upstream_problem_id` = PutnamBench's own problem id, e.g. `putnam_1988_a1`; `root_formal_statement` + server-computed `root_statement_hash`; `import_manifest_json` = the Lean imports the formalization needs) |
@@ -40,8 +40,8 @@ are about *populating and driving* this schema, not designing new schema.
 
 ### Import shape (#29 — shipped)
 
-Built as `crates/chatdb-mcp/examples/import_putnambench.rs`, with the
-parsing logic in the library at `chatdb_proof_core::putnambench` (shared
+Built as `crates/proofsearch-mcp/examples/import_putnambench.rs`, with the
+parsing logic in the library at `proofsearch_core::putnambench` (shared
 with the future #31 runner — see below).
 
 ```
@@ -80,7 +80,7 @@ no notion of Lean comment syntax. A first version of this importer mirrored
 that regex faithfully and would have registered the answer key directly
 into `benchmark_problems.root_formal_statement` for 356/672 files — handing
 any prover reading it the answer for free, the opposite of what a benchmark
-import should do. Fixed: `chatdb_proof_core::putnambench::parse_problem_file`
+import should do. Fixed: `proofsearch_core::putnambench::parse_problem_file`
 strips both `--` line comments and `/- ... -/` block/doc comments before
 storing the statement, verified against all 672 real files with zero
 comment leakage (one apparent leak on manual spot-check turned out to be a
@@ -91,7 +91,7 @@ comment). See `test_strips_answer_key_comment_and_docstring_from_solution_abbrev
 Deliberately **not** attempted by the importer: parsing or reusing
 PutnamBench's own (always `sorry`-only) proof placeholders as anything but a
 statement source, and importing the non-Lean (Isabelle/Coq) formalizations —
-ChatDB only verifies Lean. Files that don't match the expected shape are
+LLM-Driven Proof Search Environment only verifies Lean. Files that don't match the expected shape are
 skipped and reported, never silently mis-registered (none of the 672 real
 files were actually skipped, but the importer is written to handle a future
 PutnamBench update that adds an unexpected shape without crashing or
@@ -123,16 +123,16 @@ shipped, both fixed and regression-tested against the real corpus:
 ### Evaluation protocol / run manifest
 
 Everything the issue's proposed protocol asks for either already has a
-column or is intentionally out of ChatDB's scope:
+column or is intentionally out of LLM-Driven Proof Search Environment's scope:
 
 | Field | Where it lives |
 |---|---|
 | PutnamBench commit hash | `benchmark_suites.upstream_commit` |
 | Lean/Mathlib toolchain hash | `benchmark_runs.lean_version` / `.mathlib_commit` (server-detected) |
-| ChatDB commit hash | `benchmark_runs.chatdb_commit` (caller-supplied — the runner should stamp its own build's commit) |
+| LLM-Driven Proof Search Environment commit hash | `benchmark_runs.proofsearch_commit` (caller-supplied — the runner should stamp its own build's commit) |
 | attempt/wall-clock/Lean-time budgets | `benchmark_runs.attempt_budget` / `.wall_clock_budget_ms` / `.lean_timeout_ms` |
 | whether SubmitModule / Draft+planning / librarian were allowed | `benchmark_runs.solve_mode` + `.allowed_tools_json` |
-| model/agent identity outside ChatDB, prompt template hash | **Not a ChatDB column.** ChatDB verifies proofs; it does not run or template a model. This is the calling agent/host's own record-keeping (e.g. in its own logs, or as free text in `run_envelopes.notes` if host-side attribution is wanted) — deliberately not duplicated into the benchmark schema. |
+| model/agent identity outside LLM-Driven Proof Search Environment, prompt template hash | **Not a LLM-Driven Proof Search Environment column.** LLM-Driven Proof Search Environment verifies proofs; it does not run or template a model. This is the calling agent/host's own record-keeping (e.g. in its own logs, or as free text in `run_envelopes.notes` if host-side attribution is wanted) — deliberately not duplicated into the benchmark schema. |
 
 ### Metrics
 
@@ -152,8 +152,8 @@ exists to generate real runs to aggregate over.
 
 ### The runner (#31 — shipped)
 
-Built as `crates/chatdb-mcp/examples/putnam_runner.rs`. Per issue #36's
-invariant ("a proof attempt that bypasses the ledger is not part of ChatDB
+Built as `crates/proofsearch-mcp/examples/putnam_runner.rs`. Per issue #36's
+invariant ("a proof attempt that bypasses the ledger is not part of LLM-Driven Proof Search Environment
 evidence"), its proof-search loop for each problem is exactly:
 `episode_create` → `attempt_claim` → `episode_step` (chained purely off each
 response's own `next_action_request`, up to `attempt_budget`, stopping at
@@ -162,7 +162,7 @@ budget is exhausted without a terminal outcome → `benchmark_result_record`.
 It never calls `RealLeanGateway`/`LeanGateway::verify_exact`/`verify_module`
 directly.
 
-The runner does not generate candidate proofs itself — ChatDB has no
+The runner does not generate candidate proofs itself — LLM-Driven Proof Search Environment has no
 embedded model (see `readme_first`). Candidate `proof_term`/`answer_value`
 pairs come from a caller-supplied "attempts plan" JSON file, tried in order
 per problem. `solve_mode=solve_only` skips (status `skipped`) any problem
@@ -172,7 +172,7 @@ needing `SubmitModule` (i.e. one with a solution abbrev).
 declaration syntax (`theorem NAME (a : A) (b : B) : C`) is not itself a
 valid standalone Lean type expression — `problem_create`/`SubmitModule`
 require a single self-contained type (`∀ (a : A) (b : B), C`, Lean 4's own
-desugaring). `chatdb_proof_core::putnambench::to_pi_form` performs this
+desugaring). `proofsearch_core::putnambench::to_pi_form` performs this
 conversion (bracket-depth-aware, not a naive first-colon split — binders
 themselves contain colons and nest brackets arbitrarily deep). Verified
 against the real 672-file corpus: 670/672 (99.7%) convert successfully; the
@@ -232,8 +232,8 @@ before shipping:
 
 `benchmarks/putnambench_smoke.json` — a small, checked-in fixture file (not
 fetched from a live PutnamBench clone) — embedded at compile time via
-`include_str!` in `crates/chatdb-mcp/src/lib.rs`, so the smoke tests run in
-every normal `cargo test` with no `CHATDB_PUTNAM_BENCH_PATH` needed. Two
+`include_str!` in `crates/proofsearch-mcp/src/lib.rs`, so the smoke tests run in
+every normal `cargo test` with no `PROOFSEARCH_PUTNAM_BENCH_PATH` needed. Two
 kinds of fixture, per the acceptance criteria:
 
 - **`import_fixtures`** (5 real, embedded PutnamBench problems — commit
@@ -278,7 +278,7 @@ of the normal `cargo test` suite.
 
 **The product principle, restated after real design direction (v0.3.20):**
 metrics first, money second. Time/count/byte fields are real measurements
-ChatDB attempts honestly regardless of whether any money is involved;
+LLM-Driven Proof Search Environment attempts honestly regardless of whether any money is involved;
 `*_cost_micros` fields are monetary and stay `null` unless real money data
 (a provider receipt, a local meter, a self-report, or a rate card) actually
 exists. `null` always means "not measured" — never `0`. `benchmark_run_observe`'s
@@ -304,7 +304,7 @@ response includes a `cost_summary` object with this full shape:
   "estimated_cost_micros": null,
   "unknown_cost_present": true,
   "cost_completeness": "reported_total_not_exact",
-  "not_yet_instrumented": "mcp_side_cost_micros/storage_export_cost_micros are not yet instrumented — never reported as zero; there is no pricing/rate-card decision yet for either surface. mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms are now real, measured metrics — null only when this run genuinely has no correlated data yet, never fabricated as zero. model_call_reported_cost_micros is real per-attempt data from model_call_leases but always self-reported (attested), never independently measured by ChatDB."
+  "not_yet_instrumented": "mcp_side_cost_micros/storage_export_cost_micros are not yet instrumented — never reported as zero; there is no pricing/rate-card decision yet for either surface. mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms are now real, measured metrics — null only when this run genuinely has no correlated data yet, never fabricated as zero. model_call_reported_cost_micros is real per-attempt data from model_call_leases but always self-reported (attested), never independently measured by LLM-Driven Proof Search Environment."
 }
 ```
 
@@ -321,9 +321,9 @@ response includes a `cost_summary` object with this full shape:
   contributes no actual cost. Settled actual costs are ALWAYS reported at
   `"attested"` confidence (`model_call_cost_confidence`), since they are entirely
   self-reported by the runner/host and never independently measured or
-  receipted by ChatDB — they are never merged into an exact total.
+  receipted by LLM-Driven Proof Search Environment — they are never merged into an exact total.
   `mcp_side_cost_micros`/`storage_export_cost_micros` stay `null` until a real
-  meter or an explicit rate card exists for ChatDB's own compute/storage —
+  meter or an explicit rate card exists for LLM-Driven Proof Search Environment's own compute/storage —
   there is none today, and these two fields are the ONLY ones this policy
   never converts a metric into a dollar figure for (see "MCP/storage
   observability" below — the metrics ARE real now, the prices are not).
@@ -424,7 +424,7 @@ fields and renamed from the original single `verifier_cost_ms`):
 `RealLeanGateway::verify_exact`/`verify_module` already computed
 `wall_time_ms`/`lean_cpu_time_ms` on every real verification call (see
 `LeanVerificationResult`), but `attempt_finalize` in
-`crates/chatdb-core/src/orchestrator/step.rs` originally discarded everything
+`crates/proofsearch-core/src/orchestrator/step.rs` originally discarded everything
 except the bare `LeanVerificationOutcome` enum before this data ever reached
 anywhere persistent. This turned out to need no signature change at all —
 `attempt_finalize` already receives the full `GatewayResponse` parameter, so
@@ -445,7 +445,7 @@ fabricated) and covered by
 regression test**: calling `episode_step` for the SAME `(episode_id,
 action_attempt_id)` a `model_call_leases` row is reserved against
 auto-settles it, using that step's OWN `cost_micros` argument as
-`actual_cost_micros` (`crates/chatdb-mcp/src/lib.rs`'s `episode_step`
+`actual_cost_micros` (`crates/proofsearch-mcp/src/lib.rs`'s `episode_step`
 handler, a pre-existing, deliberate behavior, not a bug) — a lease is not
 guaranteed to stay `'reserved'` until an explicit `model_call_settle` call;
 the very next `episode_step` on that attempt settles it implicitly. It only
@@ -518,7 +518,7 @@ when no `episode_id` is given at all, `benchmark_fidelity_basis` is `"none"`
 at `benchmark_suite_create` time via the same param name — an honest,
 **self-declared** trust assertion the caller makes, exactly like
 `unsafe_dev_attestation`/`host_cost_confidence` elsewhere in this codebase.
-ChatDB never independently verifies it. There is no tool that updates an
+LLM-Driven Proof Search Environment never independently verifies it. There is no tool that updates an
 existing suite's `trusted_canonical_source` after creation — an untrusted
 suite can never be retroactively "laundered" into looking trusted. Set it
 true only for a suite you can vouch is a real, externally-curated corpus
@@ -528,7 +528,7 @@ sufficient fidelity evidence; leave it false for an arbitrary custom suite.
 **Public-facing wording matters here**: describe a
 `canonical_statement_hash_match` result as e.g. "matched the suite's own
 canonical formal statement" — never as "statement-fidelity certified by
-ChatDB." ChatDB performed a hash comparison against a self-declared-trusted
+LLM-Driven Proof Search Environment." LLM-Driven Proof Search Environment performed a hash comparison against a self-declared-trusted
 suite's catalog text in that case, not an independent fidelity review.
 
 Verified against the real Lean 4.32.0-rc1 + Mathlib toolchain via
@@ -620,7 +620,7 @@ and
 ## Tracked vs. untracked verifier use (issue #36)
 
 **The product principle:** a proof attempt that bypasses the episode ledger
-is not part of ChatDB evidence. A benchmark run must not test candidate
+is not part of LLM-Driven Proof Search Environment evidence. A benchmark run must not test candidate
 proofs through a side-channel checker and then submit only the winning one
 — that loses every failed attempt, the verifier diagnostics, and the cost
 signals, and turns the environment into a trophy case instead of a
@@ -635,7 +635,7 @@ it succeeds or fails.
 **Untracked path**: calling `LeanGateway::verify_exact`/`verify_module` (or
 constructing a `RealLeanGateway` directly) outside that flow. This is a
 legitimate *internal* primitive — the orchestrator's own
-`attempt_prepare`/`attempt_finalize` split (`crates/chatdb-core/src/orchestrator/step.rs`)
+`attempt_prepare`/`attempt_finalize` split (`crates/proofsearch-core/src/orchestrator/step.rs`)
 uses it to actually reach Lean, and unit tests/replay internals use it in
 isolation deliberately — but it is never exposed as a callable MCP tool. A
 client (including `putnam_runner.rs`) has no way to invoke it directly even
@@ -694,7 +694,7 @@ submissions should be accompanied by a preprint or publication, coordinated
 with the maintainers, not published as a side effect of running an
 evaluation.
 
-ChatDB's benchmark-tracking tools (`benchmark_suite_create`,
+LLM-Driven Proof Search Environment's benchmark-tracking tools (`benchmark_suite_create`,
 `benchmark_problem_register`, `benchmark_run_create`, `benchmark_result_record`,
 `benchmark_run_observe` — see the README's MCP Tools table) and its
 `proof_export` tool must make it hard to *accidentally* violate that policy,
@@ -703,7 +703,7 @@ maintainer-coordinated submissions.
 
 ## Contamination policy, as enforced in code
 
-`proof_export`'s `format` (see `ExportMode` in `crates/chatdb-mcp/src/lib.rs`)
+`proof_export`'s `format` (see `ExportMode` in `crates/proofsearch-mcp/src/lib.rs`)
 has two tiers:
 
 - **Never exposes the completed proof body, regardless of any flag:**
@@ -721,7 +721,7 @@ has two tiers:
   modes requires `allow_putnambench_proof_export=true`. Without it, the call
   is rejected with an error pointing back to this document. This is a
   deliberate speed bump, not a technical impossibility — the same discipline
-  used everywhere else in ChatDB: make the safe path the default path.
+  used everywhere else in LLM-Driven Proof Search Environment: make the safe path the default path.
 
 So: full proof artifacts (`markdown`/`lean`/`audit_archive`/`paper_dossier`)
 are private-by-default for any problem tied to a benchmark suite; a public or

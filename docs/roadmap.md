@@ -1,6 +1,6 @@
-# ChatDB capability levels and roadmap
+# LLM-Driven Proof Search Environment capability levels and roadmap
 
-This document defines what ChatDB currently does, what it does not yet do, and
+This document defines what LLM-Driven Proof Search Environment currently does, what it does not yet do, and
 what has to be built next — in that order, not the reverse. Each level is
 defined operationally: by required artifacts, required tools, and a concrete
 test of whether the level has actually been reached, not by aspiration.
@@ -46,7 +46,7 @@ fidelity tracked as independent claims (`kernel_verified` vs `certified`).
 `proof_export`.
 
 **Status:** Done. This is the environment described in the original
-`CHATDB_SPEC.md` two-phase-commit / hash-chain design.
+`PROOFSEARCH_SPEC.md` two-phase-commit / hash-chain design.
 
 **Does NOT count:** proving a theorem outside the episode/attempt state
 machine (e.g. a bare Lean file with no attempt record, no CAS check, no
@@ -61,7 +61,7 @@ including declarations that must forward-reference each other.
 
 **Required artifacts:** `episode_verified_modules`,
 `episode_verified_module_items`, `AssembledModule`/`AssembledItem` (see
-`crates/chatdb-core/src/lean/module.rs`).
+`crates/proofsearch-core/src/lean/module.rs`).
 
 **Required tools/actions:** `SubmitModule` action
 (`LeanModuleItem::Def`/`Theorem`/`MutualGroup`), staged (all-or-nothing)
@@ -237,7 +237,7 @@ last):
    obligation counts, and suite/problem identification if benchmark-linked),
    `audit_archive` (everything `markdown` has, labeled private),
    `training_export` (structured JSON records — wires up the existing but
-   previously-unused `chatdb_proof_core::orchestrator::dataset::export_rl`,
+   previously-unused `proofsearch_core::orchestrator::dataset::export_rl`,
    secret-scrubbed via the newly-public `trajectories::scrub_value`),
    `paper_dossier` (adds a deterministic, templated narrative section — not
    model-generated, this function has no model access), and
@@ -252,7 +252,7 @@ last):
 9. **#28 — PutnamBench harness design doc.** ✅ Shipped, docs-only, no
    version bump. See `docs/benchmarks/putnambench.md`.
 10. **#29 — PutnamBench importer.** ✅ Shipped in v0.3.9. A new
-    `chatdb_proof_core::putnambench` module parses PutnamBench's Lean 4
+    `proofsearch_core::putnambench` module parses PutnamBench's Lean 4
     problem files (shared with the future #31 runner, which needs the same
     `has_solution_abbrev` classification), plus a new
     `examples/import_putnambench.rs` batch-import binary, following the same
@@ -264,7 +264,7 @@ last):
     own convention for its ~350 "find the answer" problems is an
     `abbrev X_solution := sorry` immediately followed by the actual answer
     as a `--` comment — PutnamBench's own extractor captures this verbatim;
-    ChatDB's importer strips it (and doc-comments) so `root_formal_statement`
+    LLM-Driven Proof Search Environment's importer strips it (and doc-comments) so `root_formal_statement`
     never leaks the answer key. An adversarial review then caught two more
     real bugs: a colon-adjacent theorem line (`theorem NAME:` with no space)
     corrupting the extracted name via naive whitespace-splitting, and the
@@ -276,11 +276,11 @@ last):
     `episode_create` → `attempt_claim` → `episode_step` →
     `benchmark_result_record`, never calling the Lean gateway directly
     (issue #36). Candidate proofs come from a caller-supplied attempts plan
-    (ChatDB has no embedded model). Required a real supporting fix:
+    (LLM-Driven Proof Search Environment has no embedded model). Required a real supporting fix:
     PutnamBench's named-binder declarations aren't valid standalone Lean
     types, so `benchmark_problems` gained server-derived
     `prover_ready_statement`/`_hash` columns (via the new
-    `chatdb_proof_core::putnambench::to_pi_form`, verified against 670/672
+    `proofsearch_core::putnambench::to_pi_form`, verified against 670/672
     real problems), and `benchmark_result_record`'s cross-check now
     COALESCEs to it. Verified against 22 real problems through the real
     Lean/Mathlib toolchain — zero panics, zero unexpected errors. An
@@ -355,8 +355,8 @@ v0.3.19, CLOSED. Root cause (confirmed empirically against the real Lean
 parser is whitespace-sensitive — every line at the SAME column as a block's
 first tactic is a sequential sibling; a line indented MORE than that is
 parsed as NESTED under the preceding tactic, not as its sibling.
-`crates/chatdb-core/src/lean/mod.rs` (the `Solve` path) and
-`crates/chatdb-core/src/lean/module.rs` (the `SubmitModule` path) both took a
+`crates/proofsearch-core/src/lean/mod.rs` (the `Solve` path) and
+`crates/proofsearch-core/src/lean/module.rs` (the `SubmitModule` path) both took a
 client-supplied multi-line string and blindly prepended a fixed 2-space
 indent to EVERY line regardless of the client's own per-line indentation —
 so a naturally-formatted proof ("first tactic flush, rest indented" — a very
@@ -385,7 +385,7 @@ being proved) was still exposed to the bug. Fixed by routing it through
 catch a repeat. Verified against the real toolchain for all three paths
 (`Solve` repro, `Solve` uniform control, `SubmitModule` repro) via a new
 checked-in fixture,
-`crates/chatdb-mcp/examples/regression_scripts/issue41_multiline_proof_term.json` —
+`crates/proofsearch-mcp/examples/regression_scripts/issue41_multiline_proof_term.json` —
 all three reach `kernel_verified`. 4 new unit tests directly exercise
 `normalize_and_indent`'s uniform/non-uniform/single-line/blank-line
 behavior. A second adversarial review pass, specifically re-checking the
@@ -424,7 +424,7 @@ real bugs — the first clean streak this session, plausible for smaller,
 well-scoped changes building on already-established patterns.
 Still open on #34: the full per-tool metadata classification (side effect,
 trust level, cost surface, benchmark safety, replayability), and
-benchmark-mode guardrails against source-code mutation (moot for ChatDB's
+benchmark-mode guardrails against source-code mutation (moot for LLM-Driven Proof Search Environment's
 actual tool surface today — there is no MCP tool that edits source files —
 but worth revisiting if one is ever added).
 
@@ -467,7 +467,7 @@ already stores a granular, per-attempt, self-reported cost figure
 `cost_summary` never aggregates or surfaces at all today — structurally
 similar to the `verifier_cost_ms` gap v0.3.15 fixed, but NOT the same kind of
 fix: that data is `untrusted_input` (self-reported by the caller, never
-measured by ChatDB), so folding it into `cost_summary` first requires
+measured by LLM-Driven Proof Search Environment), so folding it into `cost_summary` first requires
 deciding how its trust tier interacts with `host_cost_confidence`'s existing
 exact/estimated/attested/unknown vocabulary — a real design question, not a
 mechanical copy of the verifier_cost pattern. Two more `NOT replayable in
@@ -493,7 +493,7 @@ the third and final slice, classifying the remaining 15 tools: `readme_first`,
 `episode_reset`, `episode_observe`, `episode_status`, `episode_close`,
 `proof_pattern_search`, `proof_pattern_record_application`, `draft_observe`,
 `draft_extract_moves`, `benchmark_suite_create`, `benchmark_problem_register`,
-`lean_declaration_lookup`. Every MCP tool ChatDB exposes now has a real,
+`lean_declaration_lookup`. Every MCP tool LLM-Driven Proof Search Environment exposes now has a real,
 grounded classification entry — `classified_tool_count`/`total_tool_count`
 are both tied to the actual registered tool list (`list_res.tools.len()`),
 not a hand-maintained figure that could silently drift. Two notable,
@@ -711,11 +711,11 @@ ask is now either a real measured metric, real attested/exact monetary
 data, or an honestly-`null` bucket — the only genuinely open piece left is
 a business decision this session cannot make unilaterally: whether/how to
 ever assign a real price to `mcp_side_cost`/`storage_export_cost` at all
-(there may simply never be a rate card for ChatDB's own compute/storage,
+(there may simply never be a rate card for LLM-Driven Proof Search Environment's own compute/storage,
 which would be a legitimate, permanent "unpriced" state, not a gap).
 
 **Does NOT count:** an LLM freehand-writing a formalization plan in its
-response text with no ChatDB-tracked artifact, no promotion path to a
+response text with no LLM-Driven Proof Search Environment-tracked artifact, no promotion path to a
 `SubmitModule` skeleton, and no record of what Mathlib coverage was actually
 checked versus assumed.
 

@@ -11,7 +11,7 @@
   - 252 = 2²·3²·7  and  25 = 5²  are coprime, so the distance is 252/25 miles
     and  m + n = 252 + 25 = 277.
 
-  Kernel-verified via the chatdb-proof-search MCP:
+  Kernel-verified via the proofsearch MCP:
     episode        398e56f6-da6e-4ce1-b11c-fc79cdb84073
     problem_version bb790403-f0fb-4edd-a368-386614bae22e
     outcome        kernel_verified  (termination: root_proved)
