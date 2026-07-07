@@ -4,7 +4,7 @@
 Accepted
 
 ## Context
-ChatDB transitions from a synchronous, single-path proof orchestrator to an RL environment where multiple concurrent models (episodes) will attempt to solve the same problem. This requires isolation so one model's failed search doesn't contaminate another model's context or the permanent database.
+LLM-Driven Proof Search Environment transitions from a synchronous, single-path proof orchestrator to an RL environment where multiple concurrent models (episodes) will attempt to solve the same problem. This requires isolation so one model's failed search doesn't contaminate another model's context or the permanent database.
 
 ## Decision
 We separate tables into two scopes: **Canonical Storage** (immutable facts and user-approved definitions) and **Episode-Local Storage** (mutable state scoped to a specific episode).

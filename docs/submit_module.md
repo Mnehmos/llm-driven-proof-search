@@ -1,6 +1,6 @@
 # SubmitModule — structured Lean module submissions
 
-ChatDB started as a one-theorem prover: an episode's root obligation was proved
+LLM-Driven Proof Search Environment started as a one-theorem prover: an episode's root obligation was proved
 by a single `Solve { proof_term }` wrapped as `theorem O_… : <statement> := by
 <proof>`. Serious math needs a small *local theory* first — helper definitions,
 helper lemmas, then a root theorem that uses them. `SubmitModule` adds that,
@@ -37,7 +37,7 @@ The **server** owns everything structural and renders the file itself
 - the `import` lines — from the problem's immutable `import_manifest_json`, never
   a client string;
 - the server-owned `set_option` linter lines;
-- the `namespace ChatDB.P_<problem>` … `end` wrapper;
+- the `namespace ProofSearch.P_<problem>` … `end` wrapper;
 - the `def` / `theorem` keywords and the sanitized names.
 
 Assembly order is: imports → server `set_option`s → open namespace → defs →
@@ -74,7 +74,7 @@ member has no forward-reference problem to solve, so submit it as a bare
 
 ## What is rejected (before Lean is ever run)
 
-Policy checks are deterministic and run in `chatdb-core` before any compile:
+Policy checks are deterministic and run in `proofsearch-core` before any compile:
 
 - **Names** must be a single namespace-local identifier — ASCII letter/`_`
   start, then letters/digits/`_`/`'`. No dots (a dotted name could escape the
@@ -137,7 +137,7 @@ toolchain — WITHOUT holding the server's DB mutex, so no other concurrent tool
 call on the session (`episode_observe`, `episode_status`, a different
 episode's `episode_step`, ...) blocks on it.
 
-This is a two-phase split in `chatdb-core::orchestrator::step`:
+This is a two-phase split in `proofsearch-core::orchestrator::step`:
 
 - `attempt_prepare` validates the attempt/claim/CAS, marks the attempt
   `executing`, and either fully resolves a non-Lean action (`Decompose` /

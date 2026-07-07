@@ -25,7 +25,7 @@ plus a gold `TypedAction` and an `expected_status`.
 
 ## Test wiring
 
-`ladder.json` is embedded via `include_str!` in `crates/chatdb-mcp/src/lib.rs`
+`ladder.json` is embedded via `include_str!` in `crates/proofsearch-mcp/src/lib.rs`
 and driven by three deterministic tests (no real Lean required, `MockGateway`):
 
 - `test_serious_math_ladder_metadata_is_complete_and_covers_required_rungs` —

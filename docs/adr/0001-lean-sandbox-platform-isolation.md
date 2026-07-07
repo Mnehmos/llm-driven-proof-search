@@ -4,7 +4,7 @@
 Accepted
 
 ## Context
-The ChatDB orchestrator executes model-generated Lean 4 source files using the `lake env lean` command. Since this source code is produced by an untrusted external policy (LLM), it is arbitrary and potentially malicious. The orchestrator must execute this code in a secure sandbox to prevent it from escaping, consuming excessive resources, or tampering with the host environment. The primary development environment is Windows (e.g., using an `F:` drive), but the system may also run on Unix-like environments in production.
+The LLM-Driven Proof Search Environment orchestrator executes model-generated Lean 4 source files using the `lake env lean` command. Since this source code is produced by an untrusted external policy (LLM), it is arbitrary and potentially malicious. The orchestrator must execute this code in a secure sandbox to prevent it from escaping, consuming excessive resources, or tampering with the host environment. The primary development environment is Windows (e.g., using an `F:` drive), but the system may also run on Unix-like environments in production.
 
 ## Decision
 We will implement platform-specific sandbox mechanisms with a "fail-closed" default: **if the configured sandbox cannot be established, the Lean attempt does not run.**

@@ -6,9 +6,9 @@ independent blockers prevent any client from completing a single accepted step a
 ever reaching a terminal state.
 
 How this was found: raw JSON-RPC playtest over stdio against
-`target/release/chatdb-mcp.exe` (the exact path Claude Desktop / any MCP client uses), with SQL
+`target/release/proofsearch-mcp.exe` (the exact path Claude Desktop / any MCP client uses), with SQL
 fallbacks only where the MCP surface has no tool. The unit/phase tests all pass because they call
-`chatdb-core` functions directly with hand-picked arguments; none of them drive the MCP layer as a
+`proofsearch-core` functions directly with hand-picked arguments; none of them drive the MCP layer as a
 client. **Every fix below must therefore land with an MCP-level integration test** (see Phase 0),
 not just a core-crate unit test.
 
@@ -21,14 +21,14 @@ Follow `docs/tdd_requirements.md` (RED → GREEN → commit) and `docs/gitflow_w
 
 ### 0.1 Add an MCP integration test crate/module
 
-`crates/chatdb-mcp/src/main.rs` already contains one duplex-transport test
+`crates/proofsearch-mcp/src/main.rs` already contains one duplex-transport test
 (`test_mcp_list_tools_and_describe`, main.rs:772). Extend that pattern into a proper integration
-test module (e.g. `crates/chatdb-mcp/tests/mcp_playthrough.rs` with the handler factored out of
+test module (e.g. `crates/proofsearch-mcp/tests/mcp_playthrough.rs` with the handler factored out of
 `main.rs` into a `lib.rs`, or more `#[cfg(test)]` tests — agent's choice, but the test must go
 through `call_tool`, not call orchestrator functions directly).
 
 The test MUST script this full episode against an in-memory DB with a `MockGateway` (copy the one
-in `crates/chatdb-core/tests/phase8_step_tests.rs` — pass iff source does not contain `sorry`):
+in `crates/proofsearch-core/tests/phase8_step_tests.rs` — pass iff source does not contain `sorry`):
 
 1. seed problem (via the new `problem_create` tool — task 2.1; until that lands, seed via SQL in the test)
 2. `episode_create` (max_steps=5, budget=1_000_000)
@@ -57,10 +57,10 @@ Also port the negative probes (they pass today; keep them passing):
 
 `episode_step` requires `action_attempt_id` + `claim_token`
 (main.rs:71-78). These are minted only by `attempts::attempt_claim`
-(crates/chatdb-core/src/orchestrator/attempts.rs:11), which no MCP tool calls. An MCP-only client
+(crates/proofsearch-core/src/orchestrator/attempts.rs:11), which no MCP tool calls. An MCP-only client
 is permanently stuck at the first step.
 
-**Fix:** add tool `attempt_claim` to `list_tools` and `call_tool` in `crates/chatdb-mcp/src/main.rs`:
+**Fix:** add tool `attempt_claim` to `list_tools` and `call_tool` in `crates/proofsearch-mcp/src/main.rs`:
 
 - Args: `episode_id`, `action_request_id`, `idempotency_key`, `expected_revision` (mirror
   `attempts::attempt_claim`).
@@ -74,9 +74,9 @@ is permanently stuck at the first step.
 ### 1.2 BLOCKER: accepted steps always roll back — hardcoded `episode_revision = 1` collides with UNIQUE index
 
 `lifecycle::advance` inserts every action_request with `1_i64, // revision`
-(crates/chatdb-core/src/orchestrator/lifecycle.rs:170). The schema has
+(crates/proofsearch-core/src/orchestrator/lifecycle.rs:170). The schema has
 `CREATE UNIQUE INDEX idx_active_request_per_revision ON action_requests(episode_id, episode_revision)`
-(crates/chatdb-core/src/db/schema_v1.rs:342). Consequence, verified live: a step is accepted,
+(crates/proofsearch-core/src/db/schema_v1.rs:342). Consequence, verified live: a step is accepted,
 `attempt_commit` bumps the episode, then the post-step `advance()` inserts request #2 also at
 revision 1 → UNIQUE violation → `-32603` → **the entire transaction, including the accepted step,
 rolls back**. The episode can never move past revision 0.
@@ -105,8 +105,8 @@ The DB allows `outcome IN ('certified','refuted','gave_up','timeout','budget_exh
 
 All three violate the CHECK. Verified live: `episode_close` → `-32603 CHECK constraint failed`.
 The Rust `EpisodeOutcome` enum (`Terminated|Truncated|Crashed`,
-crates/chatdb-core/src/models/episode.rs) was invented and does not match the schema vocabulary,
-which follows CHATDB_SPEC.md.
+crates/proofsearch-core/src/models/episode.rs) was invented and does not match the schema vocabulary,
+which follows PROOFSEARCH_SPEC.md.
 
 **Fix — align the Rust model to the schema, not the other way around:**
 - Replace `EpisodeOutcome` variants with the schema vocabulary:
@@ -126,7 +126,7 @@ which follows CHATDB_SPEC.md.
 
 ### 1.4 BLOCKER: KernelPass never marks the obligation proved — `root_proved` unreachable
 
-`step::attempt_commit` (crates/chatdb-core/src/orchestrator/step.rs) verifies with Lean but never
+`step::attempt_commit` (crates/proofsearch-core/src/orchestrator/step.rs) verifies with Lean but never
 updates `episode_obligations.status`. `episode_step`'s termination check reads exactly that status
 (main.rs:406-412: `SELECT status FROM episode_obligations WHERE ... kind='root'` → `== "proved"`).
 So even a kernel-passing proof leaves the root `open` and the episode running forever.
@@ -167,11 +167,11 @@ Three ways an episode wedges permanently today (all hit in playtest):
 
 ### 1.6 BLOCKER: Lean toolchain/project missing — every `solve` is an infrastructure error
 
-`CHATDB_LEAN_PROJECT_PATH` points at `lean-checker/`, which does not exist in the repo. The only
+`PROOFSEARCH_LEAN_PROJECT_PATH` points at `lean-checker/`, which does not exist in the repo. The only
 installed toolchain is a broken partial (`elan toolchain list` → `leanprover/lean4:v4.28.tmp`).
 Verified live: `solve` → `disposition="error"`,
 `LeanGatewayError("The directory name is invalid. (os error 267)")`.
-The gateway hardcodes Mathlib imports (crates/chatdb-core/src/lean/mod.rs:50-52), so the project
+The gateway hardcodes Mathlib imports (crates/proofsearch-core/src/lean/mod.rs:50-52), so the project
 must depend on Mathlib.
 
 **Fix (setup + docs, no Rust changes):**
@@ -202,7 +202,7 @@ via SQL.
 - Args: `source_problem_text`, `root_formal_statement`, `natural_rendering` (optional),
   `metadata_json` (optional).
 - Server computes hashes (`crate::hashing`), sets `fidelity_status='pending'`,
-  `fidelity_method='manual'`, `state` per the problem-state machine in CHATDB_SPEC.md.
+  `fidelity_method='manual'`, `state` per the problem-state machine in PROOFSEARCH_SPEC.md.
 - IMPORTANT schema interaction: `problem_versions` CHECK (schema_v1.rs:25) forbids `state='PROVING'`
   unless `fidelity_status='approved'`. Since episodes should only run on approved problems, also add
   a `problem_approve_fidelity` tool (sets `approved` + records `fidelity_approval_id`) or fold an
@@ -220,7 +220,7 @@ checks remaining budget.
 **Fix in main.rs:**
 - Reject `actual_cost_micros < 0` and `reserved_cost_micros < 0` with `invalid_params`.
 - Validate `status` against a closed set (`settled`, `released`, `failed` — align with
-  CHATDB_SPEC.md §call outcomes) and only deduct budget for statuses that consumed spend.
+  PROOFSEARCH_SPEC.md §call outcomes) and only deduct budget for statuses that consumed spend.
 - In `model_call_reserve`: read the episode's remaining budget; if
   `reserved < 0 || reserved > remaining`, return a structured `budget_denied` error instead of
   inserting the lease.
@@ -299,6 +299,6 @@ terminate: `state='terminated'`, `outcome='gave_up'`, `termination_reason='model
    playtest scratchpad), episode terminates `certified`, and `LeanChecker/Verified/O_*.lean`
    exists in the Lean project.
 
-Playtest residue note: `chatdb.db` currently contains two SQL-seeded problem versions and several
+Playtest residue note: `proofsearch.db` currently contains two SQL-seeded problem versions and several
 wedged episodes/attempts from the playtest (one with an artificially inflated budget from the
-negative-settle probe). Wipe the DB (`chatdb.db`, `-shm`, `-wal`) before the acceptance run.
+negative-settle probe). Wipe the DB (`proofsearch.db`, `-shm`, `-wal`) before the acceptance run.

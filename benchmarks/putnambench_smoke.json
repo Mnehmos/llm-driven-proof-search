@@ -1,5 +1,5 @@
 {
-  "$schema_note": "PutnamBench smoke subset (issue #32). import_fixtures are real PutnamBench Lean 4 problems (commit a23d8e6d4e9e3418fd78f76de7bfcb9414cbfd39), embedded verbatim so import-fidelity can be checked without CHATDB_PUTNAM_BENCH_PATH set up. canned_proof_fixtures are DELIBERATELY SYNTHETIC, not real Putnam problems -- real Putnam problems require genuine multi-step mathematical argument, not one-line tactic proofs, so plumbing tests use simple, deterministic statements instead. See docs/benchmarks/putnambench.md.",
+  "$schema_note": "PutnamBench smoke subset (issue #32). import_fixtures are real PutnamBench Lean 4 problems (commit a23d8e6d4e9e3418fd78f76de7bfcb9414cbfd39), embedded verbatim so import-fidelity can be checked without PROOFSEARCH_PUTNAM_BENCH_PATH set up. canned_proof_fixtures are DELIBERATELY SYNTHETIC, not real Putnam problems -- real Putnam problems require genuine multi-step mathematical argument, not one-line tactic proofs, so plumbing tests use simple, deterministic statements instead. See docs/benchmarks/putnambench.md.",
   "suite_upstream_commit": "a23d8e6d4e9e3418fd78f76de7bfcb9414cbfd39",
   "import_fixtures": [
     {

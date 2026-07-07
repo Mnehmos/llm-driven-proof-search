@@ -62,7 +62,7 @@ forever. Every test that exercised one of the three wrapped call sites hung
 indefinitely instead of failing.
 
 Caught by: the test run visibly not returning ("its been like 10 minutes"),
-confirmed via `Get-Process` showing a stuck `chatdb_mcp-*.exe` test binary
+confirmed via `Get-Process` showing a stuck `proofsearch_mcp-*.exe` test binary
 with ~0% CPU, then isolating the exact hung tests by running individual test
 binaries with `--exact` under a hard shell `timeout`.
 

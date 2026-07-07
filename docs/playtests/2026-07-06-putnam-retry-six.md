@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-06
 **Toolchain:** `leanprover/lean4:v4.32.0-rc1` + `mathlib@360da6fa66c1273b76b6b2d8c5666fd5ac2e3b56` (pinned)
-**Harness:** Claude Code (claude-fable-5) as MCP host and prover, driving **chatdb-mcp v0.3.24** (89 tools) through `mcp__chatdb-proof-search__*` — first run after issues #61–#67 landed. Handoff executed: `docs/playtests/handoff-2026-07-06-putnam-retry-six.md`.
+**Harness:** Claude Code (claude-fable-5) as MCP host and prover, driving **proofsearch-mcp v0.3.24** (89 tools) through `mcp__proofsearch__*` — first run after issues #61–#67 landed. Handoff executed: `docs/playtests/handoff-2026-07-06-putnam-retry-six.md`.
 **Fidelity mode:** `benchmark_suite_set_trust` granted PutnamBench `trusted_canonical_source` (audit row `390bf09c-e90c-4e5d-8820-8ea579c98cc5`, provenance in notes), then **`problem_record_benchmark_alignment` per problem** — the intended `benchmark_aligned` basis. No `unsafe_dev_attestation`, no LLM self-reviews. Successes therefore record as `kernel_verified` (alignment never reaches `certified`) — correct by design.
 **Run:** id `76619de7-ce90-4f47-9cfa-5f8c4f457b98`, envelope `3564a2c7-3c9c-4c2f-bd48-5000c8761164`, `solve_mode=submit_module_allowed`, `attempt_budget=4`.
 

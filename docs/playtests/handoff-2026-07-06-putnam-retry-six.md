@@ -1,6 +1,6 @@
-# Handoff: retry the 6 unsolved PutnamBench problems on chatdb-mcp v0.3.24
+# Handoff: retry the 6 unsolved PutnamBench problems on proofsearch-mcp v0.3.24
 
-You are the MCP host and the prover. Drive the `chatdb-proof-search` server **through its MCP tools only** (`mcp__chatdb-proof-search__*`) — no bash driving of the server, no putnam_runner, no SQL side channel (you no longer need one; see the new observe tools). If the chatdb tools are not in your tool list, STOP and say so.
+You are the MCP host and the prover. Drive the `proofsearch` server **through its MCP tools only** (`mcp__proofsearch__*`) — no bash driving of the server, no putnam_runner, no SQL side channel (you no longer need one; see the new observe tools). If the proofsearch tools are not in your tool list, STOP and say so.
 
 ## Context you inherit
 
@@ -9,7 +9,7 @@ Two prior runs against the same 12-problem PutnamBench sample (suite `PutnamBenc
 - 2026-07-04 baseline: 1/12 (placeholder attempts) — `docs/playtests/2026-07-04-putnambench-first-attempt.md`.
 - 2026-07-06 genuine attempt: **6/12 certified** (run `8942c216-9daa-4423-a8bb-82eb4400c32d`) — `docs/playtests/2026-07-05-putnam-genuine-attempt.md`. Read it. Its six failures are your six targets.
 
-Since that run, issues #61–#67 were implemented and the server was rebuilt: **v0.3.24, 89 tools** (`target/release/chatdb-mcp.exe`). Four of your six targets failed on environment gaps that are now fixed; your run is both a genuine proving attempt and the acceptance test for those fixes. Do not redo the import; do not touch the old run's results — create a **new** envelope + run and record into that.
+Since that run, issues #61–#67 were implemented and the server was rebuilt: **v0.3.24, 89 tools** (`target/release/proofsearch-mcp.exe`). Four of your six targets failed on environment gaps that are now fixed; your run is both a genuine proving attempt and the acceptance test for those fixes. Do not redo the import; do not touch the old run's results — create a **new** envelope + run and record into that.
 
 What changed that you must actually use:
 

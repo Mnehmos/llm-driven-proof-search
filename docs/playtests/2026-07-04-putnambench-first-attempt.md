@@ -2,13 +2,13 @@
 
 **Date:** 2026-07-04
 **Toolchain:** `leanprover/lean4:v4.32.0-rc1` + `mathlib@360da6fa66c1273b76b6b2d8c5666fd5ac2e3b56` (pinned)
-**Harness:** `crates/chatdb-mcp/examples/putnam_runner.rs` (issue #31) driving 12 real, imported PutnamBench problems through the tracked `episode_create` → `attempt_claim` → `episode_step` → `benchmark_result_record` loop against the real `RealLeanGateway` — no mock, no shortcut around the kernel.
+**Harness:** `crates/proofsearch-mcp/examples/putnam_runner.rs` (issue #31) driving 12 real, imported PutnamBench problems through the tracked `episode_create` → `attempt_claim` → `episode_step` → `benchmark_result_record` loop against the real `RealLeanGateway` — no mock, no shortcut around the kernel.
 **Fidelity mode:** every attempt used `unsafe_dev_attestation=true`. Every result reaches at most `kernel_verified`, never `certified`.
 **Suite:** `benchmark_run_observe` run id `f02cadc3-21bb-485c-8ed9-42106a54cf6d`, `solve_mode=submit_module_allowed`, `attempt_budget=1` (pass@1).
 
 ## Why this report exists
 
-This is not a plumbing test — the PutnamBench harness (importer, runner, schema, contamination policy) was already built and verified this session (issues #28–#33, #37). This is the thing that harness was built *for*: a genuine, best-effort attempt at real Putnam competition problems, specifically to find where ChatDB's environment holds up and where it breaks, under actual mathematical pressure rather than synthetic test fixtures.
+This is not a plumbing test — the PutnamBench harness (importer, runner, schema, contamination policy) was already built and verified this session (issues #28–#33, #37). This is the thing that harness was built *for*: a genuine, best-effort attempt at real Putnam competition problems, specifically to find where LLM-Driven Proof Search Environment's environment holds up and where it breaks, under actual mathematical pressure rather than synthetic test fixtures.
 
 ## The sample
 
@@ -74,14 +74,14 @@ The diagnostic shows `intro a ha b hb` had *already succeeded completely* (all f
 **Resolved (v0.3.19, issue #41 closed):** fixed at the source. The exact
 proof term shown above now reaches `kernel_verified` unmodified — confirmed
 against the real Lean/Mathlib toolchain via
-`crates/chatdb-mcp/examples/regression_scripts/issue41_multiline_proof_term.json`.
+`crates/proofsearch-mcp/examples/regression_scripts/issue41_multiline_proof_term.json`.
 See `docs/roadmap.md`'s #41 entry for the root cause and fix.
 
 ## Honest calibration
 
 11 of 12 attempts got a single, unconsidered `sorry` (or, for find-the-value problems, a plausible-looking but unverified guessed answer alongside `sorry`) rather than a genuine mathematical attempt. This was a deliberate scoping choice, not a failure to try: real Putnam problems — even at the historically "easiest" A1/B1 competition positions — require actual multi-step mathematical argument (synthetic geometry, real analysis, generating functions, number-theoretic case analysis), not a tactic-combinator guess. Getting a second one (`putnam_1966_a1`, sum-identity via a floor-function closed form — the math was fully worked out: `f(n) = ⌊n²/4⌋`, then a parity case split) to a checked Lean proof was judged to need real, uninterrupted formalization effort beyond what remained in this session, not a quick attempt — that's a genuine, honest constraint, not an environment gap.
 
-This calibrates something specific about "how ChatDB performs at Putnam-level difficulty": the environment's tracked verification loop, schema, and tooling all worked flawlessly across this whole sample (zero infra errors, zero panics, correct pass@1 accounting, correct kernel/fabrication enforcement throughout) — the bottleneck for actually *solving* PutnamBench problems is, as expected, the mathematical reasoning supplied to the loop, which ChatDB deliberately does not provide itself (see `readme_first`: the model/agent lives outside ChatDB). A real PutnamBench score requires an external prover (human or LLM) willing to spend real per-problem effort, same as any other Putnam attempt — the environment's job, which it did correctly here, is to make sure that effort is measured honestly.
+This calibrates something specific about "how LLM-Driven Proof Search Environment performs at Putnam-level difficulty": the environment's tracked verification loop, schema, and tooling all worked flawlessly across this whole sample (zero infra errors, zero panics, correct pass@1 accounting, correct kernel/fabrication enforcement throughout) — the bottleneck for actually *solving* PutnamBench problems is, as expected, the mathematical reasoning supplied to the loop, which LLM-Driven Proof Search Environment deliberately does not provide itself (see `readme_first`: the model/agent lives outside LLM-Driven Proof Search Environment). A real PutnamBench score requires an external prover (human or LLM) willing to spend real per-problem effort, same as any other Putnam attempt — the environment's job, which it did correctly here, is to make sure that effort is measured honestly.
 
 ## What would raise the real pass@1 rate
 
