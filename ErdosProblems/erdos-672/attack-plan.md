@@ -49,7 +49,15 @@ Closing this is exactly Fermat's **"no four squares in arithmetic progression"**
 - **M2 ☑** Recon: Mathlib has `not_fermat_42` (`a⁴+b⁴≠c²`) and
   `PythagoreanTriple.coprime_classification` (primitive-triple parametrization),
   but **NOT** `x⁴−y⁴≠z²` nor "four squares in AP". The crux must be built.
-- **M3 ☐ (CRUX)** Prove `noFourthPowerDiffSq`: no positive `a,b,c` with
+- **M3 ☑ (CRUX) DONE** — `no_fermat_sub : ∀ a b c : ℤ, IsCoprime a b → b≠0 → c≠0
+  → a⁴ ≠ b⁴ + c²`, kernel-verified (axioms `[propext, Classical.choice,
+  Quot.sound]`), both descent cases complete. Built from three lemmas:
+  `beven_factor` (square structure from `2mn=b²`), `beven_step` (second-level
+  classification descent), and `no_fermat_sub` (strong induction on `a.natAbs`).
+  The `b`-odd case descends via `a²b² = m⁴−n⁴`; the `b`-even case via the double
+  classification landing on `u⁴ = v⁴ + n0²`. Original plan retained below.
+
+- **M3 (original plan)** Prove `noFourthPowerDiffSq`: no positive `a,b,c` with
   `a⁴ = b⁴ + c²`, `gcd(a,b)=1`. By **strong induction on `a`** (infinite descent).
   Precise descent (worked out — execute this next session):
 
