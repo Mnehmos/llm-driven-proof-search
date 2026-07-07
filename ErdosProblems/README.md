@@ -1,29 +1,50 @@
-# ErdosProblems — proofs, evidence, traces, reasoning
+# ErdosProblems — one folder per problem
 
-Self-contained deliverable for the Erdős-corpus work. Start with the
-**[whitepaper](whitepaper.md)**.
+Organized **by problem**: each Erdős problem this project has touched gets
+its own self-contained folder with proof, evidence, credit, and a
+problem-specific whitepaper. Start with the **[project index](whitepaper.md)**.
 
 ## Layout
 
-| Path | Contents |
-|---|---|
-| [whitepaper.md](whitepaper.md) | The report: trust design, method, results, honest limits, reproduction |
-| [proofs/](proofs/) | Snapshot copies of the kernel-verified proofs (byte-stamped by `module_source_hash` in traces/). Living CI-built copies: `lean-checker/LeanChecker/Erdos/` |
-| [evidence/](evidence/) | Machine records: run metrics, public summaries with redaction markers, and the disclosure rationale for publishing full bodies |
-| [traces/](traces/) | Hash-chained episode ledgers (GENESIS → committed → terminated) with all integrity hashes and regeneration commands |
-| [reasoning/](reasoning/) | The narrative: 01 calibration audit · 02 corpus validation · 03 bounty board · 04 how the 1052 proof was found · 05 the open-problem attack plan |
+```
+ErdosProblems/
+├── whitepaper.md          project-level index + system-wide trust design
+├── README.md               this file
+├── erdos-1/                Erdős Problem #1 (calibration case study)
+│   ├── whitepaper.md       problem statement, proof idea, verification record
+│   ├── credit.md           attribution: math, catalog, corpus, this proof
+│   ├── evidence.md         machine records (result row, episode summary)
+│   ├── proof/              snapshot .lean, byte-stamped by module_source_hash
+│   └── trace/              hash-chained episode ledger
+├── erdos-1052/             Erdős Problem #1052 (unitary perfect numbers)
+│   ├── whitepaper.md
+│   ├── credit.md
+│   ├── evidence.md
+│   ├── proof-narrative.md  how the proof was found, incl. round-1 failures
+│   ├── attack-plan.md      staged milestones toward the OPEN question
+│   ├── proof/
+│   └── trace/
+└── shared/                 cross-problem infrastructure notes
+    ├── corpus-validation.md
+    ├── bounty-board.md
+    ├── run-575f57b1-summary.md
+    └── disclosure-note.md
+```
+
+Adding a new problem: copy the `erdos-1052/` shape (whitepaper, credit,
+evidence, proof/, trace/; add `proof-narrative.md`/`attack-plan.md` only if
+relevant) into a new `erdos-<N>/` folder and link it from the project index.
 
 ## Headline results
 
-1. **Calibration MATCH** — an independently written proof of
-   `erdos_1.variants.weaker` agrees with the corpus's proof on file, on the
-   byte-identical statement, under one verifier. The pipeline's "done"
-   signal is corroborated by an external artifact.
-2. **Unitary perfect numbers are even** (Subbarao–Warren 1966, Erdős #1052's
-   solved variant): first standalone-reproducible Lean proof — the
-   statement ships as `sorry` in google-deepmind/formal-conjectures, and the
-   only prior linked proof does not replay outside its home infrastructure.
-   Kernel-verified pass@1, ~250 lines, Mathlib-only.
+1. **Calibration MATCH** ([erdos-1/](erdos-1/whitepaper.md)) — an
+   independently written proof agrees with the corpus's proof on file, on
+   the byte-identical statement, under one verifier.
+2. **Unitary perfect numbers are even** ([erdos-1052/](erdos-1052/whitepaper.md),
+   Subbarao–Warren 1966): first standalone-reproducible Lean proof — the
+   statement ships as `sorry` in google-deepmind/formal-conjectures, and
+   the only prior linked proof does not replay outside its home
+   infrastructure.
 
 ## Verify it yourself
 
@@ -34,13 +55,13 @@ lake env lean LeanChecker/Erdos/Erdos1052.lean
 
 Exit 0 = Lean's kernel accepts every step. No trust in the authors required.
 
-## Status of the open problem
+## Status of open problems
 
-Erdős #1052 — *are there finitely many unitary perfect numbers?* — is
-**open**, and this folder does not claim otherwise. The staged attack
-(kernel-verified milestones: σ*-multiplicativity, the corpus's missing
-25-digit verification, `ω_odd ≤ ν₂ + 1` structure bound) is in
-[reasoning/05-open-problem-attack-plan.md](reasoning/05-open-problem-attack-plan.md).
+Neither #1 nor #1052 is resolved by this repository. #1052's staged attack
+(σ*-multiplicativity, the corpus's missing 25-digit verification, a
+`ω_odd ≤ ν₂+1` structure bound, then an honest map of the wall) is in
+[erdos-1052/attack-plan.md](erdos-1052/attack-plan.md) and is actively
+worked.
 
 ## Upstream
 
