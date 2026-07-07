@@ -71,6 +71,10 @@ relevant) into a new `erdos-<N>/` folder and link it from the project index.
    the easy already-known direction (Steinerberger), which the corpus ships as
    `sorry`. Kernel-verified via the explicit infinite family `n = 2·3ᵏ`. The
    open part (i) (`= 1` infinitely often) is untouched.
+5. **The #399 Cambie companion** ([erdos-399/](erdos-399/whitepaper.md)):
+   `n! ≠ x⁴ + y⁴` for coprime `x,y` with `xy > 1` — corpus `sorry`,
+   kernel-verified via a mod-8 fourth-power argument. The headline #399
+   (does `n! = xᵏ ± yᵏ` have solutions) was already resolved by Barfield.
 
 ## Verify it yourself
 
