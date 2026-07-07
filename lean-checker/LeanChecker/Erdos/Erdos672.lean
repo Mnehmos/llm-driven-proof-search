@@ -238,10 +238,46 @@ theorem no_fermat_sub :
 
 /-! ## Arithmetic core (M4) — depends on the (now-proved) crux -/
 
-/-- **Euler's theorem (arithmetic core, open — M4).** The product of a 4-term AP
-with `gcd(n,d)=1` is never a perfect square. Reduces to `no_fermat_sub`. -/
+/-- **Euler's theorem (arithmetic core, M4 in progress).** The product of a
+4-term AP with `gcd(n,d)=1` is never a perfect square. The reduction to the two
+structural cases is kernel-verified; via the primitive Pythagorean triple
+`(q, d², X)` with `X = n²+3nd+d²` (since `P + d⁴ = X²`), classification splits into
+case (i) `d²=2MN` ⟹ `A=(M−N)²`, `B=(M+N)²` (both squares ⟹ four squares in AP),
+and case (ii) `d²=M²−N²` ⟹ `A=2N²`, `B=2M²`. The two case-descents remain. -/
 theorem euler_four_ap (n d : ℕ) (hn : 0 < n) (hd : 0 < d) (hnd : n.Coprime d)
     (q : ℕ) : n * (n + d) * (n + 2 * d) * (n + 3 * d) ≠ q ^ 2 := by
-  sorry
+  intro heqn
+  have hnd' : IsCoprime (n : ℤ) (d : ℤ) := by
+    rw [Int.isCoprime_iff_gcd_eq_one]; simpa [Int.gcd_natCast_natCast] using hnd
+  have heq : (n : ℤ) * (n + d) * (n + 2 * d) * (n + 3 * d) = (q : ℤ) ^ 2 := by exact_mod_cast heqn
+  set X := (n : ℤ) ^ 2 + 3 * n * d + d ^ 2 with hX
+  have hpt : PythagoreanTriple (q : ℤ) ((d : ℤ) ^ 2) X := by
+    show (q : ℤ) * q + (d : ℤ) ^ 2 * (d : ℤ) ^ 2 = X * X; rw [hX]; nlinarith [heq]
+  have hqd : IsCoprime (q : ℤ) (d : ℤ) := by
+    have hcop : IsCoprime ((q : ℤ) ^ 2) (d : ℤ) := by
+      rw [← heq]
+      have h1 : IsCoprime ((n : ℤ) + d) d := by simpa using IsCoprime.add_mul_right_left hnd' 1
+      have h2 : IsCoprime ((n : ℤ) + 2 * d) d := by simpa using IsCoprime.add_mul_right_left hnd' 2
+      have h3 : IsCoprime ((n : ℤ) + 3 * d) d := by simpa using IsCoprime.add_mul_right_left hnd' 3
+      exact ((hnd'.mul_left h1).mul_left h2).mul_left h3
+    exact (IsCoprime.pow_left_iff (by norm_num)).mp hcop
+  have hqd2 : (q : ℤ).gcd ((d : ℤ) ^ 2) = 1 := Int.isCoprime_iff_gcd_eq_one.mp hqd.pow_right
+  obtain ⟨M, N, hleg, hhyp, hMN, hpar⟩ := PythagoreanTriple.coprime_classification.mp ⟨hpt, hqd2⟩
+  have hXpos : 0 < X := by rw [hX]; positivity
+  have hXval : X = M ^ 2 + N ^ 2 := by
+    rcases hhyp with h | h
+    · exact h
+    · exfalso; nlinarith [sq_nonneg M, sq_nonneg N, h, hXpos]
+  have hA : (n : ℤ) * (n + 3 * d) = X - (d : ℤ) ^ 2 := by rw [hX]; ring
+  have hB : ((n : ℤ) + d) * (n + 2 * d) = X + (d : ℤ) ^ 2 := by rw [hX]; ring
+  rcases hleg with ⟨hq2, hd2⟩ | ⟨hq2, hd2⟩
+  · -- case (i): d² = 2MN ⟹ A = (M−N)², B = (M+N)²  (four squares in AP)
+    have hAsq : (n : ℤ) * (n + 3 * d) = (M - N) ^ 2 := by rw [hA, hXval, hd2]; ring
+    have hBsq : ((n : ℤ) + d) * (n + 2 * d) = (M + N) ^ 2 := by rw [hB, hXval, hd2]; ring
+    sorry
+  · -- case (ii): d² = M²−N² ⟹ A = 2N², B = 2M²
+    have hA2 : (n : ℤ) * (n + 3 * d) = 2 * N ^ 2 := by rw [hA, hXval, hd2]; ring
+    have hB2 : ((n : ℤ) + d) * (n + 2 * d) = 2 * M ^ 2 := by rw [hB, hXval, hd2]; ring
+    sorry
 
 end Erdos672
