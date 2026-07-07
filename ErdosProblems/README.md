@@ -82,6 +82,10 @@ relevant) into a new `erdos-<N>/` folder and link it from the project index.
    `[propext, Classical.choice, Quot.sound]`, no `native_decide`) — a stronger
    guarantee than the corpus's own `selfridge_78557`. The open #1113 (a
    Sierpiński number with no finite covering) is untouched.
+7. **#494 product version is false** ([erdos-494/](erdos-494/whitepaper.md),
+   Steinerberger): distinct `A, B ⊆ ℂ` of equal size with the same multiset of
+   3-subset *products* — corpus `sorry`, kernel-verified via the witness
+   `A = {1,ω,ω²,2}`, `B = ω·A` (`ω³=1`), reducing to a one-line scalar lemma.
 
 ## Verify it yourself
 
