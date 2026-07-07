@@ -82,6 +82,10 @@ fails, with the formalized fences from M3 as the boundary markers.
   episode pipeline — that re-submission is the next concrete step, so the
   hash-pinned audit trail catches up to what's already proven); partial
   results labeled partial (North-Star reporting discipline, issue #124).
-- No upstream PRs until the maintainer says go.
+- Upstream: formal_proof links for even/87360/Wall are now open as
+  google-deepmind/formal-conjectures PR #4405 (maintainer go-ahead given
+  2026-07-07; CLA passing, awaiting review). Any further upstreaming (e.g. new
+  σ* machinery to Mathlib/FormalConjecturesForMathlib) still waits on an
+  explicit go.
 - If at any point a genuinely novel bound emerges, it goes to independent
   review before any public claim.

@@ -103,7 +103,12 @@ remains open; this cluster does not touch it.
 
 ## Upstream
 
-An upstream contribution branch (`erdos-1052-formal-proof-link` on the
-Mnehmos fork of formal-conjectures, adding a `@[formal_proof]` link) is
-**staged but deliberately not opened** — maintainer's call, on hold while we
-take a real shot at the problem itself.
+An upstream contribution to google-deepmind/formal-conjectures is **open** as
+[PR #4405](https://github.com/google-deepmind/formal-conjectures/pull/4405):
+`@[formal_proof using lean4]` links for three ErdosProblems/1052 statements
+(`even_of_isUnitaryPerfect`, `isUnitaryPerfect_87360`, and Wall's
+`isUnitaryPerfect_146361946186458562560000`), each pointing at this repo's
+kernel-verified proof. Metadata-only — no proof bodies change upstream; the
+`stop`/`sorry` in-file bodies stay put, matching the repo's existing
+externally-hosted-proof convention. CLA check passes; awaiting maintainer
+review.
