@@ -5,9 +5,13 @@
 > **Status: Erdős Problem #1052 is still OPEN.** *Are there finitely many
 > unitary perfect numbers?* — nobody knows. This folder does not answer
 > that. It proves a **different, already-known** companion theorem
-> (Subbarao–Warren, 1966) that lives in the same corpus file, and stages an
-> attack plan of further companion facts — not a resolution of the open
-> question.
+> (Subbarao–Warren, 1966), plus new work built on top of it: general
+> multiplicativity of `σ*` (not in Mathlib at all before this), fast
+> verification of two numbers the corpus leaves disabled/unproven, and a
+> genuine structural bound (`ω_odd(n) ≤ ν₂(n)+1`) that, combined with a real
+> 1988 theorem of Wall's, forces any undiscovered sixth unitary perfect
+> number to be divisible by `256`. None of this is a resolution of the open
+> question — it narrows the search space, honestly labeled as partial.
 
 ## The problem
 
@@ -48,6 +52,50 @@ prime power and `σ*(n) = 1 + P = 2P` forces `P = 1`: also impossible. ∎
 No general multiplicativity of `σ*` is needed — one peel-off plus one
 involution. Full details and the failure log of the development are in
 [proof-narrative.md](proof-narrative.md).
+
+## New work beyond the corpus's stated goal (this session)
+
+Four further results, none of them in the corpus and none of them
+previously formalized anywhere we could find, all kernel-verified via
+`lake env lean` (not yet re-submitted through the tracked MCP episode
+pipeline — see the honesty note below):
+
+1. **`sigmaStar_mul_of_coprime`** — `σ*(mn) = σ*(m)·σ*(n)` for coprime
+   `m, n`. Built from scratch via an explicit divisor-splitting bijection
+   (`gcd(d,m)·gcd(d,n) = d` for `d ∣ mn`); Mathlib has no unitary-divisor
+   machinery at all. Plus `σ*(p^e) = p^e+1` for prime powers.
+2. **`isUnitaryPerfect_87360`** — matches the corpus's exact statement
+   shape. The corpus's own test (`isUnitaryPerfect_87360`) is disabled with
+   `stop` as "too slow" (naive enumeration over all of `[1,87360]`); this
+   proves it in a handful of multiplicative steps from
+   `87360 = 2⁶·3·5·7·13`.
+3. **`isUnitaryPerfect_wall`** — same for Wall's 24-digit fifth unitary
+   perfect number. The corpus ships this as a bare `sorry` with only an
+   external, non-replaying `formal_proof` link; now independently verified.
+4. **`omega_odd_le_two_adic_add_one`** — for a unitary perfect
+   `n = 2^a·m` (`m` odd, `a ≥ 1`), the number of distinct odd prime factors
+   of `m` is at most `a+1`. Proved via 2-adic valuation comparison on
+   `σ*(n) = 2n`, using a new supporting lemma
+   (`two_pow_card_primeFactors_dvd_sigmaStar`: `2^ω(m) ∣ σ*(m)` for odd
+   `m`, by strong induction). Combined with Wall's real 1988 theorem
+   (*"New unitary perfect numbers have at least nine odd components,"*
+   Fibonacci Quarterly 26(4) — confirmed genuine via MR 0967649 / Zbl
+   0657.10003, though we could not access the 1988 proof text itself),
+   this forces any sixth unitary perfect number to have `a ≥ 8`.
+
+**Honesty note.** These four results are kernel-verified the same way
+`even_of_isUnitaryPerfect` originally was during development — by direct
+`lake env lean` compilation — but have not yet been re-submitted through
+this project's tracked MCP episode pipeline (hash-pinned statement,
+episode ledger, `benchmark_result_record`). That re-submission is the
+natural next step to bring their audit trail up to the same standard as
+the rest of this folder. **A dead end found and discarded along the way:**
+a 2026 arXiv preprint claiming a much deeper partial result on this exact
+problem was read in full and identified as very likely AI-fabricated
+(invented "3-Higgs prime" terminology, an unfindable author, suspiciously
+precise unverifiable computational claims) — see
+[attack-plan.md](attack-plan.md) for the full disclosure. It was not used
+for anything here.
 
 ## Verification record
 

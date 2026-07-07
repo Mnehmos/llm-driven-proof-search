@@ -31,3 +31,22 @@
   outcomes. (Note: proof snapshots contain verbatim `ProofSearch.P_*` namespace
   strings — legacy internal identifiers preserved byte-exactly because the
   verification hashes cover them.)
+
+## New work (this session)
+
+- **The mathematics.** `σ*` multiplicativity is classical/folklore, analogous
+  to ordinary `σ` multiplicativity — no attribution needed beyond "elementary
+  number theory." Wall's bound (≥9 odd prime factors for a sixth unitary
+  perfect number) is: C. R. Wall, "New unitary perfect numbers have at least
+  nine odd components," Fibonacci Quarterly 26(4) (1988), 312–317 — MR
+  0967649, Zbl 0657.10003 (confirmed genuine; full text not accessed). The
+  complementary bound proved here (`ω_odd(n) ≤ ν₂(n)+1`) is our own
+  elementary derivation from the multiplicativity + evenness facts, not
+  copied from Wall or anyone else.
+- **This Lean proof.** Written in the Mnehmos/llm-driven-proof-search
+  environment, **AI-assisted (Claude, Anthropic)** under human direction
+  (Mnehmos), in direct response to a demand for genuine, verifiable
+  engagement with the actual open literature rather than more corpus-lemma
+  busywork. A candidate 2026 arXiv source was investigated, found to show
+  strong signs of AI fabrication, and explicitly discarded rather than
+  relied upon — see [evidence.md](evidence.md) for the full disclosure.

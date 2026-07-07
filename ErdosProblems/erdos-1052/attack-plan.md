@@ -21,27 +21,54 @@ theorem, not a heuristic; each lands in this folder with a tracked episode.
 pass@1 (this folder). The machinery built for it — one-prime peel-off +
 p-free-part identification — is the recursion step for everything below.
 
-**M2 — σ*-multiplicativity, the keystone.** Prove
-`σ*(n) = ∏_{p ∈ n.primeFactors} (1 + p^{ν_p(n)})` by strong induction on
-`n`, iterating the already-proven peel-off (`sum_uDiv_factor` +
-`filter_not_dvd_eq_uDiv_ordCompl` recursing on `ordCompl`, which strictly
-decreases). Unlocks:
-- **M2a** — verify `IsUnitaryPerfect 87360` *fast* (the corpus's own test is
-  disabled with "too slow"; the product formula makes it `norm_num`-sized).
-- **M2b** — verify Wall's 25-digit fifth unitary perfect, which the corpus
-  ships as a bare `sorry`. Enumeration is hopeless; the product formula
-  reduces it to checking one factorization and a product identity. A real,
-  visible contribution nobody has in Lean.
+**M2 — σ*-multiplicativity (DONE).** `sigmaStar_mul_of_coprime` — for
+coprime `m, n`, `σ*(mn) = σ*(m)·σ*(n)` — proved directly via an explicit
+divisor-splitting bijection (`gcd(d,m)·gcd(d,n) = d` for `d ∣ mn`, `m,n`
+coprime), plus `sigmaStar_prime_pow` (`σ*(p^e) = p^e+1`). Built from scratch
+— Mathlib has no unitary-divisor-sum machinery at all. Unlocks:
+- **M2a (DONE)** — `isUnitaryPerfect_87360_fast`: `σ*(87360) = 2·87360`,
+  proved in a handful of `rw` steps via `87360 = 2^6·3·5·7·13`. The corpus's
+  own test (`isUnitaryPerfect_87360`) is disabled with `stop` as "too slow"
+  via naive divisor enumeration — this replaces that with an
+  exponentially-cheaper multiplicative computation, then reconnects to the
+  corpus's exact `properUnitaryDivisors`-based statement shape
+  (`isUnitaryPerfect_87360`, via the new `isUnitaryPerfect_of_sigmaStar`
+  bridge lemma).
+- **M2b (DONE)** — `isUnitaryPerfect_wall_fast`: same for Wall's 24-digit
+  fifth unitary perfect number (`2^18·3·5^4·7·11·13·19·37·79·109·157·313`),
+  which the corpus ships as a bare `sorry` with only an external,
+  non-replaying `formal_proof` link. Now independently verified, matching
+  the corpus's exact statement shape (`isUnitaryPerfect_wall`).
 
-**M3 — structure theorems toward finiteness.** With M2, in a unitary
-perfect `n = 2^a·m` (`m` odd, `a ≥ 1` by M1): `σ*(n) = (1+2^a)·∏(1+pᵢ^{aᵢ})
-= 2^{a+1}·m'`. Since `1+2^a` is odd and each odd factor `1+pᵢ^{aᵢ}` is even:
-- **M3a** — `ω_odd(n) ≤ a + 1`: the number of distinct odd primes is at most
-  the 2-adic budget. Clean, provable with M2 + 2-adic valuation counting.
+**M3 — structure theorems toward finiteness.**
+- **M3a (DONE)** — `omega_odd_le_two_adic_add_one`: for a unitary perfect
+  `n = 2^a·m` (`m` odd, `a ≥ 1`), the number of distinct odd prime factors
+  of `m` is at most `a + 1`. Proved via 2-adic valuation comparison on both
+  sides of `σ*(n) = 2n`, using a genuine new lemma
+  (`two_pow_card_primeFactors_dvd_sigmaStar`: for any odd `m`,
+  `2^(ω(m)) ∣ σ*(m)`, proved by strong induction peeling off one prime
+  power at a time). **Honest caveat on what this bound is worth:** combined
+  with Wall's real 1988 theorem (any sixth unitary perfect number needs
+  ≥9 distinct odd prime factors — Wall, *"New unitary perfect numbers have
+  at least nine odd components,"* Fibonacci Quarterly 26(4), 1988, MR
+  0967649 — confirmed real via Mathematical Reviews/Zentralblatt, though we
+  could not access the full 1988 proof text to reproduce his technique),
+  this forces `a ≥ 8` for any sixth unitary perfect number: it must be
+  divisible by `2^8 = 256`. That is real, if modest, new information — it
+  narrows the search space — but nowhere close to finiteness.
 - **M3b** — small non-divisibility facts from the literature (e.g. behavior
-  mod 3) as far as they formalize cleanly.
-These are the actual known fences around the problem; having them
-kernel-verified is the state of the art in formalized territory.
+  mod 3) as far as they formalize cleanly. Not yet attempted.
+
+**A dead end, disclosed.** While researching M3a's literature context, a
+2026 arXiv preprint (*"Bounded-box reductions in the Subbarao–Warren
+problem,"* claiming a much deeper partial result) was found, read in full,
+and identified as very likely AI-fabricated — invented terminology
+("3-Higgs primes" beyond the real, narrower "Higgs prime" concept),
+zero independent footprint for its named author, and suspiciously precise
+unverifiable computational claims, dressed in real citations (Zsigmodny,
+Ford, Wall, Graham) as camouflage. It was discarded and not used for
+anything in this attack plan. Recorded here so this mistake-avoided is
+part of the audit trail, not silently dropped.
 
 **M4 — the wall, mapped.** Finiteness itself requires mathematics that does
 not exist yet (this is why it is open). The deliverable at the frontier is
@@ -50,8 +77,11 @@ fails, with the formalized fences from M3 as the boundary markers.
 
 ## Ground rules
 
-- Every claim kernel-verified through the tracked pipeline; partial results
-  labeled partial (North-Star reporting discipline, issue #124).
+- Every claim kernel-verified (M2/M2a/M2b/M3a currently verified directly
+  via `lake env lean`, not yet re-submitted through the tracked MCP
+  episode pipeline — that re-submission is the next concrete step, so the
+  hash-pinned audit trail catches up to what's already proven); partial
+  results labeled partial (North-Star reporting discipline, issue #124).
 - No upstream PRs until the maintainer says go.
 - If at any point a genuinely novel bound emerges, it goes to independent
   review before any public claim.

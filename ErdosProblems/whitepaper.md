@@ -47,12 +47,15 @@ the same thing.
 | Folder | Erdős problem (upstream status) | What we actually proved |
 |---|---|---|
 | [erdos-1/](erdos-1/whitepaper.md) | [#1](https://www.erdosproblems.com/1) — distinct subset sums. **Open.** | Not #1 itself. A weaker, already-known bound from the same file, independently reproven; used as a calibration audit (**MATCH** vs. the proof already on file) — this folder is about testing our pipeline, not the problem. |
-| [erdos-1052/](erdos-1052/whitepaper.md) | [#1052](https://www.erdosproblems.com/1052) — are there finitely many unitary perfect numbers? **Open.** | Not #1052 itself. A companion theorem (Subbarao–Warren 1966: unitary perfect numbers are even) — known math since 1966, first standalone-reproducible *Lean* proof of it. A staged attack plan targets further companion facts, not the open question itself. |
-| [erdos-349/](erdos-349/whitepaper.md) | [#349](https://www.erdosproblems.com/349) — for which `(t,α)` is `⌊tαⁿ⌋` additively complete? **Open.** | Not #349 itself. The binary-expansion theorem (elementary, classical) — a supporting fact in the same file, explaining why `(1,2)` is a "good pair," closed with a one-line Mathlib corollary. |
+| [erdos-1052/](erdos-1052/whitepaper.md) | [#1052](https://www.erdosproblems.com/1052) — are there finitely many unitary perfect numbers? **Open.** | Not #1052 itself. A companion theorem (Subbarao–Warren 1966: unitary perfect numbers are even), plus new work: `σ*` multiplicativity (not previously in Mathlib), fast verification of two corpus test numbers the corpus leaves disabled/unproven, and a structural bound that — combined with a real 1988 theorem of Wall's — forces any undiscovered 6th unitary perfect number to be divisible by 256. Real but modest; not a resolution. |
+| [erdos-349/](erdos-349/whitepaper.md) | [#349](https://www.erdosproblems.com/349) — for which `(t,α)` is `⌊tαⁿ⌋` additively complete? **Open.** | Not #349 itself. Seven already-known theorems from the same file: four named component lemmas plus the corpus's own `integer_isGoodPair_iff` itself — the complete, already-solved characterization of the *integer* sub-case — fully assembled and kernel-verified. |
 
-**In short: three infra/companion-lemma wins, zero Erdős problems closed.**
-If that ever changes for a genuinely open question, it will say so
-explicitly, in a table row of its own, not folded into this one.
+**In short: three infra/companion-lemma wins (#1, #1052, #349), zero Erdős
+problems closed, one genuine sub-characterization fully assembled (#349's
+integer case: `integer_isGoodPair_iff`, all four pieces plus the final iff,
+kernel-verified end to end).** If that ever changes for a genuinely open
+question, it will say so explicitly, in a table row of its own, not folded
+into this one.
 
 ## Cross-problem method: calibrate, then produce, then attack
 
@@ -65,11 +68,15 @@ explicitly, in a table row of its own, not folded into this one.
    externally-suggested target; #349 came from a **local corpus scan**
    (grep every `research solved` + `sorry` theorem in the formal-conjectures
    clone, score by elementary-proof signals in the docstring — zero
-   external-fetch risk, ~691 candidates found). Both ship the first
-   standalone-reproducible proof of their statement.
-3. **Attack** (in progress, see [erdos-1052/attack-plan.md](erdos-1052/attack-plan.md)) —
-   push kernel-verified milestones toward a genuinely open question, with
-   every partial result honestly labeled as partial.
+   external-fetch risk, ~691 candidates found). Both ship standalone,
+   reproducible Lean proofs of their recorded statements.
+3. **Attack** (in progress for #1052, see
+   [erdos-1052/attack-plan.md](erdos-1052/attack-plan.md); complete for #349,
+   see [erdos-349/attack-plan.md](erdos-349/attack-plan.md)) — push
+   kernel-verified milestones toward a genuinely open question (#1052) or a
+   well-scoped already-solved sub-characterization within one (#349), with
+   every partial result honestly labeled as partial. #349's sub-target,
+   `integer_isGoodPair_iff`, reached full assembly this session.
 
 ## Honest limits (repository-wide)
 
@@ -77,9 +84,10 @@ explicitly, in a table row of its own, not folded into this one.
   the formalization artifact and the audited pipeline, not new mathematics
   — until/unless a genuinely novel result emerges from the attack-plan work,
   which would go to independent review before any public claim.
-- pass@1 = 1.0 across current results reflects heavy *local pre-validation*
-  before tracked attempts (every proof compiled locally first); the tracked
-  pipeline measures end-to-end integrity, not zero-shot model skill.
+- Most current results were pass@1 after local pre-validation; the newest
+  #349 growth-gap theorem was pass@3 because two tracked namespace
+  qualification repairs were preserved in the ledger. The tracked pipeline
+  measures end-to-end integrity, not zero-shot model skill.
 - Cross-problem infrastructure notes: [shared/](shared/) (corpus survey,
   bounty-board triage, run-level machine evidence, the disclosure rationale
   for publishing full proof bodies).
