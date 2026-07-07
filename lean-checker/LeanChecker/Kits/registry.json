@@ -185,24 +185,27 @@
       "module_path": "LeanChecker.Kits.FiniteCertificateKit",
       "domain": "certificate infrastructure — CNF model, solver-model import, bounded UNSAT, DIMACS export",
       "status": "v1",
-      "epistemic_basis": "owns obligation A of the A/B separation (docs/kits/certificate-interface.md §1a): certificate checking at rungs 1 (cnfUnsat_of_forall_fin, kernel enumeration) and 3 (cnfSat_of_witness, kernel model re-evaluation); rung 4 general LRAT import planned; DIMACS is exchange only, the Lean Cnf is always the canonical object; rung 5 bare solver output is NEVER proof authority",
+      "epistemic_basis": "owns obligation A of the A/B separation (docs/kits/certificate-interface.md §1a): certificate checking at rungs 1 (cnfUnsat_of_forall_fin, kernel enumeration), 3 (cnfSat_of_witness, kernel model re-evaluation), and 4 (cnfUnsat_of_forall_bitvec, bounded UNSAT via bv_decide/verified LRAT at CaDiCaL scale); DIMACS is exchange only, the Lean Cnf is always the canonical object; rung 5 bare solver output is NEVER proof authority",
       "canonical_imports": ["Mathlib", "LeanChecker.Kits.FiniteCertificateKit"],
       "canonical_open_directives": [],
       "key_lemmas": [
         "LeanChecker.FiniteCertificateKit.cnfEval",
         "LeanChecker.FiniteCertificateKit.cnfSat_of_witness",
         "LeanChecker.FiniteCertificateKit.cnfUnsat_of_forall_fin",
+        "LeanChecker.FiniteCertificateKit.cnfUnsat_of_forall_bitvec",
         "LeanChecker.FiniteCertificateKit.cnfEval_congr",
         "LeanChecker.FiniteCertificateKit.dimacs"
       ],
       "fixtures": [
         "pigeonhole PHP(2,1) UNSAT by bounded kernel enumeration",
+        "pigeonhole PHP(5,4) UNSAT at 2^20 scale via bv_decide/verified LRAT (rung 4)",
         "solver-model import checked by kernel evaluation",
         "byte-exact DIMACS rendering pinned by rfl"
       ],
       "certificate_claims": [
         {"claim": "phpTwoOne_unsat", "rung": 1, "certificate_checker": "kernel_decide", "encoding_soundness_lemma": "stated_directly"},
-        {"claim": "toy_sat", "rung": 3, "certificate_checker": "model_eval", "encoding_soundness_lemma": "stated_directly"}
+        {"claim": "toy_sat", "rung": 3, "certificate_checker": "model_eval", "encoding_soundness_lemma": "stated_directly"},
+        {"claim": "phpFiveFour_unsat", "rung": 4, "certificate_checker": "bv_decide_lrat", "encoding_soundness_lemma": "stated_directly"}
       ],
       "known_acceptance_targets": [
         {
@@ -213,11 +216,11 @@
         }
       ],
       "remaining_route_steps": [
-        "rung 4: Cnf → Std.Sat.CNF bridge + satisfiability-preservation lemma, unlocking general LRAT import at CaDiCaL scale",
-        "one general LRAT UNSAT fixture through the bridge",
+        "structural family encoding-soundness lemmas (obligation B) at scales beyond kernel decide (issue #110)",
+        "raw Std.Sat.CNF importer for unbounded/streaming certificates (deliberate non-goal for now; bounded UNSAT is covered by cnfUnsat_of_forall_bitvec)",
         "certificate artifact hashing flow (hash public via proof_artifact_hash, file private; tracked-benchmark certificates are proof-body material)"
       ],
-      "prompt_block": "FiniteCertificateKit: the certificate layer under the combinatorics kits. Lean Cnf is canonical; dimacs exports for external solvers; cnfSat_of_witness turns solver models into theorems by kernel re-evaluation (rung 3); cnfUnsat_of_forall_fin kernel-checks bounded UNSAT (rung 1). A checked certificate closes a MATHEMATICAL theorem only together with a family kit's encoding-soundness lemma (obligation B). Bare solver verdicts are never proof authority.",
+      "prompt_block": "FiniteCertificateKit: the certificate layer under the combinatorics kits. Lean Cnf is canonical; dimacs exports for external solvers; cnfSat_of_witness turns solver models into theorems by kernel re-evaluation (rung 3); cnfUnsat_of_forall_fin kernel-checks small bounded UNSAT (rung 1); cnfUnsat_of_forall_bitvec routes bounded UNSAT through bv_decide/verified LRAT at CaDiCaL scale (rung 4 — see phpFiveFour_unsat, 2^20). A checked certificate closes a MATHEMATICAL theorem only together with a family kit's encoding-soundness lemma (obligation B). Bare solver verdicts are never proof authority.",
       "unsafe_for_public_proof_body_export": false
     },
     {
