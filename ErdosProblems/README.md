@@ -24,12 +24,13 @@ ErdosProblems/
 │   ├── attack-plan.md      staged milestones toward the OPEN question
 │   ├── proof/
 │   └── trace/
-├── erdos-349/              Erdős Problem #349 (binary expansion lemma)
+├── erdos-349/              Erdős Problem #349 (integer characterization — COMPLETE)
 │   ├── whitepaper.md
 │   ├── credit.md
 │   ├── evidence.md         includes the local-corpus-scan discovery method
-│   ├── proof/
-│   └── trace/
+│   ├── attack-plan.md      integer_isGoodPair_iff fully assembled, all milestones DONE
+│   ├── proof/              7 kernel-verified theorems
+│   └── trace/              7 episode ledgers
 └── shared/                 cross-problem infrastructure notes
     ├── corpus-validation.md
     ├── bounty-board.md
@@ -50,7 +51,21 @@ relevant) into a new `erdos-<N>/` folder and link it from the project index.
    Subbarao–Warren 1966): first standalone-reproducible Lean proof — the
    statement ships as `sorry` in google-deepmind/formal-conjectures, and
    the only prior linked proof does not replay outside its home
-   infrastructure.
+   infrastructure. Since then: general `σ*` multiplicativity (not in
+   Mathlib), fast verification of the corpus's two disabled/`sorry` test
+   numbers (`87360`, Wall's 24-digit fifth unitary perfect number), and a
+   new structural bound (`ω_odd(n) ≤ ν₂(n)+1`) that combined with Wall's
+   real 1988 theorem forces any sixth unitary perfect number to be
+   divisible by `256`.
+3. **The #349 integer characterization, fully assembled**
+   ([erdos-349/](erdos-349/whitepaper.md)): `integer_isGoodPair_iff` —
+   `(t,α)` is a good integer pair iff `t=1 ∧ α=2` — is kernel-verified,
+   combining its four named component lemmas (`one_two_isGoodPair`,
+   `alpha_le_one_not_isGoodPair`, `int_coeff_ge_two_not_isGoodPair`,
+   `alpha_gt_two_not_isGoodPair`) via case split. A real, complete,
+   already-known theorem (external `formal_proof` on file), now
+   independently reproduced end-to-end through this project's own pipeline.
+   See [erdos-349/attack-plan.md](erdos-349/attack-plan.md).
 
 ## Verify it yourself
 
@@ -69,11 +84,22 @@ remain OPEN on erdosproblems.com.** Every proof in this repo targets a
 file as the open question, never the open question itself. See each
 folder's whitepaper for the explicit "what we did / did not prove" split.
 
-#1052's staged attack (σ*-multiplicativity, the corpus's missing 25-digit
-verification, a `ω_odd ≤ ν₂+1` structure bound, then an honest map of the
-wall) is in [erdos-1052/attack-plan.md](erdos-1052/attack-plan.md) and is
-actively worked — it targets further companion facts, not the finiteness
-question itself.
+#1052's staged attack is in [erdos-1052/attack-plan.md](erdos-1052/attack-plan.md):
+σ*-multiplicativity (done), fast verification of the corpus's missing
+87360/25-digit tests (done), and a `ω_odd ≤ ν₂+1` structure bound (done) —
+which, combined with Wall's real 1988 theorem, forces any sixth unitary
+perfect number to be divisible by `256`. Real, if modest, new information —
+not remotely close to resolving finiteness. An honest map of the wall is
+still pending. A 2026 arXiv paper found while researching this was
+identified as likely AI-fabricated and explicitly discarded — see the
+attack-plan for the full disclosure.
+
+#349's staged attack ([erdos-349/attack-plan.md](erdos-349/attack-plan.md))
+targeted `integer_isGoodPair_iff` — a real, already-solved (by others)
+characterization of the *integer* sub-case, not the general open question —
+and is now **complete**: all 4 component lemmas plus the final iff assembly
+are kernel-verified. The general question (`erdos_349` for real `(t,α)`)
+remains open; this cluster does not touch it.
 
 ## Upstream
 
