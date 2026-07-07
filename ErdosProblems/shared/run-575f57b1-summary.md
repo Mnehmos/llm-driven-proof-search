@@ -37,8 +37,9 @@ instrumented and are reported as null, never fabricated as zero.
 ## Public summaries (proof_export, redaction marker verbatim)
 
 Both episodes export with `proof_body_redacted: true` in `public_summary`
-mode; the full bodies are published DELIBERATELY in `../proofs/` (see
-`disclosure-note.md`).
+mode; the full bodies are published DELIBERATELY in each problem's own
+`proof/` folder (`../erdos-1/proof/`, `../erdos-1052/proof/` — see
+[disclosure-note.md](disclosure-note.md)).
 
 - Episode `2cc1e02a` (erdos 1052): statement hash `6ea8f9fe…`, trajectory
   first/last `f322e4e8…`/`64d378d2…`, outcome KERNEL_VERIFIED.
