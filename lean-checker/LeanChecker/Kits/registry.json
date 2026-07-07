@@ -238,11 +238,15 @@
         "LeanChecker.ExtremalCombinatoricsKit.ramsey_two_three_gt_five",
         "LeanChecker.ExtremalCombinatoricsKit.k5NoMonoCnf_correct",
         "LeanChecker.ExtremalCombinatoricsKit.ramsey_two_three_gt_five_via_certificate",
+        "LeanChecker.ExtremalCombinatoricsKit.ramseyTriangleCnf",
+        "LeanChecker.ExtremalCombinatoricsKit.ramseyTriangleCnf_correct",
+        "LeanChecker.ExtremalCombinatoricsKit.k9_edge_coloring_has_mono_triangle",
         "LeanChecker.ExtremalCombinatoricsKit.schur_two_of_five"
       ],
       "fixtures": [
         "R(3,3) = 6 pinned both directions: pentagon witness by kernel decide, K6 upper bound by verified-LRAT bv_decide",
         "A/B separation worked end-to-end: k5NoMonoCnf encoding + soundness lemma + kernel-checked model 665#10 → R(3,3) > 5",
+        "structural encoding soundness at 2^36: every K9 edge 2-coloring has a mono triangle (generated CNF, inductive soundness + bv_decide)",
         "Schur S(2) = 4 both directions by kernel decide",
         "edgeIdx range + injectivity sanity for K6"
       ],
@@ -250,6 +254,7 @@
         {"claim": "ramsey_two_three_le_six", "rung": 2, "certificate_checker": "bv_decide_lrat", "encoding_soundness_lemma": "stated_directly"},
         {"claim": "ramsey_two_three_gt_five", "rung": 1, "certificate_checker": "kernel_decide", "encoding_soundness_lemma": "stated_directly"},
         {"claim": "ramsey_two_three_gt_five_via_certificate", "rung": 3, "certificate_checker": "model_eval", "encoding_soundness_lemma": "LeanChecker.ExtremalCombinatoricsKit.k5NoMonoCnf_correct"},
+        {"claim": "k9_edge_coloring_has_mono_triangle", "rung": 4, "certificate_checker": "bv_decide_lrat", "encoding_soundness_lemma": "LeanChecker.ExtremalCombinatoricsKit.ramseyTriangleCnf_correct", "note": "structural (inductive) obligation B at 2^36 scale — issue #110"},
         {"claim": "schur_two_of_five", "rung": 1, "certificate_checker": "kernel_decide", "encoding_soundness_lemma": "stated_directly"}
       ],
       "known_acceptance_targets": [

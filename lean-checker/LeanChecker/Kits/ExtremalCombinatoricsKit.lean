@@ -169,4 +169,77 @@ theorem schur_two_of_four_witness :
     ∃ c : Fin 4 → Fin 2, ∀ a b : Fin 4, ∀ h : a.val + 1 + (b.val + 1) ≤ 4,
       ¬(c a = c b ∧ c b = c ⟨a.val + b.val + 1, by omega⟩) := by decide
 
+/-! ## Structural encoding soundness at scale (issue #110)
+
+The A/B worked example above (`k5NoMonoCnf_correct`) checks obligation B by
+`decide` over all 1024 colorings — that stops working exactly when obligation
+A needs a SAT solver. This section does obligation B the way that scales: a
+GENERATED Ramsey CNF (`ramseyTriangleCnf n`, using `edgeIdx` indexing) whose
+soundness lemma is proved by STRUCTURAL INDUCTION over the triangle list
+(`FiniteCertificateKit.cnfEval_flatMap_notAllSame`), never by enumerating
+assignments. Composed with the rung-4 bridge + `bv_decide` (obligation A),
+this closes a Ramsey theorem at `2³⁶` — a scale where `decide`-based
+obligation B is hopeless.
+
+Pattern for the next family (Schur/EGZ): supply a generator producing
+`notAllSame`/`atLeastOne`-style gadgets over the family's index set, get its
+structural soundness from the `flatMap` lemma, and pair with `bv_decide` or
+`cnfUnsat_of_forall_bitvec` for obligation A. -/
+
+/-- Triangles of `Kₙ` as edge-index triples `(edgeIdx i j, edgeIdx i k,
+edgeIdx j k)` for `i < j < k`. -/
+def triangleEdges (n : ℕ) : List (ℕ × ℕ × ℕ) :=
+  (List.range n).flatMap fun i => (List.range n).flatMap fun j =>
+    (List.range n).filterMap fun k =>
+      if i < j ∧ j < k then some (edgeIdx n i j, edgeIdx n i k, edgeIdx n j k) else none
+
+/-- The "no monochromatic triangle in `Kₙ`" CNF, generated (not hand-listed):
+one `notAllSame` gadget per triangle over the edge variables. -/
+def ramseyTriangleCnf (n : ℕ) : Cnf :=
+  (triangleEdges n).flatMap fun t => FiniteCertificateKit.notAllSame t.1 t.2.1 t.2.2
+
+/-- **Encoding soundness (obligation B), structural**: a coloring satisfies
+`ramseyTriangleCnf n` iff every triangle of `Kₙ` is non-monochromatic — read
+straight off the generator by induction, with no assignment enumeration. -/
+theorem ramseyTriangleCnf_correct (asn : ℕ → Bool) (n : ℕ) :
+    cnfEval asn (ramseyTriangleCnf n)
+      = (triangleEdges n).all
+          fun t => !(asn t.1 == asn t.2.1 && asn t.2.1 == asn t.2.2) :=
+  FiniteCertificateKit.cnfEval_flatMap_notAllSame asn (triangleEdges n)
+
+set_option maxRecDepth 100000 in
+set_option maxHeartbeats 4000000 in
+/-- **Obligation A at `2³⁶`**: no `BitVec 36` edge-colouring of `K₉` satisfies
+the triangle-free CNF — external CaDiCaL search, Lean's verified LRAT replay.
+The generated CNF is concretized with `norm_num [List.range_succ, …]` before
+`bv_decide`. -/
+theorem ramseyTriangleCnf_nine_unsatBV :
+    ∀ bv : BitVec 36, cnfEvalBV bv (ramseyTriangleCnf 9) = false := by
+  intro bv
+  unfold cnfEvalBV cnfEval ramseyTriangleCnf triangleEdges FiniteCertificateKit.notAllSame edgeIdx
+  norm_num [List.range_succ, List.range_zero, clauseEval, litEval]
+  bv_decide
+
+set_option maxRecDepth 100000 in
+/-- **R(3,3) ≤ 9 at `2³⁶` scale** (structural B + verified-LRAT A): every
+edge 2-colouring of `K₉` contains a monochromatic triangle. Obligation B is
+`ramseyTriangleCnf_correct` (structural, no enumeration); obligation A is the
+`bv_decide` UNSAT above; the rung-4 bridge (`cnfUnsat_of_forall_bitvec`)
+composes them. The genuine bound is R(3,3) = 6 — this theorem exists to
+demonstrate the encoding-soundness pattern past the `decide` ceiling. -/
+theorem k9_edge_coloring_has_mono_triangle (asn : ℕ → Bool) :
+    ∃ t ∈ triangleEdges 9, asn t.1 == asn t.2.1 && asn t.2.1 == asn t.2.2 := by
+  have hb : ∀ v ∈ cnfVars (ramseyTriangleCnf 9), v < 36 := by decide
+  have hunsat : CnfUnsat (ramseyTriangleCnf 9) :=
+    cnfUnsat_of_forall_bitvec (ramseyTriangleCnf 9) hb ramseyTriangleCnf_nine_unsatBV
+  by_contra hcon
+  refine hunsat ⟨asn, ?_⟩
+  rw [ramseyTriangleCnf_correct, List.all_eq_true]
+  intro t ht
+  have hne : ¬((asn t.1 == asn t.2.1 && asn t.2.1 == asn t.2.2) = true) :=
+    fun h => hcon ⟨t, ht, h⟩
+  cases hb2 : (asn t.1 == asn t.2.1 && asn t.2.1 == asn t.2.2) with
+  | false => rfl
+  | true => exact absurd hb2 hne
+
 end LeanChecker.ExtremalCombinatoricsKit
