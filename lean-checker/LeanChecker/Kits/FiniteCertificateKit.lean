@@ -129,6 +129,45 @@ theorem cnfUnsat_of_forall_fin {n : ℕ} (f : Cnf)
   rw [hcongr, hfalse] at ha
   exact Bool.false_ne_true ha
 
+/-! ## Rung 4: general UNSAT at CaDiCaL scale via the verified LRAT checker
+
+`cnfUnsat_of_forall_fin` is kernel enumeration — it dies at `2ⁿ`. The rung-4
+path routes the SAME `CnfUnsat` conclusion through `bv_decide` instead: a
+`Cnf` assignment is a `BitVec n` (bit `v` ↦ variable `v`), and ruling out
+every `BitVec n` is a pure BitVec goal CaDiCaL solves and Lean's formally
+verified LRAT checker replays — no `2ⁿ` kernel work. `cnfEvalBV` is the
+BitVec-indexed evaluator; `cnfUnsat_of_forall_bitvec` is the bridge whose
+hypothesis `∀ bv, cnfEvalBV bv f = false` is discharged by `bv_decide`. -/
+
+/-- Evaluate a CNF under a `BitVec` assignment: variable `v` reads bit `v`. -/
+def cnfEvalBV {n : ℕ} (bv : BitVec n) (f : Cnf) : Bool :=
+  cnfEval (fun v => bv.getLsbD v) f
+
+/-- **Rung-4 bridge**: for a CNF whose variables are all `< n`, ruling out
+every `BitVec n` assignment establishes genuine `CnfUnsat` over unrestricted
+`ℕ → Bool` assignments. The `∀ bv` hypothesis is a pure BitVec proposition —
+discharge it with `bv_decide` (external CaDiCaL + Lean's verified LRAT
+checker) to obtain UNSAT at solver scale rather than by `2ⁿ` enumeration. An
+arbitrary assignment is transported to a `BitVec n` via `ofBoolListLE`, which
+agrees with it on every in-range variable. -/
+theorem cnfUnsat_of_forall_bitvec {n : ℕ} (f : Cnf)
+    (hb : ∀ v ∈ cnfVars f, v < n)
+    (h : ∀ bv : BitVec n, cnfEvalBV bv f = false) : CnfUnsat f := by
+  rintro ⟨a, ha⟩
+  set bv : BitVec n :=
+    (BitVec.ofBoolListLE (List.ofFn (fun i : Fin n => a i.val))).cast List.length_ofFn with hbv
+  have hget : ∀ v ∈ cnfVars f, bv.getLsbD v = a v := by
+    intro v hv
+    have hvn : v < n := hb v hv
+    rw [hbv, BitVec.getLsbD_cast, BitVec.getLsbD_ofBoolListLE, List.getD_eq_getElem?_getD,
+      List.getElem?_ofFn]
+    simp [hvn]
+  have hcongr : cnfEval (fun v => bv.getLsbD v) f = cnfEval a f := cnfEval_congr f hget
+  have hbv_false := h bv
+  unfold cnfEvalBV at hbv_false
+  rw [hcongr, ha] at hbv_false
+  exact Bool.false_ne_true hbv_false.symm
+
 /-! ## DIMACS export (exchange format, never authority) -/
 
 /-- One DIMACS literal token. -/
@@ -162,5 +201,41 @@ theorem toy_sat : CnfSat [[⟨0, true⟩, ⟨1, true⟩], [⟨0, false⟩]] :=
 
 /-- Sanity: the DIMACS rendering of the pigeonhole formula, byte-exact. -/
 example : dimacs phpTwoOne = "p cnf 2 3\n1 0\n2 0\n-1 -2 0\n" := by rfl
+
+/-! ## Rung-4 scale fixture: pigeonhole at 2²⁰
+
+A generated pigeonhole family — `p` pigeons, `h` holes, variable `i·h + j`
+meaning "pigeon `i` in hole `j`": every pigeon is in some hole, and no two
+pigeons share a hole. UNSAT whenever `p > h`. `PHP(5,4)` has 20 variables, so
+bounded kernel enumeration would be `2²⁰ ≈ 10⁶` cases — out of reach for
+`decide`, routine for the rung-4 LRAT path. -/
+
+/-- "Each of the `p` pigeons occupies some hole" — one wide clause per pigeon. -/
+def phpVars (p h : ℕ) : List Clause :=
+  (List.range p).map fun i => (List.range h).map fun j => (⟨i * h + j, true⟩ : Lit)
+
+/-- "No two pigeons share a hole" — a binary clause per hole and pigeon pair. -/
+def phpExcl (p h : ℕ) : List Clause :=
+  (List.range h).flatMap fun j =>
+    (List.range p).flatMap fun i =>
+      (List.range p).filterMap fun i' =>
+        if i < i' then some [(⟨i * h + j, false⟩ : Lit), ⟨i' * h + j, false⟩] else none
+
+/-- Pigeonhole CNF for `p` pigeons and `h` holes. -/
+def phpCnf (p h : ℕ) : Cnf := phpVars p h ++ phpExcl p h
+
+set_option maxRecDepth 8000 in
+/-- Fixture (rung 4 — issue #109 acceptance): `PHP(5,4)` is unsatisfiable.
+20 variables ⇒ a `2²⁰` search space, closed NOT by kernel enumeration but by
+the rung-4 bridge: the `∀ bv : BitVec 20` obligation is handed to `bv_decide`
+(external CaDiCaL + Lean's verified LRAT replay), and `cnfUnsat_of_forall_bitvec`
+turns that into genuine `CnfUnsat`. -/
+theorem phpFiveFour_unsat : CnfUnsat (phpCnf 5 4) := by
+  apply cnfUnsat_of_forall_bitvec (n := 20)
+  · decide
+  · intro bv
+    unfold cnfEvalBV cnfEval phpCnf phpVars phpExcl
+    norm_num [List.range_succ, List.range_zero, clauseEval, litEval]
+    bv_decide
 
 end LeanChecker.FiniteCertificateKit

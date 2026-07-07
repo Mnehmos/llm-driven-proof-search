@@ -22,7 +22,7 @@ proof authority.
 | 1 | kernel `decide` — the whole finite search runs in Lean's kernel | kernel | shipped | `schur_two_of_five`, `phpTwoOne_unsat`, `ramsey_two_three_gt_five` |
 | 2 | `bv_decide` — external CaDiCaL search, UNSAT certificate replayed by Lean's **formally verified LRAT checker** | kernel (the checker is verified; the solver is untrusted) | shipped, works in the pinned toolchain | `ramsey_two_three_le_six` (a genuine R(3,3) ≤ 6) |
 | 3 | imported SAT model, re-evaluated by the kernel (`cnfSat_of_witness` + `decide`) | kernel (the model is untrusted input; evaluation is the check) | shipped | `toy_sat`; end-to-end: `ramsey_two_three_gt_five_via_certificate` |
-| 4 | general LRAT import for arbitrary `Cnf` UNSAT claims | kernel, once the bridge exists | planned (below) | — |
+| 4 | bounded `Cnf` UNSAT routed through `bv_decide` (external CaDiCaL + verified LRAT), no `2ⁿ` kernel enumeration | kernel (verified checker; solver untrusted) | shipped | `phpFiveFour_unsat` (PHP(5,4), a `2²⁰` search space) |
 | 5 | solver says UNSAT/SAT, nothing checked in Lean | **none — reporting metadata only** | policy | recorded via issue #92 fields, never as an outcome |
 
 The rung-5 rule restates issue #88's acceptance criterion: *no proof
@@ -79,27 +79,38 @@ against an existing canonical `Cnf` — otherwise its claims are rung 5.
 Import of a solver **model** is a `ℕ → Bool` assignment plugged into
 `cnfSat_of_witness` (rung 3). Import of a solver **UNSAT proof** is rung 4.
 
-## 3. Rung-4 plan: general LRAT import
+## 3. Rung 4: general UNSAT at solver scale (shipped)
 
-`bv_decide` already ships the hard part in the pinned toolchain: a verified
-LRAT proof checker (`Std.Tactic.BVDecide` / `Std.Sat` internals) plus the
-CaDiCaL binary. What rung 4 adds:
+Rather than reimplement an LRAT importer against the `Std.Sat` internals, the
+shipped rung-4 path reuses `bv_decide` — which already bundles a verified
+LRAT checker plus CaDiCaL — by reflecting a bounded `Cnf` UNSAT question into
+a BitVec proposition:
 
-1. **Bridge**: a translation `Cnf → Std.Sat.CNF` plus the (small) soundness
-   lemma that translation preserves satisfiability. Then
-   `LRAT.check`-style verification of a solver-produced certificate yields
-   `CnfUnsat f` for our `Cnf` values directly, at whatever scale CaDiCaL can
-   solve — no `2^n` kernel enumeration.
-2. **Encoding soundness**: for each problem family, a lemma of the shape
-   "`encode params` UNSAT → theorem". This is per-family Lean work (the
-   Ramsey fixture skipped it by *stating* the theorem over `BitVec`, which is
-   why `bv_decide` applies directly — the recommended pattern while rung 4 is
-   pending: state finite claims over `BitVec`/`Bool` when feasible).
-3. **Artifact handling**: certificates are files; they are hashed and
-   referenced, not committed (see §4).
+1. **Evaluator** `cnfEvalBV : BitVec n → Cnf → Bool` reads variable `v` from
+   bit `v` of the assignment.
+2. **Bridge** `cnfUnsat_of_forall_bitvec` (kernel-checked): for a CNF with
+   every variable `< n`, `(∀ bv : BitVec n, cnfEvalBV bv f = false) →
+   CnfUnsat f`. The proof transports an arbitrary `ℕ → Bool` assignment to a
+   `BitVec n` via `ofBoolListLE` (agreeing on every in-range variable), so no
+   generality is lost.
+3. **Discharge**: the `∀ bv` obligation is a pure BitVec goal — `bv_decide`
+   hands it to CaDiCaL and replays the UNSAT certificate through the verified
+   checker. `phpFiveFour_unsat` (PHP(5,4), 20 vars, a `2²⁰` space) is the
+   live example: closed with zero `2ⁿ` kernel enumeration.
 
-Non-goals for rung 4: proof search inside Lean, incremental solving,
-anything that would put an unverified checker in the trusted base.
+Trust is identical to rung 2 (the checker is verified; the solver is
+untrusted). This covers **bounded** CNF UNSAT at CaDiCaL scale, which is the
+case every finite-combinatorics encoding produces. Non-goals, unchanged:
+proof search inside Lean, incremental solving, and — the deliberate trade —
+unbounded/streaming certificates that would need the raw `Std.Sat` importer.
+Those remain future work; nothing here puts an unverified checker in the
+trusted base.
+
+**Encoding soundness** (obligation B) is still per-family Lean work — see
+§1a and issue #110. The recommended pattern remains: state finite claims over
+`BitVec`/`Bool` when feasible so `bv_decide` (rung 2) or this bridge (rung 4)
+applies directly; otherwise supply a structural encoding-soundness lemma.
+Certificate artifacts are hashed and referenced, not committed (see §4).
 
 ## 4. Public-safe certificate reporting
 
@@ -186,10 +197,12 @@ Implementation sequence (status):
    model-witness recheck / bounded UNSAT.
 3. ✅ Rung-3 SAT-witness path end-to-end, including the A/B worked example
    (`ramsey_two_three_gt_five_via_certificate`).
-4. ⬜ `Cnf → Std.Sat.CNF` bridge + satisfiability-preservation lemma
-   (follow-up issue).
-5. ⬜ One general LRAT UNSAT fixture through the bridge.
+4. ✅ Rung-4 bridge `cnfUnsat_of_forall_bitvec` (issue #109): bounded `Cnf`
+   UNSAT routed through `bv_decide`/verified LRAT, transporting an arbitrary
+   assignment to a `BitVec n`. (The raw `Std.Sat.CNF` importer for
+   unbounded/streaming certificates is a deliberate non-goal — see §3.)
+5. ✅ Rung-4 UNSAT fixture at scale: `phpFiveFour_unsat` (PHP(5,4), `2²⁰`).
 6. ⬜ One family encoding-soundness lemma at a scale where rung 1 cannot
-   check obligation B by `decide` (follow-up issue; Ramsey or Schur).
+   check obligation B by `decide` (issue #110; Ramsey or Schur).
 7. ⬜ Then, and only then, harder Erdős examples. R(4,4)-scale is a stress
    test, not an implementation target.
