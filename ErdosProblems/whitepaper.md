@@ -49,8 +49,9 @@ the same thing.
 | [erdos-1/](erdos-1/whitepaper.md) | [#1](https://www.erdosproblems.com/1) — distinct subset sums. **Open.** | Not #1 itself. A weaker, already-known bound from the same file, independently reproven; used as a calibration audit (**MATCH** vs. the proof already on file) — this folder is about testing our pipeline, not the problem. |
 | [erdos-1052/](erdos-1052/whitepaper.md) | [#1052](https://www.erdosproblems.com/1052) — are there finitely many unitary perfect numbers? **Open.** | Not #1052 itself. A companion theorem (Subbarao–Warren 1966: unitary perfect numbers are even), plus new work: `σ*` multiplicativity (not previously in Mathlib), fast verification of two corpus test numbers the corpus leaves disabled/unproven, and a structural bound that — combined with a real 1988 theorem of Wall's — forces any undiscovered 6th unitary perfect number to be divisible by 256. Real but modest; not a resolution. |
 | [erdos-349/](erdos-349/whitepaper.md) | [#349](https://www.erdosproblems.com/349) — for which `(t,α)` is `⌊tαⁿ⌋` additively complete? **Open.** | Not #349 itself. Seven already-known theorems from the same file: four named component lemmas plus the corpus's own `integer_isGoodPair_iff` itself — the complete, already-solved characterization of the *integer* sub-case — fully assembled and kernel-verified. |
+| [erdos-291/](erdos-291/whitepaper.md) | [#291](https://www.erdosproblems.com/291) — is `gcd(aₙ,Lₙ)=1` (harmonic-number denominators) infinitely often? **Open.** | Not #291 itself (part i, the `=1` question, is open). The **easy solved companion** (part ii): `gcd(aₙ,Lₙ) > 1` infinitely often (Steinerberger), via the explicit family `n=2·3ᵏ`. Corpus ships it `sorry`; kernel-verified here. |
 
-**In short: three infra/companion-lemma wins (#1, #1052, #349), zero Erdős
+**In short: four infra/companion-lemma wins (#1, #1052, #349, #291), zero Erdős
 problems closed, one genuine sub-characterization fully assembled (#349's
 integer case: `integer_isGoodPair_iff`, all four pieces plus the final iff,
 kernel-verified end to end).** If that ever changes for a genuinely open

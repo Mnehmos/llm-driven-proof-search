@@ -66,6 +66,11 @@ relevant) into a new `erdos-<N>/` folder and link it from the project index.
    already-known theorem (external `formal_proof` on file), now
    independently reproduced end-to-end through this project's own pipeline.
    See [erdos-349/attack-plan.md](erdos-349/attack-plan.md).
+4. **The #291 harmonic-denominator companion (part ii)**
+   ([erdos-291/](erdos-291/whitepaper.md)): `{n | gcd(aₙ,Lₙ) > 1}.Infinite` —
+   the easy already-known direction (Steinerberger), which the corpus ships as
+   `sorry`. Kernel-verified via the explicit infinite family `n = 2·3ᵏ`. The
+   open part (i) (`= 1` infinitely often) is untouched.
 
 ## Verify it yourself
 
