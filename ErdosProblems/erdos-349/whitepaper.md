@@ -2,6 +2,12 @@
 
 **Problem folder whitepaper — 2026-07-07**
 
+> **Status: Erdős Problem #349 is still OPEN.** For which `(t,α)` is
+> `⌊tαⁿ⌋` additively complete — nobody has the general answer. This folder
+> does not touch that question. It proves a **different, elementary,
+> already-known** fact (binary expansion) that happens to sit in the same
+> corpus file as scaffolding, not a step toward the open case.
+
 ## The problem
 
 [erdosproblems.com/349](https://www.erdosproblems.com/349): for what values of

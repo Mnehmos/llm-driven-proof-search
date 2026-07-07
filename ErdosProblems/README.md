@@ -63,11 +63,17 @@ Exit 0 = Lean's kernel accepts every step. No trust in the authors required.
 
 ## Status of open problems
 
-Neither #1 nor #1052 is resolved by this repository. #1052's staged attack
-(σ*-multiplicativity, the corpus's missing 25-digit verification, a
-`ω_odd ≤ ν₂+1` structure bound, then an honest map of the wall) is in
-[erdos-1052/attack-plan.md](erdos-1052/attack-plan.md) and is actively
-worked.
+**None of #1, #1052, or #349 is resolved by this repository — all three
+remain OPEN on erdosproblems.com.** Every proof in this repo targets a
+*different, already-known* companion fact that lives in the same corpus
+file as the open question, never the open question itself. See each
+folder's whitepaper for the explicit "what we did / did not prove" split.
+
+#1052's staged attack (σ*-multiplicativity, the corpus's missing 25-digit
+verification, a `ω_odd ≤ ν₂+1` structure bound, then an honest map of the
+wall) is in [erdos-1052/attack-plan.md](erdos-1052/attack-plan.md) and is
+actively worked — it targets further companion facts, not the finiteness
+question itself.
 
 ## Upstream
 

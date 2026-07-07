@@ -2,6 +2,13 @@
 
 **Problem folder whitepaper — 2026-07-07**
 
+> **Status: Erdős Problem #1052 is still OPEN.** *Are there finitely many
+> unitary perfect numbers?* — nobody knows. This folder does not answer
+> that. It proves a **different, already-known** companion theorem
+> (Subbarao–Warren, 1966) that lives in the same corpus file, and stages an
+> attack plan of further companion facts — not a resolution of the open
+> question.
+
 ## The problem
 
 [erdosproblems.com/1052](https://www.erdosproblems.com/1052): *are there only
