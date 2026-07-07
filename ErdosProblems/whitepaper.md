@@ -40,15 +40,21 @@ lives in each problem's own `whitepaper.md`.
 |---|---|---|---|
 | [erdos-1/](erdos-1/whitepaper.md) | [#1](https://www.erdosproblems.com/1) — distinct subset sums | Open (calibration case study) | Weaker known bound independently proven; audit **MATCH** vs. proof on file |
 | [erdos-1052/](erdos-1052/whitepaper.md) | [#1052](https://www.erdosproblems.com/1052) — unitary perfect numbers | Open (finiteness); companion theorem proven | First standalone-reproducible proof that unitary perfect numbers are even; staged attack plan for the open question |
+| [erdos-349/](erdos-349/whitepaper.md) | [#349](https://www.erdosproblems.com/349) — additive completeness of `⌊tαⁿ⌋` | Open (general case); one lemma in the corpus's partial cluster proven | Binary-expansion theorem, found via a local corpus scan (not external research) and closed with a one-line Mathlib corollary |
 
 ## Cross-problem method: calibrate, then produce, then attack
 
 1. **Calibrate** ([erdos-1/](erdos-1/whitepaper.md)) — verify the pipeline's
    "done" signal against an external artifact before trusting it on new
    material.
-2. **Produce** ([erdos-1052/](erdos-1052/whitepaper.md)) — target the
-   corpus's solved-but-unproven-in-Lean statements; ship the first
-   standalone-reproducible proof.
+2. **Produce** ([erdos-1052/](erdos-1052/whitepaper.md),
+   [erdos-349/](erdos-349/whitepaper.md)) — target the corpus's
+   solved-but-unproven-in-Lean statements. #1052 came from an
+   externally-suggested target; #349 came from a **local corpus scan**
+   (grep every `research solved` + `sorry` theorem in the formal-conjectures
+   clone, score by elementary-proof signals in the docstring — zero
+   external-fetch risk, ~691 candidates found). Both ship the first
+   standalone-reproducible proof of their statement.
 3. **Attack** (in progress, see [erdos-1052/attack-plan.md](erdos-1052/attack-plan.md)) —
    push kernel-verified milestones toward a genuinely open question, with
    every partial result honestly labeled as partial.
