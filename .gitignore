@@ -54,6 +54,8 @@ tunnel_client_dir/
 /igp24/
 /data/igp24/
 /data/equational-theories-lean-stage2/
+# Upstream reference clone (embedded git repo, machine-local; fetch it yourself).
+/data/equational_theories_upstream/
 
 # Kilo workspace tooling (machine-local)
 .kilo/

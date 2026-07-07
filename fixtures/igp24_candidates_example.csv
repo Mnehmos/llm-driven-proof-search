@@ -1,0 +1,3 @@
+label,r,polynomial,source,poly_disc_abs
+24T25000,0,"1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1","official example; should be skipped as baseline/team-submitted",1312855308850436212414726439933209
+24T293,16,"1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1","syntactic example only; expected label is intentionally not certified",
