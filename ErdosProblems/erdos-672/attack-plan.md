@@ -97,6 +97,24 @@ Closing this is exactly Fermat's **"no four squares in arithmetic progression"**
     factor pulled out, reducing to the same core).
   - Note: the crux `no_fermat_sub` is the hard 60% and is DONE; M4 is careful
     classical case-algebra on top of it.
+
+  **M4 progress (kernel-verified reduction, 2 case-descents remain):**
+  `euler_four_ap` now carries the verified reduction to two cases via the
+  primitive Pythagorean triple `(q, d², X)`:
+  - **case (i)** `d²=2MN`: `A=(M−N)²`, `B=(M+N)²` (both squares). Then `d=2uv`
+    (since `2MN=d²`, `gcd(M,N)=1`, opp parity ⟹ `{M,N}={2u²,v²}` ⟹ `d=2uv`).
+    With `gcd(n,3)=1`: four squares in AP `n=e², n+d=g², n+2d=h², n+3d=f²`.
+    Algebraic leads (all `ring`-verifiable): `h⁴−e⁴ = 4d·g²`, `f⁴−g⁴ = 4d·h²`,
+    so `(h⁴−e⁴)(f⁴−g⁴) = (4dgh)²`. If `d` were a perfect square, `h⁴−e⁴=(2g√d)²`
+    gives a `no_fermat_sub` instance directly — but `d=2uv` isn't square in
+    general, so either exploit the `d=2uv` structure or do a **direct infinite
+    descent on the common difference** of the four-squares AP (the standard
+    Fermat proof; reuse `PythagoreanTriple.coprime_classification`). Two
+    Pythagorean triples arise: `((h+e)/2)²+((h−e)/2)²=g²` and
+    `((f+g)/2)²+((f−g)/2)²=h²`, with `ps=rt` linking them (`p=(h+e)/2` etc.).
+  - **case (ii)** `d²=M²−N²`: `A=2N²=n(n+3d)`, `B=2M²=(n+d)(n+2d)`. Note
+    `N²+d²=M²` so `(N,d,M)` is a primitive Pythagorean triple. Needs its own
+    2×-square-in-AP descent / sub-split on `gcd(n,3)` and parity of `n`.
 - **M5 ☐** Full file 0/0; erdos-672 docs; commit; track via MCP.
 
 ## Recon notes (Mathlib pins, mathlib@360da6fa)
