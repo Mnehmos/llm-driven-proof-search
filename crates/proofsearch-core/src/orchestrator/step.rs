@@ -11,6 +11,12 @@ use crate::models::{LeanVerificationOutcome, LeanVerificationResult, LeanModuleV
 pub enum StepError {
     Conflict,
     InvalidAttempt,
+    /// The attempt's claim expired (see `attempts::CLAIM_TTL_MINUTES`) and its
+    /// action request has since been taken by another attempt (or fulfilled),
+    /// so the step cannot be revived in place. Distinct from `InvalidAttempt`
+    /// (unknown attempt / token mismatch) so the client learns the actual
+    /// remedy: re-observe and re-claim with a fresh idempotency_key. (#157)
+    ClaimSuperseded { expired_at: String },
     InvalidCost { cost_micros: i128 },
     BudgetExceeded { requested_cost_micros: i64, remaining_cost_micros: i64 },
     ActionSchemaInvalid(String),
@@ -122,19 +128,36 @@ pub fn attempt_prepare(
     let now = Utc::now().to_rfc3339();
 
     // 1. Verify attempt is valid
-    let attempt_info: Option<(String, String, String, String)> = tx.query_row(
-        "SELECT status, episode_id, claim_token, action_request_id FROM action_attempts WHERE id = ?1",
+    let attempt_info: Option<(String, String, String, String, String)> = tx.query_row(
+        "SELECT status, episode_id, claim_token, action_request_id, claim_expiration
+         FROM action_attempts WHERE id = ?1",
         [attempt_id.to_string()],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
     ).optional()?;
 
-    let (status, episode_id_str, db_claim_token, action_request_id_str) = match attempt_info {
+    let (status, episode_id_str, db_claim_token, action_request_id_str, claim_expiration) = match attempt_info {
         Some(info) => info,
         None => return Err(StepError::InvalidAttempt),
     };
 
-    if status != "claimed" || db_claim_token != claim_token {
+    if db_claim_token != claim_token {
         return Err(StepError::InvalidAttempt);
+    }
+    match status.as_str() {
+        "claimed" => {}
+        // #157: the expiry sweep recovered this claim while the step was queued
+        // (burst tail behind slow Lean verifications). The token is genuine and
+        // was issued for exactly this request — if the request went back to
+        // 'pending' and nobody else took it, reviving the claim in place is
+        // safe (everything below still runs under this transaction's CAS on
+        // the episode revision). If it WAS taken, reject with the precise
+        // reason instead of the old blanket "Invalid attempt claim or status".
+        "expired" => {
+            if !revive_expired_claim(tx, attempt_id, &action_request_id_str, "claimed")? {
+                return Err(StepError::ClaimSuperseded { expired_at: claim_expiration });
+            }
+        }
+        _ => return Err(StepError::InvalidAttempt),
     }
 
     // 2. Compare-and-swap
@@ -428,25 +451,46 @@ pub fn attempt_finalize(
     response: GatewayResponse,
 ) -> Result<LeanVerificationOutcome, StepError> {
     let _ = checked_cost_micros(cost_micros)?;
-    let (status, episode_id_str, db_claim_token, action_request_id_str, current_revision): (String, String, String, String, i64) = {
-        let (status, episode_id_str, db_claim_token, action_request_id_str): (String, String, String, String) = tx.query_row(
-            "SELECT status, episode_id, claim_token, action_request_id FROM action_attempts WHERE id = ?1",
+    let (status, episode_id_str, db_claim_token, action_request_id_str, claim_expiration, current_revision): (String, String, String, String, String, i64) = {
+        let (status, episode_id_str, db_claim_token, action_request_id_str, claim_expiration): (String, String, String, String, String) = tx.query_row(
+            "SELECT status, episode_id, claim_token, action_request_id, claim_expiration FROM action_attempts WHERE id = ?1",
             [attempt_id.to_string()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         ).optional()?.ok_or(StepError::InvalidAttempt)?;
         let current_revision: i64 = tx.query_row(
             "SELECT current_revision FROM episodes WHERE id = ?1",
             [&episode_id_str],
             |row| row.get(0),
         )?;
-        (status, episode_id_str, db_claim_token, action_request_id_str, current_revision)
+        (status, episode_id_str, db_claim_token, action_request_id_str, claim_expiration, current_revision)
     };
 
-    if status != "executing" || db_claim_token != claim_token {
-        // The attempt was reclaimed (expiry sweep) or otherwise moved on while the
-        // gateway call was in flight. Nothing safe to write — the caller surfaces
-        // this exactly like any other InvalidAttempt (client re-claims and retries).
+    if db_claim_token != claim_token {
         return Err(StepError::InvalidAttempt);
+    }
+    match status.as_str() {
+        "executing" => {}
+        // #157: the expiry sweep recovered this attempt while its gateway call
+        // was in flight (Lean verifications can outlive CLAIM_TTL_MINUTES). The
+        // kernel verdict in `response` is real and already paid for — if the
+        // request went back to 'pending' untaken, revive and commit it rather
+        // than discarding a finished verification. If the request WAS taken by
+        // another attempt, nothing is safe to write: refund the budget this
+        // attempt reserved in attempt_prepare (it will never produce a step —
+        // without this, the reservation leaks; #157 acceptance criteria) and
+        // reject with the precise reason.
+        "expired" => {
+            if !revive_expired_claim(tx, attempt_id, &action_request_id_str, "executing")? {
+                refund_cost_budget(tx, &episode_id_str, cost_micros)?;
+                return Err(StepError::ClaimSuperseded { expired_at: claim_expiration });
+            }
+        }
+        _ => {
+            // The attempt otherwise moved on (committed/rejected/abandoned) while
+            // the gateway call was in flight. Nothing safe to write — the caller
+            // surfaces this exactly like any other InvalidAttempt.
+            return Err(StepError::InvalidAttempt);
+        }
     }
 
     let (outcome_result, is_valid, lean_result_json) = match (ctx, response) {
@@ -685,6 +729,35 @@ pub fn attempt_finalize(
 /// `refund_cost_budget` if the gateway call itself fails (an infra failure
 /// carries no verdict and must not cost budget). A no-op on a NULL
 /// (unbounded) `cost_budget_micros` — SQL NULL arithmetic stays NULL.
+/// #157: revive an attempt whose claim the expiry sweep recovered while its
+/// step was queued (or its gateway call in flight), PROVIDED its action request
+/// went back to 'pending' and nobody else has claimed it. Returns `false`
+/// (without writing anything) when the request was superseded. The single
+/// UPDATE-with-status-guard on the request makes the "still pending?" check and
+/// the take atomic within this transaction.
+fn revive_expired_claim(
+    tx: &Transaction,
+    attempt_id: Uuid,
+    action_request_id_str: &str,
+    to_status: &str,
+) -> Result<bool, StepError> {
+    let took_request = tx.execute(
+        "UPDATE action_requests SET status = 'claimed' WHERE id = ?1 AND status = 'pending'",
+        [action_request_id_str],
+    )?;
+    if took_request == 0 {
+        return Ok(false);
+    }
+    let new_expiration = (Utc::now()
+        + chrono::Duration::minutes(crate::orchestrator::attempts::CLAIM_TTL_MINUTES))
+        .to_rfc3339();
+    tx.execute(
+        "UPDATE action_attempts SET status = ?1, claim_expiration = ?2 WHERE id = ?3",
+        (to_status, new_expiration, attempt_id.to_string()),
+    )?;
+    Ok(true)
+}
+
 fn reserve_cost_budget(tx: &Transaction, episode_id_str: &str, cost_micros: i128) -> Result<(), StepError> {
     let cost = checked_cost_micros(cost_micros)?;
     let updated = tx.execute(

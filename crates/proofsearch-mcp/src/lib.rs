@@ -3624,6 +3624,18 @@ fn run_step_post_processing(
             StepDisposition::InvalidResponse, false,
             Some("Invalid attempt claim or status".to_string()),
         ),
+        // #157: precise diagnosis for the burst-tail case. An expired claim whose
+        // request is still unclaimed is revived transparently inside step/finalize
+        // and never reaches here — this arm fires only when another attempt took
+        // the request in the meantime, so a retry with the SAME claim can never
+        // succeed and the remedy is spelled out.
+        Err(step::StepError::ClaimSuperseded { expired_at }) => (
+            StepDisposition::InvalidResponse, false,
+            Some(format!(
+                "claim expired at {} (claims last ~{} min; expired-but-untaken claims are revived automatically) and its action request has since been claimed or fulfilled by another attempt — call episode_observe and re-claim with a fresh idempotency_key",
+                expired_at, attempts::CLAIM_TTL_MINUTES
+            )),
+        ),
         Err(step::StepError::InvalidCost { cost_micros }) => (
             StepDisposition::InvalidResponse, false,
             Some(format!("invalid_cost: cost_micros must be >= 0 and fit in i64 (got {})", cost_micros)),
@@ -4884,7 +4896,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EpisodeCreateArgs>("episode_create", "Initialize an episode from a problem version whose fidelity_status is 'verified' or 'attested' + config. Returns first observation"),
             make_tool::<EpisodeResetArgs>("episode_reset", "Nondestructive: creates new episode from existing config, sets parent_episode_id"),
             make_tool::<EpisodeObserveArgs>("episode_observe", "Get the active observation and pending action request"),
-            make_tool::<AttemptClaimArgs>("attempt_claim", "Claim a pending action request to obtain the action_attempt_id + claim_token required by episode_step. Idempotent on idempotency_key"),
+            make_tool::<AttemptClaimArgs>("attempt_claim", "Claim a pending action request to obtain the action_attempt_id + claim_token required by episode_step. Idempotent on idempotency_key. Claims expire ~5 min after issue (see claim_expiration in the response), but an expired claim whose request is still untaken is revived automatically — by episode_step itself, or by re-calling attempt_claim with the SAME idempotency_key — so burst-parallel claim/step batches need no client-side throttling; only a claim whose request was taken by ANOTHER attempt must be re-claimed with a fresh key"),
             make_tool::<EpisodeStepArgs>("episode_step", "Submit a typed action against a claimed attempt. `action` is internally tagged — exactly one of: {\"type\":\"solve\",\"proof_term\":\"  norm_num\"} (Lean tactic block proving the target obligation), {\"type\":\"decompose\",\"sub_lemmas\":[\"<lean statement>\", ...]} (split the obligation into child lemmas), {\"type\":\"give_up\"} (terminate the episode). `expected_revision` must equal the episode_revision advertised on the action_request. Settles any lease attached to the attempt atomically. FLATTENED-SEQUENCE TRAP (issue #67): in a flat_tactic_sequence chain, an inline `by` consumes EVERYTHING after it on the line — `have h : T := by omega; have h2 : U := ...` parses the second `have` INSIDE h's completed by-block and dies with 'No goals to be solved' while the outer goal stays unsolved. Always parenthesize an inline by-block that is followed by more tactics: `have h : T := (by omega); have h2 : U := (by omega); linarith`"),
             make_tool::<EpisodeStatusArgs>("episode_status", "Retrieve current episode state, revision, budget, step count"),
             make_tool::<EpisodeCloseArgs>("episode_close", "Gracefully truncate an episode"),
@@ -6577,6 +6589,11 @@ impl ServerHandler for ChatDbMcp {
                         let res = serde_json::json!({
                             "action_attempt_id": c.attempt_id.to_string(),
                             "claim_token": c.claim_token,
+                            // #157: make the claim's deadline visible. A step queued
+                            // past this instant may find the claim expired; if the
+                            // request is still untaken, episode_step revives it
+                            // transparently — only a superseded claim hard-fails.
+                            "claim_expiration": c.claim_expiration,
                         });
                         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
                     }
@@ -6595,10 +6612,21 @@ impl ServerHandler for ChatDbMcp {
                         ).optional().map_err(rs)?;
 
                         let msg = if let Some(attempt_status) = key_used {
-                            format!(
-                                "idempotency_key '{}' was already used by an attempt now in state '{}' — retry with a fresh idempotency_key",
-                                args.idempotency_key, attempt_status
-                            )
+                            if attempt_status == "expired" {
+                                // #157: an expired attempt whose request is still
+                                // 'pending' is revived by attempt_claim itself and
+                                // never reaches this refusal — landing here means
+                                // the request was taken by another attempt.
+                                format!(
+                                    "idempotency_key '{}' belongs to an expired claim whose action request was since claimed or fulfilled by another attempt — call episode_observe and re-claim with a fresh idempotency_key",
+                                    args.idempotency_key
+                                )
+                            } else {
+                                format!(
+                                    "idempotency_key '{}' was already used by an attempt now in state '{}' — retry with a fresh idempotency_key",
+                                    args.idempotency_key, attempt_status
+                                )
+                            }
                         } else {
                             match req_info {
                                 None => format!("unknown action_request_id {} for episode {} — call episode_observe for the current request", args.action_request_id, args.episode_id),
