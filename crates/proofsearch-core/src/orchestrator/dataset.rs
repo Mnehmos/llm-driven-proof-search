@@ -182,6 +182,134 @@ pub fn export_dpo(conn: &Connection, episode_id: Uuid) -> Result<Vec<DpoPair>, S
     Ok(pairs)
 }
 
+/// Issue #164: interactive tactic-step negative-space export, sibling to
+/// [`export_rl`]'s whole-proof-path RL tuples. This repository has no
+/// dedicated `MathCorpus`/`negative_example`-named export path elsewhere
+/// (searched the crate for both terms — none found); [`export_rl`]'s
+/// `RlTuple` (state/action/reward/next_state/terminated/truncated/info) is
+/// the closest existing analog to a per-step training record for the
+/// whole-proof path — including its own rejected/failed steps as ordinary
+/// tuples rather than dropping them — so this function reuses that exact
+/// shape for interactive sessions instead of inventing a new record type.
+///
+/// A FAILED tactic step (`interactive_proof_steps.outcome = 'failed'`) is a
+/// first-class negative example here: never dropped, tagged via
+/// `info.negative_example` / `info.outcome`, and (since this is the one case
+/// raw tactic text is actually durably persisted — see
+/// `interactive_proof_steps.diagnostic_json` / `ProofStateDiagnostic` in
+/// `db::interactive`) carries the real failing tactic text and its full
+/// diagnostic. A successful (`'applied'`) step carries only its
+/// `tactic_text_hash` — the raw text of a successful interactive step is NOT
+/// durably persisted server-side by design (issue #161), so this function
+/// does not (and cannot) fabricate it.
+///
+/// TRUST BOUNDARY: `info.session_final_outcome` / `info.kernel_verified` are
+/// derived ONLY from the owning session's reconstructed-script
+/// `verified_attempt_id` / `verification_outcome` (never from a node's
+/// `is_solved` or a script's `reports_complete` alone) — the same rule
+/// `proofsearch-mcp`'s `proof_export`/`trajectory_export` interactive-session
+/// sections apply. A session that never promoted reads as
+/// `"search_in_progress"` or `"closed_without_promotion_*"` /
+/// `"reconstructed_not_promoted"`, never as a verified proof.
+pub fn export_interactive_rl(conn: &Connection, episode_id: Uuid) -> Result<Vec<RlTuple>, String> {
+    use crate::db::interactive as idb;
+
+    let mut stmt = conn
+        .prepare("SELECT id FROM interactive_proof_sessions WHERE episode_id = ?1 ORDER BY created_at ASC")
+        .map_err(|e| e.to_string())?;
+    let session_ids: Vec<String> = stmt
+        .query_map([episode_id.to_string()], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    drop(stmt);
+
+    let mut tuples = Vec::new();
+    for sid_str in session_ids {
+        let sid = Uuid::parse_str(&sid_str).map_err(|e| e.to_string())?;
+        let session = idb::get_session(conn, sid)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("interactive session {} vanished mid-export", sid))?;
+        let nodes = idb::list_nodes_for_session(conn, sid).map_err(|e| e.to_string())?;
+        let steps = idb::list_steps_for_session(conn, sid).map_err(|e| e.to_string())?;
+        let reconstructions = idb::list_reconstructed_scripts_for_session(conn, sid).map_err(|e| e.to_string())?;
+
+        let node_by_id: HashMap<Uuid, &idb::NodeRow> = nodes.iter().map(|n| (n.id, n)).collect();
+
+        // Same derivation `proofsearch-mcp`'s interactive-session export
+        // sections use — see the function doc's TRUST BOUNDARY paragraph.
+        let promoted = reconstructions.iter().find(|r| r.verified_attempt_id.is_some());
+        let (session_final_outcome, kernel_verified) = match promoted {
+            Some(r) => {
+                let outcome = r.verification_outcome.clone().unwrap_or_else(|| "unknown".to_string());
+                let kv = outcome == "committed";
+                (format!("promoted_{}", outcome), kv)
+            }
+            None if !reconstructions.is_empty() => ("reconstructed_not_promoted".to_string(), false),
+            None if session.state == "closed" => (
+                format!("closed_without_promotion_{}", session.close_reason.as_deref().unwrap_or("closed")),
+                false,
+            ),
+            None => ("search_in_progress".to_string(), false),
+        };
+
+        for step in &steps {
+            let parent_hash = node_by_id.get(&step.parent_node_id).map(|n| n.proof_state_hash.clone());
+            let child_hash = step
+                .child_node_id
+                .and_then(|c| node_by_id.get(&c))
+                .map(|n| n.proof_state_hash.clone());
+            let negative = step.outcome == "failed";
+
+            let (tactic_text, diagnostic_val) = if negative {
+                let diag_val: serde_json::Value = step
+                    .diagnostic_json
+                    .as_deref()
+                    .and_then(|j| serde_json::from_str(j).ok())
+                    .unwrap_or(serde_json::Value::Null);
+                let raw = diag_val.get("tactic_text").and_then(|v| v.as_str()).map(|s| s.to_string());
+                (raw, diag_val)
+            } else {
+                (None, serde_json::Value::Null)
+            };
+
+            let action = serde_json::json!({
+                "type": "interactive_tactic_step",
+                "outcome": step.outcome,
+                "tactic_text_hash": step.tactic_text_hash,
+                "tactic_text": tactic_text,
+            });
+            let terminated = step
+                .child_node_id
+                .and_then(|c| node_by_id.get(&c))
+                .map(|n| n.status == "solved")
+                .unwrap_or(false);
+            let info = serde_json::json!({
+                "session_id": sid.to_string(),
+                "episode_id": episode_id.to_string(),
+                "obligation_id": session.obligation_id.to_string(),
+                "step_id": step.id.to_string(),
+                "negative_example": negative,
+                "diagnostic": diagnostic_val,
+                "wall_time_ms": step.wall_time_ms,
+                "session_final_outcome": session_final_outcome,
+                "kernel_verified": kernel_verified,
+            });
+
+            tuples.push(RlTuple {
+                state: serde_json::json!({ "state_hash": parent_hash }),
+                action,
+                reward: if negative { -1.0 } else { 0.0 },
+                next_state: serde_json::json!({ "state_hash": child_hash }),
+                terminated,
+                truncated: false,
+                info,
+            });
+        }
+    }
+    Ok(tuples)
+}
+
 pub fn generate_manifest(
     conn: &Connection,
     name: &str,
