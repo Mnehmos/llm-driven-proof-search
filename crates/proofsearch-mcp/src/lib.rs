@@ -26,6 +26,7 @@ use proofsearch_core::lean::{LeanGateway, RealLeanGateway};
 use proofsearch_core::lean::interactive::{
     InteractiveProofGateway, MockInteractiveGateway, InteractiveSessionHandle, ProofStateNodeId,
     InteractiveSessionRequest, TacticOutcome, InteractiveSessionTrace, InteractiveTraceStep,
+    PantographInteractiveGateway, detect_pantograph_status,
 };
 use proofsearch_core::lean::observation::{
     self, ProofGoal, ProofStateDiagnostic, compute_proof_state_hash, hash_tactic_text,
@@ -877,9 +878,14 @@ pub struct ProofSessionStartArgs {
     #[serde(default)]
     pub expected_observation_hash: Option<String>,
     /// Which `InteractiveProofGateway` backend to start the session against.
-    /// Only `"mock"` is available today — no real interactive backend (e.g.
-    /// Pantograph) is wired into this environment by issue #161; see
-    /// `crate::lean::interactive`'s module doc. Defaults to `"mock"`.
+    /// `"mock"` (issue #161) is the deterministic, always-available test
+    /// double. `"pantograph"` (issue #166) routes to a real, PATH/lake-
+    /// manifest-based Pantograph detection probe — it is a RECOGNIZED value,
+    /// not a usable one, until a compatible Pantograph installation exists
+    /// in this environment; see `environment_describe`'s `pantograph_available`
+    /// capability flag and `crate::lean::interactive::PantographInteractiveGateway`'s
+    /// doc for exactly what it checks and why it fails closed today.
+    /// Defaults to `"mock"`.
     #[serde(default = "default_interactive_backend")]
     pub backend: String,
 }
@@ -6288,9 +6294,19 @@ impl ChatDbMcp {
         let args: ProofSessionStartArgs = serde_json::from_value(args_val)
             .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
 
-        if args.backend != "mock" {
+        // Issue #166: "pantograph" is now a recognized backend VALUE — but
+        // recognizing the string is not the same as it being usable. Every
+        // "pantograph" session start is routed to a real
+        // PantographInteractiveGateway (see below), which performs a
+        // genuine PATH/lake-manifest/toolchain probe of this environment
+        // and, since Pantograph is not installed here, fails closed with a
+        // clear, structured reason — never a panic, never silently treated
+        // as "mock". "mock"'s own behavior below is completely unchanged.
+        if args.backend != "mock" && args.backend != "pantograph" {
             return Err(mcp_invalid_params(format!(
-                "unsupported backend '{}' — only \"mock\" is available until a real interactive backend (e.g. Pantograph) is wired into this environment",
+                "unsupported backend '{}' — must be \"mock\" or \"pantograph\" (pantograph is a prototype adapter that \
+                 fails closed unless a compatible installation is detected in this environment — see environment_describe's \
+                 pantograph_available capability flag for why)",
                 args.backend
             )));
         }
@@ -6331,7 +6347,20 @@ impl ChatDbMcp {
         // `build_interactive_session_request` so backend replay can build an
         // equivalent fresh-session request without duplicating this lookup.
         let ctx = build_interactive_session_request(&tx, &args.episode_id, &args.obligation_id)?;
-        let start = self.interactive_gateway.start_session(&ctx.request).map_err(mcp_invalid_params)?;
+        // Issue #166: "pantograph" is constructed fresh per call rather than
+        // held as a persistent ChatDbMcp field, unlike `interactive_gateway`
+        // (MockInteractiveGateway) — detection is cheap (a few filesystem
+        // stats) and, unlike Mock's live in-memory session map, there is no
+        // live state to lose between calls: every PantographInteractiveGateway
+        // operation is unconditionally Err in this environment (see its own
+        // doc), so nothing is ever gained by sharing one instance.
+        let start = if args.backend == "pantograph" {
+            PantographInteractiveGateway::new(&self.lean_project_path)
+                .start_session(&ctx.request)
+                .map_err(mcp_invalid_params)?
+        } else {
+            self.interactive_gateway.start_session(&ctx.request).map_err(mcp_invalid_params)?
+        };
 
         let goals: Vec<ProofGoal> = start.initial_state.goals.iter().enumerate()
             .map(|(i, g)| ProofGoal::from_interactive_goal(i, g)).collect();
@@ -7671,6 +7700,10 @@ impl ServerHandler for ChatDbMcp {
                 // the same checkout actually compiles. Registry entries are
                 // metadata only — they never grant proof authority.
                 let kit_registry = embedded_kit_registry();
+                // Issue #166: computed once, reused for both flags below, so
+                // "pantograph_available" and "pantograph_reason" can never
+                // disagree with each other.
+                let pantograph_status = detect_pantograph_status(&self.lean_project_path);
                 let res = serde_json::json!({
                     "environment_version": "0.3.27",
                     "kit_registry": kit_registry,
@@ -7685,6 +7718,19 @@ impl ServerHandler for ChatDbMcp {
                     "lean_environment": self.lean_environment.as_ref().map(|e| serde_json::json!({
                         "descriptor": e.descriptor, "hash": e.hash
                     })),
+                    // Issue #166: a real (not hardcoded) capability flag for
+                    // the optional Pantograph interactive backend — probes
+                    // this environment's PATH and lake-manifest.json the
+                    // same way `proof_session_start`'s `backend: "pantograph"`
+                    // path does, via the SAME `detect_pantograph_status`
+                    // function, so this flag and that tool's actual behavior
+                    // can never disagree. Always `false` in this prototype
+                    // (see `PantographInteractiveGateway`'s doc for why even
+                    // a detected-and-toolchain-matching Pantograph still
+                    // wouldn't flip this to `true`) — `pantograph_reason`
+                    // explains specifically why.
+                    "pantograph_available": pantograph_status.is_available(),
+                    "pantograph_reason": pantograph_status.reason(),
                     "action_schema": action_schema,
                     "action_examples": [
                         {"type": "solve", "proof_term": "  norm_num"},
@@ -22843,6 +22889,72 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(step["outcome"], "kernel_verified", "{:?}", step);
         assert_eq!(step["accepted"], true, "{:?}", step);
+    }
+
+    /// Issue #166 acceptance: `proof_session_start` accepts `"pantograph"` as
+    /// a recognized `backend` value (unlike an arbitrary unknown string,
+    /// which is still rejected as "unsupported" below) but, since Pantograph
+    /// is genuinely not installed in this test/CI environment, starting a
+    /// session against it fails with the SAME clear, structured "unavailable"
+    /// error `PantographInteractiveGateway`/`detect_pantograph_status`
+    /// produce directly (issue #166's core lean crate tests cover those in
+    /// isolation) — exercised here through the real MCP tool call, not just
+    /// the internal Rust type.
+    #[tokio::test]
+    async fn test_proof_session_start_pantograph_backend_fails_closed_through_mcp_tool() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+
+        // "pantograph" is a RECOGNIZED backend value — it must not be
+        // rejected the same way a typo'd/unknown backend string is (that
+        // case is covered separately below). It still fails, but for a
+        // different, more specific reason: environment unavailability.
+        let session_attempt = peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+            "backend": "pantograph",
+        }).as_object().unwrap().clone())).await;
+        let err = session_attempt.expect_err("starting a pantograph session must fail cleanly (not a panic) in this Pantograph-less environment");
+        let err_text = format!("{err:?}").to_lowercase();
+        assert!(err_text.contains("pantograph"), "error should name the pantograph backend specifically: {err_text}");
+        assert!(
+            err_text.contains("not installed") || err_text.contains("unavailable") || err_text.contains("no `pantograph`") || err_text.contains("no pantograph"),
+            "error should explain WHY (missing binary / incompatible toolchain / etc), not just say 'error': {err_text}"
+        );
+
+        // An actually-unknown backend string is still rejected as
+        // unsupported (unchanged behavior, additive-only diff): the new
+        // "pantograph" acceptance did not loosen validation generally.
+        let bad_backend = peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+            "backend": "totally-not-a-real-backend",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_backend.is_err(), "an unrecognized backend value must still be rejected");
+    }
+
+    /// Issue #166 acceptance: `environment_describe` exposes a real
+    /// `pantograph_available` capability flag (plus a `pantograph_reason`
+    /// string) rather than crashing or omitting Pantograph entirely. In this
+    /// real test environment Pantograph is genuinely absent, so this must
+    /// report `false` with a reason explaining why — not a hardcoded stub.
+    #[tokio::test]
+    async fn test_environment_describe_reports_pantograph_unavailable_with_reason() {
+        let client = connected_client(test_handler()).await;
+        let res = tool_json(&client.peer().call_tool(CallToolRequestParams::new("environment_describe")).await.unwrap());
+
+        assert_eq!(res["pantograph_available"], false, "{:?}", res);
+        let reason = res["pantograph_reason"].as_str().expect("pantograph_reason must be a string");
+        assert!(!reason.is_empty(), "pantograph_reason must explain why, not be empty: {:?}", res);
+        assert!(reason.to_lowercase().contains("pantograph"), "{:?}", res);
     }
 
     // -----------------------------------------------------------------
