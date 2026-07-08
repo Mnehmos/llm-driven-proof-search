@@ -1789,8 +1789,18 @@ CREATE TABLE IF NOT EXISTS interactive_proof_sessions (
     reconstructed_script_hash TEXT,
     created_at TEXT NOT NULL,
     closed_at TEXT,
+    -- Issue #161: proof_session_close accepts a finer-grained reason
+    -- ('closed' | 'abandoned' | 'superseded') than the two-value `state`
+    -- column above models. Rather than widen `state` itself (which
+    -- `root_node_id`/`selected_final_node_id` writes and #160's own tests
+    -- already key off 'open'/'closed'), this column records WHY a closed
+    -- session was closed while `state` stays exactly the #160 vocabulary.
+    -- NULL while open; non-NULL only once closed. Legacy DBs created before
+    -- this column existed are backfilled by migrate_add_interactive_session_close_reason_column.
+    close_reason TEXT,
     CHECK(state IN ('open', 'closed')),
-    CHECK((state = 'open' AND closed_at IS NULL) OR (state = 'closed' AND closed_at IS NOT NULL))
+    CHECK((state = 'open' AND closed_at IS NULL) OR (state = 'closed' AND closed_at IS NOT NULL)),
+    CHECK(close_reason IS NULL OR (state = 'closed' AND close_reason IN ('closed', 'abandoned', 'superseded')))
 );
 CREATE INDEX IF NOT EXISTS idx_interactive_proof_sessions_episode ON interactive_proof_sessions(episode_id);
 CREATE INDEX IF NOT EXISTS idx_interactive_proof_sessions_obligation ON interactive_proof_sessions(obligation_id);
@@ -1953,6 +1963,7 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     migrate_add_current_cost_observation_column(conn)?;
     migrate_add_benchmark_goal_class_columns(conn)?;
     migrate_add_plan_item_asymptotic_role_column(conn)?;
+    migrate_add_interactive_session_close_reason_column(conn)?;
     // CHECK constraints are baked into a table at creation and CREATE TABLE IF
     // NOT EXISTS cannot update them on a table that already exists — a database
     // that predates the fidelity-vocabulary rewrite (docs/fix_plan_playtest_02.md)
@@ -2684,6 +2695,32 @@ fn migrate_add_benchmark_goal_class_columns(conn: &Connection) -> rusqlite::Resu
     }
     if !cols.iter().any(|c| c == "brute_force_admissible") {
         conn.execute("ALTER TABLE benchmark_problems ADD COLUMN brute_force_admissible INTEGER NOT NULL DEFAULT 1", [])?;
+    }
+    Ok(())
+}
+
+/// Issue #161: adds interactive_proof_sessions.close_reason to a DB that was
+/// initialized under #160's original (161-less) column list. A no-op on a
+/// genuinely fresh DB (the CREATE TABLE above already declares the column and
+/// its CHECK), and on a DB that predates the table entirely (table_exists
+/// check below). ALTER TABLE ADD COLUMN cannot re-add the CHECK constraint —
+/// same documented limitation as goal_class/brute_force_admissible below —
+/// so a legacy DB's writes are validated by the MCP handler instead.
+fn migrate_add_interactive_session_close_reason_column(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='interactive_proof_sessions'",
+        [], |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(interactive_proof_sessions)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !cols.iter().any(|c| c == "close_reason") {
+        conn.execute("ALTER TABLE interactive_proof_sessions ADD COLUMN close_reason TEXT", [])?;
     }
     Ok(())
 }

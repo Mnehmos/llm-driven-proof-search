@@ -24,6 +24,7 @@ fn parse_datetime(s: &str) -> Result<DateTime<Utc>, rusqlite::Error> {
 
 pub mod schema_v1;
 pub mod migrations;
+pub mod interactive;
 
 /// Initialize all schemas, tables, and indexes for v1 (Episode-Local isolation).
 pub fn initialize_db(conn: &Connection) -> rusqlite::Result<()> {
