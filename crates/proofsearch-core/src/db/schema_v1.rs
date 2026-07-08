@@ -1829,7 +1829,8 @@ CREATE TABLE IF NOT EXISTS interactive_proof_nodes (
     CHECK(node_kind IN ('root', 'tactic_result', 'failed_placeholder')),
     CHECK(status IN ('open', 'solved')),
     CHECK(depth >= 0),
-    CHECK((node_kind = 'root' AND parent_node_id IS NULL) OR (node_kind <> 'root' AND parent_node_id IS NOT NULL))
+    CHECK((node_kind = 'root' AND parent_node_id IS NULL) OR (node_kind <> 'root' AND parent_node_id IS NOT NULL)),
+    CHECK(node_kind <> 'root' OR depth = 0)
 );
 CREATE INDEX IF NOT EXISTS idx_interactive_proof_nodes_session ON interactive_proof_nodes(session_id);
 CREATE INDEX IF NOT EXISTS idx_interactive_proof_nodes_parent ON interactive_proof_nodes(parent_node_id);
