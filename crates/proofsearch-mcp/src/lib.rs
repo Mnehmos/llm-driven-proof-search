@@ -25,10 +25,10 @@ use proofsearch_core::orchestrator::{lifecycle, attempts, step, trajectories, da
 use proofsearch_core::lean::{LeanGateway, RealLeanGateway};
 use proofsearch_core::lean::interactive::{
     InteractiveProofGateway, MockInteractiveGateway, InteractiveSessionHandle, ProofStateNodeId,
-    InteractiveSessionRequest, TacticOutcome,
+    InteractiveSessionRequest, TacticOutcome, InteractiveSessionTrace, InteractiveTraceStep,
 };
 use proofsearch_core::lean::observation::{
-    ProofGoal, ProofStateDiagnostic, compute_proof_state_hash, hash_tactic_text,
+    self, ProofGoal, ProofStateDiagnostic, compute_proof_state_hash, hash_tactic_text,
 };
 use proofsearch_core::models::action::{TypedAction, ActionRequest, ActionRole, StepDisposition, LeanModuleItem, ModuleTheorem, ProofFormat};
 use proofsearch_core::lean::module::{assemble_module, parse_open_directive, partition_import_manifest};
@@ -959,6 +959,52 @@ pub struct ProofSessionCloseArgs {
     /// three persist the session's full trace — see
     /// `interactive_proof_sessions.close_reason` in `schema_v1.rs`.
     pub reason: String,
+}
+
+/// Issue #163: replay a session from PERSISTED DB state
+/// (`interactive_proof_sessions`/`_nodes`/`_steps`/`_reconstructed_scripts`
+/// for `session_id`) — deliberately NOT #159's `replay_session`, which
+/// operates on a caller-supplied in-memory `InteractiveSessionTrace`. The
+/// whole point here is that a closed/historical session stays replayable
+/// from what is actually stored, not just a live in-memory one.
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofSessionReplayArgs {
+    pub session_id: String,
+    /// One of `"trace_only"` (pure DB-record consistency check — no backend
+    /// or kernel call), `"backend"` (re-runs the root-to-node tactic path
+    /// against a FRESH interactive-backend session and compares outcomes/
+    /// hashes to what was recorded), or `"final_proof"` (THE TRUST GATE —
+    /// reconstructs the selected script and resubmits it through the
+    /// existing attempt_claim + episode_step Solve path for real Lean
+    /// kernel verification). Only `"final_proof"`'s result is proof
+    /// evidence; `"trace_only"` and `"backend"` remain SEARCH EVIDENCE ONLY.
+    pub mode: String,
+    /// `"backend"`, and `"final_proof"` when reconstructing fresh: which
+    /// node's root-to-node path to replay/reconstruct. Defaults to the
+    /// session's currently selected node if omitted.
+    #[serde(default)]
+    pub selected_node_id: Option<String>,
+    /// `"final_proof"` only, an ALTERNATIVE to `selected_node_id`: re-verify
+    /// an existing (not yet promoted) reconstructed script instead of
+    /// reconstructing a fresh one. Must be paired with `tactic_block` (same
+    /// hash-integrity check `proof_session_promote_to_attempt` itself uses).
+    #[serde(default)]
+    pub reconstructed_script_id: Option<String>,
+    #[serde(default)]
+    pub tactic_block: Option<String>,
+    /// `"final_proof"` only: the same submission arguments
+    /// `proof_session_promote_to_attempt` requires — all five are required
+    /// together when `mode = "final_proof"`.
+    #[serde(default)]
+    pub episode_id: Option<String>,
+    #[serde(default)]
+    pub action_request_id: Option<String>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    #[serde(default)]
+    pub expected_revision: Option<i64>,
+    #[serde(default)]
+    pub cost_micros: Option<i64>,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -2147,6 +2193,97 @@ fn extract_tool_result_json(res: &CallToolResult) -> Result<serde_json::Value, M
         .map(|t| t.text.as_str())
         .ok_or_else(|| mcp_internal_error("internal tool call returned no text content"))?;
     serde_json::from_str(text).map_err(|e| mcp_internal_error(format!("failed to parse internal tool call result: {e}")))
+}
+
+/// The only interactive backend this server ever configures (see
+/// `ChatDbMcp::new`, which always installs `MockInteractiveGateway`, and
+/// `do_proof_session_start`'s own "only mock is available" rejection at
+/// session-creation time). Issue #163's `proof_session_replay` "backend"
+/// mode compares a session's persisted `backend_kind` against this constant
+/// to detect a mismatch — today that can only arise via direct DB
+/// manipulation (a legacy row, or a corrupted one), since `proof_session_start`
+/// itself refuses any other backend value, but a future multi-backend
+/// deployment could make it a real condition.
+const CONFIGURED_INTERACTIVE_BACKEND_KIND: &str = "mock";
+
+/// Everything `InteractiveProofGateway::start_session` needs for one
+/// episode/obligation pair, plus the problem-version identity/hashes the
+/// caller (session-start or backend-replay) separately needs to persist
+/// alongside it.
+struct InteractiveSessionContext {
+    request: InteractiveSessionRequest,
+    problem_version_id: Uuid,
+    environment_hash: String,
+    import_manifest_hash: String,
+}
+
+/// Builds an [`InteractiveSessionContext`] from an episode/obligation pair —
+/// the SAME lookup `do_proof_session_start` always did (issue #161), pulled
+/// out as a pure extraction (issue #163) so `proof_session_replay`'s
+/// "backend" mode can start an equivalent fresh session without duplicating
+/// it. Behavior is unchanged: same query, same error messages, same
+/// `problem_namespace` derivation.
+fn build_interactive_session_request(
+    conn: &Connection,
+    episode_id: &str,
+    obligation_id: &str,
+) -> Result<InteractiveSessionContext, McpError> {
+    let obligation_row: Option<(String, String, String)> = conn.query_row(
+        "SELECT problem_version_id, theorem_name, lean_statement FROM episode_obligations WHERE id = ?1 AND episode_id = ?2",
+        (obligation_id, episode_id),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).optional().map_err(rs)?;
+    let (pv_id_str, theorem_name, lean_statement) = obligation_row.ok_or_else(|| mcp_invalid_params(format!(
+        "obligation_id {} is not a known obligation of episode {} — call episode_observe for a valid target_obligation_id",
+        obligation_id, episode_id
+    )))?;
+
+    let (env_hash, import_manifest_json, import_manifest_hash): (String, String, String) = conn.query_row(
+        "SELECT environment_hash, import_manifest_json, import_manifest_hash FROM problem_versions WHERE id = ?1",
+        [&pv_id_str], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).map_err(rs)?;
+    let imports: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
+
+    let dependencies: Vec<Uuid> = {
+        let mut dep_stmt = conn.prepare(
+            "SELECT dependency_obligation_id FROM episode_obligation_edges e
+             JOIN episode_obligations dep ON dep.id = e.dependency_obligation_id
+             WHERE e.parent_obligation_id = ?1 AND dep.status = 'proved'",
+        ).map_err(rs)?;
+        dep_stmt.query_map([obligation_id], |row| row.get::<_, String>(0)).map_err(rs)?
+            .collect::<Result<Vec<_>, _>>().map_err(rs)?
+            .into_iter().filter_map(|s| Uuid::parse_str(&s).ok()).collect()
+    };
+
+    let ns16 = pv_id_str.replace('-', "");
+    let problem_namespace = format!("ProofSearch.P_{}", &ns16[..16.min(ns16.len())]);
+    let problem_version_id = Uuid::parse_str(&pv_id_str).map_err(|e| mcp_internal_error(e.to_string()))?;
+
+    Ok(InteractiveSessionContext {
+        request: InteractiveSessionRequest { problem_namespace, theorem_name, statement: lean_statement, imports, dependencies },
+        problem_version_id,
+        environment_hash: env_hash,
+        import_manifest_hash,
+    })
+}
+
+/// Recomputes a node's [`proofsearch_core::lean::observation::ProofStateHash::full_state_hash`]
+/// from its own persisted `goals` and a producing step's ALREADY-hashed
+/// `tactic_text_hash` — issue #163's trace-only replay uses this to detect a
+/// corrupted/edited node row or a changed tactic-text hash. Raw tactic text
+/// is never durably stored server-side (see `ProofSessionPromoteToAttemptArgs`'s
+/// doc), so this mirrors `compute_proof_state_hash`'s own composition
+/// exactly but takes an already-computed hash instead of raw text.
+fn recompute_full_state_hash(goals: &[ProofGoal], tactic_text_hash: Option<&str>) -> Result<String, String> {
+    let mut goal_hashes = Vec::with_capacity(goals.len());
+    for g in goals {
+        let local_context_hash = match &g.local_context {
+            Some(ctx) => Some(observation::hash_local_context(ctx)?),
+            None => None,
+        };
+        goal_hashes.push(observation::hash_goal(&g.target, local_context_hash.as_deref())?);
+    }
+    canonical_hash(&(goal_hashes, tactic_text_hash.map(|s| s.to_string())))
 }
 
 fn reserve_episode_budget_for_model_call(
@@ -5422,39 +5559,12 @@ impl ChatDbMcp {
 
         // Requires valid episode/obligation linkage: obligation_id must be a
         // REAL episode_obligations row belonging to episode_id, not merely
-        // any obligation that happens to exist.
-        let obligation_row: Option<(String, String, String)> = tx.query_row(
-            "SELECT problem_version_id, theorem_name, lean_statement FROM episode_obligations WHERE id = ?1 AND episode_id = ?2",
-            (&args.obligation_id, &args.episode_id),
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ).optional().map_err(rs)?;
-        let (pv_id_str, theorem_name, lean_statement) = obligation_row.ok_or_else(|| mcp_invalid_params(format!(
-            "obligation_id {} is not a known obligation of episode {} — call episode_observe for a valid target_obligation_id",
-            args.obligation_id, args.episode_id
-        )))?;
-
-        let (env_hash, import_manifest_json, import_manifest_hash): (String, String, String) = tx.query_row(
-            "SELECT environment_hash, import_manifest_json, import_manifest_hash FROM problem_versions WHERE id = ?1",
-            [&pv_id_str], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ).map_err(rs)?;
-        let imports: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
-
-        let dependencies: Vec<Uuid> = {
-            let mut dep_stmt = tx.prepare(
-                "SELECT dependency_obligation_id FROM episode_obligation_edges e
-                 JOIN episode_obligations dep ON dep.id = e.dependency_obligation_id
-                 WHERE e.parent_obligation_id = ?1 AND dep.status = 'proved'",
-            ).map_err(rs)?;
-            dep_stmt.query_map([&args.obligation_id], |row| row.get::<_, String>(0)).map_err(rs)?
-                .collect::<Result<Vec<_>, _>>().map_err(rs)?
-                .into_iter().filter_map(|s| Uuid::parse_str(&s).ok()).collect()
-        };
-
-        let ns16 = pv_id_str.replace('-', "");
-        let problem_namespace = format!("ProofSearch.P_{}", &ns16[..16.min(ns16.len())]);
-
-        let request = InteractiveSessionRequest { problem_namespace, theorem_name, statement: lean_statement, imports, dependencies };
-        let start = self.interactive_gateway.start_session(&request).map_err(mcp_invalid_params)?;
+        // any obligation that happens to exist. Extracted (issue #163, pure
+        // extraction — behavior here is unchanged) into
+        // `build_interactive_session_request` so backend replay can build an
+        // equivalent fresh-session request without duplicating this lookup.
+        let ctx = build_interactive_session_request(&tx, &args.episode_id, &args.obligation_id)?;
+        let start = self.interactive_gateway.start_session(&ctx.request).map_err(mcp_invalid_params)?;
 
         let goals: Vec<ProofGoal> = start.initial_state.goals.iter().enumerate()
             .map(|(i, g)| ProofGoal::from_interactive_goal(i, g)).collect();
@@ -5465,12 +5575,12 @@ impl ChatDbMcp {
         let session_id = start.session.0;
         let root_node_id = start.initial_state.node.0;
         let now = Utc::now();
-        let pv_uuid = Uuid::parse_str(&pv_id_str).map_err(|e| mcp_internal_error(e.to_string()))?;
+        let pv_uuid = ctx.problem_version_id;
 
         idb::insert_session(&tx, &idb::NewSession {
             id: session_id, episode_id: ep_uuid, problem_version_id: pv_uuid, obligation_id: obl_uuid,
             backend_kind: args.backend.clone(), backend_version: None,
-            import_manifest_hash: Some(import_manifest_hash), environment_hash: Some(env_hash), created_at: now,
+            import_manifest_hash: Some(ctx.import_manifest_hash.clone()), environment_hash: Some(ctx.environment_hash.clone()), created_at: now,
         }).map_err(rs)?;
 
         idb::insert_node(&tx, &idb::NewNode {
@@ -5731,16 +5841,17 @@ impl ChatDbMcp {
         let node_uuid = Uuid::parse_str(&args.selected_node_id)
             .map_err(|e| mcp_invalid_params(format!("Invalid selected_node_id Uuid: {}", e)))?;
 
-        {
+        let session = {
             let conn = self.conn.lock().await;
-            idb::get_session(&conn, session_uuid).map_err(rs)?
+            let session = idb::get_session(&conn, session_uuid).map_err(rs)?
                 .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", args.session_id)))?;
             let node = idb::get_node(&conn, node_uuid).map_err(rs)?
                 .ok_or_else(|| mcp_invalid_params(format!("unknown selected_node_id {} in session {}", args.selected_node_id, args.session_id)))?;
             if node.session_id != session_uuid {
                 return Err(mcp_invalid_params("selected_node_id does not belong to session_id"));
             }
-        }
+            session
+        };
 
         let script = self.interactive_gateway
             .reconstruct_script(InteractiveSessionHandle(session_uuid), ProofStateNodeId(node_uuid))
@@ -5751,6 +5862,8 @@ impl ChatDbMcp {
             ProofFormat::RawLeanBlock => "raw_lean_block",
         };
         let proof_source_hash = canonical_hash(&script.tactic_block).map_err(mcp_internal_error)?;
+        let node_path_ids: Vec<String> = script.node_path.iter().map(|n| n.0.to_string()).collect();
+        let tactic_path_ids_json = serde_json::to_string(&node_path_ids).map_err(|e| mcp_internal_error(e.to_string()))?;
         let script_id = Uuid::new_v4();
         let now = Utc::now();
 
@@ -5760,21 +5873,38 @@ impl ChatDbMcp {
             idb::insert_reconstructed_script(&tx, &idb::NewReconstructedScript {
                 id: script_id, session_id: session_uuid, final_node_id: node_uuid,
                 proof_format: proof_format_str.to_string(), proof_source_hash: proof_source_hash.clone(),
-                proof_source_artifact_hash: None, reports_complete: script.reports_complete, created_at: now,
+                proof_source_artifact_hash: None, reports_complete: script.reports_complete,
+                tactic_path_ids_json: tactic_path_ids_json.clone(), created_at: now,
             }).map_err(rs)?;
             idb::set_session_reconstructed_script_hash(&tx, session_uuid, &proof_source_hash).map_err(rs)?;
             tx.commit().map_err(rs)?;
         }
 
+        // Issue #163: the "artifact" field list the issue asks for
+        // (proof source hash, source artifact hash, selected node id,
+        // tactic path ids, backend kind/version, environment hash, import
+        // manifest hash, generated_at) — tactic_path_ids is now persisted
+        // (see tactic_path_ids_json above); backend_kind/backend_version/
+        // environment_hash/import_manifest_hash are already captured on the
+        // owning session row (a session's backend/environment never changes
+        // over its lifetime) and joined in here rather than duplicated —
+        // see the schema doc comment on interactive_proof_reconstructed_scripts.
         let res = serde_json::json!({
             "session_id": args.session_id,
             "reconstructed_script_id": script_id.to_string(),
             "final_node_id": args.selected_node_id,
-            "node_path": script.node_path.iter().map(|n| n.0.to_string()).collect::<Vec<_>>(),
+            "node_path": node_path_ids,
+            "tactic_path_ids": node_path_ids,
             "tactic_block": script.tactic_block,
             "proof_format": proof_format_str,
             "reports_complete": script.reports_complete,
             "proof_source_hash": proof_source_hash,
+            "proof_source_artifact_hash": serde_json::Value::Null,
+            "backend_kind": session.backend_kind,
+            "backend_version": session.backend_version,
+            "environment_hash": session.environment_hash,
+            "import_manifest_hash": session.import_manifest_hash,
+            "generated_at": now.to_rfc3339(),
             "promote_note": "to promote, call proof_session_promote_to_attempt with this reconstructed_script_id and the EXACT tactic_block returned here (re-supplied for an integrity check against proof_source_hash — raw tactic text is not durably stored server-side)",
             "trust_boundary": INTERACTIVE_TRUST_BOUNDARY_NOTICE,
         });
@@ -5940,6 +6070,463 @@ impl ChatDbMcp {
         });
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
     }
+
+    // -----------------------------------------------------------------
+    // Issue #163: proof_session_replay — three replay modes over PERSISTED
+    // DB state (not #159's in-memory InteractiveSessionTrace). See the
+    // module-doc-style comment on ProofSessionReplayArgs for the contract.
+    // -----------------------------------------------------------------
+
+    async fn do_proof_session_replay(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofSessionReplayArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let session_uuid = Uuid::parse_str(&args.session_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid session Uuid: {}", e)))?;
+
+        let mut result = match args.mode.as_str() {
+            "trace_only" => self.replay_trace_only(session_uuid).await?,
+            "backend" => {
+                let selected = args.selected_node_id.clone();
+                self.replay_backend(session_uuid, selected.as_deref()).await?
+            }
+            "final_proof" => self.replay_final_proof(session_uuid, args).await?,
+            other => return Err(mcp_invalid_params(format!(
+                "mode must be one of \"trace_only\", \"backend\", \"final_proof\" (got {:?})", other
+            ))),
+        };
+        if let serde_json::Value::Object(ref mut map) = result {
+            map.insert("trust_boundary".to_string(), serde_json::Value::String(INTERACTIVE_TRUST_BOUNDARY_NOTICE.to_string()));
+        }
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&result).unwrap())]))
+    }
+
+    /// mode="trace_only": pure DB-record consistency check over
+    /// `interactive_proof_sessions`/`_nodes`/`_steps` for `session_id` — no
+    /// backend call, no kernel call. Verifies graph integrity (every
+    /// non-root node's parent resolves, every applied step's child node
+    /// exists exactly once and hash-matches its own recorded content,
+    /// session state/closed_at consistency checked as a DATA fact rather
+    /// than trusting the schema CHECK alone) and returns a `branch_report`
+    /// that explicitly surfaces failed steps and abandoned (unselected,
+    /// still-open) leaf nodes — the "branch handling" acceptance criterion
+    /// lives here, not in a separate export tool.
+    async fn replay_trace_only(&self, session_uuid: Uuid) -> Result<serde_json::Value, McpError> {
+        let conn = self.conn.lock().await;
+        let session = idb::get_session(&conn, session_uuid).map_err(rs)?
+            .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", session_uuid)))?;
+        let nodes = idb::list_nodes_for_session(&conn, session_uuid).map_err(rs)?;
+        let steps = idb::list_steps_for_session(&conn, session_uuid).map_err(rs)?;
+        drop(conn);
+
+        let node_by_id: std::collections::HashMap<Uuid, &idb::NodeRow> = nodes.iter().map(|n| (n.id, n)).collect();
+        let mut failures: Vec<serde_json::Value> = Vec::new();
+
+        // Session state/closed_at consistency, verified as a DATA fact (not
+        // just trusting the schema CHECK — the issue explicitly asks for
+        // this to be checked independently).
+        let state_consistent = match session.state.as_str() {
+            "open" => session.closed_at.is_none(),
+            "closed" => session.closed_at.is_some(),
+            other => {
+                failures.push(serde_json::json!({"kind": "invalid_session_state", "detail": format!("unrecognized state {:?}", other)}));
+                true // already reported; don't double-report below
+            }
+        };
+        if !state_consistent {
+            failures.push(serde_json::json!({
+                "kind": "session_state_closed_at_mismatch",
+                "detail": format!("state={:?} closed_at={:?}", session.state, session.closed_at),
+            }));
+        }
+
+        // Exactly one root, and session.root_node_id / selected_final_node_id
+        // must reference real nodes belonging to this session.
+        let root_count = nodes.iter().filter(|n| n.node_kind == "root").count();
+        if root_count != 1 {
+            failures.push(serde_json::json!({
+                "kind": "root_node_count", "detail": format!("expected exactly 1 root node, found {}", root_count),
+            }));
+        }
+        match session.root_node_id {
+            Some(rid) if !node_by_id.contains_key(&rid) => failures.push(serde_json::json!({
+                "kind": "missing_root_node", "detail": format!("session.root_node_id {} does not exist among this session's nodes", rid),
+            })),
+            None => failures.push(serde_json::json!({"kind": "missing_root_node", "detail": "session.root_node_id is NULL"})),
+            _ => {}
+        }
+        if let Some(sel) = session.selected_final_node_id {
+            if !node_by_id.contains_key(&sel) {
+                failures.push(serde_json::json!({
+                    "kind": "dangling_selected_node", "detail": format!("session.selected_final_node_id {} does not exist among this session's nodes", sel),
+                }));
+            }
+        }
+
+        // Every non-root node's parent must resolve within this session;
+        // every root node must have no parent.
+        for n in &nodes {
+            match (n.node_kind.as_str(), n.parent_node_id) {
+                ("root", None) => {}
+                ("root", Some(_)) => failures.push(serde_json::json!({
+                    "kind": "root_with_parent", "node_id": n.id.to_string(),
+                    "detail": "a root node must not have a parent_node_id",
+                })),
+                (_, None) => failures.push(serde_json::json!({
+                    "kind": "non_root_missing_parent", "node_id": n.id.to_string(),
+                    "detail": "a non-root node must have a parent_node_id",
+                })),
+                (_, Some(p)) if !node_by_id.contains_key(&p) => failures.push(serde_json::json!({
+                    "kind": "broken_parent_link", "node_id": n.id.to_string(), "parent_node_id": p.to_string(),
+                    "detail": "parent_node_id does not resolve to a node in this session — missing node",
+                })),
+                _ => {}
+            }
+        }
+
+        // Every step's parent/child references must resolve; an applied
+        // step must point at exactly one child node, and that node's own
+        // parent_node_id must agree with the step that produced it.
+        let mut applied_child_producers: std::collections::HashMap<Uuid, Vec<Uuid>> = std::collections::HashMap::new();
+        for s in &steps {
+            if !node_by_id.contains_key(&s.parent_node_id) {
+                failures.push(serde_json::json!({
+                    "kind": "dangling_step_parent", "step_id": s.id.to_string(), "parent_node_id": s.parent_node_id.to_string(),
+                    "detail": "step's parent_node_id does not resolve to a node in this session",
+                }));
+            }
+            if s.outcome == "applied" {
+                match s.child_node_id {
+                    Some(c) => {
+                        if !node_by_id.contains_key(&c) {
+                            failures.push(serde_json::json!({
+                                "kind": "dangling_step_child", "step_id": s.id.to_string(), "child_node_id": c.to_string(),
+                                "detail": "applied step's child_node_id does not resolve to a node in this session — missing node",
+                            }));
+                        } else {
+                            applied_child_producers.entry(c).or_default().push(s.id);
+                            if let Some(child_node) = node_by_id.get(&c) {
+                                if child_node.parent_node_id != Some(s.parent_node_id) {
+                                    failures.push(serde_json::json!({
+                                        "kind": "parent_child_disagreement", "step_id": s.id.to_string(), "node_id": c.to_string(),
+                                        "detail": "the node's own parent_node_id disagrees with the step that produced it — broken parent link",
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                    None => failures.push(serde_json::json!({
+                        "kind": "applied_step_missing_child", "step_id": s.id.to_string(),
+                        "detail": "outcome='applied' but child_node_id is NULL",
+                    })),
+                }
+            }
+        }
+        for n in &nodes {
+            if n.node_kind == "root" { continue; }
+            let producers = applied_child_producers.get(&n.id).map(|v| v.len()).unwrap_or(0);
+            if producers == 0 {
+                failures.push(serde_json::json!({
+                    "kind": "node_without_producing_step", "node_id": n.id.to_string(),
+                    "detail": "no applied step's child_node_id references this non-root node",
+                }));
+            } else if producers > 1 {
+                failures.push(serde_json::json!({
+                    "kind": "node_with_multiple_producing_steps", "node_id": n.id.to_string(), "count": producers,
+                    "detail": "more than one applied step claims to have produced this node",
+                }));
+            }
+        }
+
+        // Hash consistency: recompute each node's full_state_hash from its
+        // OWN persisted content (goals_json + the producing step's
+        // already-hashed tactic text) and compare against the stored
+        // proof_state_hash — catches a corrupted/edited node row or a
+        // changed tactic text hash that referential checks alone would not.
+        for n in &nodes {
+            let goals: Vec<ProofGoal> = match serde_json::from_str(&n.goals_json) {
+                Ok(g) => g,
+                Err(e) => {
+                    failures.push(serde_json::json!({
+                        "kind": "unparseable_goals_json", "node_id": n.id.to_string(), "detail": e.to_string(),
+                    }));
+                    continue;
+                }
+            };
+            let tactic_text_hash: Option<String> = if n.node_kind == "root" {
+                None
+            } else {
+                applied_child_producers.get(&n.id).and_then(|ids| ids.first())
+                    .and_then(|step_id| steps.iter().find(|s| s.id == *step_id))
+                    .map(|s| s.tactic_text_hash.clone())
+            };
+            match recompute_full_state_hash(&goals, tactic_text_hash.as_deref()) {
+                Ok(expected) if expected != n.proof_state_hash => failures.push(serde_json::json!({
+                    "kind": "proof_state_hash_mismatch", "node_id": n.id.to_string(),
+                    "recorded": n.proof_state_hash, "recomputed": expected,
+                    "detail": "recomputing the hash from this node's own persisted goals/tactic-text-hash content does not match the stored proof_state_hash",
+                })),
+                Ok(_) => {}
+                Err(e) => failures.push(serde_json::json!({
+                    "kind": "hash_recompute_error", "node_id": n.id.to_string(), "detail": e,
+                })),
+            }
+        }
+
+        // Branch visibility: never hide failed/abandoned branches from this
+        // report (issue's "branch handling" requirement — trace-only replay
+        // is where failed-branch visibility lives).
+        let selected_path: std::collections::HashSet<Uuid> = {
+            let mut set = std::collections::HashSet::new();
+            let mut cur = session.selected_final_node_id.or(session.root_node_id);
+            while let Some(id) = cur {
+                if !set.insert(id) { break; } // cycle guard (a real cycle is already flagged above)
+                cur = node_by_id.get(&id).and_then(|n| n.parent_node_id);
+            }
+            set
+        };
+        let child_counts: std::collections::HashMap<Uuid, usize> = nodes.iter()
+            .filter_map(|n| n.parent_node_id)
+            .fold(std::collections::HashMap::new(), |mut acc, p| { *acc.entry(p).or_insert(0) += 1; acc });
+        let abandoned_open_leaf_nodes: Vec<serde_json::Value> = nodes.iter()
+            .filter(|n| n.status == "open" && !child_counts.contains_key(&n.id) && !selected_path.contains(&n.id))
+            .map(|n| serde_json::json!({"node_id": n.id.to_string(), "depth": n.depth, "parent_node_id": n.parent_node_id.map(|p| p.to_string())}))
+            .collect();
+        let failed_steps: Vec<serde_json::Value> = steps.iter().filter(|s| s.outcome == "failed").map(|s| {
+            let diag: Option<serde_json::Value> = s.diagnostic_json.as_deref().and_then(|j| serde_json::from_str(j).ok());
+            serde_json::json!({
+                "step_id": s.id.to_string(),
+                "parent_node_id": s.parent_node_id.to_string(),
+                "tactic_text_hash": s.tactic_text_hash,
+                "diagnostic_category": diag.as_ref().and_then(|d| d.get("diagnostic")).and_then(|d| d.get("category")).cloned(),
+                "diagnostic_message": diag.as_ref().and_then(|d| d.get("diagnostic")).and_then(|d| d.get("primary_message")).cloned(),
+                "diagnostics_hash": s.diagnostics_hash,
+            })
+        }).collect();
+
+        Ok(serde_json::json!({
+            "session_id": session_uuid.to_string(),
+            "mode": "trace_only",
+            "passed": failures.is_empty(),
+            "node_count": nodes.len(),
+            "step_count": steps.len(),
+            "failures": failures,
+            "branch_report": {
+                "solved_node_count": nodes.iter().filter(|n| n.status == "solved").count(),
+                "abandoned_open_leaf_nodes": abandoned_open_leaf_nodes,
+                "failed_steps": failed_steps,
+            },
+        }))
+    }
+
+    /// mode="backend": re-runs the root-to-`selected_node_id` tactic path
+    /// against a FRESH interactive-backend session and confirms it
+    /// reproduces the outcomes/hashes the persisted steps recorded. Raw
+    /// tactic text is never durably stored server-side (only its hash — see
+    /// `ProofSessionPromoteToAttemptArgs`'s doc), so this mode sources the
+    /// actual text from the LIVE gateway's `reconstruct_script` on the
+    /// ORIGINAL session/node — which only works while that session's
+    /// in-memory state is still resumable (not after `proof_session_close`
+    /// or a process restart); when it is not, this returns a structured
+    /// "backend replay unavailable" result rather than a hard error. Also
+    /// reports a `backend_mismatch` if the session's recorded `backend_kind`
+    /// no longer matches [`CONFIGURED_INTERACTIVE_BACKEND_KIND`].
+    async fn replay_backend(&self, session_uuid: Uuid, selected_node_id: Option<&str>) -> Result<serde_json::Value, McpError> {
+        let (session, target_node) = {
+            let conn = self.conn.lock().await;
+            let session = idb::get_session(&conn, session_uuid).map_err(rs)?
+                .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", session_uuid)))?;
+            let target_node = match selected_node_id {
+                Some(s) => Uuid::parse_str(s).map_err(|e| mcp_invalid_params(format!("Invalid selected_node_id Uuid: {}", e)))?,
+                None => session.selected_final_node_id.or(session.root_node_id)
+                    .ok_or_else(|| mcp_internal_error("session has no root node — internal invariant violated"))?,
+            };
+            let node = idb::get_node(&conn, target_node).map_err(rs)?
+                .ok_or_else(|| mcp_invalid_params(format!("unknown node_id {} in session {}", target_node, session_uuid)))?;
+            if node.session_id != session_uuid {
+                return Err(mcp_invalid_params("selected_node_id does not belong to session_id"));
+            }
+            (session, target_node)
+        };
+
+        if session.backend_kind != CONFIGURED_INTERACTIVE_BACKEND_KIND {
+            return Ok(serde_json::json!({
+                "session_id": session_uuid.to_string(),
+                "mode": "backend",
+                "passed": false,
+                "backend_mismatch": true,
+                "backend_replay_available": false,
+                "detail": format!(
+                    "session.backend_kind {:?} does not match the currently configured backend {:?}",
+                    session.backend_kind, CONFIGURED_INTERACTIVE_BACKEND_KIND
+                ),
+            }));
+        }
+
+        // Source the actual tactic text from the LIVE original session (not
+        // persisted — see the doc comment above).
+        let original_script = match self.interactive_gateway
+            .reconstruct_script(InteractiveSessionHandle(session_uuid), ProofStateNodeId(target_node))
+        {
+            Ok(s) => s,
+            Err(e) => return Ok(serde_json::json!({
+                "session_id": session_uuid.to_string(),
+                "mode": "backend",
+                "passed": false,
+                "backend_mismatch": false,
+                "backend_replay_available": false,
+                "detail": format!(
+                    "live backend session unavailable for replay ({e}) — expected once a session has been closed or after a process restart (the mock backend's live state is in-memory only); use mode=\"final_proof\" for a durable trust gate that does not depend on live gateway state"
+                ),
+            })),
+        };
+
+        let tactics: Vec<String> = if original_script.tactic_block.is_empty() {
+            vec![]
+        } else {
+            original_script.tactic_block.split('\n').map(|s| s.to_string()).collect()
+        };
+
+        let request = {
+            let conn = self.conn.lock().await;
+            build_interactive_session_request(&conn, &session.episode_id.to_string(), &session.obligation_id.to_string())?.request
+        };
+
+        let trace = InteractiveSessionTrace {
+            request,
+            steps: tactics.iter().enumerate().map(|(i, t)| InteractiveTraceStep {
+                parent_step: if i == 0 { None } else { Some(i - 1) },
+                tactic: t.clone(),
+            }).collect(),
+        };
+        let replay = self.interactive_gateway.replay_session(&trace).map_err(mcp_invalid_params)?;
+
+        // Compare against the ORIGINAL stored path's steps/nodes — the same
+        // root-to-target_node walk `reconstruct_script` did.
+        let (orig_nodes, orig_steps) = {
+            let conn = self.conn.lock().await;
+            (idb::list_nodes_for_session(&conn, session_uuid).map_err(rs)?, idb::list_steps_for_session(&conn, session_uuid).map_err(rs)?)
+        };
+        let node_by_id: std::collections::HashMap<Uuid, &idb::NodeRow> = orig_nodes.iter().map(|n| (n.id, n)).collect();
+        let mut orig_path = vec![target_node];
+        {
+            let mut cur = target_node;
+            while let Some(p) = node_by_id.get(&cur).and_then(|n| n.parent_node_id) {
+                orig_path.push(p);
+                cur = p;
+            }
+        }
+        orig_path.reverse();
+
+        let mut mismatches = Vec::new();
+        let mut step_reports = Vec::new();
+        for (i, tactic) in tactics.iter().enumerate() {
+            let replayed = &replay.steps[i];
+            let orig_child = orig_path.get(i + 1).copied();
+            let orig_step = orig_child.and_then(|c| orig_steps.iter().find(|s| s.outcome == "applied" && s.child_node_id == Some(c)));
+
+            let replayed_outcome = match replayed.outcome { TacticOutcome::Applied => "applied", TacticOutcome::Failed => "failed" };
+            let orig_outcome = orig_step.map(|s| s.outcome.as_str());
+            let outcome_match = Some(replayed_outcome) == orig_outcome;
+
+            let replayed_tactic_hash = hash_tactic_text(tactic).map_err(mcp_internal_error)?;
+            let tactic_hash_match = orig_step.map(|s| s.tactic_text_hash == replayed_tactic_hash).unwrap_or(false);
+
+            let mut proof_state_hash_match = None;
+            if let (TacticOutcome::Applied, Some(state)) = (replayed.outcome, &replayed.state) {
+                let goals: Vec<ProofGoal> = state.goals.iter().enumerate().map(|(gi, g)| ProofGoal::from_interactive_goal(gi, g)).collect();
+                if let Ok(replayed_hash) = compute_proof_state_hash(&goals, state.tactic_applied.as_deref()) {
+                    if let Some(orig_node) = orig_child.and_then(|c| node_by_id.get(&c)) {
+                        proof_state_hash_match = Some(replayed_hash.full_state_hash == orig_node.proof_state_hash);
+                    }
+                }
+            }
+
+            if !outcome_match || !tactic_hash_match || proof_state_hash_match == Some(false) {
+                mismatches.push(serde_json::json!({
+                    "step_index": i, "original_step_id": orig_step.map(|s| s.id.to_string()),
+                    "outcome_match": outcome_match, "tactic_hash_match": tactic_hash_match, "proof_state_hash_match": proof_state_hash_match,
+                }));
+            }
+            step_reports.push(serde_json::json!({
+                "step_index": i, "replayed_outcome": replayed_outcome, "original_outcome": orig_outcome,
+                "outcome_match": outcome_match, "tactic_hash_match": tactic_hash_match, "proof_state_hash_match": proof_state_hash_match,
+            }));
+        }
+
+        let _ = self.interactive_gateway.close_session(replay.session);
+
+        Ok(serde_json::json!({
+            "session_id": session_uuid.to_string(),
+            "mode": "backend",
+            "backend_mismatch": false,
+            "backend_replay_available": true,
+            "passed": mismatches.is_empty(),
+            "replayed_node_path": orig_path.iter().map(|n| n.to_string()).collect::<Vec<_>>(),
+            "steps": step_reports,
+            "mismatches": mismatches,
+        }))
+    }
+
+    /// mode="final_proof" — THE TRUST GATE. Reconstructs the selected
+    /// script (or re-verifies an already-reconstructed one) and resubmits
+    /// it through the EXISTING attempt_claim + episode_step Solve path, by
+    /// calling `do_proof_session_reconstruct`/`do_proof_session_promote_to_attempt`
+    /// directly rather than duplicating their logic — the same "call the
+    /// real internal path" convention `do_proof_session_promote_to_attempt`
+    /// itself already uses for `do_attempt_claim`/`do_episode_step`.
+    async fn replay_final_proof(&self, session_uuid: Uuid, args: ProofSessionReplayArgs) -> Result<serde_json::Value, McpError> {
+        let episode_id = args.episode_id.ok_or_else(|| mcp_invalid_params("mode=\"final_proof\" requires episode_id"))?;
+        let action_request_id = args.action_request_id.ok_or_else(|| mcp_invalid_params("mode=\"final_proof\" requires action_request_id"))?;
+        let idempotency_key = args.idempotency_key.ok_or_else(|| mcp_invalid_params("mode=\"final_proof\" requires idempotency_key"))?;
+        let expected_revision = args.expected_revision.ok_or_else(|| mcp_invalid_params("mode=\"final_proof\" requires expected_revision"))?;
+        let cost_micros = args.cost_micros.ok_or_else(|| mcp_invalid_params("mode=\"final_proof\" requires cost_micros"))?;
+
+        let (script_id, tactic_block, reconstruction) = match (args.reconstructed_script_id, args.tactic_block) {
+            (Some(script_id), Some(tactic_block)) => (script_id, tactic_block, serde_json::Value::Null),
+            (Some(_), None) | (None, Some(_)) => return Err(mcp_invalid_params(
+                "mode=\"final_proof\" requires reconstructed_script_id and tactic_block together, or neither (to reconstruct fresh from selected_node_id)"
+            )),
+            (None, None) => {
+                let selected_node_id = match args.selected_node_id {
+                    Some(id) => id,
+                    None => {
+                        let conn = self.conn.lock().await;
+                        let session = idb::get_session(&conn, session_uuid).map_err(rs)?
+                            .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", session_uuid)))?;
+                        session.selected_final_node_id.or(session.root_node_id)
+                            .ok_or_else(|| mcp_internal_error("session has no root node — internal invariant violated"))?
+                            .to_string()
+                    }
+                };
+                let reconstruct_args = serde_json::json!({ "session_id": session_uuid.to_string(), "selected_node_id": selected_node_id });
+                let reconstruct_result = self.do_proof_session_reconstruct(reconstruct_args).await?;
+                let reconstruct_json = extract_tool_result_json(&reconstruct_result)?;
+                let script_id = reconstruct_json["reconstructed_script_id"].as_str()
+                    .ok_or_else(|| mcp_internal_error("proof_session_reconstruct did not return reconstructed_script_id"))?.to_string();
+                let tactic_block = reconstruct_json["tactic_block"].as_str()
+                    .ok_or_else(|| mcp_internal_error("proof_session_reconstruct did not return tactic_block"))?.to_string();
+                (script_id, tactic_block, reconstruct_json)
+            }
+        };
+
+        let promote_args = serde_json::json!({
+            "session_id": session_uuid.to_string(), "reconstructed_script_id": script_id, "tactic_block": tactic_block,
+            "episode_id": episode_id, "action_request_id": action_request_id,
+            "idempotency_key": idempotency_key, "expected_revision": expected_revision, "cost_micros": cost_micros,
+        });
+        let promote_result = self.do_proof_session_promote_to_attempt(promote_args).await?;
+        let promote_json = extract_tool_result_json(&promote_result)?;
+
+        Ok(serde_json::json!({
+            "session_id": session_uuid.to_string(),
+            "mode": "final_proof",
+            "reconstruction": reconstruction,
+            "promotion": promote_json,
+            "verified_attempt_id": promote_json["verified_attempt_id"],
+            "verification_outcome": promote_json["verification_outcome"],
+            "passed": promote_json["episode_step_result"]["accepted"].as_bool().unwrap_or(false),
+        }))
+    }
 }
 
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
@@ -5979,6 +6566,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ProofSessionReconstructArgs>("proof_session_reconstruct", "Issue #161: reconstruct a Lean tactic script from the root-to-selected_node_id path of a session's proof-state tree (#159's reconstruct_script), record its source hash (interactive_proof_reconstructed_scripts), and return the reconstructed tactic_block text directly — raw tactic text is not durably stored server-side, only its hash, so this response is the ONE place you get it back verbatim. reports_complete reflects the session's OWN internal is_solved claim at the selected node — it is still SEARCH EVIDENCE ONLY, not a verified proof. To actually verify, pass the returned reconstructed_script_id and the EXACT tactic_block back into proof_session_promote_to_attempt"),
             make_tool::<ProofSessionPromoteToAttemptArgs>("proof_session_promote_to_attempt", "Issue #161: THE ONLY proof_session_* tool that can affect an obligation's status. Takes a reconstructed_script_id (from proof_session_reconstruct) plus the exact tactic_block text (checked against that script's recorded proof_source_hash — a caller cannot promote text that wasn't actually reconstructed from this session), then internally calls the EXACT SAME attempt_claim + episode_step(Solve) internal path a normal two-call round trip uses: claims action_request_id with idempotency_key/expected_revision, then submits a Solve action with the reconstructed tactic_block through the real Lean kernel. Requires action_request_id to target the SAME obligation this session was interactively working on. The response's verification_outcome is read directly off the resulting action_attempts row (committed/rejected/infrastructure_failed/...), and episode_step_result carries the full underlying episode_step response (accepted/outcome/reward/...) — this tool changes nothing by itself; the kernel verdict inside episode_step_result is what (if anything) changed the obligation's status"),
             make_tool::<ProofSessionCloseArgs>("proof_session_close", "Issue #161: mark a session closed with reason \"closed\" (normal completion), \"abandoned\" (given up on), or \"superseded\" (replaced by a different session/approach). The session's full trace (every node/step, including failed tactics) stays visible and queryable afterward — closing never deletes anything. Also best-effort releases the live gateway's in-memory session"),
+            make_tool::<ProofSessionReplayArgs>("proof_session_replay", "Issue #163: replay a session from PERSISTED DB state (interactive_proof_sessions/_nodes/_steps/_reconstructed_scripts for session_id), not a caller-supplied in-memory trace — a closed/historical session stays replayable from what is actually stored. mode=\"trace_only\": pure DB-record consistency check (no backend/kernel call) — verifies every node's parent link resolves, every applied step's child node exists and its recorded proof_state_hash is internally consistent with its own persisted goals + tactic-text hash, session state/closed_at consistency, and returns a branch_report that explicitly surfaces failed steps and abandoned (unselected, still-open) leaf nodes rather than hiding them. mode=\"backend\": re-runs the root-to-selected_node_id tactic path against a FRESH interactive-backend session (sourcing tactic text from the live original session, since raw text is never durably stored) and compares outcomes/hashes to what was recorded — reports backend_mismatch if the session's recorded backend_kind no longer matches the currently configured backend, or backend_replay_available:false if the live backend can no longer supply the path (e.g. after proof_session_close or a process restart). mode=\"final_proof\": THE TRUST GATE — reconstructs the selected script (or re-verifies an already-reconstructed one via reconstructed_script_id+tactic_block) and resubmits it through the EXISTING attempt_claim + episode_step Solve path by calling proof_session_reconstruct's/proof_session_promote_to_attempt's own internal logic, not a second parallel verification path. Only final_proof's result is proof evidence — trace_only and backend remain SEARCH EVIDENCE ONLY, same as every other proof_session_* tool"),
             make_tool::<ModelCallReserveArgs>("model_call_reserve", "Reserve a model-call budget lease and immediately debit bounded episode budget"),
             make_tool::<ModelCallSettleArgs>("model_call_settle", "Settle or void a lease, applying only the reserved-vs-actual budget delta"),
             make_tool::<TrajectoryExportArgs>("trajectory_export", "Export trajectory with pagination (cursor + page_size). Raw event payload_json can expose a completed proof body (proof_term/module_items) — for a benchmark-linked episode this requires allow_putnambench_proof_export=true, same contamination policy as proof_export (issue #33)"),
@@ -6185,8 +6773,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 97,
-                        "total_tool_count": 97,
+                        "classified_tool_count": 98,
+                        "total_tool_count": 98,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -7162,6 +7750,16 @@ impl ServerHandler for ChatDbMcp {
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
+                            },
+                            "proof_session_replay": {
+                                "side_effect": "mode-dependent — trace_only and backend are read-only (no interactive_proof_* writes); final_proof is mutating via the EXACT SAME do_proof_session_reconstruct/do_proof_session_promote_to_attempt internal paths those tools themselves use (a fresh interactive_proof_reconstructed_scripts row, plus whatever action_attempts/episodes/episode_obligations writes a real Solve verification makes)",
+                                "trust_level": "trace_only and backend are search_evidence_only (a pure DB-consistency check and a live-backend re-run, neither touches the kernel); final_proof is verifier_backed — it IS the trust gate, the real Lean kernel decides, by reusing episode_step's own Solve path rather than a second verification path",
+                                "cost_surface": "none for trace_only/backend; identical to episode_step's Solve path for final_proof (this tool does not call the Lean gateway itself — do_episode_step does, via do_proof_session_promote_to_attempt)",
+                                "benchmark_safety": "contamination_risk — backend/final_proof can surface tactic/proof-body content (same category as proof_session_tactic_step/reconstruct); trace_only's report also echoes diagnostic categories/tactic hashes from stored steps",
+                                "replayability": "this tool IS the replay mechanism — trace_only/backend read persisted state deterministically given unchanged DB/live-gateway state; final_proof's result is replayable_with_hashes via the same action_attempts row episode_replay already re-executes",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body (goal/tactic/diagnostic content echoed in the report, or submitted for verification in final_proof mode)",
+                                "required_run_mode": "any — enforcement belongs at export time, exactly like the rest of the proof_session_* family"
                             }
                         }
                     }
@@ -7800,6 +8398,7 @@ impl ServerHandler for ChatDbMcp {
             "proof_session_reconstruct" => self.do_proof_session_reconstruct(args_val).await,
             "proof_session_promote_to_attempt" => self.do_proof_session_promote_to_attempt(args_val).await,
             "proof_session_close" => self.do_proof_session_close(args_val).await,
+            "proof_session_replay" => self.do_proof_session_replay(args_val).await,
             "model_call_reserve" => {
                 let args: ModelCallReserveArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -12143,8 +12742,9 @@ mod tests {
         // 86 through v0.3.23 + benchmark_suite_observe / benchmark_problem_observe /
         // benchmark_suite_set_trust (issue #65) = 89, + 8 proof_session_*
         // tools (issue #161: start/observe/tactic_step/branch/select_node/
-        // reconstruct/promote_to_attempt/close).
-        assert_eq!(list_res.tools.len(), 97);
+        // reconstruct/promote_to_attempt/close) = 97, + proof_session_replay
+        // (issue #163: trace_only/backend/final_proof replay modes).
+        assert_eq!(list_res.tools.len(), 98);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -20430,5 +21030,248 @@ mod tests {
             "idempotency_key": "promote-2", "expected_revision": revision, "cost_micros": 100,
         }).as_object().unwrap().clone())).await;
         assert!(repeat.is_err(), "promoting an already-promoted reconstructed_script_id must be rejected");
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #163: proof_session_replay (trace_only / backend / final_proof).
+    // -----------------------------------------------------------------
+
+    /// (a) trace_only replay on a healthy successful linear tactic path
+    /// passes cleanly, AND (b) it correctly surfaces a failed branch in its
+    /// branch_report rather than hiding it — a failed step is expected data,
+    /// not an integrity failure, so `passed` stays true while the failed
+    /// step is still visible in the report.
+    #[tokio::test]
+    async fn test_proof_session_replay_trace_only_passes_and_surfaces_failed_branch() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+        assert_eq!(applied["is_solved"], true);
+
+        // A failed branch off the now-solved (goal-less) node.
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "rfl",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(failed["outcome"], "failed");
+
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "trace_only",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        assert_eq!(replay["mode"], "trace_only", "{:?}", replay);
+        assert_eq!(replay["passed"], true, "a healthy path plus one expected failed step must still pass trace_only replay: {:?}", replay);
+        assert_eq!(replay["failures"].as_array().unwrap().len(), 0, "{:?}", replay);
+        assert_eq!(replay["node_count"], 2, "{:?}", replay); // root + solved node (the failed tactic created no node)
+        assert_eq!(replay["step_count"], 2, "{:?}", replay); // one applied, one failed
+        let failed_steps = replay["branch_report"]["failed_steps"].as_array().unwrap();
+        assert_eq!(failed_steps.len(), 1, "the failed branch must be surfaced, not hidden: {:?}", replay);
+        assert_eq!(failed_steps[0]["parent_node_id"], solved_node_id, "{:?}", failed_steps);
+        assert!(replay["trust_boundary"].as_str().unwrap().to_lowercase().contains("evidence"), "{:?}", replay);
+    }
+
+    /// (d) trace_only replay detects a corrupted DB row: directly tamper
+    /// with a node's recorded `proof_state_hash` (a class of integrity
+    /// failure referential/parent-link checks alone would not catch) and
+    /// confirm replay flags it rather than reporting a clean pass.
+    #[tokio::test]
+    async fn test_proof_session_replay_trace_only_detects_corrupted_proof_state_hash() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        // Replay is clean before corruption.
+        let clean_replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "trace_only",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(clean_replay["passed"], true, "{:?}", clean_replay);
+
+        // Directly corrupt the solved node's recorded proof_state_hash —
+        // simulates an edited/corrupted row, not reachable via any MCP tool.
+        {
+            let conn = conn_arc.lock().await;
+            let updated = conn.execute(
+                "UPDATE interactive_proof_nodes SET proof_state_hash = 'deliberately-corrupted-hash' WHERE id = ?1",
+                [&solved_node_id],
+            ).unwrap();
+            assert_eq!(updated, 1);
+        }
+
+        let corrupted_replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "trace_only",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(corrupted_replay["passed"], false, "corrupted proof_state_hash must be detected: {:?}", corrupted_replay);
+        let failures = corrupted_replay["failures"].as_array().unwrap();
+        assert!(
+            failures.iter().any(|f| f["kind"] == "proof_state_hash_mismatch" && f["node_id"] == solved_node_id),
+            "expected a proof_state_hash_mismatch failure for node {}: {:?}", solved_node_id, failures
+        );
+    }
+
+    /// mode="backend": re-running the recorded tactic path against a fresh
+    /// session (via the live gateway, which still holds the real tactic
+    /// text) reproduces the same outcomes/hashes that were stored.
+    #[tokio::test]
+    async fn test_proof_session_replay_backend_mode_matches_recorded_steps() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "backend", "selected_node_id": solved_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        assert_eq!(replay["mode"], "backend", "{:?}", replay);
+        assert_eq!(replay["backend_mismatch"], false, "{:?}", replay);
+        assert_eq!(replay["backend_replay_available"], true, "{:?}", replay);
+        assert_eq!(replay["passed"], true, "{:?}", replay);
+        assert_eq!(replay["mismatches"].as_array().unwrap().len(), 0, "{:?}", replay);
+        let steps = replay["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 1, "{:?}", replay);
+        assert_eq!(steps[0]["outcome_match"], true, "{:?}", steps);
+        assert_eq!(steps[0]["tactic_hash_match"], true, "{:?}", steps);
+        assert_eq!(steps[0]["proof_state_hash_match"], true, "{:?}", steps);
+    }
+
+    /// (c) mode="final_proof" is THE TRUST GATE: reconstructing fresh from a
+    /// solved node and resubmitting through it actually goes through
+    /// attempt_claim + episode_step (real kernel verification, via
+    /// MockGateway) and changes the obligation's status — reusing exactly
+    /// the same do_proof_session_reconstruct/do_proof_session_promote_to_attempt
+    /// internal paths those standalone tools use.
+    #[tokio::test]
+    async fn test_proof_session_replay_final_proof_verifies_and_certifies() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+        assert_eq!(applied["is_solved"], true);
+
+        // Nothing has proved the obligation yet.
+        let obl_status_before: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(obl_status_before, "open");
+
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "final_proof", "selected_node_id": solved_node_id,
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "replay-final-proof-1", "expected_revision": revision, "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        assert_eq!(replay["mode"], "final_proof", "{:?}", replay);
+        assert_eq!(replay["passed"], true, "{:?}", replay);
+        assert_eq!(replay["verification_outcome"], "committed", "{:?}", replay);
+        assert_eq!(replay["promotion"]["episode_step_result"]["outcome"], "kernel_verified", "{:?}", replay);
+        assert!(replay["verified_attempt_id"].as_str().is_some(), "{:?}", replay);
+        assert!(replay["trust_boundary"].as_str().unwrap().to_lowercase().contains("evidence"), "{:?}", replay);
+
+        // The obligation IS now proved — via the real episode_step path,
+        // reached through proof_session_replay's final_proof mode.
+        let obl_status_after: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(obl_status_after, "proved");
+    }
+
+    #[tokio::test]
+    async fn test_proof_session_replay_rejects_unknown_mode() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+
+        let bad = peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "nonsense",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad.is_err(), "an unknown replay mode must be rejected");
     }
 }

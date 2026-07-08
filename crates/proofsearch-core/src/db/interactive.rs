@@ -285,6 +285,57 @@ pub struct NewStep {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct StepRow {
+    pub id: Uuid,
+    pub session_id: Uuid,
+    pub parent_node_id: Uuid,
+    pub child_node_id: Option<Uuid>,
+    pub tactic_text_hash: String,
+    pub tactic_text_artifact_hash: Option<String>,
+    pub redacted_text: bool,
+    pub outcome: String,
+    pub diagnostic_json: Option<String>,
+    pub diagnostics_hash: Option<String>,
+    pub wall_time_ms: Option<i64>,
+    pub created_at: DateTime<Utc>,
+}
+
+const STEP_COLUMNS: &str = "id, session_id, parent_node_id, child_node_id, tactic_text_hash, tactic_text_artifact_hash, \
+     redacted_text, outcome, diagnostic_json, diagnostics_hash, wall_time_ms, created_at";
+
+fn row_to_step(row: &rusqlite::Row) -> rusqlite::Result<StepRow> {
+    let child_node_id: Option<String> = row.get(3)?;
+    Ok(StepRow {
+        id: parse_uuid(&row.get::<_, String>(0)?)?,
+        session_id: parse_uuid(&row.get::<_, String>(1)?)?,
+        parent_node_id: parse_uuid(&row.get::<_, String>(2)?)?,
+        child_node_id: child_node_id.map(|s| parse_uuid(&s)).transpose()?,
+        tactic_text_hash: row.get(4)?,
+        tactic_text_artifact_hash: row.get(5)?,
+        redacted_text: row.get::<_, i64>(6)? != 0,
+        outcome: row.get(7)?,
+        diagnostic_json: row.get(8)?,
+        diagnostics_hash: row.get(9)?,
+        wall_time_ms: row.get(10)?,
+        created_at: parse_datetime(&row.get::<_, String>(11)?)?,
+    })
+}
+
+/// Every step (applied AND failed — never filtered out; see the table doc)
+/// belonging to a session, oldest first. Issue #163: used by
+/// `proof_session_replay`'s trace-only integrity check (which needs the full
+/// step set to verify parent/child edges and surface failed branches) and by
+/// backend replay (which needs each stored step's `tactic_text_hash` to
+/// compare against a freshly re-run tactic's hash).
+pub fn list_steps_for_session(conn: &Connection, session_id: Uuid) -> rusqlite::Result<Vec<StepRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {STEP_COLUMNS} FROM interactive_proof_steps WHERE session_id = ?1 ORDER BY created_at ASC"
+    ))?;
+    let rows = stmt.query_map([session_id.to_string()], row_to_step)?;
+    rows.collect()
+}
+
 pub fn insert_step(conn: &Connection, s: &NewStep) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO interactive_proof_steps (
@@ -330,6 +381,13 @@ pub struct ReconstructedScriptRow {
     pub proof_source_hash: String,
     pub proof_source_artifact_hash: Option<String>,
     pub reports_complete: bool,
+    /// Issue #163: canonical JSON array of the root-to-final_node_id node
+    /// ids (#159 ReconstructedScript.node_path, persisted) — the one
+    /// artifact field this table was genuinely missing; see the table's doc
+    /// comment in schema_v1.rs for why backend_kind/backend_version/
+    /// environment_hash/import_manifest_hash are deliberately NOT duplicated
+    /// here instead of joined from the owning session.
+    pub tactic_path_ids_json: String,
     pub verified_attempt_id: Option<Uuid>,
     pub verification_outcome: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -343,6 +401,7 @@ pub struct NewReconstructedScript {
     pub proof_source_hash: String,
     pub proof_source_artifact_hash: Option<String>,
     pub reports_complete: bool,
+    pub tactic_path_ids_json: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -350,8 +409,8 @@ pub fn insert_reconstructed_script(conn: &Connection, r: &NewReconstructedScript
     conn.execute(
         "INSERT INTO interactive_proof_reconstructed_scripts (
             id, session_id, final_node_id, proof_format, proof_source_hash, proof_source_artifact_hash,
-            reports_complete, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            reports_complete, tactic_path_ids_json, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             r.id.to_string(),
             r.session_id.to_string(),
@@ -360,6 +419,7 @@ pub fn insert_reconstructed_script(conn: &Connection, r: &NewReconstructedScript
             r.proof_source_hash,
             r.proof_source_artifact_hash,
             r.reports_complete as i64,
+            r.tactic_path_ids_json,
             r.created_at.to_rfc3339(),
         ],
     )?;
@@ -367,10 +427,10 @@ pub fn insert_reconstructed_script(conn: &Connection, r: &NewReconstructedScript
 }
 
 const RECONSTRUCTED_SCRIPT_COLUMNS: &str = "id, session_id, final_node_id, proof_format, proof_source_hash, \
-     proof_source_artifact_hash, reports_complete, verified_attempt_id, verification_outcome, created_at";
+     proof_source_artifact_hash, reports_complete, tactic_path_ids_json, verified_attempt_id, verification_outcome, created_at";
 
 fn row_to_reconstructed_script(row: &rusqlite::Row) -> rusqlite::Result<ReconstructedScriptRow> {
-    let verified_attempt_id: Option<String> = row.get(7)?;
+    let verified_attempt_id: Option<String> = row.get(8)?;
     Ok(ReconstructedScriptRow {
         id: parse_uuid(&row.get::<_, String>(0)?)?,
         session_id: parse_uuid(&row.get::<_, String>(1)?)?,
@@ -379,9 +439,10 @@ fn row_to_reconstructed_script(row: &rusqlite::Row) -> rusqlite::Result<Reconstr
         proof_source_hash: row.get(4)?,
         proof_source_artifact_hash: row.get(5)?,
         reports_complete: row.get::<_, i64>(6)? != 0,
+        tactic_path_ids_json: row.get(7)?,
         verified_attempt_id: verified_attempt_id.map(|s| parse_uuid(&s)).transpose()?,
-        verification_outcome: row.get(8)?,
-        created_at: parse_datetime(&row.get::<_, String>(9)?)?,
+        verification_outcome: row.get(9)?,
+        created_at: parse_datetime(&row.get::<_, String>(10)?)?,
     })
 }
 
