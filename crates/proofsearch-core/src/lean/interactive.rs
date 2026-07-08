@@ -41,6 +41,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -52,7 +53,12 @@ use crate::models::{LeanDiagnostic, LeanDiagnosticCategory};
 /// to a different gateway implementation is a caller bug this type does not
 /// prevent structurally, the same way `LeanGateway` callers already carry
 /// `environment` / `import_manifest` by convention rather than by type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// `JsonSchema` (added in #162, additive) so this type can appear inside the
+/// `lean::observation` models without breaking their MCP-schema derivation —
+/// it does not change this type's fields, `Serialize`/`Deserialize` shape, or
+/// any #159 trait signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct InteractiveSessionHandle(pub Uuid);
 
 /// Identifies one node in a session's proof-state tree — the state produced
@@ -61,7 +67,7 @@ pub struct InteractiveSessionHandle(pub Uuid);
 /// hold several sibling nodes reached from the same parent by different
 /// tactics, which is why `apply_tactic` takes an explicit `parent_node`
 /// instead of always extending an implicit "current" pointer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct ProofStateNodeId(pub Uuid);
 
 /// One open goal within a proof-state node, in Pantograph-shaped terms: a

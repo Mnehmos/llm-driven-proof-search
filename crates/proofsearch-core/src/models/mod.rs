@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 use uuid::Uuid;
 
 pub mod episode;
@@ -438,7 +439,7 @@ impl TryFrom<&str> for LeanVerificationOutcome {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LeanDiagnosticCategory {
     ParseError,
@@ -496,7 +497,7 @@ impl TryFrom<&str> for LeanDiagnosticCategory {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LeanDiagnostic {
     pub category: LeanDiagnosticCategory,
     pub primary_message: String,
