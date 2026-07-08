@@ -21289,4 +21289,539 @@ mod tests {
         }).as_object().unwrap().clone())).await;
         assert!(bad.is_err(), "an unknown replay mode must be rejected");
     }
+
+    // -----------------------------------------------------------------
+    // Issue #167: interactive-session test lock-down. #159-#163 each carry
+    // their own thorough test coverage (see those tests above); this batch
+    // fills the specific gaps issue #167 calls out by name and adds ONE
+    // consolidated vertical-slice regression test that drives the full real
+    // MCP tool surface end to end, exactly the way #161/#163's own
+    // integration tests are structured (peer.call_tool(...), never internal
+    // Rust calls) — see this crate's PR description for why these tests
+    // live here (inline in this `mod tests`) rather than in a separate
+    // `tests/` file: every proof_session_* integration test #159-#163 wrote
+    // already lives in this exact module, reusing private helpers
+    // (`connected_client`, `tool_json`, `setup_solvable_episode`, the local
+    // `MockGateway`) that are not `pub` and so cannot be reused from a
+    // separate integration-test crate without either duplicating them or
+    // widening this crate's public surface purely for tests — matching the
+    // established convention was judged more consistent than either.
+    //
+    // Test class 7 ("Export policy": public_summary / audit_archive /
+    // training_export redaction semantics for interactive sessions) is
+    // deliberately NOT covered here — `proof_session_export` does not exist
+    // yet (deferred out of #161, and issue #164 owns adding interactive-
+    // session support to trajectory_export/proof_export/training_export).
+    // Writing that test now would mean inventing the exact redaction
+    // mechanism #164 is supposed to design. See the PR description / the
+    // comment left on issue #167 for the full explanation.
+    // -----------------------------------------------------------------
+
+    /// Test class 1 gap: "close abandoned session" and "close completed
+    /// session" are two DISTINCT close-reason paths, not just two strings
+    /// accepted by the same code path. Session A is abandoned before ever
+    /// reaching a solved node; session B is closed only after its one goal
+    /// is closed. Both must persist their own `close_reason` independently
+    /// and remain separately observable afterward.
+    #[tokio::test]
+    async fn test_proof_session_close_abandoned_vs_completed_are_distinct_paths() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        // --- Session A: abandoned before any tactic is ever applied. ---
+        let (episode_a, obligation_a, _req_a, rev_a) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_a, "obligation_id": obligation_a, "expected_revision": rev_a,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_a = start_a["session_id"].as_str().unwrap().to_string();
+
+        let closed_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+            "session_id": session_a, "reason": "abandoned",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(closed_a["close_reason"], "abandoned", "{:?}", closed_a);
+        assert_eq!(closed_a["state"], "closed");
+
+        // --- Session B: closed only after its goal is actually solved. ---
+        let (episode_b, obligation_b, _req_b, rev_b) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_b, "obligation_id": obligation_b, "expected_revision": rev_b,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_b = start_b["session_id"].as_str().unwrap().to_string();
+        let root_b = start_b["node_id"].as_str().unwrap().to_string();
+        let applied_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_b, "parent_node_id": root_b, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(applied_b["is_solved"], true);
+
+        let closed_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+            "session_id": session_b, "reason": "closed",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(closed_b["close_reason"], "closed", "{:?}", closed_b);
+        assert_eq!(closed_b["state"], "closed");
+
+        // Each session independently and durably remembers its own
+        // close_reason — abandoning one never leaks into or overwrites the
+        // other, and both are still observable via proof_session_observe
+        // (closing never deletes anything).
+        let observed_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_a,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed_a["close_reason"], "abandoned", "{:?}", observed_a);
+        assert_eq!(observed_a["is_solved"], false, "session A was abandoned before solving anything: {:?}", observed_a);
+
+        let observed_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_b,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed_b["close_reason"], "closed", "{:?}", observed_b);
+        assert_eq!(observed_b["is_solved"], true, "{:?}", observed_b);
+
+        // Neither session's closure — abandoned OR completed — ever touched
+        // its obligation's status by itself.
+        let (status_a, status_b): (String, String) = {
+            let conn = conn_arc.lock().await;
+            (
+                conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_a], |row| row.get(0)).unwrap(),
+                conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_b], |row| row.get(0)).unwrap(),
+            )
+        };
+        assert_eq!(status_a, "open");
+        assert_eq!(status_b, "open", "session B's in-session solved goal is search evidence only, until promote_to_attempt runs");
+    }
+
+    /// Test class 2 gap: an explicit, dedicated check that a successful
+    /// `proof_session_tactic_step` call's `proof_state_hash` is STABLE and
+    /// REPRODUCIBLE through the real tool surface — not merely internally
+    /// consistent within one call. Two independently-started sessions
+    /// against the identical statement, given the identical tactic, must
+    /// compute the identical `full_state_hash` (the hash is a function of
+    /// canonically-rendered content, never of session/node identity), and
+    /// re-observing the same node twice must return that same hash again.
+    #[tokio::test]
+    async fn test_proof_session_tactic_step_success_produces_stable_reproducible_hash() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        // Two structurally-identical, but fully independent, sessions
+        // (different episodes/obligations/node UUIDs throughout).
+        let (episode_1, obligation_1, _req_1, rev_1) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start_1 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_1, "obligation_id": obligation_1, "expected_revision": rev_1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_1 = start_1["session_id"].as_str().unwrap().to_string();
+        let root_1 = start_1["node_id"].as_str().unwrap().to_string();
+
+        let (episode_2, obligation_2, _req_2, rev_2) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start_2 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_2, "obligation_id": obligation_2, "expected_revision": rev_2,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_2 = start_2["session_id"].as_str().unwrap().to_string();
+        let root_2 = start_2["node_id"].as_str().unwrap().to_string();
+
+        // Two DIFFERENT sessions never produce colliding node ids, but their
+        // root proof_state_hash (same statement, no tactic yet) must match.
+        assert_ne!(session_1, session_2);
+        assert_ne!(root_1, root_2);
+        assert_eq!(start_1["proof_state_hash"]["full_state_hash"], start_2["proof_state_hash"]["full_state_hash"],
+            "identical root statements must hash identically regardless of session identity: {:?} vs {:?}", start_1, start_2);
+
+        let applied_1 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_1, "parent_node_id": root_1, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let applied_2 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_2, "parent_node_id": root_2, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // Same tactic, same resulting (empty) goal set, from two
+        // independent sessions -> identical full_state_hash.
+        assert_eq!(applied_1["proof_state_hash"]["full_state_hash"], applied_2["proof_state_hash"]["full_state_hash"],
+            "identical tactic applied to identical prior states must hash identically: {:?} vs {:?}", applied_1, applied_2);
+        assert_ne!(applied_1["proof_state_hash"]["full_state_hash"], start_1["proof_state_hash"]["full_state_hash"],
+            "applying a tactic must change the hash relative to its own parent");
+
+        // Re-observing the SAME node twice reproduces the SAME hash — the
+        // hash is a pure function of persisted content, not recomputed
+        // freshly (and differently) on every read.
+        let solved_node_1 = applied_1["node_id"].as_str().unwrap().to_string();
+        let observed_first = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let observed_second = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed_first["selected_node_id"], solved_node_1);
+        assert_eq!(observed_first["proof_state_hash"], observed_second["proof_state_hash"],
+            "repeated reads of the same node must reproduce the identical stored hash: {:?} vs {:?}", observed_first, observed_second);
+        assert_eq!(observed_first["proof_state_hash"], applied_1["proof_state_hash"]["full_state_hash"],
+            "the hash read back via observe must match the hash returned at tactic-application time");
+    }
+
+    /// Test class 4: confirms the DB layer preserves BOTH a failed branch
+    /// and its sibling successful branches after the fact — a failed branch
+    /// is not overwritten, deleted, or hidden when a sibling branch
+    /// succeeds. `MockInteractiveGateway` deterministically fails a tactic
+    /// only when applied to a node with no goals remaining (see its doc
+    /// comment), so "one branch fails, one succeeds" cannot come from the
+    /// exact same still-open parent node with this backend (outcome is a
+    /// pure function of the parent's own goal state, not of the tactic
+    /// text) — this test instead branches twice off the ROOT (both succeed,
+    /// non-destructive siblings) and then attempts a further branch off one
+    /// of the now-solved children (which deterministically fails), which is
+    /// the closest honest reproduction of "one branch fails, one succeeds"
+    /// this backend can produce without fabricating failure behavior it
+    /// doesn't have. Skips exporting both branches (export machinery is
+    /// out of scope — see the #167 test-class-7 note above) and instead
+    /// confirms both remain independently queryable via direct node/step
+    /// listing AND via `proof_session_replay` mode="trace_only", per the
+    /// issue's own "whichever is more natural" allowance.
+    #[tokio::test]
+    async fn test_proof_session_branching_preserves_both_failed_and_successful_branches_after_the_fact() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        // Two successful siblings off root.
+        let branch_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "branch-a", "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(branch_a["outcome"], "applied", "{:?}", branch_a);
+        let branch_a_node = branch_a["node_id"].as_str().unwrap().to_string();
+
+        let branch_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "branch-b", "tactic": "decide",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(branch_b["outcome"], "applied", "{:?}", branch_b);
+        let branch_b_node = branch_b["node_id"].as_str().unwrap().to_string();
+        assert_ne!(branch_a_node, branch_b_node);
+
+        // A further branch attempt off branch_a's now-solved node fails.
+        let failed_branch = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": branch_a_node, "branch_name": "branch-a-followup", "tactic": "rfl",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(failed_branch["outcome"], "failed", "{:?}", failed_branch);
+        assert!(failed_branch["node_id"].is_null());
+        assert!(failed_branch["diagnostic"].is_object());
+
+        // --- Direct DB check: nothing was overwritten or deleted. ---
+        let sibling_count: i64 = {
+            let conn = conn_arc.lock().await;
+            conn.query_row(
+                "SELECT COUNT(*) FROM interactive_proof_nodes WHERE parent_node_id = ?1",
+                [&root_node_id], |row| row.get(0),
+            ).unwrap()
+        };
+        assert_eq!(sibling_count, 2, "both successful root branches must survive as distinct sibling nodes");
+
+        let (failed_step_count, applied_step_count): (i64, i64) = {
+            let conn = conn_arc.lock().await;
+            (
+                conn.query_row(
+                    "SELECT COUNT(*) FROM interactive_proof_steps WHERE session_id = ?1 AND outcome = 'failed'",
+                    [&session_id], |row| row.get(0),
+                ).unwrap(),
+                conn.query_row(
+                    "SELECT COUNT(*) FROM interactive_proof_steps WHERE session_id = ?1 AND outcome = 'applied'",
+                    [&session_id], |row| row.get(0),
+                ).unwrap(),
+            )
+        };
+        assert_eq!(failed_step_count, 1, "the failed branch step must remain, not be pruned");
+        assert_eq!(applied_step_count, 2, "both successful branch steps must remain alongside the failed one");
+
+        // --- Independently queryable via proof_session_replay trace_only. ---
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "trace_only",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(replay["passed"], true, "an expected failed branch alongside successful siblings is not a corruption: {:?}", replay);
+        assert_eq!(replay["node_count"], 3, "{:?}", replay); // root + branch_a + branch_b
+        assert_eq!(replay["step_count"], 3, "{:?}", replay); // 2 applied + 1 failed
+        let failed_steps = replay["branch_report"]["failed_steps"].as_array().unwrap();
+        assert_eq!(failed_steps.len(), 1, "{:?}", replay);
+        assert_eq!(failed_steps[0]["parent_node_id"], branch_a_node, "{:?}", failed_steps);
+    }
+
+    /// Test class 6: a clear, explicit, well-named trust-boundary
+    /// regression test. Runs start + tactic_step (success) + branch +
+    /// reconstruct — deliberately WITHOUT ever calling
+    /// promote_to_attempt — and confirms `episode_obligations.status` is
+    /// byte-for-byte unchanged from before the session even started. Only
+    /// then calls promote_to_attempt and confirms status changes, proving
+    /// the state change is caused by promote_to_attempt's real kernel
+    /// verification, not by anything upstream of it.
+    #[tokio::test]
+    async fn test_interactive_session_alone_cannot_prove_obligation_only_promote_to_attempt_can() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+
+        let status_before_anything: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(status_before_anything, "open");
+
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(applied["is_solved"], true, "{:?}", applied);
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        let _branch = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "alt", "tactic": "decide",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+            "session_id": session_id, "selected_node_id": solved_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(reconstructed["reports_complete"], true, "{:?}", reconstructed);
+        let script_id = reconstructed["reconstructed_script_id"].as_str().unwrap().to_string();
+        let tactic_block = reconstructed["tactic_block"].as_str().unwrap().to_string();
+
+        // Start + a successful tactic_step + a branch + reconstruct — and
+        // STILL nothing has changed about the obligation itself. This is
+        // the entire point of the trust boundary: is_solved=true in-session
+        // is evidence, not authority.
+        let status_after_session_work: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(status_after_session_work, status_before_anything,
+            "an interactive session — including a solved node, a branch, and a reconstruction — must never itself change obligation status");
+
+        // Only promote_to_attempt (real attempt_claim + episode_step Solve,
+        // real Lean kernel verification via MockGateway) can move it.
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+            "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "trust-boundary-promote-1", "expected_revision": revision, "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(promoted["episode_step_result"]["accepted"], true, "{:?}", promoted);
+
+        let status_after_promote: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(status_after_promote, "proved", "only promote_to_attempt's real kernel verification may change obligation status");
+    }
+
+    /// The parent epic's vertical-slice success case, driven end to end
+    /// through the FULL real MCP tool surface (issue #167 acceptance
+    /// criterion: "Regression tests cover the parent epic's vertical-slice
+    /// success case"): start -> tactic_step (success) -> tactic_step
+    /// (failure, attempted off the now-solved node — "on a branch" in the
+    /// sense that it is a doomed offshoot, not an extension of the main
+    /// line) -> branch (a genuine second named branch off the root) ->
+    /// select_node (switch the working pointer onto that branch) ->
+    /// reconstruct (from the selected branch) -> promote_to_attempt (real
+    /// kernel verification) -> close. Every step is asserted, not just the
+    /// last one, so a regression anywhere in the chain fails this test.
+    #[tokio::test]
+    async fn test_issue167_full_vertical_slice_start_tactic_branch_select_reconstruct_promote_close() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        // 1) episode/obligation fixture, same as every other #159-#163 test.
+        let (episode_id, obligation_id, request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+
+        // 2) proof_session_start.
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+        assert_eq!(start["is_solved"], false, "{:?}", start);
+
+        // 3) proof_session_tactic_step: success.
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(applied["outcome"], "applied", "{:?}", applied);
+        assert_eq!(applied["is_solved"], true, "{:?}", applied);
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        // 4) proof_session_tactic_step: failure, on the now-solved (goal-less) node.
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "rfl",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(failed["outcome"], "failed", "{:?}", failed);
+        assert!(failed["node_id"].is_null(), "{:?}", failed);
+        assert!(failed["diagnostic"]["diagnostic"]["primary_message"].as_str().unwrap().len() > 0, "{:?}", failed);
+
+        // 5) proof_session_branch: a genuine second named branch off root.
+        let branch = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "vertical-slice-alt", "tactic": "decide",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(branch["outcome"], "applied", "{:?}", branch);
+        assert_eq!(branch["branch_name"], "vertical-slice-alt");
+        let branch_node_id = branch["node_id"].as_str().unwrap().to_string();
+        assert_ne!(branch_node_id, solved_node_id, "the branch must be a genuinely distinct sibling node, not the earlier solved node");
+
+        // 6) proof_session_select_node: move the working pointer onto the branch.
+        let selected = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_select_node").with_arguments(serde_json::json!({
+            "session_id": session_id, "node_id": branch_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(selected["selected_node_id"], branch_node_id, "{:?}", selected);
+
+        // 7) proof_session_reconstruct: from the SELECTED branch node.
+        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+            "session_id": session_id, "selected_node_id": branch_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(reconstructed["reports_complete"], true, "{:?}", reconstructed);
+        let script_id = reconstructed["reconstructed_script_id"].as_str().unwrap().to_string();
+        let tactic_block = reconstructed["tactic_block"].as_str().unwrap().to_string();
+        assert_eq!(tactic_block, "decide", "must reconstruct the BRANCH's own tactic, not the earlier abandoned main-line one");
+        let proof_source_hash_first = reconstructed["proof_source_hash"].as_str().unwrap().to_string();
+
+        // Reconstructing the identical path again reproduces the identical hash.
+        let reconstructed_again = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+            "session_id": session_id, "selected_node_id": branch_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(reconstructed_again["proof_source_hash"].as_str().unwrap(), proof_source_hash_first,
+            "reconstructing the same path twice must hash identically");
+
+        // Nothing so far has changed the obligation's status.
+        let status_before_promote: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(status_before_promote, "open");
+
+        // 8) proof_session_promote_to_attempt: the ONLY step that can prove anything.
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+            "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "vertical-slice-promote-1", "expected_revision": revision, "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(promoted["verification_outcome"], "committed", "{:?}", promoted);
+        assert_eq!(promoted["episode_step_result"]["outcome"], "kernel_verified", "{:?}", promoted);
+        assert_eq!(promoted["episode_step_result"]["accepted"], true, "{:?}", promoted);
+
+        let status_after_promote: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(status_after_promote, "proved");
+
+        // 9) proof_session_close.
+        let closed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+            "session_id": session_id, "reason": "closed",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(closed["state"], "closed", "{:?}", closed);
+        assert_eq!(closed["close_reason"], "closed");
+
+        // Full trace — the successful main line, the failed offshoot, AND
+        // the promoted branch — is all still intact and consistent after
+        // close, confirmed independently via replay trace_only.
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "trace_only",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(replay["passed"], true, "{:?}", replay);
+        assert_eq!(replay["node_count"], 3, "{:?}", replay); // root + solved_node_id + branch_node_id
+        assert_eq!(replay["step_count"], 3, "{:?}", replay); // applied + failed + branch-applied
+        let failed_steps = replay["branch_report"]["failed_steps"].as_array().unwrap();
+        assert_eq!(failed_steps.len(), 1, "{:?}", replay);
+    }
+
+    /// Acceptance criterion: "A failing interactive backend does not break
+    /// whole-proof verification." Constructs a handler whose
+    /// `interactive_gateway` is `FallbackInteractiveGateway` (issue #159's
+    /// "no interactive backend available" stand-in, which errors on every
+    /// live-stepping operation) and confirms a completely ordinary
+    /// attempt_claim + episode_step(Solve) round trip — the SAME whole-
+    /// theorem-verification path Solve/SubmitModule always use, untouched
+    /// by any proof_session_* call — still succeeds. Also confirms
+    /// proof_session_start itself fails cleanly (not a panic) against this
+    /// backend, so the "failing interactive backend" premise is real, not
+    /// vacuous.
+    #[tokio::test]
+    async fn test_solve_via_episode_step_succeeds_when_interactive_gateway_is_fallback_only() {
+        use proofsearch_core::lean::interactive::FallbackInteractiveGateway;
+
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(FallbackInteractiveGateway),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, _obligation_id, request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+
+        // The "failing interactive backend" premise is real: proof_session_start
+        // itself is rejected cleanly (not a panic, not a hang) against this backend.
+        let session_attempt = peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": _obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await;
+        assert!(session_attempt.is_err(), "FallbackInteractiveGateway must cleanly refuse to start a session");
+
+        // Whole-proof verification (attempt_claim + episode_step Solve) is
+        // completely unaffected — it never touches interactive_gateway at all.
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "fallback-gateway-solve-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": revision, "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "norm_num"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["outcome"], "kernel_verified", "{:?}", step);
+        assert_eq!(step["accepted"], true, "{:?}", step);
+    }
 }
