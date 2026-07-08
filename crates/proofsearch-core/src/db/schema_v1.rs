@@ -1728,6 +1728,208 @@ CREATE INDEX IF NOT EXISTS idx_scoring_results_submission ON scoring_results(sub
 CREATE INDEX IF NOT EXISTS idx_review_results_submission ON review_results(submission_id);
 CREATE INDEX IF NOT EXISTS idx_validation_protocols_dossier ON validation_protocols(dossier_id);
 CREATE INDEX IF NOT EXISTS idx_distilled_strategy_artifacts_dossier ON distilled_strategy_artifacts(dossier_id);
+
+-- Interactive proof-session persistence (issue #160, part of the Pantograph-
+-- style interaction epic #158): first-class storage for tactic-by-tactic
+-- proof search built on top of #159's InteractiveProofGateway trait
+-- (`crate::lean::interactive`) and #162's canonical ProofStateObservation /
+-- ProofStateDiagnostic model (`crate::lean::observation`). Without this,
+-- an interactive backend would be another untracked scratchpad -- exactly the
+-- negative-space loss this project exists to fix.
+--
+-- TRUST BOUNDARY (same rule #159/#162 already state, restated here because it
+-- is this table group's entire reason for existing): every row below is
+-- SEARCH EVIDENCE ONLY. No row here, and no column combination across them,
+-- can mark an `episode_obligations` row proved -- that structural absence is
+-- the guarantee, not a CHECK. The ONLY path from an interactive session to a
+-- proved obligation is: reconstruct a script -> resubmit it through the
+-- EXISTING Solve/SubmitModule -> action_attempts kernel-verification path
+-- (unchanged by this migration) -> link the resulting action_attempts row
+-- back onto `interactive_proof_reconstructed_scripts.verified_attempt_id`.
+-- That link column (and `verification_outcome` beside it) is nullable and is
+-- NEVER populated at INSERT time by this schema -- see that table's own doc.
+--
+-- Judgment call -- `interactive_proof_diagnostics` (issue #160 lists this as
+-- a proposed 5th table without giving it its own column list): folded into
+-- `interactive_proof_steps` as `diagnostic_json` + `diagnostics_hash` rather
+-- than kept as a separate table. Reasons: (1) #162's `ProofStateDiagnostic`
+-- already serializes losslessly to one JSON value (it wraps `LeanDiagnostic`
+-- wholesale), so a separate table would just be this same JSON blob split
+-- across columns with no query pattern that needs it split; (2) the existing
+-- schema already has this exact convention -- `episode_proposal_attempts` /
+-- `episode_review_proposals` etc. carry a `diagnostic_json TEXT` column
+-- directly rather than a child table, and this group follows the same
+-- pattern rather than inventing a second one; (3) a diagnostic is 1:1 with
+-- the failed step that produced it (never shared across steps), so a child
+-- table would carry a redundant `step_id` unique key and buy nothing a
+-- nullable column pair doesn't already give for free. `diagnostics_hash` is
+-- `crate::hashing::canonical_hash` over the same content
+-- `crate::lean::observation::hash_diagnostic` would compute, so two
+-- structurally-identical diagnostics remain comparable without a join.
+CREATE TABLE IF NOT EXISTS interactive_proof_sessions (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    problem_version_id TEXT NOT NULL REFERENCES problem_versions(id),
+    obligation_id TEXT NOT NULL REFERENCES episode_obligations(id),
+    backend_kind TEXT NOT NULL,
+    backend_version TEXT,
+    import_manifest_hash TEXT,
+    environment_hash TEXT,
+    state TEXT NOT NULL DEFAULT 'open',
+    -- root_node_id / selected_final_node_id reference interactive_proof_nodes
+    -- (defined below this table): SQLite resolves a REFERENCES target by name
+    -- at DML time, not at CREATE TABLE time, so this forward reference (and
+    -- interactive_proof_nodes.session_id referencing back up to this table)
+    -- is safe. In practice a session row is inserted first with both NULL,
+    -- then updated once its root node (and later, its selected final node)
+    -- exist -- the same "create now, link later" shape
+    -- `problem_versions.root_obligation_id` already uses.
+    root_node_id TEXT REFERENCES interactive_proof_nodes(id),
+    selected_final_node_id TEXT REFERENCES interactive_proof_nodes(id),
+    reconstructed_script_hash TEXT,
+    created_at TEXT NOT NULL,
+    closed_at TEXT,
+    CHECK(state IN ('open', 'closed')),
+    CHECK((state = 'open' AND closed_at IS NULL) OR (state = 'closed' AND closed_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_interactive_proof_sessions_episode ON interactive_proof_sessions(episode_id);
+CREATE INDEX IF NOT EXISTS idx_interactive_proof_sessions_obligation ON interactive_proof_sessions(obligation_id);
+CREATE INDEX IF NOT EXISTS idx_interactive_proof_sessions_problem_version ON interactive_proof_sessions(problem_version_id);
+
+-- One row per proof-state node in a session's tree (#159's
+-- ProofStateSnapshot / #162's ProofStateObservation, persisted). Nodes are
+-- APPEND-ONLY: a session can hold several sibling nodes reached from the same
+-- parent by different tactics (branching from `apply_tactic`'s explicit
+-- `parent_node` argument), and nothing in this schema ever deletes or
+-- overwrites an existing node row -- see `interactive_proof_steps` for the
+-- tactic edges that connect them.
+CREATE TABLE IF NOT EXISTS interactive_proof_nodes (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES interactive_proof_sessions(id),
+    parent_node_id TEXT REFERENCES interactive_proof_nodes(id),
+    depth INTEGER NOT NULL,
+    node_kind TEXT NOT NULL,
+    -- #162 ProofStateHash.full_state_hash for this node.
+    proof_state_hash TEXT NOT NULL,
+    -- Canonical JSON serialization of #162's Vec<ProofGoal> (each entry
+    -- already bundles its own target rendering AND local_context). Issue
+    -- #160 suggests separate local_context_json/target_json columns; those
+    -- are deliberately folded into this single goals_json column instead --
+    -- splitting them out would only be lossless for a single-goal node, and
+    -- would either duplicate goals_json's content or silently keep just one
+    -- goal's context/target for a multi-goal node. selected_goal_index below
+    -- covers "which one is focused" without needing a second representation.
+    goals_json TEXT NOT NULL,
+    -- Index into the goals_json array the session/UI currently has focused,
+    -- mirroring #162's ProofStateObservation.selected_goal. NULL iff
+    -- goals_json is an empty array (nothing to select).
+    selected_goal_index INTEGER,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK(node_kind IN ('root', 'tactic_result', 'failed_placeholder')),
+    CHECK(status IN ('open', 'solved')),
+    CHECK(depth >= 0),
+    CHECK((node_kind = 'root' AND parent_node_id IS NULL) OR (node_kind <> 'root' AND parent_node_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_interactive_proof_nodes_session ON interactive_proof_nodes(session_id);
+CREATE INDEX IF NOT EXISTS idx_interactive_proof_nodes_parent ON interactive_proof_nodes(parent_node_id);
+
+-- One row per `apply_tactic` call (#159), whether it succeeded or failed.
+-- Tactic-step edges are APPEND-ONLY and a failed step is NEVER deleted or
+-- hidden -- it remains a normal, queryable row with outcome = 'failed'. That
+-- is exactly what makes this table "search evidence" rather than a
+-- scratchpad: a dead end is as much a first-class fact as a successful step,
+-- and future search/training code can learn from `failed` rows precisely
+-- because nothing here quietly drops them.
+--
+-- See the doc comment above `interactive_proof_sessions` for why diagnostic
+-- detail (issue #160's proposed `interactive_proof_diagnostics` table) is
+-- folded into this table's `diagnostic_json` / `diagnostics_hash` columns
+-- instead of living in a separate table.
+CREATE TABLE IF NOT EXISTS interactive_proof_steps (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES interactive_proof_sessions(id),
+    parent_node_id TEXT NOT NULL REFERENCES interactive_proof_nodes(id),
+    -- NULL iff outcome = 'failed' and the backend created no placeholder node
+    -- for it -- #162's ProofStateDiagnostic.child_node_id doc: the only
+    -- backend today (MockInteractiveGateway) always leaves this NULL on
+    -- failure, but a future backend is allowed to populate one for replay.
+    child_node_id TEXT REFERENCES interactive_proof_nodes(id),
+    -- crate::lean::observation::hash_tactic_text output. Always present: a
+    -- tactic-application call always has tactic text (the caller supplies
+    -- it), whether it succeeds or fails.
+    tactic_text_hash TEXT NOT NULL,
+    -- Content-addressed pointer to the raw tactic text stored as a separate
+    -- artifact, matching the *_artifact_hash convention used elsewhere
+    -- (proof_source_artifact_hash, compiled_artifact_hash, ...). NULL means
+    -- the raw text was not separately archived as an artifact.
+    tactic_text_artifact_hash TEXT,
+    -- Mirrors the machine-checkable proof_body_redacted marker #162 already
+    -- carries on ProofStateObservation: 1 iff the tactic text captured for
+    -- this step has been scrubbed before storage/export and must not be
+    -- treated as proof-body-bearing evidence; 0 (default) means it is real
+    -- tactic-body content.
+    redacted_text INTEGER NOT NULL DEFAULT 0,
+    outcome TEXT NOT NULL,
+    -- Canonical JSON serialization of #162's ProofStateDiagnostic. NULL iff
+    -- outcome = 'applied' (a successful step has no diagnostic to record).
+    diagnostic_json TEXT,
+    -- crate::hashing::canonical_hash over the same diagnostic content
+    -- crate::lean::observation::hash_diagnostic computes. NULL exactly when
+    -- diagnostic_json is NULL.
+    diagnostics_hash TEXT,
+    wall_time_ms INTEGER,
+    created_at TEXT NOT NULL,
+    CHECK(outcome IN ('applied', 'failed')),
+    CHECK(outcome <> 'applied' OR child_node_id IS NOT NULL),
+    CHECK(outcome <> 'applied' OR diagnostic_json IS NULL),
+    CHECK(outcome <> 'failed' OR diagnostic_json IS NOT NULL),
+    CHECK((diagnostic_json IS NULL) = (diagnostics_hash IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_interactive_proof_steps_session ON interactive_proof_steps(session_id);
+CREATE INDEX IF NOT EXISTS idx_interactive_proof_steps_parent_node ON interactive_proof_steps(parent_node_id);
+CREATE INDEX IF NOT EXISTS idx_interactive_proof_steps_child_node ON interactive_proof_steps(child_node_id);
+
+-- A tactic script reconstructed from a root-to-selected-node path (#159's
+-- ReconstructedScript, persisted). THE TRUST BOUNDARY LIVES HERE:
+-- verified_attempt_id / verification_outcome are NULLABLE and this schema
+-- never populates them at INSERT time -- a reconstructed script can exist,
+-- be queried, and be handed to a UI/agent with both columns NULL, meaning
+-- "reconstructed, not (yet, or ever) submitted for kernel verification."
+-- Only a caller that separately resubmits the reconstructed `tactic_block`
+-- through the EXISTING Solve/SubmitModule -> action_attempts verification
+-- path (entirely unchanged by this migration), and then UPDATEs this row
+-- with that action_attempts row's id and resulting status, may populate
+-- them. No column on this table, and no trigger in this schema, can write
+-- `episode_obligations.status` -- linking a script here never proves
+-- anything by itself.
+CREATE TABLE IF NOT EXISTS interactive_proof_reconstructed_scripts (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES interactive_proof_sessions(id),
+    final_node_id TEXT NOT NULL REFERENCES interactive_proof_nodes(id),
+    proof_format TEXT NOT NULL,
+    proof_source_hash TEXT NOT NULL,
+    proof_source_artifact_hash TEXT,
+    -- #159 ReconstructedScript.reports_complete, persisted for parity: a
+    -- claim about the SESSION's own internal state only, never proof
+    -- authority by itself -- see the table doc above.
+    reports_complete INTEGER NOT NULL DEFAULT 0,
+    verified_attempt_id TEXT REFERENCES action_attempts(id),
+    verification_outcome TEXT,
+    created_at TEXT NOT NULL,
+    CHECK(proof_format IN ('flat_tactic_sequence', 'raw_lean_block')),
+    CHECK(verification_outcome IS NULL OR verification_outcome IN (
+        'claimed', 'preflight_rejected', 'executing', 'verified', 'rejected',
+        'committed', 'abandoned', 'expired', 'infrastructure_failed'
+    )),
+    -- A resolved outcome can only be recorded once an attempt is actually
+    -- linked; the reverse (attempt linked, outcome not yet resolved) stays
+    -- legal so a caller can record "submitted for verification, pending"
+    -- before the linked action_attempts row settles.
+    CHECK(verification_outcome IS NULL OR verified_attempt_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_interactive_proof_reconstructed_scripts_session ON interactive_proof_reconstructed_scripts(session_id);
+CREATE INDEX IF NOT EXISTS idx_interactive_proof_reconstructed_scripts_verified_attempt ON interactive_proof_reconstructed_scripts(verified_attempt_id);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
