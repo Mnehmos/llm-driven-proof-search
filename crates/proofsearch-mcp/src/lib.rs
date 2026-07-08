@@ -7513,7 +7513,7 @@ impl ServerHandler for ChatDbMcp {
         let tools = vec![
             make_tool::<ReadmeFirstArgs>("readme_first", "CALL THIS FIRST, before creating any episode. Explains what LLM-Driven Proof Search Environment is (an environment, not a prover), the trust boundary (tracked MCP actions and Lean verifier results are evidence; hidden model reasoning is not), the required proof-search loop, when to use Solve vs SubmitModule, why untracked/side-channel proof checks don't count as valid attempts, and the cost/benchmark-mode boundary"),
             make_tool::<EnvironmentDescribeArgs>("environment_describe", "Return environment version, supported protocol, tool schemas, capabilities"),
-            make_tool::<ProblemCreateArgs>("problem_create", "Register a new problem version (source text + root formal statement). fidelity_status starts 'unreviewed' — proving requires either a real problem_submit_fidelity_review or the honestly-named unsafe_dev_attestation=true (which can reach outcome=kernel_verified but never 'certified'). problem_imports entries may be Lean module paths AND `open [scoped] <Namespace> ...` directives (issue #62): a statement that relies on scoped notation (ℤ[X], ∠, π) or unqualified names (derivative, volume, ball) needs the upstream open context registered here, or it will not elaborate to the intended mathematics"),
+            make_tool::<ProblemCreateArgs>("problem_create", "Register a new problem version (source text + root formal statement). fidelity_status starts 'unreviewed' — proving requires either a real problem_submit_fidelity_review or the honestly-named unsafe_dev_attestation=true (which can reach outcome=kernel_verified but never 'certified'). Import manifest (issue #142): if problem_imports is OMITTED entirely, the registered manifest defaults to the full \"Mathlib\" umbrella (broad enough to PARSE, not just elaborate, ordinary Mathlib-style notation like Finset.sum/Filter.Eventually) — pass problem_imports explicitly (even as an empty list) only if you deliberately want the narrower Ring+NormNum-only manifest instead. problem_imports entries may be Lean module paths AND `open [scoped] <Namespace> ...` directives (issue #62): a statement that relies on scoped notation (ℤ[X], ∠, π) or unqualified names (derivative, volume, ball) needs the upstream open context registered here, or it will not elaborate to the intended mathematics"),
             make_tool::<ProblemSubmitFidelityReviewArgs>("problem_submit_fidelity_review", "Record an evidence-backed determination of whether a problem's formal statement represents its source text. Requires the CURRENT source/statement/rendering hashes (recomputed server-side; mismatches are rejected as stale). decision='verified' is the ONLY path to outcome='certified' and problem state COMPLETE; 'rejected' blocks it. This is a review record, not a flag flip — proof soundness (Lean kernel) and statement fidelity (this tool) are independent claims"),
             make_tool::<ProblemRecordBenchmarkAlignmentArgs>("problem_record_benchmark_alignment", "Record a formal_benchmark_hash_alignment fidelity basis (issue #43) for a benchmark-imported problem: the server verifies the problem_version's root_statement_hash equals the registered benchmark target hash — COALESCE(prover_ready_statement_hash, root_statement_hash) — on a trusted_canonical_source suite, then sets fidelity_status='benchmark_aligned' and unlocks proving WITHOUT unsafe_dev_attestation. This is hash alignment to a curated benchmark target, NOT independent natural-language review: it can reach outcome=kernel_verified but NEVER 'certified'/COMPLETE. An untrusted/custom suite is rejected and directed to problem_submit_fidelity_review"),
             make_tool::<ProblemListArgs>("problem_list", "List known problem versions (id, state, fidelity_status, root statement)"),
@@ -8780,6 +8780,20 @@ impl ServerHandler for ChatDbMcp {
                     )));
                 }
 
+                // Issue #142: problem_imports omitted entirely (None, not an
+                // explicit empty list) means the caller never thought about
+                // imports at all -- BASE_IMPORT_MANIFEST's narrow Ring+NormNum
+                // pair is nowhere near enough to PARSE (not just elaborate)
+                // ordinary Mathlib-style notation (Finset.sum, Filter.Eventually,
+                // etc.), and the resulting parse_error looks identical to a
+                // proof-content bug, with nothing in the diagnostic pointing at
+                // the real cause. Default to the full "Mathlib" umbrella instead
+                // (matching benchmark_problem_register's own default for
+                // suite-level registration) so registration is parseable out of
+                // the box; a caller that explicitly passes problem_imports
+                // (even `[]`) is making a deliberate narrower choice and keeps
+                // the previous BASE_IMPORT_MANIFEST-plus-extras behavior.
+                let problem_imports_omitted = args.problem_imports.is_none();
                 let raw_extra_imports = args.problem_imports.unwrap_or_default();
                 if raw_extra_imports.len() > 50 {
                     return Err(mcp_invalid_params("problem_imports: at most 50 entries per problem"));
@@ -8804,7 +8818,11 @@ impl ServerHandler for ChatDbMcp {
                         )));
                     }
                 }
-                let mut import_manifest: Vec<String> = BASE_IMPORT_MANIFEST.iter().map(|s| s.to_string()).collect();
+                let mut import_manifest: Vec<String> = if problem_imports_omitted {
+                    vec!["Mathlib".to_string()]
+                } else {
+                    BASE_IMPORT_MANIFEST.iter().map(|s| s.to_string()).collect()
+                };
                 import_manifest.extend(extra_imports.iter().cloned());
                 let import_manifest_json = serde_json::to_string(&import_manifest).unwrap();
                 let import_manifest_hash = canonical_hash(&import_manifest).map_err(mcp_internal_error)?;
@@ -14114,9 +14132,11 @@ mod tests {
         assert!(lean.contains("theorem root_theorem : 1 + 1 = 2 := by"), "{lean}");
         assert!(!lean.contains("## "), "lean format must be bare source, not markdown: {lean}");
         // The assembled source must carry the problem's REAL import manifest, not
-        // a hardcoded Ring/NormNum stub. This problem used the default manifest.
-        assert!(lean.contains("import Mathlib.Tactic.Ring"), "real manifest must be rendered: {lean}");
-        assert!(lean.contains("import Mathlib.Tactic.NormNum"), "real manifest must be rendered: {lean}");
+        // a hardcoded stub. This problem omitted problem_imports entirely, so
+        // (issue #142) it gets the broad "Mathlib" umbrella default, not the
+        // narrow Ring/NormNum pair BASE_IMPORT_MANIFEST used to apply even when
+        // the caller never asked for imports at all.
+        assert!(lean.contains("import Mathlib\n"), "real (broad-default) manifest must be rendered: {lean}");
         // The dossier must state the pinned verification context as a receipt.
         assert!(md.contains("## Verification context"), "dossier must carry verification context: {md}");
         assert!(md.contains("Import manifest hash:"), "dossier must carry manifest hash: {md}");
@@ -16001,6 +16021,40 @@ mod tests {
         // by real Lean (a syntactically-valid but nonexistent module) is
         // exercised live against the real lean-checker rather than here, since
         // test_handler's RealLeanGateway points at a dummy, nonexistent path.
+    }
+
+    /// Issue #142: problem_imports OMITTED entirely (not an explicit empty
+    /// list) must default the registered manifest to the broad "Mathlib"
+    /// umbrella, not the narrow Ring+NormNum-only BASE_IMPORT_MANIFEST pair
+    /// that isn't enough to PARSE ordinary Mathlib-style notation
+    /// (Finset.sum, Filter.Eventually, etc.) and previously produced a
+    /// parse_error indistinguishable from a real proof-content bug.
+    #[tokio::test]
+    async fn test_problem_create_defaults_to_broad_mathlib_manifest_when_imports_omitted() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let omitted = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "x", "root_formal_statement": "x",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let omitted_manifest: Vec<&str> = omitted["import_manifest"].as_array().unwrap()
+            .iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(omitted_manifest, vec!["Mathlib"], "problem_imports omitted entirely must default to the broad umbrella, not Ring+NormNum: {:?}", omitted_manifest);
+
+        // An EXPLICIT empty list is a deliberate narrower choice by the
+        // caller, not an omission -- it must keep the previous
+        // BASE_IMPORT_MANIFEST-only behavior, unaffected by this default
+        // change.
+        let explicit_empty = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "y", "root_formal_statement": "y", "problem_imports": [],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let explicit_manifest: Vec<&str> = explicit_empty["import_manifest"].as_array().unwrap()
+            .iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(explicit_manifest, vec!["Mathlib.Tactic.Ring", "Mathlib.Tactic.NormNum"],
+            "an EXPLICIT empty problem_imports must keep the narrow base manifest, not the new broad default: {:?}", explicit_manifest);
+
+        assert_ne!(omitted["import_manifest_hash"], explicit_empty["import_manifest_hash"],
+            "the two manifests are genuinely different and must hash differently");
     }
 
     /// lean_declaration_lookup must return an honest per-name status even when
