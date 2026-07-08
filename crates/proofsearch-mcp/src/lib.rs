@@ -4322,6 +4322,307 @@ fn interactive_step_failure_category(diagnostic_json: &Option<String>) -> String
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Issue #165: derived progress/failure/repair/branch labels for interactive
+// steps.
+//
+// TRUST BOUNDARY (same rule as the whole `interactive_proof_*` family — see
+// `INTERACTIVE_TRUST_BOUNDARY_NOTICE`, `crate::lean::interactive`'s and
+// `crate::lean::observation`'s module docs, and `interactive_session_final_outcome`'s
+// doc above): every label defined below is a HEURISTIC TRAINING HINT about
+// LOCAL, IN-SESSION proof-state progress. None of them is, or may ever be
+// treated as, a claim that any obligation is proved. They may feed reward
+// shaping or training export (this is literally what issue #165 asks them to
+// do), but `episode_obligations.status` / `kernel_verified` /
+// `verified_attempt_id` / `verification_outcome` remain the ONLY proof
+// authority in this system. A session can accumulate `progress_made` and
+// `goal_closed` labels on every single step and still never be promoted —
+// see `test_issue165_progress_labels_never_imply_kernel_verified`, which
+// asserts exactly that: `kernel_verified` stays `false` everywhere it is
+// reported, independent of how many positive labels a session's steps carry.
+//
+// Design note (additive, no new persisted column): every label below is
+// computed PURELY from data #160-#164 already persist — `goals_json`/
+// `status` on `interactive_proof_nodes`, `outcome`/`diagnostic_json` on
+// `interactive_proof_steps`, `selected_final_node_id`/`root_node_id`/`state`
+// on `interactive_proof_sessions` — matching this epic's established
+// prefer-pure-derivation pattern (`recompute_full_state_hash`,
+// `interactive_session_final_outcome`, `interactive_step_failure_category`
+// above). No schema migration was needed or added for this issue.
+// ---------------------------------------------------------------------------
+
+/// One step's issue #165 label set, plus the `LeanDiagnosticCategory` value
+/// (reused, not re-derived — see `interactive_step_failure_category`) for a
+/// failed step. See `compute_step_progress_labels`'s doc for exact trigger
+/// conditions.
+#[derive(Debug, Clone)]
+struct StepProgressLabels {
+    /// Sorted, deduplicated label names drawn ONLY from the issue's fixed
+    /// 12-label vocabulary: `progress_made`, `goal_closed`,
+    /// `goal_count_reduced`, `goal_count_increased`, `target_simplified`,
+    /// `context_changed`, `tactic_failed`, `tactic_repaired_previous_failure`,
+    /// `branch_abandoned`, `branch_selected_for_reconstruction`,
+    /// `no_progress`, `backend_unavailable`. `backend_unavailable` is NEVER
+    /// produced by this function — see its doc.
+    labels: Vec<String>,
+    /// `Some(<LeanDiagnosticCategory serde value>)` iff this step's
+    /// `outcome == "failed"`; `None` for an applied step. Computed via
+    /// `interactive_step_failure_category` — the SAME function
+    /// `public_summary` already uses — so a failed step's `failure_category`
+    /// here is always identical to what `public_summary`'s
+    /// `failure_categories` bucket would count it under. This is the
+    /// "align with existing diagnostic categories" half of #165's
+    /// acceptance criteria.
+    failure_category: Option<String>,
+}
+
+/// `true` iff `parent_node_id` has at least one FAILED step among `steps` —
+/// the caller is responsible for restricting `steps` to "steps that occurred
+/// strictly before the one being labeled" (see the two call sites:
+/// `apply_tactic_core` passes the session's full existing step list fetched
+/// BEFORE inserting the new step's own row; `step_has_prior_failure_on_same_parent`
+/// below passes everything strictly before `target` in a full, already-persisted,
+/// oldest-first step list).
+fn any_failed_step_on_parent(steps: &[idb::StepRow], parent_node_id: Uuid) -> bool {
+    steps.iter().any(|s| s.parent_node_id == parent_node_id && s.outcome == "failed")
+}
+
+/// `tactic_repaired_previous_failure`'s core check over an already-persisted,
+/// oldest-first step list (e.g. `list_steps_for_session`'s output): `true`
+/// iff some step strictly earlier than `target` in `ordered_steps` shares
+/// `target.parent_node_id` and has `outcome == "failed"`. Deliberately does
+/// NOT require `target` to be the very next step tried against that parent —
+/// a caller may branch elsewhere in between and come back; that still counts
+/// as "eventually repaired" per the issue's "retry after failure, and the
+/// retry worked" framing.
+fn step_has_prior_failure_on_same_parent(ordered_steps: &[idb::StepRow], target: &idb::StepRow) -> bool {
+    let earlier = ordered_steps.iter().take_while(|s| s.id != target.id);
+    for s in earlier {
+        if s.parent_node_id == target.parent_node_id && s.outcome == "failed" {
+            return true;
+        }
+    }
+    false
+}
+
+/// Shared branch-topology computation. Issue #163's `replay_trace_only`
+/// originally computed this inline for its `branch_report`; issue #165 needs
+/// the IDENTICAL notion for `branch_selected_for_reconstruction` /
+/// `branch_abandoned`, so it is extracted here as the single source of truth
+/// both call sites now share — same inputs, same computation, no behavior
+/// change to `replay_trace_only`'s existing output.
+///
+/// Returns `(selected_path, abandoned_open_leaf_ids)`:
+/// - `selected_path`: every node id on the walk from
+///   `session.selected_final_node_id` (or `root_node_id` if nothing has been
+///   explicitly selected yet) up to the root, inclusive — the node itself
+///   AND every ancestor. This is exactly "IS or is an ancestor on the path
+///   to the session's `selected_final_node_id`" from the issue's
+///   `branch_selected_for_reconstruction` definition. A cycle in a corrupted
+///   tree stops the walk rather than looping forever (a real cycle is
+///   separately flagged as a `replay_trace_only` failure elsewhere).
+/// - `abandoned_open_leaf_ids`: nodes with `status == "open"`, no children,
+///   and NOT in `selected_path`. Computed unconditionally, not gated on
+///   `session.state == "closed"` — same as `replay_trace_only` has always
+///   done — so an open session's "abandoned" set is a live, provisional
+///   snapshot of branches not currently being pursued, not necessarily a
+///   permanent verdict; it becomes a stable verdict once the session closes
+///   (matching the issue's own "when the session closes" framing for
+///   `branch_abandoned`).
+fn interactive_session_branch_topology(
+    session: &idb::SessionRow,
+    nodes: &[idb::NodeRow],
+) -> (std::collections::HashSet<Uuid>, std::collections::HashSet<Uuid>) {
+    let node_by_id: std::collections::HashMap<Uuid, &idb::NodeRow> = nodes.iter().map(|n| (n.id, n)).collect();
+    let selected_path: std::collections::HashSet<Uuid> = {
+        let mut set = std::collections::HashSet::new();
+        let mut cur = session.selected_final_node_id.or(session.root_node_id);
+        while let Some(id) = cur {
+            if !set.insert(id) {
+                break; // cycle guard — a real cycle is flagged elsewhere as a data-integrity failure.
+            }
+            cur = node_by_id.get(&id).and_then(|n| n.parent_node_id);
+        }
+        set
+    };
+    let child_counts: std::collections::HashMap<Uuid, usize> = nodes.iter()
+        .filter_map(|n| n.parent_node_id)
+        .fold(std::collections::HashMap::new(), |mut acc, p| { *acc.entry(p).or_insert(0) += 1; acc });
+    let abandoned_open_leaf_ids: std::collections::HashSet<Uuid> = nodes.iter()
+        .filter(|n| n.status == "open" && !child_counts.contains_key(&n.id) && !selected_path.contains(&n.id))
+        .map(|n| n.id)
+        .collect();
+    (selected_path, abandoned_open_leaf_ids)
+}
+
+/// THE issue #165 labeling function: derives every applicable heuristic
+/// progress/failure/repair/branch label for one interactive-session step
+/// transition (`parent` -> `child`, or `parent` -> failure) from data ALREADY
+/// persisted by #160-#164. See this section's module-doc-style comment above
+/// for the trust-boundary rule this function is bound by.
+///
+/// Per-label trigger condition (the 12 labels, in the exact order the issue
+/// lists them):
+/// - `progress_made`: `outcome == "applied"` AND at least one of
+///   `goal_closed` / `goal_count_reduced` / `target_simplified` /
+///   `context_changed` fired for this transition.
+/// - `goal_closed`: the child node's `status == "solved"`, OR the child's
+///   goal count is strictly less than the parent's (at least one goal
+///   eliminated, even if others remain open) — this schema tracks a
+///   whole-node `status` plus a goal COUNT, not individually-tagged goal
+///   ids, so "at least one goal eliminated" is read off the count rather
+///   than a per-goal closure flag (the issue's own documented fallback for
+///   exactly this case).
+/// - `goal_count_reduced` / `goal_count_increased`: strict `<` / `>` between
+///   the parent's and child's parsed `goals_json` lengths.
+/// - `target_simplified`: a HEURISTIC, PURELY TEXTUAL size comparison —
+///   computed ONLY when the goal count is UNCHANGED (when it changed,
+///   `goal_count_reduced`/`goal_closed` already cover it, and comparing
+///   per-goal text across a changed goal list would require goal-identity
+///   tracking this schema does not have). Sums each goal's
+///   `target.raw_rendering` character count across all goals, parent vs.
+///   child (in `goal_index` order); `true` iff the child's sum is strictly
+///   smaller. LIMITATION, stated plainly: this is NOT a semantic
+///   simplification check. A goal that got textually shorter but harder
+///   (or textually longer but trivial, e.g. after unfolding a definition)
+///   fools it in either direction. It exists because the issue explicitly
+///   asks for "a reasonable, honestly-scoped heuristic," not a real one —
+///   do not upgrade its meaning in a training pipeline without also
+///   upgrading this comment.
+/// - `context_changed`: the parent's and child's per-goal local-context
+///   hashes (via `observation::hash_local_context`; `None` when a goal's
+///   context is unreported — see `ProofGoal`'s own doc on that distinction)
+///   differ as an ORDERED LIST. A goal-count change makes the two lists
+///   different lengths and therefore automatically unequal, which is the
+///   intended behavior (the hypothesis set genuinely did change), not a
+///   spurious signal.
+/// - `tactic_failed`: `outcome == "failed"`.
+/// - `tactic_repaired_previous_failure`: `outcome == "applied"` AND
+///   `prior_failed_on_same_parent` is `true` (see
+///   `step_has_prior_failure_on_same_parent` / `any_failed_step_on_parent`).
+/// - `branch_abandoned` / `branch_selected_for_reconstruction`: the child
+///   node id is in `abandoned_leaf_ids` / `selected_path` — both produced by
+///   `interactive_session_branch_topology`. Callers that only have
+///   IMMEDIATE, single-step context (no full-session view — see
+///   `apply_tactic_core`) pass empty sets for both, since neither label is
+///   meaningful without the session's full node tree and current selection.
+/// - `no_progress`: `outcome == "applied"` AND NOT `progress_made` —
+///   deliberately distinct from `tactic_failed` (a FAILED step never reaches
+///   this branch at all; `no_progress` is for a step that succeeded
+///   syntactically but changed nothing progress-relevant).
+/// - `backend_unavailable`: NEVER set by this function. There is no
+///   persisted node/step content this function could derive that condition
+///   from — backend availability is a property of the LIVE gateway process,
+///   not stored step content. See `replay_backend`, which maps its own
+///   existing `backend_replay_available` / `backend_mismatch` booleans onto
+///   this label directly instead of this function re-deriving them.
+fn compute_step_progress_labels(
+    outcome: &str,
+    diagnostic_json: &Option<String>,
+    parent: &idb::NodeRow,
+    child: Option<&idb::NodeRow>,
+    prior_failed_on_same_parent: bool,
+    selected_path: &std::collections::HashSet<Uuid>,
+    abandoned_leaf_ids: &std::collections::HashSet<Uuid>,
+) -> Result<StepProgressLabels, McpError> {
+    if outcome == "failed" {
+        return Ok(StepProgressLabels {
+            labels: vec!["tactic_failed".to_string()],
+            failure_category: Some(interactive_step_failure_category(diagnostic_json)),
+        });
+    }
+
+    let child = child.ok_or_else(|| mcp_internal_error(
+        "compute_step_progress_labels: outcome=\"applied\" but no child node was supplied",
+    ))?;
+
+    let parent_goals: Vec<ProofGoal> = serde_json::from_str(&parent.goals_json)
+        .map_err(|e| mcp_internal_error(format!("compute_step_progress_labels: unparseable parent goals_json: {e}")))?;
+    let child_goals: Vec<ProofGoal> = serde_json::from_str(&child.goals_json)
+        .map_err(|e| mcp_internal_error(format!("compute_step_progress_labels: unparseable child goals_json: {e}")))?;
+
+    let before = parent_goals.len();
+    let after = child_goals.len();
+    let goal_count_reduced = after < before;
+    let goal_count_increased = after > before;
+    let goal_closed = child.status == "solved" || goal_count_reduced;
+
+    let target_simplified = if before == after {
+        let sum_before: usize = parent_goals.iter().map(|g| g.target.raw_rendering.chars().count()).sum();
+        let sum_after: usize = child_goals.iter().map(|g| g.target.raw_rendering.chars().count()).sum();
+        sum_after < sum_before
+    } else {
+        false
+    };
+
+    let context_changed = {
+        let hash_all = |goals: &[ProofGoal]| -> Result<Vec<Option<String>>, McpError> {
+            goals.iter().map(|g| match &g.local_context {
+                Some(ctx) => observation::hash_local_context(ctx).map(Some).map_err(mcp_internal_error),
+                None => Ok(None),
+            }).collect()
+        };
+        hash_all(&parent_goals)? != hash_all(&child_goals)?
+    };
+
+    let mut labels: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
+    if goal_closed { labels.insert("goal_closed"); }
+    if goal_count_reduced { labels.insert("goal_count_reduced"); }
+    if goal_count_increased { labels.insert("goal_count_increased"); }
+    if target_simplified { labels.insert("target_simplified"); }
+    if context_changed { labels.insert("context_changed"); }
+
+    let progress_made = goal_closed || goal_count_reduced || target_simplified || context_changed;
+    if progress_made {
+        labels.insert("progress_made");
+    } else {
+        labels.insert("no_progress");
+    }
+
+    if prior_failed_on_same_parent {
+        labels.insert("tactic_repaired_previous_failure");
+    }
+    if selected_path.contains(&child.id) {
+        labels.insert("branch_selected_for_reconstruction");
+    }
+    if abandoned_leaf_ids.contains(&child.id) {
+        labels.insert("branch_abandoned");
+    }
+
+    Ok(StepProgressLabels {
+        labels: labels.into_iter().map(|s| s.to_string()).collect(),
+        failure_category: None,
+    })
+}
+
+/// Computes every step's issue #165 label set for one bundle — the SHARED
+/// helper `interactive_sessions_public_summary_json` (aggregate counts
+/// only), `render_interactive_sessions_markdown` (per-step column), and
+/// `interactive_sessions_training_json` (per-step field) all call, so all
+/// three surfaces derive IDENTICAL labels from an IDENTICAL computation
+/// rather than three separately-written lookups drifting apart. A label
+/// computation error (e.g. unparseable `goals_json`, a dangling parent/child
+/// link — both already independently surfaced by `replay_trace_only`'s
+/// `failures`) degrades that one step to an empty label set rather than
+/// failing the whole export.
+fn interactive_session_step_labels(bundle: &InteractiveSessionBundle) -> std::collections::HashMap<Uuid, StepProgressLabels> {
+    let node_by_id: std::collections::HashMap<Uuid, &idb::NodeRow> = bundle.nodes.iter().map(|n| (n.id, n)).collect();
+    let (selected_path, abandoned_leaf_ids) = interactive_session_branch_topology(&bundle.session, &bundle.nodes);
+    bundle.steps.iter().map(|s| {
+        let parent = node_by_id.get(&s.parent_node_id).copied();
+        let labels = match parent {
+            Some(p) => {
+                let child = s.child_node_id.and_then(|c| node_by_id.get(&c).copied());
+                let prior_failed = step_has_prior_failure_on_same_parent(&bundle.steps, s);
+                compute_step_progress_labels(&s.outcome, &s.diagnostic_json, p, child, prior_failed, &selected_path, &abandoned_leaf_ids)
+                    .unwrap_or_else(|_| StepProgressLabels { labels: vec![], failure_category: None })
+            }
+            None => StepProgressLabels { labels: vec![], failure_category: None },
+        };
+        (s.id, labels)
+    }).collect()
+}
+
 /// THE trust-boundary derivation for interactive sessions (see this section's
 /// module-doc-style comment above `InteractiveSessionBundle`). Returns
 /// `(outcome_label, kernel_verified)`:
@@ -4409,6 +4710,15 @@ fn interactive_sessions_public_summary_json(bundles: &[InteractiveSessionBundle]
                 *failure_categories.entry(interactive_step_failure_category(&s.diagnostic_json)).or_insert(0) += 1;
             }
         }
+        // Issue #165: aggregate label NAME counts only — no tactic/goal text,
+        // matching the same safety bar `failure_categories` above already
+        // meets (structural signal only). See `interactive_session_step_labels`.
+        let mut progress_label_counts: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+        for labels in interactive_session_step_labels(b).values() {
+            for l in &labels.labels {
+                *progress_label_counts.entry(l.clone()).or_insert(0) += 1;
+            }
+        }
         serde_json::json!({
             "session_id": b.session.id.to_string(),
             "backend_kind": b.session.backend_kind,
@@ -4418,13 +4728,14 @@ fn interactive_sessions_public_summary_json(bundles: &[InteractiveSessionBundle]
             "final_outcome": outcome_label,
             "kernel_verified": kernel_verified,
             "failure_categories": failure_categories,
+            "progress_label_counts": progress_label_counts,
         })
     }).collect();
     serde_json::json!({
         "session_count": bundles.len(),
         "sessions": sessions,
         "proof_body_redacted": true,
-        "note": "counts and structural failure categories only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete.",
+        "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
     })
 }
 
@@ -4471,16 +4782,22 @@ fn render_interactive_sessions_markdown(conn: &Connection, bundles: &[Interactiv
             ));
         }
 
+        // Issue #165: same per-step label set every other surface derives —
+        // see `interactive_session_step_labels`'s doc.
+        let step_labels = interactive_session_step_labels(b);
+
         md.push_str("\n**Steps** (every `apply_tactic` call, applied AND failed — never filtered):\n\n");
-        md.push_str("| step | parent | child | outcome | tactic_text_hash | diagnostics_hash | wall_time_ms |\n|---|---|---|---|---|---|---|\n");
+        md.push_str("| step | parent | child | outcome | tactic_text_hash | diagnostics_hash | wall_time_ms | progress_labels (issue #165, heuristic training hints — never proof authority) |\n|---|---|---|---|---|---|---|---|\n");
         for s in &b.steps {
+            let labels_str = step_labels.get(&s.id).map(|l| l.labels.join(", ")).unwrap_or_default();
             md.push_str(&format!(
-                "| `{}` | `{}` | {} | {} | `{}` | {} | {} |\n",
+                "| `{}` | `{}` | {} | {} | `{}` | {} | {} | {} |\n",
                 short(&s.id.to_string()), short(&s.parent_node_id.to_string()),
                 s.child_node_id.map(|c| format!("`{}`", short(&c.to_string()))).unwrap_or_else(|| "—".to_string()),
                 s.outcome, short(&s.tactic_text_hash),
                 s.diagnostics_hash.as_deref().map(|h| format!("`{}`", short(h))).unwrap_or_else(|| "—".to_string()),
                 s.wall_time_ms.map(|w| w.to_string()).unwrap_or_else(|| "—".to_string()),
+                if labels_str.is_empty() { "—".to_string() } else { labels_str },
             ));
         }
         let failed_steps: Vec<&idb::StepRow> = b.steps.iter().filter(|s| s.outcome == "failed").collect();
@@ -4532,6 +4849,10 @@ fn interactive_sessions_training_json(conn: &Connection, bundles: &[InteractiveS
     let mut sessions_json = Vec::with_capacity(bundles.len());
     for b in bundles {
         let (outcome_label, kernel_verified) = interactive_session_final_outcome(b);
+        // Issue #165: THE primary training-export consumer of the labeling
+        // function — see `interactive_session_step_labels`'s doc. Computed
+        // once per session and looked up per step below.
+        let step_labels = interactive_session_step_labels(b);
 
         let steps_json: Vec<serde_json::Value> = b.steps.iter().map(|s| {
             let negative = s.outcome == "failed";
@@ -4543,6 +4864,9 @@ fn interactive_sessions_training_json(conn: &Connection, bundles: &[InteractiveS
             } else {
                 (None, serde_json::Value::Null)
             };
+            let (progress_labels, failure_category) = step_labels.get(&s.id)
+                .map(|l| (l.labels.clone(), l.failure_category.clone()))
+                .unwrap_or((vec![], None));
             serde_json::json!({
                 "step_id": s.id.to_string(),
                 "parent_node_id": s.parent_node_id.to_string(),
@@ -4556,6 +4880,14 @@ fn interactive_sessions_training_json(conn: &Connection, bundles: &[InteractiveS
                 "diagnostic": diagnostic_val,
                 "wall_time_ms": s.wall_time_ms,
                 "created_at": s.created_at.to_rfc3339(),
+                // Issue #165: heuristic training hints — see
+                // `compute_step_progress_labels`'s trust-boundary doc.
+                // `failure_category` mirrors `diagnostic.diagnostic.category`
+                // above for a failed step (same `LeanDiagnosticCategory`
+                // value, via `interactive_step_failure_category`), `null` for
+                // an applied step.
+                "progress_labels": progress_labels,
+                "failure_category": failure_category,
             })
         }).collect();
 
@@ -6147,6 +6479,22 @@ impl ChatDbMcp {
                 let goals_json = serde_json::to_string(&goals).map_err(|e| mcp_internal_error(e.to_string()))?;
                 let child_id = state.node.0;
 
+                // Issue #165 / CodeRabbit fix: this MUST be fetched BEFORE
+                // `idb::insert_step` below inserts the current step's own
+                // row — see `any_failed_step_on_parent`'s doc comment, which
+                // documents exactly this ordering requirement. Fetching
+                // after the insert would be harmless TODAY only because this
+                // call site is on the `outcome: "applied"` branch and
+                // `any_failed_step_on_parent` only counts `outcome ==
+                // "failed"` rows (so an applied step could never spuriously
+                // count itself); it would silently corrupt
+                // `tactic_repaired_previous_failure` the moment this same
+                // pattern were ever reused on a FAILED step's own insertion
+                // path, where the just-inserted row WOULD match. Fetch here,
+                // before either insert below, so the ordering can't drift.
+                let existing_steps = idb::list_steps_for_session(&tx, session_uuid).map_err(rs)?;
+                let prior_failed_on_same_parent = any_failed_step_on_parent(&existing_steps, parent_uuid);
+
                 idb::insert_node(&tx, &idb::NewNode {
                     id: child_id, session_id: session_uuid, parent_node_id: Some(parent_uuid),
                     depth: parent_node.depth + 1, node_kind: "tactic_result".to_string(),
@@ -6165,6 +6513,34 @@ impl ChatDbMcp {
 
                 idb::set_session_selected_node(&tx, session_uuid, child_id).map_err(rs)?;
 
+                // Issue #165: labels for THIS step, from an in-memory child
+                // NodeRow matching exactly what was just inserted above (no
+                // redundant re-SELECT). `branch_abandoned` /
+                // `branch_selected_for_reconstruction` are intentionally
+                // computed with EMPTY selected-path/abandoned sets here — see
+                // `compute_step_progress_labels`'s doc: those two labels need
+                // the session's full node tree and FINAL selection, which
+                // only exists at export/replay time (proof_session_replay
+                // trace_only, proof_session_export), not on the immediate
+                // response to one apply_tactic call whose own
+                // set_session_selected_node call above trivially makes the
+                // just-applied node "selected" every single time.
+                // `existing_steps`/`prior_failed_on_same_parent` were already
+                // computed ABOVE, before either insert — see that comment.
+                let child_node_for_labels = idb::NodeRow {
+                    id: child_id, session_id: session_uuid, parent_node_id: Some(parent_uuid),
+                    depth: parent_node.depth + 1, node_kind: "tactic_result".to_string(),
+                    proof_state_hash: proof_state_hash.full_state_hash.clone(),
+                    goals_json: serde_json::to_string(&goals).map_err(|e| mcp_internal_error(e.to_string()))?,
+                    selected_goal_index: if goals.is_empty() { None } else { Some(0) },
+                    status: if state.is_solved { "solved".to_string() } else { "open".to_string() },
+                    created_at: now,
+                };
+                let progress = compute_step_progress_labels(
+                    "applied", &None, &parent_node, Some(&child_node_for_labels), prior_failed_on_same_parent,
+                    &std::collections::HashSet::new(), &std::collections::HashSet::new(),
+                )?;
+
                 serde_json::json!({
                     "outcome": "applied",
                     "session_id": session_uuid.to_string(),
@@ -6175,6 +6551,8 @@ impl ChatDbMcp {
                     "is_solved": state.is_solved,
                     "proof_state_hash": proof_state_hash,
                     "diagnostic": serde_json::Value::Null,
+                    "progress_labels": progress.labels,
+                    "failure_category": progress.failure_category,
                 })
             }
             TacticOutcome::Failed => {
@@ -6188,10 +6566,19 @@ impl ChatDbMcp {
                 idb::insert_step(&tx, &idb::NewStep {
                     id: step_id, session_id: session_uuid, parent_node_id: parent_uuid, child_node_id: None,
                     tactic_text_hash, tactic_text_artifact_hash: None, redacted_text: false,
-                    outcome: "failed".to_string(), diagnostic_json: Some(diagnostic_json),
+                    outcome: "failed".to_string(), diagnostic_json: Some(diagnostic_json.clone()),
                     diagnostics_hash: Some(diag_record.diagnostic_hash.clone()),
                     wall_time_ms: Some(wall_time_ms), created_at: now,
                 }).map_err(rs)?;
+
+                // Issue #165: a failed step's only labels are `tactic_failed`
+                // plus its `failure_category` (the SAME `LeanDiagnosticCategory`
+                // value stored in `diag_record` — see
+                // `interactive_step_failure_category`'s doc).
+                let progress = compute_step_progress_labels(
+                    "failed", &Some(diagnostic_json), &parent_node, None, false,
+                    &std::collections::HashSet::new(), &std::collections::HashSet::new(),
+                )?;
 
                 serde_json::json!({
                     "outcome": "failed",
@@ -6200,6 +6587,8 @@ impl ChatDbMcp {
                     "parent_node_id": parent_uuid.to_string(),
                     "node_id": serde_json::Value::Null,
                     "diagnostic": diag_record,
+                    "progress_labels": progress.labels,
+                    "failure_category": progress.failure_category,
                 })
             }
         };
@@ -6771,21 +7160,13 @@ impl ChatDbMcp {
 
         // Branch visibility: never hide failed/abandoned branches from this
         // report (issue's "branch handling" requirement — trace-only replay
-        // is where failed-branch visibility lives).
-        let selected_path: std::collections::HashSet<Uuid> = {
-            let mut set = std::collections::HashSet::new();
-            let mut cur = session.selected_final_node_id.or(session.root_node_id);
-            while let Some(id) = cur {
-                if !set.insert(id) { break; } // cycle guard (a real cycle is already flagged above)
-                cur = node_by_id.get(&id).and_then(|n| n.parent_node_id);
-            }
-            set
-        };
-        let child_counts: std::collections::HashMap<Uuid, usize> = nodes.iter()
-            .filter_map(|n| n.parent_node_id)
-            .fold(std::collections::HashMap::new(), |mut acc, p| { *acc.entry(p).or_insert(0) += 1; acc });
+        // is where failed-branch visibility lives). Issue #165: this is now
+        // `interactive_session_branch_topology` (extracted, same computation,
+        // shared with the `branch_abandoned`/`branch_selected_for_reconstruction`
+        // labels below and in export — see that function's doc).
+        let (selected_path, abandoned_leaf_ids) = interactive_session_branch_topology(&session, &nodes);
         let abandoned_open_leaf_nodes: Vec<serde_json::Value> = nodes.iter()
-            .filter(|n| n.status == "open" && !child_counts.contains_key(&n.id) && !selected_path.contains(&n.id))
+            .filter(|n| abandoned_leaf_ids.contains(&n.id))
             .map(|n| serde_json::json!({"node_id": n.id.to_string(), "depth": n.depth, "parent_node_id": n.parent_node_id.map(|p| p.to_string())}))
             .collect();
         let failed_steps: Vec<serde_json::Value> = steps.iter().filter(|s| s.outcome == "failed").map(|s| {
@@ -6800,6 +7181,39 @@ impl ChatDbMcp {
             })
         }).collect();
 
+        // Issue #165: per-step progress/failure/repair/branch labels, for
+        // EVERY step (applied and failed — nothing filtered, matching this
+        // whole function's own "never hide" discipline). Purely derived from
+        // the SAME `nodes`/`steps` this integrity check already loaded — see
+        // `compute_step_progress_labels`'s trust-boundary doc. A label
+        // computation error degrades to an empty label set with the error
+        // surfaced in `label_error` rather than aborting the whole replay —
+        // the underlying corruption (unparseable goals_json, a dangling
+        // parent/child link) is ALREADY reported above in `failures`, so
+        // this never silently hides anything a caller couldn't otherwise see.
+        let step_progress_labels: Vec<serde_json::Value> = steps.iter().map(|s| {
+            let parent = node_by_id.get(&s.parent_node_id).copied();
+            let child = s.child_node_id.and_then(|c| node_by_id.get(&c).copied());
+            match parent {
+                Some(p) => {
+                    let prior_failed = step_has_prior_failure_on_same_parent(&steps, s);
+                    match compute_step_progress_labels(&s.outcome, &s.diagnostic_json, p, child, prior_failed, &selected_path, &abandoned_leaf_ids) {
+                        Ok(lbl) => serde_json::json!({
+                            "step_id": s.id.to_string(), "progress_labels": lbl.labels,
+                            "failure_category": lbl.failure_category, "label_error": serde_json::Value::Null,
+                        }),
+                        Err(e) => serde_json::json!({
+                            "step_id": s.id.to_string(), "progress_labels": [], "failure_category": null, "label_error": e.message.to_string(),
+                        }),
+                    }
+                }
+                None => serde_json::json!({
+                    "step_id": s.id.to_string(), "progress_labels": [], "failure_category": null,
+                    "label_error": "step's parent_node_id does not resolve to a node in this session — see failures",
+                }),
+            }
+        }).collect();
+
         Ok(serde_json::json!({
             "session_id": session_uuid.to_string(),
             "mode": "trace_only",
@@ -6812,6 +7226,8 @@ impl ChatDbMcp {
                 "abandoned_open_leaf_nodes": abandoned_open_leaf_nodes,
                 "failed_steps": failed_steps,
             },
+            "step_progress_labels": step_progress_labels,
+            "progress_labels_note": "issue #165: heuristic training hints about LOCAL in-session progress only — never proof authority; see kernel_verified / verified_attempt_id / verification_outcome for the only real proof signal",
         }))
     }
 
@@ -6852,6 +7268,11 @@ impl ChatDbMcp {
                 "passed": false,
                 "backend_mismatch": true,
                 "backend_replay_available": false,
+                // Issue #165's `backend_unavailable` label, mapped directly
+                // from THIS existing `backend_replay_available` condition —
+                // not re-derived, per `compute_step_progress_labels`'s doc on
+                // why that function never produces this label itself.
+                "progress_labels": ["backend_unavailable"],
                 "detail": format!(
                     "session.backend_kind {:?} does not match the currently configured backend {:?}",
                     session.backend_kind, CONFIGURED_INTERACTIVE_BACKEND_KIND
@@ -6871,6 +7292,7 @@ impl ChatDbMcp {
                 "passed": false,
                 "backend_mismatch": false,
                 "backend_replay_available": false,
+                "progress_labels": ["backend_unavailable"],
                 "detail": format!(
                     "live backend session unavailable for replay ({e}) — expected once a session has been closed or after a process restart (the mock backend's live state is in-memory only); this is a real architectural limit shared by BOTH replay modes that need live tactic text (backend replay always, and final_proof's auto-reconstruct-from-selected_node_id path) — if you already have this session's exact tactic_block text from an EARLIER proof_session_reconstruct call, mode=\"final_proof\" with an explicit reconstructed_script_id + tactic_block does NOT depend on live gateway state and remains available"
                 ),
@@ -6961,6 +7383,9 @@ impl ChatDbMcp {
             "mode": "backend",
             "backend_mismatch": false,
             "backend_replay_available": true,
+            // `backend_unavailable` never applies here — the backend WAS
+            // available (this line is only reached when it was).
+            "progress_labels": Vec::<&str>::new(),
             "passed": mismatches.is_empty(),
             "replayed_node_path": orig_path.iter().map(|n| n.to_string()).collect::<Vec<_>>(),
             "steps": step_reports,
@@ -22842,5 +23267,388 @@ mod tests {
         let sess = &training["sessions"][0];
         assert_eq!(sess["kernel_verified"], true, "{:?}", sess);
         assert_eq!(sess["reconstructions"][0]["verified_proof_text"], tactic_block, "{:?}", sess);
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #165: derived progress/failure/repair/branch labels for
+    // interactive-session steps.
+    //
+    // Unit tests exercise `compute_step_progress_labels` /
+    // `step_has_prior_failure_on_same_parent` / `interactive_session_branch_topology`
+    // directly against hand-built `idb::NodeRow`/`idb::StepRow`/`idb::SessionRow`
+    // values — needed because `MockInteractiveGateway` is DETERMINISTIC (it
+    // always removes exactly one goal on every successful `apply_tactic`),
+    // so several labels (`no_progress`, `goal_count_increased`,
+    // `target_simplified`, `context_changed`) can never actually be produced
+    // by a real round trip through the mock backend; constructing the
+    // node/step rows directly is the only way to exercise their EXACT
+    // trigger conditions. Integration tests below exercise the full MCP
+    // surface (`proof_session_tactic_step`, `proof_session_replay`,
+    // `proof_session_export`) for the labels the mock backend CAN produce,
+    // plus the trust-boundary rule.
+    // -----------------------------------------------------------------
+
+    use proofsearch_core::lean::observation::{ProofTarget, LocalHypothesis};
+
+    fn issue165_goal(raw: &str, ctx: Option<Vec<LocalHypothesis>>) -> ProofGoal {
+        ProofGoal { goal_index: 0, target: ProofTarget { raw_rendering: raw.to_string(), pretty_rendering: None }, local_context: ctx }
+    }
+
+    fn issue165_node(session_id: Uuid, id: Uuid, parent: Option<Uuid>, goals: &[ProofGoal], status: &str) -> idb::NodeRow {
+        idb::NodeRow {
+            id, session_id, parent_node_id: parent, depth: if parent.is_none() { 0 } else { 1 },
+            node_kind: if parent.is_none() { "root".to_string() } else { "tactic_result".to_string() },
+            proof_state_hash: format!("hash-{id}"),
+            goals_json: serde_json::to_string(goals).unwrap(),
+            selected_goal_index: if goals.is_empty() { None } else { Some(0) },
+            status: status.to_string(), created_at: Utc::now(),
+        }
+    }
+
+    fn issue165_step(session_id: Uuid, id: Uuid, parent_node_id: Uuid, child_node_id: Option<Uuid>, outcome: &str, diagnostic_json: Option<String>) -> idb::StepRow {
+        idb::StepRow {
+            id, session_id, parent_node_id, child_node_id,
+            tactic_text_hash: format!("tactic-hash-{id}"), tactic_text_artifact_hash: None, redacted_text: false,
+            outcome: outcome.to_string(), diagnostic_json, diagnostics_hash: None,
+            wall_time_ms: Some(1), created_at: Utc::now(),
+        }
+    }
+
+    fn issue165_diagnostic_json(category: &str) -> String {
+        serde_json::json!({"diagnostic": {"category": category, "primary_message": "boom"}}).to_string()
+    }
+
+    /// `tactic_failed` + failure-category alignment: `failure_category` must
+    /// be the SAME `LeanDiagnosticCategory` serde value stored in the
+    /// diagnostic (via `interactive_step_failure_category`), never a
+    /// parallel classification — and `no_progress`/`progress_made` must
+    /// never co-occur with `tactic_failed`.
+    #[test]
+    fn test_issue165_failed_step_labels_tactic_failed_and_aligned_failure_category() {
+        let session_id = Uuid::new_v4();
+        let parent = issue165_node(session_id, Uuid::new_v4(), None, &[issue165_goal("P", None)], "open");
+        let diag = issue165_diagnostic_json("unsolved_goals");
+
+        let result = compute_step_progress_labels(
+            "failed", &Some(diag), &parent, None, false,
+            &std::collections::HashSet::new(), &std::collections::HashSet::new(),
+        ).unwrap();
+
+        assert_eq!(result.labels, vec!["tactic_failed".to_string()]);
+        assert_eq!(result.failure_category.as_deref(), Some("unsolved_goals"),
+            "failure_category must reuse the exact LeanDiagnosticCategory value already stored in the diagnostic");
+        assert!(!result.labels.contains(&"no_progress".to_string()));
+        assert!(!result.labels.contains(&"progress_made".to_string()));
+    }
+
+    /// Successful progress: closing the only goal fires `progress_made`,
+    /// `goal_closed`, AND `goal_count_reduced` together (both trigger
+    /// conditions are simultaneously true here, which is expected — labels
+    /// are not mutually exclusive).
+    #[test]
+    fn test_issue165_successful_step_closing_the_only_goal_is_progress_made_and_goal_closed() {
+        let session_id = Uuid::new_v4();
+        let parent = issue165_node(session_id, Uuid::new_v4(), None, &[issue165_goal("1 + 1 = 2", None)], "open");
+        let child = issue165_node(session_id, Uuid::new_v4(), Some(parent.id), &[], "solved");
+
+        let result = compute_step_progress_labels(
+            "applied", &None, &parent, Some(&child), false,
+            &std::collections::HashSet::new(), &std::collections::HashSet::new(),
+        ).unwrap();
+
+        for expected in ["progress_made", "goal_closed", "goal_count_reduced"] {
+            assert!(result.labels.contains(&expected.to_string()), "expected {expected} in {:?}", result.labels);
+        }
+        assert!(!result.labels.contains(&"no_progress".to_string()));
+        assert!(!result.labels.contains(&"tactic_failed".to_string()));
+        assert!(result.failure_category.is_none());
+    }
+
+    /// `no_progress`: an APPLIED step whose child has an identical goal set
+    /// (same count, same target text, same — absent — context) to its
+    /// parent. Distinct from `tactic_failed` (this step succeeded), and
+    /// mutually exclusive with `progress_made` by construction.
+    #[test]
+    fn test_issue165_no_progress_when_goal_count_and_content_are_unchanged() {
+        let session_id = Uuid::new_v4();
+        let goal = issue165_goal("n : Nat |- P n", None);
+        let parent = issue165_node(session_id, Uuid::new_v4(), None, &[goal.clone()], "open");
+        let child = issue165_node(session_id, Uuid::new_v4(), Some(parent.id), &[goal], "open");
+
+        let result = compute_step_progress_labels(
+            "applied", &None, &parent, Some(&child), false,
+            &std::collections::HashSet::new(), &std::collections::HashSet::new(),
+        ).unwrap();
+
+        assert_eq!(result.labels, vec!["no_progress".to_string()],
+            "an applied step with an unchanged parent/child goal set must be exactly no_progress and nothing else: {:?}", result.labels);
+    }
+
+    /// `goal_count_increased` (a `cases`-like split introducing more
+    /// subgoals — not counted as progress by itself), `target_simplified`
+    /// (goal count unchanged, textually shorter — the documented HEURISTIC,
+    /// gated to only fire when the count didn't change), and
+    /// `context_changed` (goal count AND target text unchanged, but a
+    /// hypothesis was introduced) — three independent trigger conditions,
+    /// each isolated in its own scenario so no other signal could be
+    /// responsible for the assertion passing.
+    #[test]
+    fn test_issue165_goal_count_increased_and_target_simplified_and_context_changed_are_independent() {
+        let session_id = Uuid::new_v4();
+        let empty_sets = (std::collections::HashSet::new(), std::collections::HashSet::new());
+
+        // goal_count_increased.
+        let parent_a = issue165_node(session_id, Uuid::new_v4(), None, &[issue165_goal("P n", None)], "open");
+        let child_a = issue165_node(session_id, Uuid::new_v4(), Some(parent_a.id),
+            &[issue165_goal("P 0", None), issue165_goal("P (n+1)", None)], "open");
+        let result_a = compute_step_progress_labels("applied", &None, &parent_a, Some(&child_a), false, &empty_sets.0, &empty_sets.1).unwrap();
+        assert!(result_a.labels.contains(&"goal_count_increased".to_string()), "{:?}", result_a.labels);
+        assert!(!result_a.labels.contains(&"goal_count_reduced".to_string()));
+
+        // target_simplified: goal count UNCHANGED, remaining goal's text got shorter.
+        let parent_b = issue165_node(session_id, Uuid::new_v4(), None,
+            &[issue165_goal("1 + 1 + 1 + 1 + 1 + 1 = 6", None)], "open");
+        let child_b = issue165_node(session_id, Uuid::new_v4(), Some(parent_b.id),
+            &[issue165_goal("6 = 6", None)], "open");
+        let result_b = compute_step_progress_labels("applied", &None, &parent_b, Some(&child_b), false, &empty_sets.0, &empty_sets.1).unwrap();
+        assert!(result_b.labels.contains(&"target_simplified".to_string()), "{:?}", result_b.labels);
+        assert!(result_b.labels.contains(&"progress_made".to_string()));
+        assert!(!result_b.labels.contains(&"goal_count_reduced".to_string()));
+        assert!(!result_b.labels.contains(&"goal_count_increased".to_string()));
+
+        // context_changed: goal count AND target text UNCHANGED, a hypothesis appeared.
+        let target_text = "P n";
+        let parent_c = issue165_node(session_id, Uuid::new_v4(), None, &[issue165_goal(target_text, None)], "open");
+        let child_c = issue165_node(session_id, Uuid::new_v4(), Some(parent_c.id),
+            &[issue165_goal(target_text, Some(vec![LocalHypothesis { raw_rendering: "n : Nat".to_string(), name: None, type_rendering: None }]))], "open");
+        let result_c = compute_step_progress_labels("applied", &None, &parent_c, Some(&child_c), false, &empty_sets.0, &empty_sets.1).unwrap();
+        assert!(result_c.labels.contains(&"context_changed".to_string()), "{:?}", result_c.labels);
+        assert!(result_c.labels.contains(&"progress_made".to_string()));
+        assert!(!result_c.labels.contains(&"target_simplified".to_string()));
+    }
+
+    /// `tactic_repaired_previous_failure`: a later APPLIED step on the SAME
+    /// parent as an earlier FAILED step. Tests both the raw ordered-step
+    /// detection (`step_has_prior_failure_on_same_parent`) and its effect on
+    /// `compute_step_progress_labels`'s output.
+    #[test]
+    fn test_issue165_tactic_repaired_previous_failure_on_a_retry_after_failure() {
+        let session_id = Uuid::new_v4();
+        let parent_id = Uuid::new_v4();
+        let child_id = Uuid::new_v4();
+
+        let failed_step = issue165_step(session_id, Uuid::new_v4(), parent_id, None, "failed", Some(issue165_diagnostic_json("tactic_failure")));
+        let applied_step = issue165_step(session_id, Uuid::new_v4(), parent_id, Some(child_id), "applied", None);
+        let ordered = vec![failed_step.clone(), applied_step.clone()];
+
+        assert!(step_has_prior_failure_on_same_parent(&ordered, &applied_step),
+            "a later applied step on the SAME parent as an earlier failed step must detect the prior failure");
+        assert!(!step_has_prior_failure_on_same_parent(&ordered, &failed_step),
+            "the FIRST step tried against a parent has no prior failure to detect");
+
+        let parent = issue165_node(session_id, parent_id, None, &[issue165_goal("P", None)], "open");
+        let child = issue165_node(session_id, child_id, Some(parent_id), &[], "solved");
+        let result = compute_step_progress_labels("applied", &None, &parent, Some(&child), true,
+            &std::collections::HashSet::new(), &std::collections::HashSet::new()).unwrap();
+        assert!(result.labels.contains(&"tactic_repaired_previous_failure".to_string()), "{:?}", result.labels);
+    }
+
+    /// `branch_selected_for_reconstruction` vs `branch_abandoned`: two
+    /// sibling leaves off the same parent, one on the session's selected
+    /// path, one not — `interactive_session_branch_topology`'s sets AND
+    /// `compute_step_progress_labels`'s resulting labels must agree, and
+    /// the two labels must never both appear on the same node.
+    #[test]
+    fn test_issue165_branch_topology_selected_path_and_abandoned_leaf() {
+        let session_id = Uuid::new_v4();
+        let root_id = Uuid::new_v4();
+        let selected_child_id = Uuid::new_v4();
+        let abandoned_child_id = Uuid::new_v4();
+
+        let root = issue165_node(session_id, root_id, None, &[issue165_goal("P", None)], "open");
+        let selected_child = issue165_node(session_id, selected_child_id, Some(root_id), &[], "solved");
+        let abandoned_child = issue165_node(session_id, abandoned_child_id, Some(root_id), &[issue165_goal("Q", None)], "open");
+        let nodes = vec![root.clone(), selected_child.clone(), abandoned_child.clone()];
+
+        let session = idb::SessionRow {
+            id: session_id, episode_id: Uuid::new_v4(), problem_version_id: Uuid::new_v4(), obligation_id: Uuid::new_v4(),
+            backend_kind: "mock".to_string(), backend_version: None, import_manifest_hash: None, environment_hash: None,
+            state: "closed".to_string(), root_node_id: Some(root_id), selected_final_node_id: Some(selected_child_id),
+            reconstructed_script_hash: None, created_at: Utc::now(), closed_at: Some(Utc::now()), close_reason: Some("closed".to_string()),
+        };
+
+        let (selected_path, abandoned) = interactive_session_branch_topology(&session, &nodes);
+        assert!(selected_path.contains(&root_id));
+        assert!(selected_path.contains(&selected_child_id));
+        assert!(!selected_path.contains(&abandoned_child_id));
+        assert!(abandoned.contains(&abandoned_child_id));
+        assert!(!abandoned.contains(&selected_child_id));
+        assert!(!abandoned.contains(&root_id), "root has children, so it is never a LEAF regardless of selection");
+
+        let selected_labels = compute_step_progress_labels("applied", &None, &root, Some(&selected_child), false, &selected_path, &abandoned).unwrap();
+        assert!(selected_labels.labels.contains(&"branch_selected_for_reconstruction".to_string()), "{:?}", selected_labels.labels);
+        assert!(!selected_labels.labels.contains(&"branch_abandoned".to_string()));
+
+        let abandoned_labels = compute_step_progress_labels("applied", &None, &root, Some(&abandoned_child), false, &selected_path, &abandoned).unwrap();
+        assert!(abandoned_labels.labels.contains(&"branch_abandoned".to_string()), "{:?}", abandoned_labels.labels);
+        assert!(!abandoned_labels.labels.contains(&"branch_selected_for_reconstruction".to_string()));
+    }
+
+    /// Full MCP-surface integration: `proof_session_tactic_step`'s response
+    /// carries `progress_labels`/`failure_category` for both a successful
+    /// and a failed step, matching what the mock backend can actually
+    /// produce end to end (acceptance criteria: "Interactive steps receive
+    /// deterministic progress/failure labels ... stored with the step or
+    /// exported as derived metadata").
+    #[tokio::test]
+    async fn test_issue165_tactic_step_response_carries_progress_labels() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let client = connected_client(issue164_test_handler(conn_arc.clone())).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _req, revision) =
+            setup_solvable_episode_with_statement(&peer, &conn_arc, "165 + 1 = 166").await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let applied_labels: Vec<String> = applied["progress_labels"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        for expected in ["progress_made", "goal_closed", "goal_count_reduced"] {
+            assert!(applied_labels.contains(&expected.to_string()), "expected {expected} in {:?}", applied_labels);
+        }
+        assert!(applied["failure_category"].is_null(), "{:?}", applied);
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "rfl",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(failed["progress_labels"], serde_json::json!(["tactic_failed"]), "{:?}", failed);
+        assert_eq!(failed["failure_category"], "tactic_failure",
+            "must reuse the SAME LeanDiagnosticCategory value MockInteractiveGateway::apply_tactic's 'no goals remaining' diagnostic already carries");
+    }
+
+    /// Full MCP-surface integration: `proof_session_replay(mode="trace_only")`
+    /// reports `branch_selected_for_reconstruction` on the branch that ends
+    /// up selected when the session closes, and `branch_abandoned` on the
+    /// sibling that doesn't — the acceptance criteria's "selected final
+    /// path" test case, driven through the real tool surface rather than the
+    /// pure function directly.
+    #[tokio::test]
+    async fn test_issue165_replay_trace_only_reports_branch_selected_and_abandoned_labels() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let client = connected_client(issue164_test_handler(conn_arc.clone())).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _req, revision) =
+            setup_solvable_episode_with_statement(&peer, &conn_arc, "165 + 3 = 168").await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let branch_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "a", "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let branch_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "b", "tactic": "decide",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let branch_a_node = branch_a["node_id"].as_str().unwrap().to_string();
+
+        let _selected = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_select_node").with_arguments(serde_json::json!({
+            "session_id": session_id, "node_id": branch_a_node,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let _closed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+            "session_id": session_id, "reason": "closed",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "trace_only",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(replay["passed"], true, "{:?}", replay);
+
+        let step_labels = replay["step_progress_labels"].as_array().unwrap();
+        let step_a = step_labels.iter().find(|s| s["step_id"] == branch_a["step_id"]).unwrap();
+        let step_b = step_labels.iter().find(|s| s["step_id"] == branch_b["step_id"]).unwrap();
+        let labels_a: Vec<String> = step_a["progress_labels"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        let labels_b: Vec<String> = step_b["progress_labels"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert!(labels_a.contains(&"branch_selected_for_reconstruction".to_string()), "{:?}", step_a);
+        assert!(!labels_a.contains(&"branch_abandoned".to_string()), "{:?}", step_a);
+        assert!(!labels_b.contains(&"branch_selected_for_reconstruction".to_string()), "{:?}", step_b);
+        // NOTE: `branch_abandoned` is deliberately NOT asserted for branch B
+        // here. MockInteractiveGateway always starts a session with exactly
+        // ONE goal and closes it entirely on ANY syntactically nonempty
+        // tactic (see that gateway's own doc), so every node it ever
+        // produces via a successful `apply_tactic` is immediately
+        // `status == "solved"` — there is no way to reach an OPEN,
+        // childless, unselected leaf (an "abandoned" node, by definition)
+        // through a real round trip against this deterministic backend.
+        // `branch_abandoned`'s exact trigger condition IS still fully
+        // covered — see `test_issue165_branch_topology_selected_path_and_abandoned_leaf`,
+        // which constructs the open/unselected/childless node this backend
+        // structurally cannot produce.
+        assert!(!labels_b.contains(&"branch_abandoned".to_string()), "{:?}", step_b);
+    }
+
+    /// THE issue #165 reward-interaction rule, tested directly: a session
+    /// whose applied step carries `progress_made`/`goal_closed` labels, and
+    /// which is NEVER promoted, must still report `kernel_verified: false`
+    /// everywhere that field is surfaced, and the obligation's own status
+    /// must stay untouched. Also confirms the check isn't vacuous — the
+    /// session DID accrue real positive labels — so this isn't passing
+    /// merely because nothing happened.
+    #[tokio::test]
+    async fn test_issue165_progress_labels_never_imply_kernel_verified() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let client = connected_client(issue164_test_handler(conn_arc.clone())).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _req, revision) =
+            setup_solvable_episode_with_statement(&peer, &conn_arc, "165 + 2 = 167").await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let applied_labels: Vec<String> = applied["progress_labels"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert!(applied_labels.contains(&"goal_closed".to_string()), "{:?}", applied);
+        assert!(applied.get("kernel_verified").is_none(),
+            "the tactic_step response must never carry a kernel_verified-shaped field — progress labels are a completely separate vocabulary from proof authority");
+
+        let obl_status: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(obl_status, "open", "a session that only accrued progress labels — never promoted — must never change obligation status");
+
+        let public_summary = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+            "session_id": session_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(public_summary["sessions"][0]["kernel_verified"], false, "{:?}", public_summary);
+        let label_counts = public_summary["sessions"][0]["progress_label_counts"].as_object().unwrap();
+        assert!(label_counts.get("goal_closed").and_then(|v| v.as_i64()).unwrap_or(0) > 0,
+            "the session DID accrue positive progress labels — this proves the kernel_verified=false assertion above isn't vacuous: {:?}", label_counts);
+
+        let training_export = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+            "session_id": session_id, "format": "training_export",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(training_export["sessions"][0]["kernel_verified"], false, "{:?}", training_export);
+        let step0 = &training_export["sessions"][0]["steps"][0];
+        assert!(step0["progress_labels"].as_array().unwrap().iter().any(|v| v == "goal_closed"), "{:?}", step0);
     }
 }
