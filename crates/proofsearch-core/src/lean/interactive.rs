@@ -365,6 +365,9 @@ impl InteractiveProofGateway for MockInteractiveGateway {
     ) -> Result<ReconstructedScript, String> {
         let sessions = self.sessions.lock().map_err(|_| "mock gateway session lock poisoned".to_string())?;
         let s = sessions.get(&session).ok_or("unknown interactive session")?;
+        if s.closed {
+            return Err("session is closed".to_string());
+        }
 
         let mut cur = s.nodes.get(&selected_node).cloned().ok_or("unknown proof-state node")?;
         let reports_complete = cur.is_solved;
@@ -565,6 +568,24 @@ mod tests {
             first.steps[0].state.as_ref().unwrap().goals.len(),
             second.steps[0].state.as_ref().unwrap().goals.len(),
         );
+    }
+
+    #[test]
+    fn mock_backend_reconstruct_script_rejects_closed_session() {
+        let gw = MockInteractiveGateway::new();
+        let start = gw.start_session(&sample_request()).unwrap();
+        let applied = gw.apply_tactic(start.session, start.initial_state.node, "norm_num").unwrap();
+        let solved_node = applied.state.unwrap().node;
+
+        // reconstruct_script succeeds while the session is open ...
+        assert!(gw.reconstruct_script(start.session, solved_node).is_ok());
+
+        gw.close_session(start.session).expect("close_session should succeed");
+
+        // ... but must fail cleanly once the session is closed, matching the
+        // contract close_session's own doc comment makes for every other
+        // operation (observe_state, apply_tactic).
+        assert!(gw.reconstruct_script(start.session, solved_node).is_err());
     }
 
     #[test]
