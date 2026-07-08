@@ -1925,6 +1925,21 @@ CREATE TABLE IF NOT EXISTS interactive_proof_reconstructed_scripts (
     -- claim about the SESSION's own internal state only, never proof
     -- authority by itself -- see the table doc above.
     reports_complete INTEGER NOT NULL DEFAULT 0,
+    -- Issue #163: canonical JSON array of the root-to-final_node_id node ids
+    -- (#159 ReconstructedScript.node_path, persisted). This was the one
+    -- "artifact" field #163 found genuinely missing from this table --
+    -- backend_kind/backend_version/environment_hash/import_manifest_hash are
+    -- deliberately NOT duplicated here: this row's session_id already links
+    -- 1:1 to a `interactive_proof_sessions` row that carries all four
+    -- (a session's backend/environment does not change over its lifetime),
+    -- so duplicating them here would be redundant columns with no query
+    -- pattern that needs them split out, same reasoning #160's own doc
+    -- comment already gives for folding diagnostics into interactive_proof_steps
+    -- instead of a child table. generated_at is likewise just created_at
+    -- below, not a separate column. proof_session_reconstruct's MCP response
+    -- surfaces all of these (joined from the session) so a caller sees the
+    -- full artifact field list without a second round trip.
+    tactic_path_ids_json TEXT NOT NULL DEFAULT '[]',
     verified_attempt_id TEXT REFERENCES action_attempts(id),
     verification_outcome TEXT,
     created_at TEXT NOT NULL,
@@ -1964,6 +1979,7 @@ pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
     migrate_add_benchmark_goal_class_columns(conn)?;
     migrate_add_plan_item_asymptotic_role_column(conn)?;
     migrate_add_interactive_session_close_reason_column(conn)?;
+    migrate_add_reconstructed_script_tactic_path_column(conn)?;
     // CHECK constraints are baked into a table at creation and CREATE TABLE IF
     // NOT EXISTS cannot update them on a table that already exists — a database
     // that predates the fidelity-vocabulary rewrite (docs/fix_plan_playtest_02.md)
@@ -2721,6 +2737,34 @@ fn migrate_add_interactive_session_close_reason_column(conn: &Connection) -> rus
         .collect();
     if !cols.iter().any(|c| c == "close_reason") {
         conn.execute("ALTER TABLE interactive_proof_sessions ADD COLUMN close_reason TEXT", [])?;
+    }
+    Ok(())
+}
+
+/// Issue #163: adds interactive_proof_reconstructed_scripts.tactic_path_ids_json
+/// to a DB that was initialized under #160/#161's original column list. A
+/// no-op on a genuinely fresh DB (the CREATE TABLE above already declares
+/// the column) and on a DB that predates the table entirely (table_exists
+/// check below). Same guarded ALTER TABLE ADD COLUMN pattern as
+/// `migrate_add_interactive_session_close_reason_column`.
+fn migrate_add_reconstructed_script_tactic_path_column(conn: &Connection) -> rusqlite::Result<()> {
+    let table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='interactive_proof_reconstructed_scripts'",
+        [], |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(());
+    }
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(interactive_proof_reconstructed_scripts)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !cols.iter().any(|c| c == "tactic_path_ids_json") {
+        conn.execute(
+            "ALTER TABLE interactive_proof_reconstructed_scripts ADD COLUMN tactic_path_ids_json TEXT NOT NULL DEFAULT '[]'",
+            [],
+        )?;
     }
     Ok(())
 }

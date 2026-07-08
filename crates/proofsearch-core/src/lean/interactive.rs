@@ -160,6 +160,18 @@ pub struct ReconstructedScript {
     /// `true` iff the selected node's `is_solved` was `true` at
     /// reconstruction time. Still not proof authority — only the kernel is.
     pub reports_complete: bool,
+    /// The same per-step tactic strings `tactic_block` was built from
+    /// (`tactic_block == tactics.join("\n")`), kept as their own field
+    /// rather than making a caller re-split `tactic_block` to recover them.
+    /// Issue #163: `tactic_block.split('\n')` is NOT a safe inverse of the
+    /// join — a single step's tactic text can itself legitimately contain
+    /// embedded newlines (the same multi-line tactic-block shape
+    /// `EpisodeStepArgs`/`Solve` already has to support elsewhere in this
+    /// codebase), which `split('\n')` would fragment into spurious extra
+    /// pseudo-steps. `tactics.len() == node_path.len().saturating_sub(1)`
+    /// (one tactic per edge on the root-to-selected path; zero for a
+    /// root-only reconstruction).
+    pub tactics: Vec<String>,
 }
 
 /// One step of a recorded session, replayable against a fresh session for
@@ -399,6 +411,7 @@ impl InteractiveProofGateway for MockInteractiveGateway {
             proof_format: ProofFormat::FlatTacticSequence,
             node_path,
             reports_complete,
+            tactics,
         })
     }
 
@@ -521,6 +534,7 @@ mod tests {
         assert_eq!(script.tactic_block, "norm_num");
         assert!(script.reports_complete);
         assert_eq!(script.node_path, vec![start.initial_state.node, new_state.node]);
+        assert_eq!(script.tactics, vec!["norm_num".to_string()]);
 
         gw.close_session(start.session).expect("close_session should succeed");
 
@@ -574,6 +588,33 @@ mod tests {
             first.steps[0].state.as_ref().unwrap().goals.len(),
             second.steps[0].state.as_ref().unwrap().goals.len(),
         );
+    }
+
+    /// Issue #163: `tactic_block` is `tactics.join("\n")`, so
+    /// `tactic_block.split('\n')` is NOT a safe way to recover the original
+    /// per-step tactics when a single step's own text legitimately contains
+    /// an embedded newline (a multi-line tactic block, the same shape
+    /// `EpisodeStepArgs`/`Solve` already supports elsewhere). `tactics`
+    /// exists precisely so a caller (e.g. `proof_session_replay`'s backend
+    /// mode) never has to re-split `tactic_block` and risk fragmenting one
+    /// step into several spurious pseudo-steps.
+    #[test]
+    fn mock_backend_reconstruct_script_tactics_field_preserves_embedded_newlines_as_one_step() {
+        let gw = MockInteractiveGateway::new();
+        let start = gw.start_session(&sample_request()).unwrap();
+
+        let multiline_tactic = "have h : 1 + 1 = 2 := by\n  norm_num\nexact h";
+        let applied = gw.apply_tactic(start.session, start.initial_state.node, multiline_tactic).unwrap();
+        assert_eq!(applied.outcome, TacticOutcome::Applied);
+        let solved_node = applied.state.unwrap().node;
+
+        let script = gw.reconstruct_script(start.session, solved_node).unwrap();
+        // The naive (WRONG) recovery would split this into 3 pseudo-steps.
+        assert_eq!(script.tactic_block.split('\n').count(), 3, "sanity: the flattened block does span 3 lines");
+        // The CORRECT recovery: exactly one step, with its embedded newlines intact.
+        assert_eq!(script.tactics.len(), 1, "a single multi-line tactic call must round-trip as ONE step: {:?}", script.tactics);
+        assert_eq!(script.tactics[0], multiline_tactic);
+        assert_eq!(script.tactic_block, multiline_tactic, "tactic_block == tactics.join(\"\\n\") for a single step");
     }
 
     #[test]
