@@ -66,6 +66,26 @@ relevant) into a new `erdos-<N>/` folder and link it from the project index.
    already-known theorem (external `formal_proof` on file), now
    independently reproduced end-to-end through this project's own pipeline.
    See [erdos-349/attack-plan.md](erdos-349/attack-plan.md).
+4. **The #291 harmonic-denominator companion (part ii)**
+   ([erdos-291/](erdos-291/whitepaper.md)): `{n | gcd(aₙ,Lₙ) > 1}.Infinite` —
+   the easy already-known direction (Steinerberger), which the corpus ships as
+   `sorry`. Kernel-verified via the explicit infinite family `n = 2·3ᵏ`. The
+   open part (i) (`= 1` infinitely often) is untouched.
+5. **The #399 Cambie companion** ([erdos-399/](erdos-399/whitepaper.md)):
+   `n! ≠ x⁴ + y⁴` for coprime `x,y` with `xy > 1` — corpus `sorry`,
+   kernel-verified via a mod-8 fourth-power argument. The headline #399
+   (does `n! = xᵏ ± yᵏ` have solutions) was already resolved by Barfield.
+6. **Infinitely many Sierpiński numbers** ([erdos-1113/](erdos-1113/whitepaper.md),
+   Sierpiński 1960): `Set.Infinite {k | IsSierpinskiNumber k}` — corpus `sorry`,
+   kernel-verified via Selfridge's `{3,5,7,13,19,37,73}` covering generalized to
+   the residue class `k ≡ 78557 (mod M)`. Uses **only kernel `decide`** (axioms
+   `[propext, Classical.choice, Quot.sound]`, no `native_decide`) — a stronger
+   guarantee than the corpus's own `selfridge_78557`. The open #1113 (a
+   Sierpiński number with no finite covering) is untouched.
+7. **#494 product version is false** ([erdos-494/](erdos-494/whitepaper.md),
+   Steinerberger): distinct `A, B ⊆ ℂ` of equal size with the same multiset of
+   3-subset *products* — corpus `sorry`, kernel-verified via the witness
+   `A = {1,ω,ω²,2}`, `B = ω·A` (`ω³=1`), reducing to a one-line scalar lemma.
 
 ## Verify it yourself
 
@@ -103,7 +123,12 @@ remains open; this cluster does not touch it.
 
 ## Upstream
 
-An upstream contribution branch (`erdos-1052-formal-proof-link` on the
-Mnehmos fork of formal-conjectures, adding a `@[formal_proof]` link) is
-**staged but deliberately not opened** — maintainer's call, on hold while we
-take a real shot at the problem itself.
+An upstream contribution to google-deepmind/formal-conjectures is **open** as
+[PR #4405](https://github.com/google-deepmind/formal-conjectures/pull/4405):
+`@[formal_proof using lean4]` links for three ErdosProblems/1052 statements
+(`even_of_isUnitaryPerfect`, `isUnitaryPerfect_87360`, and Wall's
+`isUnitaryPerfect_146361946186458562560000`), each pointing at this repo's
+kernel-verified proof. Metadata-only — no proof bodies change upstream; the
+`stop`/`sorry` in-file bodies stay put, matching the repo's existing
+externally-hosted-proof convention. CLA check passes; awaiting maintainer
+review.

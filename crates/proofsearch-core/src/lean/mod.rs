@@ -13,6 +13,23 @@ pub mod module;
 use module::{AssembledModule, normalize_proof};
 use crate::models::action::ProofFormat;
 
+/// Interactive (tactic-by-tactic) proof-state sessions — issue #159. Additive
+/// and separate from `LeanGateway`: see `interactive`'s module doc for the
+/// trust-boundary rule (results there are search evidence, never proof
+/// authority) and for why Pantograph is an optional future backend, not the
+/// API surface itself.
+pub mod interactive;
+
+/// Canonical observation data model for interactive proof-state sessions —
+/// issue #162. Separate module from `interactive` because #159's module is
+/// about the LIVE session trait/backends and #162 is about the STORED,
+/// hashed, MCP-schema'd shape those live results get formalized into for
+/// `proof_session_observe` / `proof_session_tactic_step` (not implemented in
+/// this module — this module defines the data they will return). See
+/// `observation`'s module doc for the hashing rules and the trust-boundary
+/// reminder (still search evidence, never proof authority).
+pub mod observation;
+
 pub trait LeanGateway {
     fn verify_exact(
         &self,

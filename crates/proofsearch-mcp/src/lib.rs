@@ -20,14 +20,35 @@ use rmcp::service::RoleServer;
 pub use rmcp::ErrorData as McpError;
 
 use proofsearch_core::db::schema_v1;
+use proofsearch_core::db::interactive as idb;
 use proofsearch_core::orchestrator::{lifecycle, attempts, step, trajectories, dataset};
 use proofsearch_core::lean::{LeanGateway, RealLeanGateway};
+use proofsearch_core::lean::interactive::{
+    InteractiveProofGateway, MockInteractiveGateway, InteractiveSessionHandle, ProofStateNodeId,
+    InteractiveSessionRequest, TacticOutcome, InteractiveSessionTrace, InteractiveTraceStep,
+    PantographInteractiveGateway, detect_pantograph_status,
+};
+use proofsearch_core::lean::observation::{
+    self, ProofGoal, ProofStateDiagnostic, compute_proof_state_hash, hash_tactic_text,
+};
 use proofsearch_core::models::action::{TypedAction, ActionRequest, ActionRole, StepDisposition, LeanModuleItem, ModuleTheorem, ProofFormat};
 use proofsearch_core::lean::module::{assemble_module, parse_open_directive, partition_import_manifest};
 use proofsearch_core::models::episode::{EpisodeOutcome, TerminationReason, TruncationReason};
 use proofsearch_core::models::reward::{RewardComponent, RewardComponentId, RewardPolicy};
 use proofsearch_core::hashing::canonical_hash;
 use proofsearch_core::putnambench::to_pi_form;
+
+/// Interactive proof-state sessions (issue #161) are SEARCH EVIDENCE, never
+/// proof authority — see `proofsearch_core::lean::interactive`'s and
+/// `proofsearch_core::lean::observation`'s module docs for the full
+/// statement of this rule, which this string exists purely to keep visible
+/// on every `proof_session_*` tool's output. The only route from an
+/// interactive session to a proved obligation is `proof_session_reconstruct`
+/// followed by `proof_session_promote_to_attempt`, which submits the
+/// reconstructed script through the EXISTING `attempt_claim` +
+/// `episode_step` Solve verification path — nothing in this module can flip
+/// an obligation's status directly.
+const INTERACTIVE_TRUST_BOUNDARY_NOTICE: &str = "interactive proof-session state is SEARCH EVIDENCE, not proof authority — only proof_session_promote_to_attempt (which resubmits a reconstructed script through the existing attempt_claim + episode_step Solve path for real Lean kernel verification) can affect an obligation's status";
 
 /// Every problem's import manifest starts with these two; problem_imports adds to
 /// them. Kept in one place so the "what does a bare problem_create get by
@@ -826,6 +847,193 @@ pub struct ModelCallSettleArgs {
     pub lease_id: String,
     pub actual_cost_micros: i64,
     pub status: String,
+}
+
+// --- Issue #161: interactive (tactic-by-tactic) proof-state sessions -----
+//
+// Every `proof_session_*` tool's response includes a trust-boundary
+// reminder string (see `INTERACTIVE_TRUST_BOUNDARY_NOTICE`): this whole
+// family is SEARCH EVIDENCE, never proof authority, until
+// `proof_session_promote_to_attempt` resubmits a reconstructed script
+// through the EXISTING `attempt_claim`/`episode_step` Solve path. See
+// `proofsearch_core::lean::interactive` and
+// `proofsearch_core::lean::observation`'s module docs for the full
+// statement of this rule.
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofSessionStartArgs {
+    pub episode_id: String,
+    /// Must be an `episode_obligations` row that already belongs to
+    /// `episode_id` (created the normal way — root obligation at
+    /// episode_create, or a child obligation from a prior Decompose).
+    pub obligation_id: String,
+    /// CAS guard, same convention as `attempt_claim`/`episode_step`: must
+    /// equal the episode's current `current_revision`.
+    pub expected_revision: i64,
+    /// Optional extra guard (issue #161: "expected episode revision OR
+    /// observation hash") — if supplied, must equal this episode's current
+    /// progress hash (the same hash `episode_observe`'s
+    /// `action_request.state_hash_before` is derived from). `None` skips
+    /// this extra check; `expected_revision` alone is always checked.
+    #[serde(default)]
+    pub expected_observation_hash: Option<String>,
+    /// Which `InteractiveProofGateway` backend to start the session against.
+    /// `"mock"` (issue #161) is the deterministic, always-available test
+    /// double. `"pantograph"` (issue #166) routes to a real, PATH/lake-
+    /// manifest-based Pantograph detection probe — it is a RECOGNIZED value,
+    /// not a usable one, until a compatible Pantograph installation exists
+    /// in this environment; see `environment_describe`'s `pantograph_available`
+    /// capability flag and `crate::lean::interactive::PantographInteractiveGateway`'s
+    /// doc for exactly what it checks and why it fails closed today.
+    /// Defaults to `"mock"`.
+    #[serde(default = "default_interactive_backend")]
+    pub backend: String,
+}
+
+fn default_interactive_backend() -> String {
+    "mock".to_string()
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofSessionObserveArgs {
+    pub session_id: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofSessionTacticStepArgs {
+    pub session_id: String,
+    /// The node to apply `tactic` to. Need not be the session's currently
+    /// selected node — branching from an earlier node is allowed (issue
+    /// #159's `apply_tactic` contract).
+    pub parent_node_id: String,
+    pub tactic: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofSessionBranchArgs {
+    pub session_id: String,
+    pub parent_node_id: String,
+    /// Free-text label for this branch (audit/UI convenience only — not
+    /// interpreted, not unique-constrained).
+    pub branch_name: String,
+    pub tactic: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofSessionSelectNodeArgs {
+    pub session_id: String,
+    pub node_id: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofSessionReconstructArgs {
+    pub session_id: String,
+    pub selected_node_id: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofSessionPromoteToAttemptArgs {
+    pub session_id: String,
+    /// An id returned by a prior `proof_session_reconstruct` call for this
+    /// session.
+    pub reconstructed_script_id: String,
+    /// The EXACT reconstructed tactic text `proof_session_reconstruct`
+    /// returned. Interactive sessions do not durably persist raw tactic
+    /// text server-side (only content hashes — the same convention this
+    /// schema already uses for `action_attempts.submitted_action_json`-
+    /// adjacent `*_artifact_hash` columns), so this is re-supplied here and
+    /// checked against the reconstructed script's recorded
+    /// `proof_source_hash` before anything is submitted — a caller cannot
+    /// promote text that does not match what was actually reconstructed
+    /// from this session's proof-state tree.
+    pub tactic_block: String,
+    pub episode_id: String,
+    /// A pending `action_request_id` targeting this session's obligation —
+    /// obtain one via `episode_observe`, exactly as the normal
+    /// `attempt_claim` flow requires.
+    pub action_request_id: String,
+    pub idempotency_key: String,
+    pub expected_revision: i64,
+    pub cost_micros: i64,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofSessionCloseArgs {
+    pub session_id: String,
+    /// One of `"closed"` (normal completion), `"abandoned"` (given up on),
+    /// or `"superseded"` (replaced by a different session/approach). All
+    /// three persist the session's full trace — see
+    /// `interactive_proof_sessions.close_reason` in `schema_v1.rs`.
+    pub reason: String,
+}
+
+/// Issue #163: replay a session from PERSISTED DB state
+/// (`interactive_proof_sessions`/`_nodes`/`_steps`/`_reconstructed_scripts`
+/// for `session_id`) — deliberately NOT #159's `replay_session`, which
+/// operates on a caller-supplied in-memory `InteractiveSessionTrace`. The
+/// whole point here is that a closed/historical session stays replayable
+/// from what is actually stored, not just a live in-memory one.
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofSessionReplayArgs {
+    pub session_id: String,
+    /// One of `"trace_only"` (pure DB-record consistency check — no backend
+    /// or kernel call), `"backend"` (re-runs the root-to-node tactic path
+    /// against a FRESH interactive-backend session and compares outcomes/
+    /// hashes to what was recorded), or `"final_proof"` (THE TRUST GATE —
+    /// reconstructs the selected script and resubmits it through the
+    /// existing attempt_claim + episode_step Solve path for real Lean
+    /// kernel verification). Only `"final_proof"`'s result is proof
+    /// evidence; `"trace_only"` and `"backend"` remain SEARCH EVIDENCE ONLY.
+    pub mode: String,
+    /// `"backend"`, and `"final_proof"` when reconstructing fresh: which
+    /// node's root-to-node path to replay/reconstruct. Defaults to the
+    /// session's currently selected node if omitted.
+    #[serde(default)]
+    pub selected_node_id: Option<String>,
+    /// `"final_proof"` only, an ALTERNATIVE to `selected_node_id`: re-verify
+    /// an existing (not yet promoted) reconstructed script instead of
+    /// reconstructing a fresh one. Must be paired with `tactic_block` (same
+    /// hash-integrity check `proof_session_promote_to_attempt` itself uses).
+    #[serde(default)]
+    pub reconstructed_script_id: Option<String>,
+    #[serde(default)]
+    pub tactic_block: Option<String>,
+    /// `"final_proof"` only: the same submission arguments
+    /// `proof_session_promote_to_attempt` requires — all five are required
+    /// together when `mode = "final_proof"`.
+    #[serde(default)]
+    pub episode_id: Option<String>,
+    #[serde(default)]
+    pub action_request_id: Option<String>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    #[serde(default)]
+    pub expected_revision: Option<i64>,
+    #[serde(default)]
+    pub cost_micros: Option<i64>,
+}
+
+/// Issue #164: closes out #161's explicitly-deferred `proof_session_export`
+/// as a thin per-session convenience wrapper over the SAME interactive-
+/// session export machinery `proof_export`/`trajectory_export` now share
+/// (`gather_interactive_sessions` + the three `interactive_sessions_*`
+/// renderers) — scoped to exactly ONE session rather than a whole episode.
+/// Only the three interactive-aware `proof_export` formats apply here
+/// (`public_summary` default, `audit_archive`, `training_export`); any other
+/// `ExportMode` variant is rejected rather than silently ignored, since this
+/// tool never renders a whole-episode dossier.
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofSessionExportArgs {
+    pub session_id: String,
+    #[serde(default)]
+    pub format: Option<ExportMode>,
+    /// Same contamination gate `proof_export`/`trajectory_export` already
+    /// enforce (issue #33): required when `format` is `audit_archive` or
+    /// `training_export` AND this session's episode's problem is linked to a
+    /// tracked benchmark suite. Has no effect for `public_summary`, which
+    /// never exposes a proof body regardless of this flag.
+    #[serde(default)]
+    pub allow_putnambench_proof_export: bool,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -2001,6 +2209,110 @@ fn mcp_internal_error(msg: impl Into<std::borrow::Cow<'static, str>>) -> McpErro
 
 fn rs(e: impl std::fmt::Display) -> McpError {
     mcp_internal_error(e.to_string())
+}
+
+/// Issue #161: extracts the JSON payload out of a `CallToolResult` produced
+/// by an internal helper (`do_attempt_claim`/`do_episode_step`) invoked
+/// directly rather than through the MCP wire protocol —
+/// `proof_session_promote_to_attempt`'s only way to read back
+/// `action_attempt_id`/`claim_token`/the step outcome from those calls.
+fn extract_tool_result_json(res: &CallToolResult) -> Result<serde_json::Value, McpError> {
+    let text = res.content.first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.as_str())
+        .ok_or_else(|| mcp_internal_error("internal tool call returned no text content"))?;
+    serde_json::from_str(text).map_err(|e| mcp_internal_error(format!("failed to parse internal tool call result: {e}")))
+}
+
+/// The only interactive backend this server ever configures (see
+/// `ChatDbMcp::new`, which always installs `MockInteractiveGateway`, and
+/// `do_proof_session_start`'s own "only mock is available" rejection at
+/// session-creation time). Issue #163's `proof_session_replay` "backend"
+/// mode compares a session's persisted `backend_kind` against this constant
+/// to detect a mismatch — today that can only arise via direct DB
+/// manipulation (a legacy row, or a corrupted one), since `proof_session_start`
+/// itself refuses any other backend value, but a future multi-backend
+/// deployment could make it a real condition.
+const CONFIGURED_INTERACTIVE_BACKEND_KIND: &str = "mock";
+
+/// Everything `InteractiveProofGateway::start_session` needs for one
+/// episode/obligation pair, plus the problem-version identity/hashes the
+/// caller (session-start or backend-replay) separately needs to persist
+/// alongside it.
+struct InteractiveSessionContext {
+    request: InteractiveSessionRequest,
+    problem_version_id: Uuid,
+    environment_hash: String,
+    import_manifest_hash: String,
+}
+
+/// Builds an [`InteractiveSessionContext`] from an episode/obligation pair —
+/// the SAME lookup `do_proof_session_start` always did (issue #161), pulled
+/// out as a pure extraction (issue #163) so `proof_session_replay`'s
+/// "backend" mode can start an equivalent fresh session without duplicating
+/// it. Behavior is unchanged: same query, same error messages, same
+/// `problem_namespace` derivation.
+fn build_interactive_session_request(
+    conn: &Connection,
+    episode_id: &str,
+    obligation_id: &str,
+) -> Result<InteractiveSessionContext, McpError> {
+    let obligation_row: Option<(String, String, String)> = conn.query_row(
+        "SELECT problem_version_id, theorem_name, lean_statement FROM episode_obligations WHERE id = ?1 AND episode_id = ?2",
+        (obligation_id, episode_id),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).optional().map_err(rs)?;
+    let (pv_id_str, theorem_name, lean_statement) = obligation_row.ok_or_else(|| mcp_invalid_params(format!(
+        "obligation_id {} is not a known obligation of episode {} — call episode_observe for a valid target_obligation_id",
+        obligation_id, episode_id
+    )))?;
+
+    let (env_hash, import_manifest_json, import_manifest_hash): (String, String, String) = conn.query_row(
+        "SELECT environment_hash, import_manifest_json, import_manifest_hash FROM problem_versions WHERE id = ?1",
+        [&pv_id_str], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).map_err(rs)?;
+    let imports: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
+
+    let dependencies: Vec<Uuid> = {
+        let mut dep_stmt = conn.prepare(
+            "SELECT dependency_obligation_id FROM episode_obligation_edges e
+             JOIN episode_obligations dep ON dep.id = e.dependency_obligation_id
+             WHERE e.parent_obligation_id = ?1 AND dep.status = 'proved'",
+        ).map_err(rs)?;
+        dep_stmt.query_map([obligation_id], |row| row.get::<_, String>(0)).map_err(rs)?
+            .collect::<Result<Vec<_>, _>>().map_err(rs)?
+            .into_iter().filter_map(|s| Uuid::parse_str(&s).ok()).collect()
+    };
+
+    let ns16 = pv_id_str.replace('-', "");
+    let problem_namespace = format!("ProofSearch.P_{}", &ns16[..16.min(ns16.len())]);
+    let problem_version_id = Uuid::parse_str(&pv_id_str).map_err(|e| mcp_internal_error(e.to_string()))?;
+
+    Ok(InteractiveSessionContext {
+        request: InteractiveSessionRequest { problem_namespace, theorem_name, statement: lean_statement, imports, dependencies },
+        problem_version_id,
+        environment_hash: env_hash,
+        import_manifest_hash,
+    })
+}
+
+/// Recomputes a node's [`proofsearch_core::lean::observation::ProofStateHash::full_state_hash`]
+/// from its own persisted `goals` and a producing step's ALREADY-hashed
+/// `tactic_text_hash` — issue #163's trace-only replay uses this to detect a
+/// corrupted/edited node row or a changed tactic-text hash. Raw tactic text
+/// is never durably stored server-side (see `ProofSessionPromoteToAttemptArgs`'s
+/// doc), so this mirrors `compute_proof_state_hash`'s own composition
+/// exactly but takes an already-computed hash instead of raw text.
+fn recompute_full_state_hash(goals: &[ProofGoal], tactic_text_hash: Option<&str>) -> Result<String, String> {
+    let mut goal_hashes = Vec::with_capacity(goals.len());
+    for g in goals {
+        let local_context_hash = match &g.local_context {
+            Some(ctx) => Some(observation::hash_local_context(ctx)?),
+            None => None,
+        };
+        goal_hashes.push(observation::hash_goal(&g.target, local_context_hash.as_deref())?);
+    }
+    canonical_hash(&(goal_hashes, tactic_text_hash.map(|s| s.to_string())))
 }
 
 fn reserve_episode_budget_for_model_call(
@@ -3624,6 +3936,18 @@ fn run_step_post_processing(
             StepDisposition::InvalidResponse, false,
             Some("Invalid attempt claim or status".to_string()),
         ),
+        // #157: precise diagnosis for the burst-tail case. An expired claim whose
+        // request is still unclaimed is revived transparently inside step/finalize
+        // and never reaches here — this arm fires only when another attempt took
+        // the request in the meantime, so a retry with the SAME claim can never
+        // succeed and the remedy is spelled out.
+        Err(step::StepError::ClaimSuperseded { expired_at }) => (
+            StepDisposition::InvalidResponse, false,
+            Some(format!(
+                "claim expired at {} (claims last ~{} min; expired-but-untaken claims are revived automatically) and its action request has since been claimed or fulfilled by another attempt — call episode_observe and re-claim with a fresh idempotency_key",
+                expired_at, attempts::CLAIM_TTL_MINUTES
+            )),
+        ),
         Err(step::StepError::InvalidCost { cost_micros }) => (
             StepDisposition::InvalidResponse, false,
             Some(format!("invalid_cost: cost_micros must be >= 0 and fit in i64 (got {})", cost_micros)),
@@ -3916,6 +4240,710 @@ fn benchmark_suite_name_for_episode(conn: &Connection, episode_id: &str) -> Resu
     Ok(Some(BenchmarkLink {
         suite_name: rows[0].0.clone(),
         upstream_problem_id: if rows.len() == 1 { Some(rows[0].1.clone()) } else { None },
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Issue #164: interactive-session export machinery, shared by proof_export's
+// public_summary/audit_archive/training_export, trajectory_export, and
+// proof_session_export. One gather pass reads the SAME #159-#163 tables
+// proof_session_observe/replay already read (interactive_proof_sessions/
+// _nodes/_steps/_reconstructed_scripts, via db::interactive) into a plain
+// struct; each export mode below builds its own view over that struct rather
+// than re-querying, so a session's redaction rule is expressed once per
+// format instead of duplicated per SQL call site.
+//
+// TRUST BOUNDARY (restated once more — see schema_v1.rs's doc comment above
+// `interactive_proof_sessions`): every function below derives "did this
+// session's work amount to anything verified" ONLY from a reconstructed
+// script's `verified_attempt_id` / `verification_outcome`
+// (`session_final_outcome`), NEVER from a node's `is_solved` or a script's
+// `reports_complete` alone — those two fields are the session's own internal
+// claim, not kernel evidence. See `session_final_outcome`'s doc.
+// ---------------------------------------------------------------------------
+
+/// One interactive session's full persisted state, gathered for export.
+struct InteractiveSessionBundle {
+    session: idb::SessionRow,
+    nodes: Vec<idb::NodeRow>,
+    steps: Vec<idb::StepRow>,
+    reconstructions: Vec<idb::ReconstructedScriptRow>,
+}
+
+/// Every interactive session belonging to `episode_id`, oldest first. Empty
+/// for an episode that never started one — every export mode below treats
+/// that as "no interactive_sessions section to add," not an error.
+fn gather_interactive_sessions(conn: &Connection, episode_id: &str) -> Result<Vec<InteractiveSessionBundle>, McpError> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM interactive_proof_sessions WHERE episode_id = ?1 ORDER BY created_at ASC"
+    ).map_err(rs)?;
+    let session_ids: Vec<String> = stmt.query_map([episode_id], |row| row.get(0)).map_err(rs)?
+        .collect::<Result<Vec<_>, _>>().map_err(rs)?;
+    drop(stmt);
+
+    let mut out = Vec::with_capacity(session_ids.len());
+    for sid_str in session_ids {
+        let sid = Uuid::parse_str(&sid_str).map_err(|e| mcp_internal_error(e.to_string()))?;
+        let session = idb::get_session(conn, sid).map_err(rs)?
+            .ok_or_else(|| mcp_internal_error("interactive session id from query vanished mid-export"))?;
+        let nodes = idb::list_nodes_for_session(conn, sid).map_err(rs)?;
+        let steps = idb::list_steps_for_session(conn, sid).map_err(rs)?;
+        let reconstructions = idb::list_reconstructed_scripts_for_session(conn, sid).map_err(rs)?;
+        out.push(InteractiveSessionBundle { session, nodes, steps, reconstructions });
+    }
+    Ok(out)
+}
+
+/// Number of nodes within a session's tree that are genuine branch points —
+/// a `parent_node_id` with more than one child (reached by more than one
+/// distinct `apply_tactic`/`proof_session_branch` call). Not simply "total
+/// nodes minus one": a long linear chain of single-child nodes has zero
+/// branch points, only a fork does.
+fn interactive_branch_count(nodes: &[idb::NodeRow]) -> usize {
+    let mut children_per_parent: std::collections::HashMap<Uuid, usize> = std::collections::HashMap::new();
+    for n in nodes {
+        if let Some(p) = n.parent_node_id {
+            *children_per_parent.entry(p).or_insert(0) += 1;
+        }
+    }
+    children_per_parent.values().filter(|&&c| c > 1).count()
+}
+
+/// `(applied_count, failed_count)` over a session's steps.
+fn interactive_step_outcome_counts(steps: &[idb::StepRow]) -> (usize, usize) {
+    let applied = steps.iter().filter(|s| s.outcome == "applied").count();
+    (applied, steps.len() - applied)
+}
+
+/// Safe, structural failure category for a failed step — `LeanDiagnostic`'s
+/// `category` enum value only (e.g. `"tactic_failure"`, `"unsolved_goals"`),
+/// never the diagnostic's free-text `primary_message`/`goal`/tactic text.
+/// This is the ONE piece of diagnostic content `public_summary` is allowed to
+/// surface (the issue's "high-level failure categories" bullet) — every
+/// other diagnostic field stays out of public_summary.
+fn interactive_step_failure_category(diagnostic_json: &Option<String>) -> String {
+    diagnostic_json.as_ref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| v["diagnostic"]["category"].as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Issue #165: derived progress/failure/repair/branch labels for interactive
+// steps.
+//
+// TRUST BOUNDARY (same rule as the whole `interactive_proof_*` family — see
+// `INTERACTIVE_TRUST_BOUNDARY_NOTICE`, `crate::lean::interactive`'s and
+// `crate::lean::observation`'s module docs, and `interactive_session_final_outcome`'s
+// doc above): every label defined below is a HEURISTIC TRAINING HINT about
+// LOCAL, IN-SESSION proof-state progress. None of them is, or may ever be
+// treated as, a claim that any obligation is proved. They may feed reward
+// shaping or training export (this is literally what issue #165 asks them to
+// do), but `episode_obligations.status` / `kernel_verified` /
+// `verified_attempt_id` / `verification_outcome` remain the ONLY proof
+// authority in this system. A session can accumulate `progress_made` and
+// `goal_closed` labels on every single step and still never be promoted —
+// see `test_issue165_progress_labels_never_imply_kernel_verified`, which
+// asserts exactly that: `kernel_verified` stays `false` everywhere it is
+// reported, independent of how many positive labels a session's steps carry.
+//
+// Design note (additive, no new persisted column): every label below is
+// computed PURELY from data #160-#164 already persist — `goals_json`/
+// `status` on `interactive_proof_nodes`, `outcome`/`diagnostic_json` on
+// `interactive_proof_steps`, `selected_final_node_id`/`root_node_id`/`state`
+// on `interactive_proof_sessions` — matching this epic's established
+// prefer-pure-derivation pattern (`recompute_full_state_hash`,
+// `interactive_session_final_outcome`, `interactive_step_failure_category`
+// above). No schema migration was needed or added for this issue.
+// ---------------------------------------------------------------------------
+
+/// One step's issue #165 label set, plus the `LeanDiagnosticCategory` value
+/// (reused, not re-derived — see `interactive_step_failure_category`) for a
+/// failed step. See `compute_step_progress_labels`'s doc for exact trigger
+/// conditions.
+#[derive(Debug, Clone)]
+struct StepProgressLabels {
+    /// Sorted, deduplicated label names drawn ONLY from the issue's fixed
+    /// 12-label vocabulary: `progress_made`, `goal_closed`,
+    /// `goal_count_reduced`, `goal_count_increased`, `target_simplified`,
+    /// `context_changed`, `tactic_failed`, `tactic_repaired_previous_failure`,
+    /// `branch_abandoned`, `branch_selected_for_reconstruction`,
+    /// `no_progress`, `backend_unavailable`. `backend_unavailable` is NEVER
+    /// produced by this function — see its doc.
+    labels: Vec<String>,
+    /// `Some(<LeanDiagnosticCategory serde value>)` iff this step's
+    /// `outcome == "failed"`; `None` for an applied step. Computed via
+    /// `interactive_step_failure_category` — the SAME function
+    /// `public_summary` already uses — so a failed step's `failure_category`
+    /// here is always identical to what `public_summary`'s
+    /// `failure_categories` bucket would count it under. This is the
+    /// "align with existing diagnostic categories" half of #165's
+    /// acceptance criteria.
+    failure_category: Option<String>,
+}
+
+/// `true` iff `parent_node_id` has at least one FAILED step among `steps` —
+/// the caller is responsible for restricting `steps` to "steps that occurred
+/// strictly before the one being labeled" (see the two call sites:
+/// `apply_tactic_core` passes the session's full existing step list fetched
+/// BEFORE inserting the new step's own row; `step_has_prior_failure_on_same_parent`
+/// below passes everything strictly before `target` in a full, already-persisted,
+/// oldest-first step list).
+fn any_failed_step_on_parent(steps: &[idb::StepRow], parent_node_id: Uuid) -> bool {
+    steps.iter().any(|s| s.parent_node_id == parent_node_id && s.outcome == "failed")
+}
+
+/// `tactic_repaired_previous_failure`'s core check over an already-persisted,
+/// oldest-first step list (e.g. `list_steps_for_session`'s output): `true`
+/// iff some step strictly earlier than `target` in `ordered_steps` shares
+/// `target.parent_node_id` and has `outcome == "failed"`. Deliberately does
+/// NOT require `target` to be the very next step tried against that parent —
+/// a caller may branch elsewhere in between and come back; that still counts
+/// as "eventually repaired" per the issue's "retry after failure, and the
+/// retry worked" framing.
+fn step_has_prior_failure_on_same_parent(ordered_steps: &[idb::StepRow], target: &idb::StepRow) -> bool {
+    let earlier = ordered_steps.iter().take_while(|s| s.id != target.id);
+    for s in earlier {
+        if s.parent_node_id == target.parent_node_id && s.outcome == "failed" {
+            return true;
+        }
+    }
+    false
+}
+
+/// Shared branch-topology computation. Issue #163's `replay_trace_only`
+/// originally computed this inline for its `branch_report`; issue #165 needs
+/// the IDENTICAL notion for `branch_selected_for_reconstruction` /
+/// `branch_abandoned`, so it is extracted here as the single source of truth
+/// both call sites now share — same inputs, same computation, no behavior
+/// change to `replay_trace_only`'s existing output.
+///
+/// Returns `(selected_path, abandoned_open_leaf_ids)`:
+/// - `selected_path`: every node id on the walk from
+///   `session.selected_final_node_id` (or `root_node_id` if nothing has been
+///   explicitly selected yet) up to the root, inclusive — the node itself
+///   AND every ancestor. This is exactly "IS or is an ancestor on the path
+///   to the session's `selected_final_node_id`" from the issue's
+///   `branch_selected_for_reconstruction` definition. A cycle in a corrupted
+///   tree stops the walk rather than looping forever (a real cycle is
+///   separately flagged as a `replay_trace_only` failure elsewhere).
+/// - `abandoned_open_leaf_ids`: nodes with `status == "open"`, no children,
+///   and NOT in `selected_path`. Computed unconditionally, not gated on
+///   `session.state == "closed"` — same as `replay_trace_only` has always
+///   done — so an open session's "abandoned" set is a live, provisional
+///   snapshot of branches not currently being pursued, not necessarily a
+///   permanent verdict; it becomes a stable verdict once the session closes
+///   (matching the issue's own "when the session closes" framing for
+///   `branch_abandoned`).
+fn interactive_session_branch_topology(
+    session: &idb::SessionRow,
+    nodes: &[idb::NodeRow],
+) -> (std::collections::HashSet<Uuid>, std::collections::HashSet<Uuid>) {
+    let node_by_id: std::collections::HashMap<Uuid, &idb::NodeRow> = nodes.iter().map(|n| (n.id, n)).collect();
+    let selected_path: std::collections::HashSet<Uuid> = {
+        let mut set = std::collections::HashSet::new();
+        let mut cur = session.selected_final_node_id.or(session.root_node_id);
+        while let Some(id) = cur {
+            if !set.insert(id) {
+                break; // cycle guard — a real cycle is flagged elsewhere as a data-integrity failure.
+            }
+            cur = node_by_id.get(&id).and_then(|n| n.parent_node_id);
+        }
+        set
+    };
+    let child_counts: std::collections::HashMap<Uuid, usize> = nodes.iter()
+        .filter_map(|n| n.parent_node_id)
+        .fold(std::collections::HashMap::new(), |mut acc, p| { *acc.entry(p).or_insert(0) += 1; acc });
+    let abandoned_open_leaf_ids: std::collections::HashSet<Uuid> = nodes.iter()
+        .filter(|n| n.status == "open" && !child_counts.contains_key(&n.id) && !selected_path.contains(&n.id))
+        .map(|n| n.id)
+        .collect();
+    (selected_path, abandoned_open_leaf_ids)
+}
+
+/// THE issue #165 labeling function: derives every applicable heuristic
+/// progress/failure/repair/branch label for one interactive-session step
+/// transition (`parent` -> `child`, or `parent` -> failure) from data ALREADY
+/// persisted by #160-#164. See this section's module-doc-style comment above
+/// for the trust-boundary rule this function is bound by.
+///
+/// Per-label trigger condition (the 12 labels, in the exact order the issue
+/// lists them):
+/// - `progress_made`: `outcome == "applied"` AND at least one of
+///   `goal_closed` / `goal_count_reduced` / `target_simplified` /
+///   `context_changed` fired for this transition.
+/// - `goal_closed`: the child node's `status == "solved"`, OR the child's
+///   goal count is strictly less than the parent's (at least one goal
+///   eliminated, even if others remain open) — this schema tracks a
+///   whole-node `status` plus a goal COUNT, not individually-tagged goal
+///   ids, so "at least one goal eliminated" is read off the count rather
+///   than a per-goal closure flag (the issue's own documented fallback for
+///   exactly this case).
+/// - `goal_count_reduced` / `goal_count_increased`: strict `<` / `>` between
+///   the parent's and child's parsed `goals_json` lengths.
+/// - `target_simplified`: a HEURISTIC, PURELY TEXTUAL size comparison —
+///   computed ONLY when the goal count is UNCHANGED (when it changed,
+///   `goal_count_reduced`/`goal_closed` already cover it, and comparing
+///   per-goal text across a changed goal list would require goal-identity
+///   tracking this schema does not have). Sums each goal's
+///   `target.raw_rendering` character count across all goals, parent vs.
+///   child (in `goal_index` order); `true` iff the child's sum is strictly
+///   smaller. LIMITATION, stated plainly: this is NOT a semantic
+///   simplification check. A goal that got textually shorter but harder
+///   (or textually longer but trivial, e.g. after unfolding a definition)
+///   fools it in either direction. It exists because the issue explicitly
+///   asks for "a reasonable, honestly-scoped heuristic," not a real one —
+///   do not upgrade its meaning in a training pipeline without also
+///   upgrading this comment.
+/// - `context_changed`: the parent's and child's per-goal local-context
+///   hashes (via `observation::hash_local_context`; `None` when a goal's
+///   context is unreported — see `ProofGoal`'s own doc on that distinction)
+///   differ as an ORDERED LIST. A goal-count change makes the two lists
+///   different lengths and therefore automatically unequal, which is the
+///   intended behavior (the hypothesis set genuinely did change), not a
+///   spurious signal.
+/// - `tactic_failed`: `outcome == "failed"`.
+/// - `tactic_repaired_previous_failure`: `outcome == "applied"` AND
+///   `prior_failed_on_same_parent` is `true` (see
+///   `step_has_prior_failure_on_same_parent` / `any_failed_step_on_parent`).
+/// - `branch_abandoned` / `branch_selected_for_reconstruction`: the child
+///   node id is in `abandoned_leaf_ids` / `selected_path` — both produced by
+///   `interactive_session_branch_topology`. Callers that only have
+///   IMMEDIATE, single-step context (no full-session view — see
+///   `apply_tactic_core`) pass empty sets for both, since neither label is
+///   meaningful without the session's full node tree and current selection.
+/// - `no_progress`: `outcome == "applied"` AND NOT `progress_made` —
+///   deliberately distinct from `tactic_failed` (a FAILED step never reaches
+///   this branch at all; `no_progress` is for a step that succeeded
+///   syntactically but changed nothing progress-relevant).
+/// - `backend_unavailable`: NEVER set by this function. There is no
+///   persisted node/step content this function could derive that condition
+///   from — backend availability is a property of the LIVE gateway process,
+///   not stored step content. See `replay_backend`, which maps its own
+///   existing `backend_replay_available` / `backend_mismatch` booleans onto
+///   this label directly instead of this function re-deriving them.
+fn compute_step_progress_labels(
+    outcome: &str,
+    diagnostic_json: &Option<String>,
+    parent: &idb::NodeRow,
+    child: Option<&idb::NodeRow>,
+    prior_failed_on_same_parent: bool,
+    selected_path: &std::collections::HashSet<Uuid>,
+    abandoned_leaf_ids: &std::collections::HashSet<Uuid>,
+) -> Result<StepProgressLabels, McpError> {
+    if outcome == "failed" {
+        return Ok(StepProgressLabels {
+            labels: vec!["tactic_failed".to_string()],
+            failure_category: Some(interactive_step_failure_category(diagnostic_json)),
+        });
+    }
+
+    let child = child.ok_or_else(|| mcp_internal_error(
+        "compute_step_progress_labels: outcome=\"applied\" but no child node was supplied",
+    ))?;
+
+    let parent_goals: Vec<ProofGoal> = serde_json::from_str(&parent.goals_json)
+        .map_err(|e| mcp_internal_error(format!("compute_step_progress_labels: unparseable parent goals_json: {e}")))?;
+    let child_goals: Vec<ProofGoal> = serde_json::from_str(&child.goals_json)
+        .map_err(|e| mcp_internal_error(format!("compute_step_progress_labels: unparseable child goals_json: {e}")))?;
+
+    let before = parent_goals.len();
+    let after = child_goals.len();
+    let goal_count_reduced = after < before;
+    let goal_count_increased = after > before;
+    let goal_closed = child.status == "solved" || goal_count_reduced;
+
+    let target_simplified = if before == after {
+        let sum_before: usize = parent_goals.iter().map(|g| g.target.raw_rendering.chars().count()).sum();
+        let sum_after: usize = child_goals.iter().map(|g| g.target.raw_rendering.chars().count()).sum();
+        sum_after < sum_before
+    } else {
+        false
+    };
+
+    let context_changed = {
+        let hash_all = |goals: &[ProofGoal]| -> Result<Vec<Option<String>>, McpError> {
+            goals.iter().map(|g| match &g.local_context {
+                Some(ctx) => observation::hash_local_context(ctx).map(Some).map_err(mcp_internal_error),
+                None => Ok(None),
+            }).collect()
+        };
+        hash_all(&parent_goals)? != hash_all(&child_goals)?
+    };
+
+    let mut labels: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
+    if goal_closed { labels.insert("goal_closed"); }
+    if goal_count_reduced { labels.insert("goal_count_reduced"); }
+    if goal_count_increased { labels.insert("goal_count_increased"); }
+    if target_simplified { labels.insert("target_simplified"); }
+    if context_changed { labels.insert("context_changed"); }
+
+    let progress_made = goal_closed || goal_count_reduced || target_simplified || context_changed;
+    if progress_made {
+        labels.insert("progress_made");
+    } else {
+        labels.insert("no_progress");
+    }
+
+    if prior_failed_on_same_parent {
+        labels.insert("tactic_repaired_previous_failure");
+    }
+    if selected_path.contains(&child.id) {
+        labels.insert("branch_selected_for_reconstruction");
+    }
+    if abandoned_leaf_ids.contains(&child.id) {
+        labels.insert("branch_abandoned");
+    }
+
+    Ok(StepProgressLabels {
+        labels: labels.into_iter().map(|s| s.to_string()).collect(),
+        failure_category: None,
+    })
+}
+
+/// Computes every step's issue #165 label set for one bundle — the SHARED
+/// helper `interactive_sessions_public_summary_json` (aggregate counts
+/// only), `render_interactive_sessions_markdown` (per-step column), and
+/// `interactive_sessions_training_json` (per-step field) all call, so all
+/// three surfaces derive IDENTICAL labels from an IDENTICAL computation
+/// rather than three separately-written lookups drifting apart. A label
+/// computation error (e.g. unparseable `goals_json`, a dangling parent/child
+/// link — both already independently surfaced by `replay_trace_only`'s
+/// `failures`) degrades that one step to an empty label set rather than
+/// failing the whole export.
+fn interactive_session_step_labels(bundle: &InteractiveSessionBundle) -> std::collections::HashMap<Uuid, StepProgressLabels> {
+    let node_by_id: std::collections::HashMap<Uuid, &idb::NodeRow> = bundle.nodes.iter().map(|n| (n.id, n)).collect();
+    let (selected_path, abandoned_leaf_ids) = interactive_session_branch_topology(&bundle.session, &bundle.nodes);
+    bundle.steps.iter().map(|s| {
+        let parent = node_by_id.get(&s.parent_node_id).copied();
+        let labels = match parent {
+            Some(p) => {
+                let child = s.child_node_id.and_then(|c| node_by_id.get(&c).copied());
+                let prior_failed = step_has_prior_failure_on_same_parent(&bundle.steps, s);
+                compute_step_progress_labels(&s.outcome, &s.diagnostic_json, p, child, prior_failed, &selected_path, &abandoned_leaf_ids)
+                    .unwrap_or_else(|_| StepProgressLabels { labels: vec![], failure_category: None })
+            }
+            None => StepProgressLabels { labels: vec![], failure_category: None },
+        };
+        (s.id, labels)
+    }).collect()
+}
+
+/// THE trust-boundary derivation for interactive sessions (see this section's
+/// module-doc-style comment above `InteractiveSessionBundle`). Returns
+/// `(outcome_label, kernel_verified)`:
+///   - a reconstruction with a linked `verified_attempt_id` exists: label is
+///     `"promoted_<verification_outcome>"` (e.g. `"promoted_committed"`,
+///     `"promoted_rejected"`), `kernel_verified` true iff the outcome is
+///     literally `"committed"` (the terminal success value action_attempts
+///     uses — see `interactive_proof_reconstructed_scripts`'s CHECK
+///     constraint in schema_v1.rs and `do_proof_session_promote_to_attempt`).
+///   - a reconstruction exists but none was ever promoted: `"reconstructed_not_promoted"`.
+///   - no reconstruction and the session is closed: `"closed_without_promotion_<close_reason>"`.
+///   - otherwise (open, nothing reconstructed yet): `"search_in_progress"`.
+/// Deliberately never reads `is_solved`/`reports_complete` — see the module doc.
+fn interactive_session_final_outcome(bundle: &InteractiveSessionBundle) -> (String, bool) {
+    if let Some(promoted) = bundle.reconstructions.iter().find(|r| r.verified_attempt_id.is_some()) {
+        let outcome = promoted.verification_outcome.clone().unwrap_or_else(|| "unknown".to_string());
+        let kernel_verified = outcome == "committed";
+        (format!("promoted_{}", outcome), kernel_verified)
+    } else if !bundle.reconstructions.is_empty() {
+        ("reconstructed_not_promoted".to_string(), false)
+    } else if bundle.session.state == "closed" {
+        (format!("closed_without_promotion_{}", bundle.session.close_reason.as_deref().unwrap_or("closed")), false)
+    } else {
+        ("search_in_progress".to_string(), false)
+    }
+}
+
+/// The real, kernel-submitted proof text for `obligation_id` within
+/// `episode_id`, read from the SAME `trajectory_events` `action_committed`
+/// rows (`accepted == true && outcome == "kernel_pass"`) that
+/// `render_proof_export`'s own `winning_proof` map is built from for the
+/// whole-proof path — NOT `action_attempts.submitted_action_json`, which
+/// this codebase's runtime never actually populates (only a test fixture in
+/// `phase11_dataset_tests.rs` sets it; `dataset::export_sft`/`export_dpo`
+/// reading that column is a separate, pre-existing gap outside this issue's
+/// scope). This is the one durable, populated source of a real (non-hash)
+/// verified proof body, so `render_proof_export`'s own `winning_proof`
+/// computation and this function deliberately use the identical
+/// `action_committed`/`accepted`/`kernel_pass` criteria. Only call this once
+/// a reconstruction's `verified_attempt_id` is actually set (never promoted
+/// => `None` without calling this) — matched by construction, not enforced
+/// here, since `promote_to_attempt` targets THIS session's own
+/// `obligation_id` and no other route can commit a Solve/SubmitModule for it.
+fn interactive_verified_proof_text_for_obligation(
+    conn: &Connection, episode_id: Uuid, obligation_id: Uuid,
+) -> Result<Option<String>, McpError> {
+    let mut stmt = conn.prepare(
+        "SELECT payload_json FROM trajectory_events WHERE episode_id = ?1 AND event_type = 'action_committed' ORDER BY event_sequence_number ASC"
+    ).map_err(rs)?;
+    let payloads: Vec<String> = stmt.query_map([episode_id.to_string()], |row| row.get(0)).map_err(rs)?
+        .collect::<Result<Vec<_>, _>>().map_err(rs)?;
+    let obligation_id_str = obligation_id.to_string();
+    for p in payloads {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&p) else { continue };
+        if v["obligation_id"].as_str() != Some(obligation_id_str.as_str()) { continue; }
+        if v["accepted"].as_bool() != Some(true) || v["outcome"].as_str() != Some("kernel_pass") { continue; }
+        let action = &v["action"];
+        let text = match action["type"].as_str() {
+            Some("solve") => action["proof_term"].as_str().map(|s| s.to_string()),
+            Some("submit_module") => action["root_theorem"]["proof_term"].as_str().map(|s| s.to_string()),
+            _ => None,
+        };
+        if text.is_some() {
+            return Ok(text);
+        }
+    }
+    Ok(None)
+}
+
+/// `public_summary`'s interactive-sessions view: session count, backend kind,
+/// step counts, branch count, final outcome, and high-level failure
+/// categories ONLY — per the issue's exact list. Never touches
+/// `tactic_text_hash`/`diagnostics_hash`/`diagnostic_json`/`proof_state_hash`/
+/// raw tactic or goal text; the ONLY diagnostic content surfaced is the safe
+/// structural category from `interactive_step_failure_category`. Requires no
+/// gate (same as the rest of public_summary): it never carries a proof body
+/// or tactic text, so it is safe unconditionally.
+fn interactive_sessions_public_summary_json(bundles: &[InteractiveSessionBundle]) -> serde_json::Value {
+    let sessions: Vec<serde_json::Value> = bundles.iter().map(|b| {
+        let (applied, failed) = interactive_step_outcome_counts(&b.steps);
+        let (outcome_label, kernel_verified) = interactive_session_final_outcome(b);
+        let mut failure_categories: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+        for s in &b.steps {
+            if s.outcome == "failed" {
+                *failure_categories.entry(interactive_step_failure_category(&s.diagnostic_json)).or_insert(0) += 1;
+            }
+        }
+        // Issue #165: aggregate label NAME counts only — no tactic/goal text,
+        // matching the same safety bar `failure_categories` above already
+        // meets (structural signal only). See `interactive_session_step_labels`.
+        let mut progress_label_counts: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+        for labels in interactive_session_step_labels(b).values() {
+            for l in &labels.labels {
+                *progress_label_counts.entry(l.clone()).or_insert(0) += 1;
+            }
+        }
+        serde_json::json!({
+            "session_id": b.session.id.to_string(),
+            "backend_kind": b.session.backend_kind,
+            "state": b.session.state,
+            "step_count": {"applied": applied, "failed": failed, "total": applied + failed},
+            "branch_count": interactive_branch_count(&b.nodes),
+            "final_outcome": outcome_label,
+            "kernel_verified": kernel_verified,
+            "failure_categories": failure_categories,
+            "progress_label_counts": progress_label_counts,
+        })
+    }).collect();
+    serde_json::json!({
+        "session_count": bundles.len(),
+        "sessions": sessions,
+        "proof_body_redacted": true,
+        "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
+    })
+}
+
+/// `audit_archive`'s interactive-sessions markdown section: full trace
+/// (every node and every step, applied AND failed — nothing filtered),
+/// hashes, reconstructed proof artifacts, and linkage to the final
+/// verification attempt. Only reachable already gated the same way the rest
+/// of `audit_archive` is (`ExportMode::exposes_proof_body` is true for this
+/// mode, so the caller already required `allow_putnambench_proof_export` for
+/// a benchmark-linked episode before this function is ever invoked) — so,
+/// like the rest of `audit_archive`, this shows FAILED steps' real tactic
+/// text and full diagnostic (the one case raw tactic text is durably
+/// persisted at all — see `interactive_step_failure_category`'s doc).
+fn render_interactive_sessions_markdown(conn: &Connection, bundles: &[InteractiveSessionBundle]) -> Result<String, McpError> {
+    if bundles.is_empty() {
+        return Ok(String::new());
+    }
+    let short = |s: &str| -> String { s.chars().take(10).collect() };
+    let mut md = String::new();
+    md.push_str("\n## Interactive proof sessions (issue #164)\n\n");
+    md.push_str(&format!("{} interactive session(s) recorded against this episode's obligation(s).\n\n", bundles.len()));
+    for (i, b) in bundles.iter().enumerate() {
+        let (outcome_label, kernel_verified) = interactive_session_final_outcome(b);
+        md.push_str(&format!(
+            "### Session {} — `{}`\n\n- backend: `{}` (version: {})\n- obligation: `{}`\n- state: {}{}\n- environment_hash: `{}`\n- import_manifest_hash: `{}`\n- created_at: {}\n- final outcome: **{}** (kernel_verified: {})\n\n",
+            i + 1, b.session.id,
+            b.session.backend_kind, b.session.backend_version.as_deref().unwrap_or("—"),
+            b.session.obligation_id,
+            b.session.state, b.session.close_reason.as_ref().map(|r| format!(" ({})", r)).unwrap_or_default(),
+            b.session.environment_hash.as_deref().unwrap_or("—"),
+            b.session.import_manifest_hash.as_deref().unwrap_or("—"),
+            b.session.created_at.to_rfc3339(),
+            outcome_label, kernel_verified,
+        ));
+
+        md.push_str("**Nodes** (raw backend payload hash: not captured by any current backend — see `ProofStateObservation.raw_backend_payload_hash`'s doc; not a persisted column on `interactive_proof_nodes`):\n\n");
+        md.push_str("| node | parent | depth | kind | status | proof_state_hash |\n|---|---|---|---|---|---|\n");
+        for n in &b.nodes {
+            md.push_str(&format!(
+                "| `{}` | {} | {} | {} | {} | `{}` |\n",
+                short(&n.id.to_string()),
+                n.parent_node_id.map(|p| format!("`{}`", short(&p.to_string()))).unwrap_or_else(|| "—".to_string()),
+                n.depth, n.node_kind, n.status, short(&n.proof_state_hash),
+            ));
+        }
+
+        // Issue #165: same per-step label set every other surface derives —
+        // see `interactive_session_step_labels`'s doc.
+        let step_labels = interactive_session_step_labels(b);
+
+        md.push_str("\n**Steps** (every `apply_tactic` call, applied AND failed — never filtered):\n\n");
+        md.push_str("| step | parent | child | outcome | tactic_text_hash | diagnostics_hash | wall_time_ms | progress_labels (issue #165, heuristic training hints — never proof authority) |\n|---|---|---|---|---|---|---|---|\n");
+        for s in &b.steps {
+            let labels_str = step_labels.get(&s.id).map(|l| l.labels.join(", ")).unwrap_or_default();
+            md.push_str(&format!(
+                "| `{}` | `{}` | {} | {} | `{}` | {} | {} | {} |\n",
+                short(&s.id.to_string()), short(&s.parent_node_id.to_string()),
+                s.child_node_id.map(|c| format!("`{}`", short(&c.to_string()))).unwrap_or_else(|| "—".to_string()),
+                s.outcome, short(&s.tactic_text_hash),
+                s.diagnostics_hash.as_deref().map(|h| format!("`{}`", short(h))).unwrap_or_else(|| "—".to_string()),
+                s.wall_time_ms.map(|w| w.to_string()).unwrap_or_else(|| "—".to_string()),
+                if labels_str.is_empty() { "—".to_string() } else { labels_str },
+            ));
+        }
+        let failed_steps: Vec<&idb::StepRow> = b.steps.iter().filter(|s| s.outcome == "failed").collect();
+        if !failed_steps.is_empty() {
+            md.push_str("\n**Failed step detail** (real tactic text + full diagnostic — this mode is gated identically to the completed proof body):\n\n");
+            for s in &failed_steps {
+                let diag: serde_json::Value = s.diagnostic_json.as_deref()
+                    .and_then(|j| serde_json::from_str(j).ok()).unwrap_or(serde_json::Value::Null);
+                let tactic_text = diag.get("tactic_text").and_then(|v| v.as_str()).unwrap_or("(not recorded)");
+                let category = diag["diagnostic"]["category"].as_str().unwrap_or("unknown");
+                let message = diag["diagnostic"]["primary_message"].as_str().unwrap_or("");
+                md.push_str(&format!(
+                    "- step `{}`: tactic `{}` — {} — {}\n",
+                    short(&s.id.to_string()), tactic_text.replace('\n', " "), category, message.replace('\n', " "),
+                ));
+            }
+        }
+
+        if !b.reconstructions.is_empty() {
+            md.push_str("\n**Reconstructed proof artifacts:**\n\n");
+            md.push_str("| script | final_node | format | reports_complete | proof_source_hash | verified_attempt_id | verification_outcome | kernel_verified |\n|---|---|---|---|---|---|---|---|\n");
+            for r in &b.reconstructions {
+                let kernel_verified = r.verification_outcome.as_deref() == Some("committed");
+                md.push_str(&format!(
+                    "| `{}` | `{}` | {} | {} | `{}` | {} | {} | {} |\n",
+                    short(&r.id.to_string()), short(&r.final_node_id.to_string()), r.proof_format, r.reports_complete,
+                    short(&r.proof_source_hash),
+                    r.verified_attempt_id.map(|a| format!("`{}`", short(&a.to_string()))).unwrap_or_else(|| "—".to_string()),
+                    r.verification_outcome.as_deref().unwrap_or("—"),
+                    kernel_verified,
+                ));
+            }
+        }
+        md.push_str(&format!("\n> {}\n\n", INTERACTIVE_TRUST_BOUNDARY_NOTICE));
+        let _ = conn; // reserved: kept &Connection for symmetry with training-export's sibling builder, which does query it.
+    }
+    Ok(md)
+}
+
+/// `training_export`'s interactive-sessions view: per-step records (applied
+/// AND failed — failed steps are the negative-space "failed routes" the
+/// issue asks training_export to include, tagged `negative_example: true`),
+/// plus per-reconstruction linkage to the final verification attempt
+/// (`verified_proof_text` populated ONLY when `verified_attempt_id` is set —
+/// see `interactive_verified_attempt_proof_text`'s doc). Only reachable
+/// already gated the same way the rest of `training_export` is (see
+/// `render_interactive_sessions_markdown`'s doc for the identical reasoning).
+fn interactive_sessions_training_json(conn: &Connection, bundles: &[InteractiveSessionBundle]) -> Result<serde_json::Value, McpError> {
+    let mut sessions_json = Vec::with_capacity(bundles.len());
+    for b in bundles {
+        let (outcome_label, kernel_verified) = interactive_session_final_outcome(b);
+        // Issue #165: THE primary training-export consumer of the labeling
+        // function — see `interactive_session_step_labels`'s doc. Computed
+        // once per session and looked up per step below.
+        let step_labels = interactive_session_step_labels(b);
+
+        let steps_json: Vec<serde_json::Value> = b.steps.iter().map(|s| {
+            let negative = s.outcome == "failed";
+            let (tactic_text, diagnostic_val) = if negative {
+                let diag_val: serde_json::Value = s.diagnostic_json.as_deref()
+                    .and_then(|j| serde_json::from_str(j).ok()).unwrap_or(serde_json::Value::Null);
+                let raw = diag_val.get("tactic_text").and_then(|v| v.as_str()).map(|s| s.to_string());
+                (raw, diag_val)
+            } else {
+                (None, serde_json::Value::Null)
+            };
+            let (progress_labels, failure_category) = step_labels.get(&s.id)
+                .map(|l| (l.labels.clone(), l.failure_category.clone()))
+                .unwrap_or((vec![], None));
+            serde_json::json!({
+                "step_id": s.id.to_string(),
+                "parent_node_id": s.parent_node_id.to_string(),
+                "child_node_id": s.child_node_id.map(|u| u.to_string()),
+                "outcome": s.outcome,
+                "negative_example": negative,
+                "tactic_text_hash": s.tactic_text_hash,
+                // Real text only for a failed step — the one case it is
+                // durably persisted; None for an applied step by design (#161).
+                "tactic_text": tactic_text,
+                "diagnostic": diagnostic_val,
+                "wall_time_ms": s.wall_time_ms,
+                "created_at": s.created_at.to_rfc3339(),
+                // Issue #165: heuristic training hints — see
+                // `compute_step_progress_labels`'s trust-boundary doc.
+                // `failure_category` mirrors `diagnostic.diagnostic.category`
+                // above for a failed step (same `LeanDiagnosticCategory`
+                // value, via `interactive_step_failure_category`), `null` for
+                // an applied step.
+                "progress_labels": progress_labels,
+                "failure_category": failure_category,
+            })
+        }).collect();
+
+        let mut reconstructions_json = Vec::with_capacity(b.reconstructions.len());
+        for r in &b.reconstructions {
+            let verified_proof_text = match r.verified_attempt_id {
+                Some(_) => interactive_verified_proof_text_for_obligation(conn, b.session.episode_id, b.session.obligation_id)?,
+                None => None,
+            };
+            reconstructions_json.push(serde_json::json!({
+                "reconstructed_script_id": r.id.to_string(),
+                "final_node_id": r.final_node_id.to_string(),
+                "proof_format": r.proof_format,
+                "reports_complete": r.reports_complete,
+                "proof_source_hash": r.proof_source_hash,
+                "tactic_path_ids": serde_json::from_str::<serde_json::Value>(&r.tactic_path_ids_json)
+                    .unwrap_or(serde_json::Value::Array(vec![])),
+                "verified_attempt_id": r.verified_attempt_id.map(|u| u.to_string()),
+                "verification_outcome": r.verification_outcome,
+                // Trust boundary, spelled out at the field level: true ONLY
+                // when verification_outcome is literally "committed" — never
+                // inferred from reports_complete above.
+                "kernel_verified": r.verification_outcome.as_deref() == Some("committed"),
+                "verified_proof_text": verified_proof_text,
+            }));
+        }
+
+        sessions_json.push(serde_json::json!({
+            "session_id": b.session.id.to_string(),
+            "episode_id": b.session.episode_id.to_string(),
+            "obligation_id": b.session.obligation_id.to_string(),
+            "backend_kind": b.session.backend_kind,
+            "backend_version": b.session.backend_version,
+            "state": b.session.state,
+            "close_reason": b.session.close_reason,
+            "node_count": b.nodes.len(),
+            "branch_count": interactive_branch_count(&b.nodes),
+            "step_count": b.steps.len(),
+            "steps": steps_json,
+            "reconstructions": reconstructions_json,
+            // Trust boundary, restated once more at the session level — see
+            // this section's module-doc-style comment.
+            "trust_boundary_outcome": outcome_label,
+            "kernel_verified": kernel_verified,
+            "trust_boundary": INTERACTIVE_TRUST_BOUNDARY_NOTICE,
+        }));
+    }
+    Ok(serde_json::json!({
+        "session_count": bundles.len(),
+        "sessions": sessions_json,
     }))
 }
 
@@ -4267,6 +5295,11 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
             [episode_id], |row| row.get(0),
         ).optional().map_err(rs)?.unwrap_or(false);
         let formal_target_matched = fidelity_status == "benchmark_aligned" || has_canonical_basis;
+        // Issue #164: interactive-session summary — never gated (like the
+        // rest of public_summary) since it never carries a proof body or
+        // tactic text; see interactive_sessions_public_summary_json's doc.
+        let interactive_bundles = gather_interactive_sessions(conn, episode_id)?;
+        let interactive_sessions = interactive_sessions_public_summary_json(&interactive_bundles);
         let res = serde_json::json!({
             "mode": "public_summary",
             // Issue #70: machine-checkable — this mode never carries a proof body.
@@ -4290,6 +5323,7 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
             "trajectory_event_count": event_count,
             "trajectory_first_hash": first_hash,
             "trajectory_last_hash": last_hash,
+            "interactive_sessions": interactive_sessions,
         });
         return Ok(serde_json::to_string_pretty(&res).unwrap());
     }
@@ -4331,6 +5365,23 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
             })
         }).collect();
 
+        // Issue #164: interactive-session negative-space records (failed AND
+        // applied tactic steps, via dataset::export_interactive_rl — the
+        // SAME RL-tuple shape `records` above already uses for the
+        // whole-proof path) plus session/reconstruction-level summary
+        // (linkage to the final verification attempt, trust-boundary
+        // labeling). Already gated identically to `records` above: this
+        // whole branch is only reached once the caller-level
+        // allow_putnambench_proof_export check has passed for a
+        // benchmark-linked episode (TrainingExport.exposes_proof_body() ==
+        // true), so failed steps' real tactic text is safe to include here
+        // the same way `records`' solve proof_term already is.
+        let interactive_records = dataset::export_interactive_rl(conn, ep_uuid).map_err(mcp_internal_error)?;
+        let interactive_record_values: Vec<serde_json::Value> = interactive_records.iter()
+            .map(|r| serde_json::to_value(r).unwrap()).collect();
+        let interactive_bundles = gather_interactive_sessions(conn, episode_id)?;
+        let interactive_sessions = interactive_sessions_training_json(conn, &interactive_bundles)?;
+
         let mut envelope = serde_json::json!({
             // Issue #70: machine-checkable — RL records carry proof/tactic content.
             "proof_body_redacted": false,
@@ -4341,9 +5392,12 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
                 "total_layer_count": layer_rows.len(),
                 "layers": layers,
             },
+            "interactive_session_records": interactive_record_values,
+            "interactive_sessions": interactive_sessions,
         });
-        // One recursive scrub over the whole envelope (records + layer metadata)
-        // strips any credential-shaped keys.
+        // One recursive scrub over the whole envelope (records + layer
+        // metadata + interactive-session records) strips any
+        // credential-shaped keys.
         trajectories::scrub_value(&mut envelope);
         return Ok(serde_json::to_string_pretty(&envelope).unwrap());
     }
@@ -4590,6 +5644,20 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
         for a in &attempts {
             md.push_str(&format!("| {} | `{}` | {} | {} | {} |\n", a.seq, a.obligation_name, a.action_type, a.detail.replace('|', "\\|"), a.verdict));
         }
+    }
+
+    // Issue #164: interactive proof-session sections — full trace, hashes,
+    // reconstructed proof artifacts, and linkage to the final verification
+    // attempt — ONLY for audit_archive (the mode the issue explicitly asks
+    // to carry this). See render_interactive_sessions_markdown's doc: this
+    // whole export already required allow_putnambench_proof_export for a
+    // benchmark-linked episode before reaching this function
+    // (ExportMode::exposes_proof_body() is true for AuditArchive), so
+    // failed steps' real tactic text is safe here the same way the rest of
+    // this dossier's proof body already is.
+    if mode == ExportMode::AuditArchive {
+        let interactive_bundles = gather_interactive_sessions(conn, episode_id)?;
+        md.push_str(&render_interactive_sessions_markdown(conn, &interactive_bundles)?);
     }
 
     // Verification context: the export is a receipt, so it must state exactly
@@ -4846,6 +5914,17 @@ pub struct ChatDbMcp {
     /// pinned Mathlib source tree at `<lean_project_path>/.lake/packages/mathlib/Mathlib`
     /// (or the legacy `lake-packages/` layout) — read-only, no Lean invocation.
     pub lean_project_path: PathBuf,
+    /// Issue #161: the live backend for `proof_session_*` tools (#159's
+    /// `InteractiveProofGateway`). `Arc`, not `Box`, because it must be the
+    /// SAME instance across separate MCP calls — `start_session` and a later
+    /// `apply_tactic` on the same session are two separate `call_tool`
+    /// invocations, and `MockInteractiveGateway`'s live session map (an
+    /// in-memory `Mutex<HashMap<...>>`) would silently lose every session if
+    /// a fresh gateway were constructed per call. No real (e.g. Pantograph)
+    /// backend is wired in by this issue — see the module doc on
+    /// `crate::lean::interactive`; `MockInteractiveGateway` is what
+    /// `ChatDbMcp::new` installs today.
+    pub interactive_gateway: Arc<dyn InteractiveProofGateway + Send + Sync>,
 }
 
 impl ChatDbMcp {
@@ -4855,7 +5934,1564 @@ impl ChatDbMcp {
         let lean_environment = proofsearch_core::lean::detect_environment(&lean_project_path);
         let stored_lean_project_path = lean_project_path.clone();
         let gateway = Box::new(RealLeanGateway::new(lean_project_path, elan_bin_path));
-        Self { conn, gateway, lean_available, lean_environment, lean_project_path: stored_lean_project_path }
+        let interactive_gateway = Arc::new(MockInteractiveGateway::new());
+        Self { conn, gateway, lean_available, lean_environment, lean_project_path: stored_lean_project_path, interactive_gateway }
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #161: `do_attempt_claim`/`do_episode_step` are the ORIGINAL
+    // `"attempt_claim"`/`"episode_step"` match-arm bodies from `call_tool`,
+    // moved here verbatim (behavior is byte-for-byte unchanged — this is a
+    // pure extraction, not a rewrite) so `proof_session_promote_to_attempt`
+    // can invoke the exact same internal path a normal
+    // attempt_claim+episode_step round trip uses, instead of a shortcut that
+    // reimplements or bypasses it. `call_tool`'s `"attempt_claim"` /
+    // `"episode_step"` arms now just delegate to these two methods.
+    // -----------------------------------------------------------------
+
+    async fn do_attempt_claim(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: AttemptClaimArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let ep_uuid = Uuid::parse_str(&args.episode_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid episode Uuid: {}", e)))?;
+        let req_uuid = Uuid::parse_str(&args.action_request_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid action_request Uuid: {}", e)))?;
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        attempts::attempt_recover_expired(&tx).map_err(rs)?;
+        attempts::request_recover_expired(&tx, ep_uuid).map_err(rs)?;
+
+        let ep_state: Option<String> = tx.query_row(
+            "SELECT state FROM episodes WHERE id = ?1", [&args.episode_id], |row| row.get(0)
+        ).optional().map_err(rs)?;
+        match ep_state.as_deref() {
+            None => return Err(mcp_invalid_params(format!("unknown episode_id: {}", args.episode_id))),
+            Some("terminated") | Some("truncated") => return Err(mcp_invalid_params(format!(
+                "episode {} is {} — create a new episode (episode_create) or fork it (episode_reset)",
+                args.episode_id, ep_state.as_deref().unwrap()
+            ))),
+            _ => {}
+        }
+
+        let claim = attempts::attempt_claim(&tx, ep_uuid, req_uuid, &args.idempotency_key, args.expected_revision)
+            .map_err(rs)?;
+
+        match claim {
+            Some(c) => {
+                tx.commit().map_err(rs)?;
+                let res = serde_json::json!({
+                    "action_attempt_id": c.attempt_id.to_string(),
+                    "claim_token": c.claim_token,
+                    // #157: make the claim's deadline visible. A step queued
+                    // past this instant may find the claim expired; if the
+                    // request is still untaken, episode_step revives it
+                    // transparently — only a superseded claim hard-fails.
+                    "claim_expiration": c.claim_expiration,
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+            }
+            None => {
+                // Diagnose exactly why the claim was refused instead of a bare error.
+                let req_info: Option<(String, Option<String>)> = tx.query_row(
+                    "SELECT status, expiration_at FROM action_requests WHERE id = ?1 AND episode_id = ?2",
+                    (&args.action_request_id, &args.episode_id),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).optional().map_err(rs)?;
+
+                let key_used: Option<String> = tx.query_row(
+                    "SELECT status FROM action_attempts WHERE episode_id = ?1 AND idempotency_key = ?2",
+                    (&args.episode_id, &args.idempotency_key),
+                    |row| row.get(0),
+                ).optional().map_err(rs)?;
+
+                let msg = if let Some(attempt_status) = key_used {
+                    if attempt_status == "expired" {
+                        // #157: an expired attempt whose request is still
+                        // 'pending' is revived by attempt_claim itself and
+                        // never reaches this refusal — landing here means
+                        // the request was taken by another attempt.
+                        format!(
+                            "idempotency_key '{}' belongs to an expired claim whose action request was since claimed or fulfilled by another attempt — call episode_observe and re-claim with a fresh idempotency_key",
+                            args.idempotency_key
+                        )
+                    } else {
+                        format!(
+                            "idempotency_key '{}' was already used by an attempt now in state '{}' — retry with a fresh idempotency_key",
+                            args.idempotency_key, attempt_status
+                        )
+                    }
+                } else {
+                    match req_info {
+                        None => format!("unknown action_request_id {} for episode {} — call episode_observe for the current request", args.action_request_id, args.episode_id),
+                        Some((status, exp)) => match status.as_str() {
+                            "claimed" => "request is currently claimed by another attempt (claims auto-expire ~5 min after issue and are recovered on the next observe/claim) — call episode_observe and retry".to_string(),
+                            "fulfilled" => "request was already fulfilled by a committed step — call episode_observe for the next request".to_string(),
+                            "expired" | "cancelled" => format!(
+                                "action request {}{} — call episode_observe for the current request",
+                                status,
+                                exp.map(|e| format!(" (expired at {})", e)).unwrap_or_default()
+                            ),
+                            other => format!("request is in state '{}' and not claimable — call episode_observe", other),
+                        },
+                    }
+                };
+                Err(mcp_invalid_params(msg))
+            }
+        }
+    }
+
+    async fn do_episode_step(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: EpisodeStepArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!(
+                "Invalid params: {}. `action` must be one of: {{\"type\":\"solve\",\"proof_term\":\"  norm_num\"}} | {{\"type\":\"decompose\",\"sub_lemmas\":[\"...\"]}} | {{\"type\":\"submit_module\",\"module_items\":[{{\"item_kind\":\"def\",\"name\":\"f\",\"type_signature\":\"Nat → Nat\",\"body\":\"fun n => n\"}}],\"root_theorem\":{{\"name\":\"root\",\"statement\":\"<must hash-match registered root>\",\"proof_term\":\"  rfl\"}}}} | {{\"type\":\"give_up\"}} (see environment_describe.action_schema)", e
+            )))?;
+
+        if args.cost_micros < 0 {
+            return Err(mcp_invalid_params("invalid_cost: cost_micros must be >= 0"));
+        }
+
+        let ep_uuid = Uuid::parse_str(&args.episode_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid episode Uuid: {}", e)))?;
+
+        let attempt_uuid = Uuid::parse_str(&args.action_attempt_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid attempt Uuid: {}", e)))?;
+
+        let mut conn = self.conn.lock().await;
+
+        // Everything that touches `tx1` lives in this block and the block ends
+        // (dropping `tx1`) before any `.await` — a `Transaction` borrows from
+        // `Connection`, which is `!Sync` (hence `!Send`), so it must be
+        // LEXICALLY out of scope, not merely logically unused, before crossing
+        // an await point in an async fn (the generator transform otherwise
+        // reserves state for it and the whole future stops being `Send`).
+        // `conn` itself is only ever mutably BORROWED by `tx1.transaction()`,
+        // never moved, so it's still ours to use/drop once this block ends.
+        enum Prepared {
+            Resolved(PostProcessing),
+            NeedsGateway { request: step::GatewayRequest, ctx: step::FinalizeContext },
+        }
+        let (prepared, target_obligation_id, state_hash_before) = {
+            let tx1 = conn.transaction().map_err(rs)?;
+            attempts::attempt_recover_expired(&tx1).map_err(rs)?;
+
+            // Capture what this attempt targets before attempt_prepare mutates
+            // state, so the trajectory payload reflects what was actually acted on.
+            let action_request_id: Option<String> = tx1.query_row(
+                "SELECT action_request_id FROM action_attempts WHERE id = ?1",
+                [args.action_attempt_id.clone()],
+                |row| row.get(0),
+            ).optional().map_err(rs)?;
+            let target_obligation_id: Option<String> = match &action_request_id {
+                Some(rid) => tx1.query_row(
+                    "SELECT target_obligation_id FROM action_requests WHERE id = ?1",
+                    [rid], |row| row.get::<_, Option<String>>(0),
+                ).optional().map_err(rs)?.flatten(),
+                None => None,
+            };
+            let state_hash_before: String = match &action_request_id {
+                Some(rid) => tx1.query_row(
+                    "SELECT state_hash_before FROM action_requests WHERE id = ?1",
+                    [rid], |row| row.get::<_, Option<String>>(0),
+                ).optional().map_err(rs)?.flatten().unwrap_or_else(|| "GENESIS".to_string()),
+                None => "GENESIS".to_string(),
+            };
+
+            // Two-phase commit: `attempt_prepare` validates the attempt/claim/CAS
+            // and either (a) fully executes a non-Lean action (Decompose / GiveUp /
+            // ExternalResponseRejected / a policy-rejected SubmitModule) within
+            // tx1, or (b) marks the attempt 'executing' and returns exactly what's
+            // needed to call the Lean gateway — WITHOUT calling it. Case (b) is why
+            // this is split: the gateway call (up to 60-120s) must never run while
+            // the DB mutex (`self.conn`) is held, or every other concurrent tool
+            // call on this session blocks on it for the duration.
+            let prep_res = step::attempt_prepare(
+                &tx1, attempt_uuid, args.expected_revision, &args.claim_token, &args.action, args.cost_micros as i128,
+            );
+
+            let prepared = match prep_res {
+                Err(e) => {
+                    let post = run_step_post_processing(
+                        &tx1, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
+                        Err(e), &target_obligation_id, &state_hash_before,
+                    )?;
+                    tx1.commit().map_err(rs)?;
+                    Prepared::Resolved(post)
+                }
+                Ok(step::PrepOutcome::Done { outcome, .. }) => {
+                    settle_reserved_model_call_leases_for_attempt(
+                        &tx1,
+                        &args.episode_id,
+                        &args.action_attempt_id,
+                        args.cost_micros,
+                    )?;
+                    let post = run_step_post_processing(
+                        &tx1, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
+                        Ok(outcome), &target_obligation_id, &state_hash_before,
+                    )?;
+                    tx1.commit().map_err(rs)?;
+                    Prepared::Resolved(post)
+                }
+                Ok(step::PrepOutcome::NeedsGateway { request, ctx }) => {
+                    settle_reserved_model_call_leases_for_attempt(
+                        &tx1,
+                        &args.episode_id,
+                        &args.action_attempt_id,
+                        args.cost_micros,
+                    )?;
+                    tx1.commit().map_err(rs)?; // commit prepare-only writes (mark-executing, attempt_count)
+                    Prepared::NeedsGateway { request, ctx }
+                }
+            };
+            (prepared, target_obligation_id, state_hash_before)
+        }; // tx1 fully out of scope here — safe to cross an .await below.
+
+        let post = match prepared {
+            Prepared::Resolved(post) => post,
+            Prepared::NeedsGateway { request, ctx } => {
+                drop(conn); // RELEASE THE LOCK — no other tool call is blocked while Lean runs.
+
+                let response = match request {
+                    step::GatewayRequest::Solve { obl, proof_term, proof_format, dep_ids, env_hash, import_manifest } => {
+                        step::GatewayResponse::Solve(self.gateway.verify_exact(&obl, &proof_term, &dep_ids, &env_hash, &import_manifest, proof_format))
+                    }
+                    step::GatewayRequest::SubmitModule { assembled, env_hash } => {
+                        step::GatewayResponse::SubmitModule(self.gateway.verify_module(&assembled, &env_hash))
+                    }
+                };
+
+                conn = self.conn.lock().await; // reacquire
+                let post = {
+                    let tx2 = conn.transaction().map_err(rs)?;
+                    let finalize_res = step::attempt_finalize(&tx2, attempt_uuid, &args.claim_token, args.cost_micros as i128, ctx, response);
+                    let post = run_step_post_processing(
+                        &tx2, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
+                        finalize_res, &target_obligation_id, &state_hash_before,
+                    )?;
+                    tx2.commit().map_err(rs)?;
+                    post
+                }; // tx2 out of scope here too.
+                post
+            }
+        };
+
+        let PostProcessing { disposition, accepted, error_msg, outcome_enum, term_reason, trunc_reason, next_req_id } = post;
+        let is_terminated = term_reason.is_some();
+        let is_truncated = trunc_reason.is_some();
+
+        // Calculate reward. `accepted` doubles as "not a Lean kernel_fail" for
+        // Solve/SubmitModule and as a generic accept/reject signal for
+        // Decompose/GiveUp — only treat it as a proof-verification result
+        // (kernel_pass/kernel_fail reward) for an actual verification action.
+        let is_verification_action = matches!(args.action, TypedAction::Solve { .. } | TypedAction::SubmitModule { .. });
+        let mut reward_components = Vec::new();
+        let policy = RewardPolicy::default_policy();
+        if disposition == StepDisposition::Accepted {
+            reward_components.push(RewardComponent {
+                id: RewardComponentId::StepPenalty,
+                value_scaled: policy.step_penalty,
+            });
+            if is_verification_action && accepted {
+                reward_components.push(RewardComponent {
+                    id: RewardComponentId::KernelPass,
+                    value_scaled: policy.kernel_pass,
+                });
+            } else if is_verification_action && !is_terminated {
+                reward_components.push(RewardComponent {
+                    id: RewardComponentId::KernelFail,
+                    value_scaled: policy.kernel_fail,
+                });
+            }
+        }
+        if outcome_enum == Some(EpisodeOutcome::Certified) || outcome_enum == Some(EpisodeOutcome::KernelVerified) {
+            // Real work either way: the prover proved exactly the formal
+            // statement it was given. Composite success (TerminalSuccess) is
+            // reserved for when fidelity is ALSO verified — never award it for
+            // a kernel_verified-but-not-certified outcome, or a prover that
+            // faithfully proved a bad formalization looks identical to one
+            // that solved the real problem.
+            reward_components.push(RewardComponent {
+                id: RewardComponentId::RootKernelVerified,
+                value_scaled: policy.root_kernel_verified,
+            });
+            if outcome_enum == Some(EpisodeOutcome::Certified) {
+                reward_components.push(RewardComponent {
+                    id: RewardComponentId::TerminalSuccess,
+                    value_scaled: policy.terminal_success,
+                });
+            }
+        } else if is_truncated {
+            reward_components.push(RewardComponent {
+                id: RewardComponentId::TruncationPenalty,
+                value_scaled: policy.truncation_penalty,
+            });
+        }
+
+        let next_action_request = if let Some(req_id) = next_req_id {
+            Some(query_action_request(&conn, req_id).map_err(rs)?)
+        } else {
+            None
+        };
+
+        let observation = if let Some(ref req) = next_action_request {
+            let obs_json: Option<String> = conn.query_row(
+                "SELECT observation_json FROM action_requests WHERE id = ?1",
+                [req.id.to_string()],
+                |row| row.get(0),
+            ).optional().map_err(rs)?.flatten();
+            obs_json.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(serde_json::Value::Null)
+        } else {
+            serde_json::Value::Null
+        };
+
+        // A rejected verification action (a kernel-failed Solve, or a
+        // module refused by policy or the staged kernel) preserves its
+        // reason as the obligation's failure_lesson. Surface it directly on
+        // the step response so a client gets structured feedback about WHY
+        // the draft was rejected without a second observe round-trip — the
+        // module trust boundary demands the rejection be legible, not silent.
+        let rejection_diagnostic: Option<String> = if is_verification_action
+            && disposition == StepDisposition::Accepted && !accepted {
+            match &target_obligation_id {
+                Some(oid) => conn.query_row(
+                    "SELECT failure_lesson FROM episode_obligations WHERE id = ?1",
+                    [oid], |row| row.get::<_, Option<String>>(0),
+                ).optional().map_err(rs)?.flatten(),
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        let res = serde_json::json!({
+            "accepted": accepted,
+            "disposition": disposition,
+            "counts_as_environment_step": disposition == StepDisposition::Accepted,
+            "reward": reward_components,
+            "outcome": outcome_enum,
+            "termination_reason": term_reason,
+            "truncation_reason": trunc_reason,
+            "diagnostics": error_msg,
+            "rejection_diagnostic": rejection_diagnostic,
+            "next_action_request": next_action_request,
+            "observation": observation
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #161: interactive (tactic-by-tactic) proof-state sessions.
+    // Every response includes `trust_boundary` — see
+    // `INTERACTIVE_TRUST_BOUNDARY_NOTICE`'s doc comment. Only
+    // `do_proof_session_promote_to_attempt` can affect an obligation's
+    // status, and it does so ENTIRELY by calling `do_attempt_claim` /
+    // `do_episode_step` above — the same internal path a normal
+    // attempt_claim + episode_step round trip uses.
+    // -----------------------------------------------------------------
+
+    async fn do_proof_session_start(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofSessionStartArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        // Issue #166: "pantograph" is now a recognized backend VALUE — but
+        // recognizing the string is not the same as it being usable. Every
+        // "pantograph" session start is routed to a real
+        // PantographInteractiveGateway (see below), which performs a
+        // genuine PATH/lake-manifest/toolchain probe of this environment
+        // and, since Pantograph is not installed here, fails closed with a
+        // clear, structured reason — never a panic, never silently treated
+        // as "mock". "mock"'s own behavior below is completely unchanged.
+        if args.backend != "mock" && args.backend != "pantograph" {
+            return Err(mcp_invalid_params(format!(
+                "unsupported backend '{}' — must be \"mock\" or \"pantograph\" (pantograph is a prototype adapter that \
+                 fails closed unless a compatible installation is detected in this environment — see environment_describe's \
+                 pantograph_available capability flag for why)",
+                args.backend
+            )));
+        }
+
+        let ep_uuid = Uuid::parse_str(&args.episode_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid episode Uuid: {}", e)))?;
+        let obl_uuid = Uuid::parse_str(&args.obligation_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid obligation Uuid: {}", e)))?;
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+
+        let current_revision: Option<i64> = tx.query_row(
+            "SELECT current_revision FROM episodes WHERE id = ?1", [&args.episode_id], |row| row.get(0),
+        ).optional().map_err(rs)?;
+        let current_revision = current_revision
+            .ok_or_else(|| mcp_invalid_params(format!("unknown episode_id: {}", args.episode_id)))?;
+        if current_revision != args.expected_revision {
+            return Err(mcp_invalid_params(format!(
+                "revision conflict: episode {} is at revision {} but expected_revision was {} — call episode_status for the current revision",
+                args.episode_id, current_revision, args.expected_revision
+            )));
+        }
+        if let Some(expected_hash) = &args.expected_observation_hash {
+            let actual_hash = episode_progress_hash(&tx, &args.episode_id)?;
+            if &actual_hash != expected_hash {
+                return Err(mcp_invalid_params(format!(
+                    "observation hash conflict: episode {}'s current progress hash is {} but expected_observation_hash was {}",
+                    args.episode_id, actual_hash, expected_hash
+                )));
+            }
+        }
+
+        // Requires valid episode/obligation linkage: obligation_id must be a
+        // REAL episode_obligations row belonging to episode_id, not merely
+        // any obligation that happens to exist. Extracted (issue #163, pure
+        // extraction — behavior here is unchanged) into
+        // `build_interactive_session_request` so backend replay can build an
+        // equivalent fresh-session request without duplicating this lookup.
+        let ctx = build_interactive_session_request(&tx, &args.episode_id, &args.obligation_id)?;
+        // Issue #166: "pantograph" is constructed fresh per call rather than
+        // held as a persistent ChatDbMcp field, unlike `interactive_gateway`
+        // (MockInteractiveGateway) — detection is cheap (a few filesystem
+        // stats) and, unlike Mock's live in-memory session map, there is no
+        // live state to lose between calls: every PantographInteractiveGateway
+        // operation is unconditionally Err in this environment (see its own
+        // doc), so nothing is ever gained by sharing one instance.
+        let start = if args.backend == "pantograph" {
+            PantographInteractiveGateway::new(&self.lean_project_path)
+                .start_session(&ctx.request)
+                .map_err(mcp_invalid_params)?
+        } else {
+            self.interactive_gateway.start_session(&ctx.request).map_err(mcp_invalid_params)?
+        };
+
+        let goals: Vec<ProofGoal> = start.initial_state.goals.iter().enumerate()
+            .map(|(i, g)| ProofGoal::from_interactive_goal(i, g)).collect();
+        let proof_state_hash = compute_proof_state_hash(&goals, start.initial_state.tactic_applied.as_deref())
+            .map_err(mcp_internal_error)?;
+        let goals_json = serde_json::to_string(&goals).map_err(|e| mcp_internal_error(e.to_string()))?;
+
+        let session_id = start.session.0;
+        let root_node_id = start.initial_state.node.0;
+        let now = Utc::now();
+        let pv_uuid = ctx.problem_version_id;
+
+        idb::insert_session(&tx, &idb::NewSession {
+            id: session_id, episode_id: ep_uuid, problem_version_id: pv_uuid, obligation_id: obl_uuid,
+            backend_kind: args.backend.clone(), backend_version: None,
+            import_manifest_hash: Some(ctx.import_manifest_hash.clone()), environment_hash: Some(ctx.environment_hash.clone()), created_at: now,
+        }).map_err(rs)?;
+
+        idb::insert_node(&tx, &idb::NewNode {
+            id: root_node_id, session_id, parent_node_id: None, depth: 0, node_kind: "root".to_string(),
+            proof_state_hash: proof_state_hash.full_state_hash.clone(), goals_json,
+            selected_goal_index: if goals.is_empty() { None } else { Some(0) },
+            status: if start.initial_state.is_solved { "solved".to_string() } else { "open".to_string() },
+            created_at: now,
+        }).map_err(rs)?;
+
+        idb::set_session_root_node(&tx, session_id, root_node_id).map_err(rs)?;
+        idb::set_session_selected_node(&tx, session_id, root_node_id).map_err(rs)?;
+        tx.commit().map_err(rs)?;
+
+        let res = serde_json::json!({
+            "session_id": session_id.to_string(),
+            "node_id": root_node_id.to_string(),
+            "episode_id": args.episode_id,
+            "obligation_id": args.obligation_id,
+            "backend": args.backend,
+            "goals": goals,
+            "is_solved": start.initial_state.is_solved,
+            "proof_state_hash": proof_state_hash,
+            "trust_boundary": INTERACTIVE_TRUST_BOUNDARY_NOTICE,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_proof_session_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofSessionObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let session_uuid = Uuid::parse_str(&args.session_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid session Uuid: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let session = idb::get_session(&conn, session_uuid).map_err(rs)?
+            .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", args.session_id)))?;
+
+        let selected_node_id = session.selected_final_node_id.or(session.root_node_id)
+            .ok_or_else(|| mcp_internal_error("session has no root node — internal invariant violated"))?;
+        let node = idb::get_node(&conn, selected_node_id).map_err(rs)?
+            .ok_or_else(|| mcp_internal_error("session's selected node is missing from interactive_proof_nodes"))?;
+
+        let goals: serde_json::Value = serde_json::from_str(&node.goals_json).unwrap_or(serde_json::Value::Array(vec![]));
+
+        let children = idb::list_child_nodes(&conn, session_uuid, selected_node_id).map_err(rs)?;
+        let total_nodes = idb::list_nodes_for_session(&conn, session_uuid).map_err(rs)?.len();
+        let total_steps = idb::count_steps_for_session(&conn, session_uuid).map_err(rs)?;
+        let branch_summary = serde_json::json!({
+            "total_nodes": total_nodes,
+            "total_steps": total_steps,
+            "children_of_selected_node": children.iter().map(|c| serde_json::json!({
+                "node_id": c.id.to_string(), "status": c.status, "depth": c.depth,
+            })).collect::<Vec<_>>(),
+        });
+
+        let reconstructions = idb::list_reconstructed_scripts_for_session(&conn, session_uuid).map_err(rs)?;
+        let available_reconstructions: Vec<serde_json::Value> = reconstructions.iter().map(|r| serde_json::json!({
+            "reconstructed_script_id": r.id.to_string(),
+            "final_node_id": r.final_node_id.to_string(),
+            "reports_complete": r.reports_complete,
+            "verified_attempt_id": r.verified_attempt_id.map(|u| u.to_string()),
+            "verification_outcome": r.verification_outcome,
+        })).collect();
+
+        let res = serde_json::json!({
+            "session_id": args.session_id,
+            "state": session.state,
+            "close_reason": session.close_reason,
+            "episode_id": session.episode_id.to_string(),
+            "obligation_id": session.obligation_id.to_string(),
+            "selected_node_id": selected_node_id.to_string(),
+            "parent_node_id": node.parent_node_id.map(|u| u.to_string()),
+            "goals": goals,
+            "is_solved": node.status == "solved",
+            "proof_state_hash": node.proof_state_hash,
+            "branch_summary": branch_summary,
+            "available_reconstructions": available_reconstructions,
+            "trust_boundary": INTERACTIVE_TRUST_BOUNDARY_NOTICE,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    /// Shared core of `proof_session_tactic_step` and `proof_session_branch`
+    /// (branching is just applying a tactic to a non-current parent node —
+    /// #159's `apply_tactic` already supports that; `proof_session_branch`
+    /// only adds a caller-facing `branch_name` label on top). Returns the
+    /// core response fields WITHOUT `trust_boundary`/`branch_name` — callers
+    /// add those before wrapping into a `CallToolResult`.
+    async fn apply_tactic_core(&self, session_uuid: Uuid, parent_uuid: Uuid, tactic: &str) -> Result<serde_json::Value, McpError> {
+        if tactic.trim().is_empty() {
+            return Err(mcp_invalid_params("tactic must not be empty"));
+        }
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+
+        let session = idb::get_session(&tx, session_uuid).map_err(rs)?
+            .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", session_uuid)))?;
+        if session.state == "closed" {
+            return Err(mcp_invalid_params(format!(
+                "session {} is closed ({}) — start a new session (proof_session_start) to continue interactive work",
+                session_uuid, session.close_reason.as_deref().unwrap_or("closed")
+            )));
+        }
+        let parent_node = idb::get_node(&tx, parent_uuid).map_err(rs)?
+            .ok_or_else(|| mcp_invalid_params(format!("unknown parent_node_id {} in session {}", parent_uuid, session_uuid)))?;
+        if parent_node.session_id != session_uuid {
+            return Err(mcp_invalid_params("parent_node_id does not belong to session_id"));
+        }
+
+        let started = Instant::now();
+        let result = self.interactive_gateway
+            .apply_tactic(InteractiveSessionHandle(session_uuid), ProofStateNodeId(parent_uuid), tactic)
+            .map_err(mcp_invalid_params)?;
+        let wall_time_ms = started.elapsed().as_millis() as i64;
+
+        let now = Utc::now();
+        let step_id = Uuid::new_v4();
+        let tactic_text_hash = hash_tactic_text(tactic).map_err(mcp_internal_error)?;
+
+        let response = match result.outcome {
+            TacticOutcome::Applied => {
+                let state = result.state.expect("Applied outcome must carry a state (#159 contract)");
+                let goals: Vec<ProofGoal> = state.goals.iter().enumerate()
+                    .map(|(i, g)| ProofGoal::from_interactive_goal(i, g)).collect();
+                let proof_state_hash = compute_proof_state_hash(&goals, state.tactic_applied.as_deref())
+                    .map_err(mcp_internal_error)?;
+                let goals_json = serde_json::to_string(&goals).map_err(|e| mcp_internal_error(e.to_string()))?;
+                let child_id = state.node.0;
+
+                // Issue #165 / CodeRabbit fix: this MUST be fetched BEFORE
+                // `idb::insert_step` below inserts the current step's own
+                // row — see `any_failed_step_on_parent`'s doc comment, which
+                // documents exactly this ordering requirement. Fetching
+                // after the insert would be harmless TODAY only because this
+                // call site is on the `outcome: "applied"` branch and
+                // `any_failed_step_on_parent` only counts `outcome ==
+                // "failed"` rows (so an applied step could never spuriously
+                // count itself); it would silently corrupt
+                // `tactic_repaired_previous_failure` the moment this same
+                // pattern were ever reused on a FAILED step's own insertion
+                // path, where the just-inserted row WOULD match. Fetch here,
+                // before either insert below, so the ordering can't drift.
+                let existing_steps = idb::list_steps_for_session(&tx, session_uuid).map_err(rs)?;
+                let prior_failed_on_same_parent = any_failed_step_on_parent(&existing_steps, parent_uuid);
+
+                idb::insert_node(&tx, &idb::NewNode {
+                    id: child_id, session_id: session_uuid, parent_node_id: Some(parent_uuid),
+                    depth: parent_node.depth + 1, node_kind: "tactic_result".to_string(),
+                    proof_state_hash: proof_state_hash.full_state_hash.clone(), goals_json,
+                    selected_goal_index: if goals.is_empty() { None } else { Some(0) },
+                    status: if state.is_solved { "solved".to_string() } else { "open".to_string() },
+                    created_at: now,
+                }).map_err(rs)?;
+
+                idb::insert_step(&tx, &idb::NewStep {
+                    id: step_id, session_id: session_uuid, parent_node_id: parent_uuid, child_node_id: Some(child_id),
+                    tactic_text_hash, tactic_text_artifact_hash: None, redacted_text: false,
+                    outcome: "applied".to_string(), diagnostic_json: None, diagnostics_hash: None,
+                    wall_time_ms: Some(wall_time_ms), created_at: now,
+                }).map_err(rs)?;
+
+                idb::set_session_selected_node(&tx, session_uuid, child_id).map_err(rs)?;
+
+                // Issue #165: labels for THIS step, from an in-memory child
+                // NodeRow matching exactly what was just inserted above (no
+                // redundant re-SELECT). `branch_abandoned` /
+                // `branch_selected_for_reconstruction` are intentionally
+                // computed with EMPTY selected-path/abandoned sets here — see
+                // `compute_step_progress_labels`'s doc: those two labels need
+                // the session's full node tree and FINAL selection, which
+                // only exists at export/replay time (proof_session_replay
+                // trace_only, proof_session_export), not on the immediate
+                // response to one apply_tactic call whose own
+                // set_session_selected_node call above trivially makes the
+                // just-applied node "selected" every single time.
+                // `existing_steps`/`prior_failed_on_same_parent` were already
+                // computed ABOVE, before either insert — see that comment.
+                let child_node_for_labels = idb::NodeRow {
+                    id: child_id, session_id: session_uuid, parent_node_id: Some(parent_uuid),
+                    depth: parent_node.depth + 1, node_kind: "tactic_result".to_string(),
+                    proof_state_hash: proof_state_hash.full_state_hash.clone(),
+                    goals_json: serde_json::to_string(&goals).map_err(|e| mcp_internal_error(e.to_string()))?,
+                    selected_goal_index: if goals.is_empty() { None } else { Some(0) },
+                    status: if state.is_solved { "solved".to_string() } else { "open".to_string() },
+                    created_at: now,
+                };
+                let progress = compute_step_progress_labels(
+                    "applied", &None, &parent_node, Some(&child_node_for_labels), prior_failed_on_same_parent,
+                    &std::collections::HashSet::new(), &std::collections::HashSet::new(),
+                )?;
+
+                serde_json::json!({
+                    "outcome": "applied",
+                    "session_id": session_uuid.to_string(),
+                    "step_id": step_id.to_string(),
+                    "parent_node_id": parent_uuid.to_string(),
+                    "node_id": child_id.to_string(),
+                    "goals": goals,
+                    "is_solved": state.is_solved,
+                    "proof_state_hash": proof_state_hash,
+                    "diagnostic": serde_json::Value::Null,
+                    "progress_labels": progress.labels,
+                    "failure_category": progress.failure_category,
+                })
+            }
+            TacticOutcome::Failed => {
+                let diagnostic = result.diagnostic.expect("Failed outcome must carry a diagnostic (#159 contract)");
+                let diag_record = ProofStateDiagnostic::from_tactic_failure(
+                    InteractiveSessionHandle(session_uuid), Some(ProofStateNodeId(parent_uuid)),
+                    Some(parent_node.proof_state_hash.clone()), Some(tactic.to_string()), None, diagnostic, now,
+                ).map_err(mcp_internal_error)?;
+                let diagnostic_json = serde_json::to_string(&diag_record).map_err(|e| mcp_internal_error(e.to_string()))?;
+
+                idb::insert_step(&tx, &idb::NewStep {
+                    id: step_id, session_id: session_uuid, parent_node_id: parent_uuid, child_node_id: None,
+                    tactic_text_hash, tactic_text_artifact_hash: None, redacted_text: false,
+                    outcome: "failed".to_string(), diagnostic_json: Some(diagnostic_json.clone()),
+                    diagnostics_hash: Some(diag_record.diagnostic_hash.clone()),
+                    wall_time_ms: Some(wall_time_ms), created_at: now,
+                }).map_err(rs)?;
+
+                // Issue #165: a failed step's only labels are `tactic_failed`
+                // plus its `failure_category` (the SAME `LeanDiagnosticCategory`
+                // value stored in `diag_record` — see
+                // `interactive_step_failure_category`'s doc).
+                let progress = compute_step_progress_labels(
+                    "failed", &Some(diagnostic_json), &parent_node, None, false,
+                    &std::collections::HashSet::new(), &std::collections::HashSet::new(),
+                )?;
+
+                serde_json::json!({
+                    "outcome": "failed",
+                    "session_id": session_uuid.to_string(),
+                    "step_id": step_id.to_string(),
+                    "parent_node_id": parent_uuid.to_string(),
+                    "node_id": serde_json::Value::Null,
+                    "diagnostic": diag_record,
+                    "progress_labels": progress.labels,
+                    "failure_category": progress.failure_category,
+                })
+            }
+        };
+        tx.commit().map_err(rs)?;
+        Ok(response)
+    }
+
+    async fn do_proof_session_tactic_step(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofSessionTacticStepArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let session_uuid = Uuid::parse_str(&args.session_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid session Uuid: {}", e)))?;
+        let parent_uuid = Uuid::parse_str(&args.parent_node_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid parent_node_id Uuid: {}", e)))?;
+
+        let mut core = self.apply_tactic_core(session_uuid, parent_uuid, &args.tactic).await?;
+        core["trust_boundary"] = serde_json::Value::String(INTERACTIVE_TRUST_BOUNDARY_NOTICE.to_string());
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&core).unwrap())]))
+    }
+
+    async fn do_proof_session_branch(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofSessionBranchArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if args.branch_name.trim().is_empty() {
+            return Err(mcp_invalid_params("branch_name must not be empty"));
+        }
+        let session_uuid = Uuid::parse_str(&args.session_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid session Uuid: {}", e)))?;
+        let parent_uuid = Uuid::parse_str(&args.parent_node_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid parent_node_id Uuid: {}", e)))?;
+
+        let mut core = self.apply_tactic_core(session_uuid, parent_uuid, &args.tactic).await?;
+        core["branch_name"] = serde_json::Value::String(args.branch_name);
+        core["trust_boundary"] = serde_json::Value::String(INTERACTIVE_TRUST_BOUNDARY_NOTICE.to_string());
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&core).unwrap())]))
+    }
+
+    async fn do_proof_session_select_node(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofSessionSelectNodeArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let session_uuid = Uuid::parse_str(&args.session_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid session Uuid: {}", e)))?;
+        let node_uuid = Uuid::parse_str(&args.node_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid node_id Uuid: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        idb::get_session(&conn, session_uuid).map_err(rs)?
+            .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", args.session_id)))?;
+        let node = idb::get_node(&conn, node_uuid).map_err(rs)?
+            .ok_or_else(|| mcp_invalid_params(format!("unknown node_id {} in session {}", args.node_id, args.session_id)))?;
+        if node.session_id != session_uuid {
+            return Err(mcp_invalid_params("node_id does not belong to session_id"));
+        }
+        idb::set_session_selected_node(&conn, session_uuid, node_uuid).map_err(rs)?;
+
+        let goals: serde_json::Value = serde_json::from_str(&node.goals_json).unwrap_or(serde_json::Value::Array(vec![]));
+        let res = serde_json::json!({
+            "session_id": args.session_id,
+            "selected_node_id": args.node_id,
+            "goals": goals,
+            "is_solved": node.status == "solved",
+            "proof_state_hash": node.proof_state_hash,
+            "note": "proof_session_select_node moves convenience working-state only — it is not proof authority and does not itself apply, verify, or reconstruct anything",
+            "trust_boundary": INTERACTIVE_TRUST_BOUNDARY_NOTICE,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_proof_session_reconstruct(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofSessionReconstructArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let session_uuid = Uuid::parse_str(&args.session_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid session Uuid: {}", e)))?;
+        let node_uuid = Uuid::parse_str(&args.selected_node_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid selected_node_id Uuid: {}", e)))?;
+
+        let session = {
+            let conn = self.conn.lock().await;
+            let session = idb::get_session(&conn, session_uuid).map_err(rs)?
+                .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", args.session_id)))?;
+            let node = idb::get_node(&conn, node_uuid).map_err(rs)?
+                .ok_or_else(|| mcp_invalid_params(format!("unknown selected_node_id {} in session {}", args.selected_node_id, args.session_id)))?;
+            if node.session_id != session_uuid {
+                return Err(mcp_invalid_params("selected_node_id does not belong to session_id"));
+            }
+            session
+        };
+
+        let script = self.interactive_gateway
+            .reconstruct_script(InteractiveSessionHandle(session_uuid), ProofStateNodeId(node_uuid))
+            .map_err(mcp_invalid_params)?;
+
+        let proof_format_str = match script.proof_format {
+            ProofFormat::FlatTacticSequence => "flat_tactic_sequence",
+            ProofFormat::RawLeanBlock => "raw_lean_block",
+        };
+        let proof_source_hash = canonical_hash(&script.tactic_block).map_err(mcp_internal_error)?;
+        let node_path_ids: Vec<String> = script.node_path.iter().map(|n| n.0.to_string()).collect();
+        let tactic_path_ids_json = serde_json::to_string(&node_path_ids).map_err(|e| mcp_internal_error(e.to_string()))?;
+        let script_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        {
+            let mut conn = self.conn.lock().await;
+            let tx = conn.transaction().map_err(rs)?;
+            idb::insert_reconstructed_script(&tx, &idb::NewReconstructedScript {
+                id: script_id, session_id: session_uuid, final_node_id: node_uuid,
+                proof_format: proof_format_str.to_string(), proof_source_hash: proof_source_hash.clone(),
+                proof_source_artifact_hash: None, reports_complete: script.reports_complete,
+                tactic_path_ids_json: tactic_path_ids_json.clone(), created_at: now,
+            }).map_err(rs)?;
+            idb::set_session_reconstructed_script_hash(&tx, session_uuid, &proof_source_hash).map_err(rs)?;
+            tx.commit().map_err(rs)?;
+        }
+
+        // Issue #163: the "artifact" field list the issue asks for
+        // (proof source hash, source artifact hash, selected node id,
+        // tactic path ids, backend kind/version, environment hash, import
+        // manifest hash, generated_at) — tactic_path_ids is now persisted
+        // (see tactic_path_ids_json above); backend_kind/backend_version/
+        // environment_hash/import_manifest_hash are already captured on the
+        // owning session row (a session's backend/environment never changes
+        // over its lifetime) and joined in here rather than duplicated —
+        // see the schema doc comment on interactive_proof_reconstructed_scripts.
+        let res = serde_json::json!({
+            "session_id": args.session_id,
+            "reconstructed_script_id": script_id.to_string(),
+            "final_node_id": args.selected_node_id,
+            "node_path": node_path_ids,
+            "tactic_path_ids": node_path_ids,
+            "tactic_block": script.tactic_block,
+            "proof_format": proof_format_str,
+            "reports_complete": script.reports_complete,
+            "proof_source_hash": proof_source_hash,
+            "proof_source_artifact_hash": serde_json::Value::Null,
+            "backend_kind": session.backend_kind,
+            "backend_version": session.backend_version,
+            "environment_hash": session.environment_hash,
+            "import_manifest_hash": session.import_manifest_hash,
+            "generated_at": now.to_rfc3339(),
+            "promote_note": "to promote, call proof_session_promote_to_attempt with this reconstructed_script_id and the EXACT tactic_block returned here (re-supplied for an integrity check against proof_source_hash — raw tactic text is not durably stored server-side)",
+            "trust_boundary": INTERACTIVE_TRUST_BOUNDARY_NOTICE,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    /// The ONLY route from an interactive session to a proved obligation
+    /// (issue #161's core trust-boundary requirement). Does not flip
+    /// `episode_obligations.status` directly, or duplicate any Solve
+    /// verification logic — it validates the reconstructed script's
+    /// integrity and episode/obligation linkage, then calls
+    /// `do_attempt_claim` followed by `do_episode_step` with a
+    /// `TypedAction::Solve`, exactly the same internal path a normal
+    /// attempt_claim + episode_step round trip uses.
+    async fn do_proof_session_promote_to_attempt(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofSessionPromoteToAttemptArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let session_uuid = Uuid::parse_str(&args.session_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid session Uuid: {}", e)))?;
+        let script_uuid = Uuid::parse_str(&args.reconstructed_script_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid reconstructed_script_id Uuid: {}", e)))?;
+
+        let (session, script) = {
+            let conn = self.conn.lock().await;
+            let session = idb::get_session(&conn, session_uuid).map_err(rs)?
+                .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", args.session_id)))?;
+            let script = idb::get_reconstructed_script(&conn, script_uuid).map_err(rs)?
+                .ok_or_else(|| mcp_invalid_params(format!("unknown reconstructed_script_id: {}", args.reconstructed_script_id)))?;
+            (session, script)
+        };
+
+        if script.session_id != session_uuid {
+            return Err(mcp_invalid_params("reconstructed_script_id does not belong to session_id"));
+        }
+        if let Some(existing_attempt) = script.verified_attempt_id {
+            return Err(mcp_invalid_params(format!(
+                "reconstructed_script_id {} was already promoted via attempt {} (outcome: {}) — call proof_session_reconstruct again for a fresh script to retry",
+                args.reconstructed_script_id, existing_attempt, script.verification_outcome.as_deref().unwrap_or("unknown")
+            )));
+        }
+        if session.episode_id.to_string() != args.episode_id {
+            return Err(mcp_invalid_params("episode_id does not match this session's episode_id"));
+        }
+
+        let recomputed_hash = canonical_hash(&args.tactic_block).map_err(mcp_internal_error)?;
+        if recomputed_hash != script.proof_source_hash {
+            return Err(mcp_invalid_params(
+                "tactic_block does not match the reconstructed script's recorded proof_source_hash — re-fetch the exact text via proof_session_reconstruct rather than retyping or editing it",
+            ));
+        }
+        if !matches!(script.proof_format.as_str(), "flat_tactic_sequence" | "raw_lean_block") {
+            return Err(mcp_internal_error(format!("unknown persisted proof_format '{}'", script.proof_format)));
+        }
+
+        // Requires valid episode/obligation linkage: the action_request being
+        // claimed must target the SAME obligation this session interactively
+        // worked on.
+        let target_obligation_id: Option<String> = {
+            let conn = self.conn.lock().await;
+            conn.query_row(
+                "SELECT target_obligation_id FROM action_requests WHERE id = ?1 AND episode_id = ?2",
+                (&args.action_request_id, &args.episode_id),
+                |row| row.get::<_, Option<String>>(0),
+            ).optional().map_err(rs)?.flatten()
+        };
+        match &target_obligation_id {
+            Some(oid) if *oid == session.obligation_id.to_string() => {}
+            Some(_) => return Err(mcp_invalid_params("action_request_id targets a different obligation than this interactive session")),
+            None => return Err(mcp_invalid_params(format!(
+                "unknown or non-targeting action_request_id {} for episode {} — call episode_observe for a valid pending request",
+                args.action_request_id, args.episode_id
+            ))),
+        }
+
+        // Step 1: attempt_claim, through the EXACT SAME internal path a
+        // normal attempt_claim tool call uses.
+        let claim_args = serde_json::json!({
+            "episode_id": args.episode_id,
+            "action_request_id": args.action_request_id,
+            "idempotency_key": args.idempotency_key,
+            "expected_revision": args.expected_revision,
+        });
+        let claim_result = self.do_attempt_claim(claim_args).await?;
+        let claim_json = extract_tool_result_json(&claim_result)?;
+        let action_attempt_id = claim_json["action_attempt_id"].as_str()
+            .ok_or_else(|| mcp_internal_error("attempt_claim did not return action_attempt_id"))?.to_string();
+        let claim_token = claim_json["claim_token"].as_str()
+            .ok_or_else(|| mcp_internal_error("attempt_claim did not return claim_token"))?.to_string();
+
+        // Step 2: episode_step(Solve), through the EXACT SAME internal path
+        // a normal episode_step tool call uses — this is the ONLY thing in
+        // this whole tool family that can affect the obligation's status,
+        // and it does so via the real Lean kernel, not this tool.
+        let step_args = serde_json::json!({
+            "episode_id": args.episode_id,
+            "action_attempt_id": action_attempt_id,
+            "expected_revision": args.expected_revision,
+            "claim_token": claim_token,
+            "action": { "type": "solve", "proof_term": args.tactic_block, "proof_format": script.proof_format },
+            "cost_micros": args.cost_micros,
+        });
+        let step_result = self.do_episode_step(step_args).await?;
+        let step_json = extract_tool_result_json(&step_result)?;
+
+        let attempt_uuid = Uuid::parse_str(&action_attempt_id).map_err(|e| mcp_internal_error(e.to_string()))?;
+        let final_status: String = {
+            let conn = self.conn.lock().await;
+            conn.query_row("SELECT status FROM action_attempts WHERE id = ?1", [&action_attempt_id], |row| row.get(0))
+                .map_err(rs)?
+        };
+        {
+            let conn = self.conn.lock().await;
+            idb::update_reconstructed_script_verification(&conn, script_uuid, attempt_uuid, &final_status).map_err(rs)?;
+        }
+
+        let res = serde_json::json!({
+            "session_id": args.session_id,
+            "reconstructed_script_id": args.reconstructed_script_id,
+            "action_attempt_id": action_attempt_id,
+            "verified_attempt_id": action_attempt_id,
+            "verification_outcome": final_status,
+            "episode_step_result": step_json,
+            "trust_boundary": "this promotion resubmitted the reconstructed script through the EXISTING attempt_claim + episode_step Solve path for real Lean kernel verification — the obligation's status (if it changed) was changed by episode_step's own kernel-verification result, not by this tool directly; see episode_step_result.outcome/accepted for the actual verdict",
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_proof_session_close(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofSessionCloseArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if !matches!(args.reason.as_str(), "closed" | "abandoned" | "superseded") {
+            return Err(mcp_invalid_params(format!(
+                "reason must be one of \"closed\", \"abandoned\", \"superseded\" (got {:?})", args.reason
+            )));
+        }
+        let session_uuid = Uuid::parse_str(&args.session_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid session Uuid: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let session = idb::get_session(&conn, session_uuid).map_err(rs)?
+            .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", args.session_id)))?;
+        if session.state == "closed" {
+            return Err(mcp_invalid_params(format!(
+                "session {} is already closed (reason: {})", args.session_id, session.close_reason.as_deref().unwrap_or("closed")
+            )));
+        }
+
+        // Best-effort: release the live gateway's in-memory session too. Not
+        // fatal if this errors — the DB row is the durable record of
+        // closure either way, and a future backend may have already GC'd
+        // its own session independently.
+        let _ = self.interactive_gateway.close_session(InteractiveSessionHandle(session_uuid));
+
+        let now = Utc::now();
+        idb::close_session(&conn, session_uuid, now, &args.reason).map_err(rs)?;
+
+        let res = serde_json::json!({
+            "session_id": args.session_id,
+            "state": "closed",
+            "close_reason": args.reason,
+            "closed_at": now.to_rfc3339(),
+            "trust_boundary": INTERACTIVE_TRUST_BOUNDARY_NOTICE,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #163: proof_session_replay — three replay modes over PERSISTED
+    // DB state (not #159's in-memory InteractiveSessionTrace). See the
+    // module-doc-style comment on ProofSessionReplayArgs for the contract.
+    // -----------------------------------------------------------------
+
+    async fn do_proof_session_replay(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofSessionReplayArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let session_uuid = Uuid::parse_str(&args.session_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid session Uuid: {}", e)))?;
+
+        let mut result = match args.mode.as_str() {
+            "trace_only" => self.replay_trace_only(session_uuid).await?,
+            "backend" => {
+                let selected = args.selected_node_id.clone();
+                self.replay_backend(session_uuid, selected.as_deref()).await?
+            }
+            "final_proof" => self.replay_final_proof(session_uuid, args).await?,
+            other => return Err(mcp_invalid_params(format!(
+                "mode must be one of \"trace_only\", \"backend\", \"final_proof\" (got {:?})", other
+            ))),
+        };
+        if let serde_json::Value::Object(ref mut map) = result {
+            map.insert("trust_boundary".to_string(), serde_json::Value::String(INTERACTIVE_TRUST_BOUNDARY_NOTICE.to_string()));
+        }
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&result).unwrap())]))
+    }
+
+    /// Issue #164: closes out #161's deferred `proof_session_export` — a
+    /// thin wrapper over the exact same `gather_interactive_sessions` +
+    /// `interactive_sessions_*` renderers `proof_export`/`trajectory_export`
+    /// use, scoped to exactly the one session named by `session_id` rather
+    /// than a whole episode. Reuses `ExportMode`/`benchmark_suite_name_for_episode`
+    /// rather than a second gate implementation — see those functions' docs
+    /// for the full redaction/trust-boundary rules this delegates to.
+    async fn do_proof_session_export(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofSessionExportArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let session_uuid = Uuid::parse_str(&args.session_id)
+            .map_err(|e| mcp_invalid_params(format!("Invalid session Uuid: {}", e)))?;
+        let mode = args.format.unwrap_or(ExportMode::PublicSummary);
+        if !matches!(mode, ExportMode::PublicSummary | ExportMode::AuditArchive | ExportMode::TrainingExport) {
+            return Err(mcp_invalid_params(
+                "format must be one of \"public_summary\", \"audit_archive\", \"training_export\" — proof_session_export renders ONE session's interactive-session views only, not a whole-episode dossier (use proof_export for \"markdown\"/\"lean\"/\"paper_dossier\"/\"maintainer_submission\")",
+            ));
+        }
+
+        let conn = self.conn.lock().await;
+        let session = idb::get_session(&conn, session_uuid).map_err(rs)?
+            .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", args.session_id)))?;
+        let episode_id = session.episode_id.to_string();
+
+        // Same #33 contamination gate proof_export/trajectory_export already
+        // enforce, reused verbatim rather than re-implemented.
+        if mode.exposes_proof_body() && !args.allow_putnambench_proof_export {
+            if let Some(link) = benchmark_suite_name_for_episode(&conn, &episode_id)? {
+                let mode_label = if mode == ExportMode::AuditArchive { "audit_archive" } else { "training_export" };
+                return Err(mcp_invalid_params(format!(
+                    "session {}'s episode {} is linked to benchmark suite '{}' — format=\"{}\" can expose the completed proof body, so it requires \
+                     allow_putnambench_proof_export=true (see docs/benchmarks/putnambench.md). \
+                     Use format=\"public_summary\" for a disclosure-safe report instead.",
+                    args.session_id, episode_id, link.suite_name, mode_label
+                )));
+            }
+        }
+
+        let nodes = idb::list_nodes_for_session(&conn, session_uuid).map_err(rs)?;
+        let steps = idb::list_steps_for_session(&conn, session_uuid).map_err(rs)?;
+        let reconstructions = idb::list_reconstructed_scripts_for_session(&conn, session_uuid).map_err(rs)?;
+        let bundles = vec![InteractiveSessionBundle { session, nodes, steps, reconstructions }];
+
+        let text = match mode {
+            ExportMode::PublicSummary => {
+                serde_json::to_string_pretty(&interactive_sessions_public_summary_json(&bundles)).unwrap()
+            }
+            ExportMode::AuditArchive => {
+                let mut md = format!("> 🔒 **AUDIT ARCHIVE — private, single session.** {}\n", INTERACTIVE_TRUST_BOUNDARY_NOTICE);
+                md.push_str(&render_interactive_sessions_markdown(&conn, &bundles)?);
+                md
+            }
+            ExportMode::TrainingExport => {
+                let mut envelope = interactive_sessions_training_json(&conn, &bundles)?;
+                trajectories::scrub_value(&mut envelope);
+                serde_json::to_string_pretty(&envelope).unwrap()
+            }
+            _ => unreachable!("validated above"),
+        };
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// mode="trace_only": pure DB-record consistency check over
+    /// `interactive_proof_sessions`/`_nodes`/`_steps` for `session_id` — no
+    /// backend call, no kernel call. Verifies graph integrity (every
+    /// non-root node's parent resolves, every applied step's child node
+    /// exists exactly once and hash-matches its own recorded content,
+    /// session state/closed_at consistency checked as a DATA fact rather
+    /// than trusting the schema CHECK alone) and returns a `branch_report`
+    /// that explicitly surfaces failed steps and abandoned (unselected,
+    /// still-open) leaf nodes — the "branch handling" acceptance criterion
+    /// lives here, not in a separate export tool.
+    async fn replay_trace_only(&self, session_uuid: Uuid) -> Result<serde_json::Value, McpError> {
+        let conn = self.conn.lock().await;
+        let session = idb::get_session(&conn, session_uuid).map_err(rs)?
+            .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", session_uuid)))?;
+        let nodes = idb::list_nodes_for_session(&conn, session_uuid).map_err(rs)?;
+        let steps = idb::list_steps_for_session(&conn, session_uuid).map_err(rs)?;
+        drop(conn);
+
+        let node_by_id: std::collections::HashMap<Uuid, &idb::NodeRow> = nodes.iter().map(|n| (n.id, n)).collect();
+        let mut failures: Vec<serde_json::Value> = Vec::new();
+
+        // Session state/closed_at consistency, verified as a DATA fact (not
+        // just trusting the schema CHECK — the issue explicitly asks for
+        // this to be checked independently).
+        let state_consistent = match session.state.as_str() {
+            "open" => session.closed_at.is_none(),
+            "closed" => session.closed_at.is_some(),
+            other => {
+                failures.push(serde_json::json!({"kind": "invalid_session_state", "detail": format!("unrecognized state {:?}", other)}));
+                true // already reported; don't double-report below
+            }
+        };
+        if !state_consistent {
+            failures.push(serde_json::json!({
+                "kind": "session_state_closed_at_mismatch",
+                "detail": format!("state={:?} closed_at={:?}", session.state, session.closed_at),
+            }));
+        }
+
+        // Exactly one root, and session.root_node_id / selected_final_node_id
+        // must reference real nodes belonging to this session.
+        let root_count = nodes.iter().filter(|n| n.node_kind == "root").count();
+        if root_count != 1 {
+            failures.push(serde_json::json!({
+                "kind": "root_node_count", "detail": format!("expected exactly 1 root node, found {}", root_count),
+            }));
+        }
+        match session.root_node_id {
+            Some(rid) if !node_by_id.contains_key(&rid) => failures.push(serde_json::json!({
+                "kind": "missing_root_node", "detail": format!("session.root_node_id {} does not exist among this session's nodes", rid),
+            })),
+            None => failures.push(serde_json::json!({"kind": "missing_root_node", "detail": "session.root_node_id is NULL"})),
+            _ => {}
+        }
+        if let Some(sel) = session.selected_final_node_id {
+            if !node_by_id.contains_key(&sel) {
+                failures.push(serde_json::json!({
+                    "kind": "dangling_selected_node", "detail": format!("session.selected_final_node_id {} does not exist among this session's nodes", sel),
+                }));
+            }
+        }
+
+        // Every non-root node's parent must resolve within this session;
+        // every root node must have no parent.
+        for n in &nodes {
+            match (n.node_kind.as_str(), n.parent_node_id) {
+                ("root", None) => {}
+                ("root", Some(_)) => failures.push(serde_json::json!({
+                    "kind": "root_with_parent", "node_id": n.id.to_string(),
+                    "detail": "a root node must not have a parent_node_id",
+                })),
+                (_, None) => failures.push(serde_json::json!({
+                    "kind": "non_root_missing_parent", "node_id": n.id.to_string(),
+                    "detail": "a non-root node must have a parent_node_id",
+                })),
+                (_, Some(p)) if !node_by_id.contains_key(&p) => failures.push(serde_json::json!({
+                    "kind": "broken_parent_link", "node_id": n.id.to_string(), "parent_node_id": p.to_string(),
+                    "detail": "parent_node_id does not resolve to a node in this session — missing node",
+                })),
+                _ => {}
+            }
+        }
+
+        // Every step's parent/child references must resolve; an applied
+        // step must point at exactly one child node, and that node's own
+        // parent_node_id must agree with the step that produced it.
+        let mut applied_child_producers: std::collections::HashMap<Uuid, Vec<Uuid>> = std::collections::HashMap::new();
+        for s in &steps {
+            if !node_by_id.contains_key(&s.parent_node_id) {
+                failures.push(serde_json::json!({
+                    "kind": "dangling_step_parent", "step_id": s.id.to_string(), "parent_node_id": s.parent_node_id.to_string(),
+                    "detail": "step's parent_node_id does not resolve to a node in this session",
+                }));
+            }
+            if s.outcome == "applied" {
+                match s.child_node_id {
+                    Some(c) => {
+                        if !node_by_id.contains_key(&c) {
+                            failures.push(serde_json::json!({
+                                "kind": "dangling_step_child", "step_id": s.id.to_string(), "child_node_id": c.to_string(),
+                                "detail": "applied step's child_node_id does not resolve to a node in this session — missing node",
+                            }));
+                        } else {
+                            applied_child_producers.entry(c).or_default().push(s.id);
+                            if let Some(child_node) = node_by_id.get(&c) {
+                                if child_node.parent_node_id != Some(s.parent_node_id) {
+                                    failures.push(serde_json::json!({
+                                        "kind": "parent_child_disagreement", "step_id": s.id.to_string(), "node_id": c.to_string(),
+                                        "detail": "the node's own parent_node_id disagrees with the step that produced it — broken parent link",
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                    None => failures.push(serde_json::json!({
+                        "kind": "applied_step_missing_child", "step_id": s.id.to_string(),
+                        "detail": "outcome='applied' but child_node_id is NULL",
+                    })),
+                }
+            }
+        }
+        for n in &nodes {
+            if n.node_kind == "root" { continue; }
+            let producers = applied_child_producers.get(&n.id).map(|v| v.len()).unwrap_or(0);
+            if producers == 0 {
+                failures.push(serde_json::json!({
+                    "kind": "node_without_producing_step", "node_id": n.id.to_string(),
+                    "detail": "no applied step's child_node_id references this non-root node",
+                }));
+            } else if producers > 1 {
+                failures.push(serde_json::json!({
+                    "kind": "node_with_multiple_producing_steps", "node_id": n.id.to_string(), "count": producers,
+                    "detail": "more than one applied step claims to have produced this node",
+                }));
+            }
+        }
+
+        // Hash consistency: recompute each node's full_state_hash from its
+        // OWN persisted content (goals_json + the producing step's
+        // already-hashed tactic text) and compare against the stored
+        // proof_state_hash — catches a corrupted/edited node row or a
+        // changed tactic text hash that referential checks alone would not.
+        for n in &nodes {
+            let goals: Vec<ProofGoal> = match serde_json::from_str(&n.goals_json) {
+                Ok(g) => g,
+                Err(e) => {
+                    failures.push(serde_json::json!({
+                        "kind": "unparseable_goals_json", "node_id": n.id.to_string(), "detail": e.to_string(),
+                    }));
+                    continue;
+                }
+            };
+            let tactic_text_hash: Option<String> = if n.node_kind == "root" {
+                None
+            } else {
+                applied_child_producers.get(&n.id).and_then(|ids| ids.first())
+                    .and_then(|step_id| steps.iter().find(|s| s.id == *step_id))
+                    .map(|s| s.tactic_text_hash.clone())
+            };
+            match recompute_full_state_hash(&goals, tactic_text_hash.as_deref()) {
+                Ok(expected) if expected != n.proof_state_hash => failures.push(serde_json::json!({
+                    "kind": "proof_state_hash_mismatch", "node_id": n.id.to_string(),
+                    "recorded": n.proof_state_hash, "recomputed": expected,
+                    "detail": "recomputing the hash from this node's own persisted goals/tactic-text-hash content does not match the stored proof_state_hash",
+                })),
+                Ok(_) => {}
+                Err(e) => failures.push(serde_json::json!({
+                    "kind": "hash_recompute_error", "node_id": n.id.to_string(), "detail": e,
+                })),
+            }
+        }
+
+        // Branch visibility: never hide failed/abandoned branches from this
+        // report (issue's "branch handling" requirement — trace-only replay
+        // is where failed-branch visibility lives). Issue #165: this is now
+        // `interactive_session_branch_topology` (extracted, same computation,
+        // shared with the `branch_abandoned`/`branch_selected_for_reconstruction`
+        // labels below and in export — see that function's doc).
+        let (selected_path, abandoned_leaf_ids) = interactive_session_branch_topology(&session, &nodes);
+        let abandoned_open_leaf_nodes: Vec<serde_json::Value> = nodes.iter()
+            .filter(|n| abandoned_leaf_ids.contains(&n.id))
+            .map(|n| serde_json::json!({"node_id": n.id.to_string(), "depth": n.depth, "parent_node_id": n.parent_node_id.map(|p| p.to_string())}))
+            .collect();
+        let failed_steps: Vec<serde_json::Value> = steps.iter().filter(|s| s.outcome == "failed").map(|s| {
+            let diag: Option<serde_json::Value> = s.diagnostic_json.as_deref().and_then(|j| serde_json::from_str(j).ok());
+            serde_json::json!({
+                "step_id": s.id.to_string(),
+                "parent_node_id": s.parent_node_id.to_string(),
+                "tactic_text_hash": s.tactic_text_hash,
+                "diagnostic_category": diag.as_ref().and_then(|d| d.get("diagnostic")).and_then(|d| d.get("category")).cloned(),
+                "diagnostic_message": diag.as_ref().and_then(|d| d.get("diagnostic")).and_then(|d| d.get("primary_message")).cloned(),
+                "diagnostics_hash": s.diagnostics_hash,
+            })
+        }).collect();
+
+        // Issue #165: per-step progress/failure/repair/branch labels, for
+        // EVERY step (applied and failed — nothing filtered, matching this
+        // whole function's own "never hide" discipline). Purely derived from
+        // the SAME `nodes`/`steps` this integrity check already loaded — see
+        // `compute_step_progress_labels`'s trust-boundary doc. A label
+        // computation error degrades to an empty label set with the error
+        // surfaced in `label_error` rather than aborting the whole replay —
+        // the underlying corruption (unparseable goals_json, a dangling
+        // parent/child link) is ALREADY reported above in `failures`, so
+        // this never silently hides anything a caller couldn't otherwise see.
+        let step_progress_labels: Vec<serde_json::Value> = steps.iter().map(|s| {
+            let parent = node_by_id.get(&s.parent_node_id).copied();
+            let child = s.child_node_id.and_then(|c| node_by_id.get(&c).copied());
+            match parent {
+                Some(p) => {
+                    let prior_failed = step_has_prior_failure_on_same_parent(&steps, s);
+                    match compute_step_progress_labels(&s.outcome, &s.diagnostic_json, p, child, prior_failed, &selected_path, &abandoned_leaf_ids) {
+                        Ok(lbl) => serde_json::json!({
+                            "step_id": s.id.to_string(), "progress_labels": lbl.labels,
+                            "failure_category": lbl.failure_category, "label_error": serde_json::Value::Null,
+                        }),
+                        Err(e) => serde_json::json!({
+                            "step_id": s.id.to_string(), "progress_labels": [], "failure_category": null, "label_error": e.message.to_string(),
+                        }),
+                    }
+                }
+                None => serde_json::json!({
+                    "step_id": s.id.to_string(), "progress_labels": [], "failure_category": null,
+                    "label_error": "step's parent_node_id does not resolve to a node in this session — see failures",
+                }),
+            }
+        }).collect();
+
+        Ok(serde_json::json!({
+            "session_id": session_uuid.to_string(),
+            "mode": "trace_only",
+            "passed": failures.is_empty(),
+            "node_count": nodes.len(),
+            "step_count": steps.len(),
+            "failures": failures,
+            "branch_report": {
+                "solved_node_count": nodes.iter().filter(|n| n.status == "solved").count(),
+                "abandoned_open_leaf_nodes": abandoned_open_leaf_nodes,
+                "failed_steps": failed_steps,
+            },
+            "step_progress_labels": step_progress_labels,
+            "progress_labels_note": "issue #165: heuristic training hints about LOCAL in-session progress only — never proof authority; see kernel_verified / verified_attempt_id / verification_outcome for the only real proof signal",
+        }))
+    }
+
+    /// mode="backend": re-runs the root-to-`selected_node_id` tactic path
+    /// against a FRESH interactive-backend session and confirms it
+    /// reproduces the outcomes/hashes the persisted steps recorded. Raw
+    /// tactic text is never durably stored server-side (only its hash — see
+    /// `ProofSessionPromoteToAttemptArgs`'s doc), so this mode sources the
+    /// actual text from the LIVE gateway's `reconstruct_script` on the
+    /// ORIGINAL session/node — which only works while that session's
+    /// in-memory state is still resumable (not after `proof_session_close`
+    /// or a process restart); when it is not, this returns a structured
+    /// "backend replay unavailable" result rather than a hard error. Also
+    /// reports a `backend_mismatch` if the session's recorded `backend_kind`
+    /// no longer matches [`CONFIGURED_INTERACTIVE_BACKEND_KIND`].
+    async fn replay_backend(&self, session_uuid: Uuid, selected_node_id: Option<&str>) -> Result<serde_json::Value, McpError> {
+        let (session, target_node) = {
+            let conn = self.conn.lock().await;
+            let session = idb::get_session(&conn, session_uuid).map_err(rs)?
+                .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", session_uuid)))?;
+            let target_node = match selected_node_id {
+                Some(s) => Uuid::parse_str(s).map_err(|e| mcp_invalid_params(format!("Invalid selected_node_id Uuid: {}", e)))?,
+                None => session.selected_final_node_id.or(session.root_node_id)
+                    .ok_or_else(|| mcp_internal_error("session has no root node — internal invariant violated"))?,
+            };
+            let node = idb::get_node(&conn, target_node).map_err(rs)?
+                .ok_or_else(|| mcp_invalid_params(format!("unknown node_id {} in session {}", target_node, session_uuid)))?;
+            if node.session_id != session_uuid {
+                return Err(mcp_invalid_params("selected_node_id does not belong to session_id"));
+            }
+            (session, target_node)
+        };
+
+        if session.backend_kind != CONFIGURED_INTERACTIVE_BACKEND_KIND {
+            return Ok(serde_json::json!({
+                "session_id": session_uuid.to_string(),
+                "mode": "backend",
+                "passed": false,
+                "backend_mismatch": true,
+                "backend_replay_available": false,
+                // Issue #165's `backend_unavailable` label, mapped directly
+                // from THIS existing `backend_replay_available` condition —
+                // not re-derived, per `compute_step_progress_labels`'s doc on
+                // why that function never produces this label itself.
+                "progress_labels": ["backend_unavailable"],
+                "detail": format!(
+                    "session.backend_kind {:?} does not match the currently configured backend {:?}",
+                    session.backend_kind, CONFIGURED_INTERACTIVE_BACKEND_KIND
+                ),
+            }));
+        }
+
+        // Source the actual tactic text from the LIVE original session (not
+        // persisted — see the doc comment above).
+        let original_script = match self.interactive_gateway
+            .reconstruct_script(InteractiveSessionHandle(session_uuid), ProofStateNodeId(target_node))
+        {
+            Ok(s) => s,
+            Err(e) => return Ok(serde_json::json!({
+                "session_id": session_uuid.to_string(),
+                "mode": "backend",
+                "passed": false,
+                "backend_mismatch": false,
+                "backend_replay_available": false,
+                "progress_labels": ["backend_unavailable"],
+                "detail": format!(
+                    "live backend session unavailable for replay ({e}) — expected once a session has been closed or after a process restart (the mock backend's live state is in-memory only); this is a real architectural limit shared by BOTH replay modes that need live tactic text (backend replay always, and final_proof's auto-reconstruct-from-selected_node_id path) — if you already have this session's exact tactic_block text from an EARLIER proof_session_reconstruct call, mode=\"final_proof\" with an explicit reconstructed_script_id + tactic_block does NOT depend on live gateway state and remains available"
+                ),
+            })),
+        };
+
+        // Issue #163: use the per-step `tactics` field directly rather than
+        // `tactic_block.split('\n')` — that split is NOT a safe inverse of
+        // `tactics.join("\n")` when a single step's own tactic text
+        // legitimately contains an embedded newline (a multi-line tactic
+        // block); splitting on it would fragment one real step into several
+        // spurious pseudo-steps and misalign the comparison below against
+        // the recorded step boundaries. See `ReconstructedScript::tactics`'s
+        // doc comment in `lean/interactive.rs`.
+        let tactics: Vec<String> = original_script.tactics.clone();
+
+        let request = {
+            let conn = self.conn.lock().await;
+            build_interactive_session_request(&conn, &session.episode_id.to_string(), &session.obligation_id.to_string())?.request
+        };
+
+        let trace = InteractiveSessionTrace {
+            request,
+            steps: tactics.iter().enumerate().map(|(i, t)| InteractiveTraceStep {
+                parent_step: if i == 0 { None } else { Some(i - 1) },
+                tactic: t.clone(),
+            }).collect(),
+        };
+        let replay = self.interactive_gateway.replay_session(&trace).map_err(mcp_invalid_params)?;
+
+        // Compare against the ORIGINAL stored path's steps/nodes — the same
+        // root-to-target_node walk `reconstruct_script` did.
+        let (orig_nodes, orig_steps) = {
+            let conn = self.conn.lock().await;
+            (idb::list_nodes_for_session(&conn, session_uuid).map_err(rs)?, idb::list_steps_for_session(&conn, session_uuid).map_err(rs)?)
+        };
+        let node_by_id: std::collections::HashMap<Uuid, &idb::NodeRow> = orig_nodes.iter().map(|n| (n.id, n)).collect();
+        let mut orig_path = vec![target_node];
+        {
+            let mut cur = target_node;
+            while let Some(p) = node_by_id.get(&cur).and_then(|n| n.parent_node_id) {
+                orig_path.push(p);
+                cur = p;
+            }
+        }
+        orig_path.reverse();
+
+        let mut mismatches = Vec::new();
+        let mut step_reports = Vec::new();
+        for (i, tactic) in tactics.iter().enumerate() {
+            let replayed = &replay.steps[i];
+            let orig_child = orig_path.get(i + 1).copied();
+            let orig_step = orig_child.and_then(|c| orig_steps.iter().find(|s| s.outcome == "applied" && s.child_node_id == Some(c)));
+
+            let replayed_outcome = match replayed.outcome { TacticOutcome::Applied => "applied", TacticOutcome::Failed => "failed" };
+            let orig_outcome = orig_step.map(|s| s.outcome.as_str());
+            let outcome_match = Some(replayed_outcome) == orig_outcome;
+
+            let replayed_tactic_hash = hash_tactic_text(tactic).map_err(mcp_internal_error)?;
+            let tactic_hash_match = orig_step.map(|s| s.tactic_text_hash == replayed_tactic_hash).unwrap_or(false);
+
+            let mut proof_state_hash_match = None;
+            if let (TacticOutcome::Applied, Some(state)) = (replayed.outcome, &replayed.state) {
+                let goals: Vec<ProofGoal> = state.goals.iter().enumerate().map(|(gi, g)| ProofGoal::from_interactive_goal(gi, g)).collect();
+                if let Ok(replayed_hash) = compute_proof_state_hash(&goals, state.tactic_applied.as_deref()) {
+                    if let Some(orig_node) = orig_child.and_then(|c| node_by_id.get(&c)) {
+                        proof_state_hash_match = Some(replayed_hash.full_state_hash == orig_node.proof_state_hash);
+                    }
+                }
+            }
+
+            if !outcome_match || !tactic_hash_match || proof_state_hash_match == Some(false) {
+                mismatches.push(serde_json::json!({
+                    "step_index": i, "original_step_id": orig_step.map(|s| s.id.to_string()),
+                    "outcome_match": outcome_match, "tactic_hash_match": tactic_hash_match, "proof_state_hash_match": proof_state_hash_match,
+                }));
+            }
+            step_reports.push(serde_json::json!({
+                "step_index": i, "replayed_outcome": replayed_outcome, "original_outcome": orig_outcome,
+                "outcome_match": outcome_match, "tactic_hash_match": tactic_hash_match, "proof_state_hash_match": proof_state_hash_match,
+            }));
+        }
+
+        let _ = self.interactive_gateway.close_session(replay.session);
+
+        Ok(serde_json::json!({
+            "session_id": session_uuid.to_string(),
+            "mode": "backend",
+            "backend_mismatch": false,
+            "backend_replay_available": true,
+            // `backend_unavailable` never applies here — the backend WAS
+            // available (this line is only reached when it was).
+            "progress_labels": Vec::<&str>::new(),
+            "passed": mismatches.is_empty(),
+            "replayed_node_path": orig_path.iter().map(|n| n.to_string()).collect::<Vec<_>>(),
+            "steps": step_reports,
+            "mismatches": mismatches,
+        }))
+    }
+
+    /// mode="final_proof" — THE TRUST GATE. Reconstructs the selected
+    /// script (or re-verifies an already-reconstructed one) and resubmits
+    /// it through the EXISTING attempt_claim + episode_step Solve path, by
+    /// calling `do_proof_session_reconstruct`/`do_proof_session_promote_to_attempt`
+    /// directly rather than duplicating their logic — the same "call the
+    /// real internal path" convention `do_proof_session_promote_to_attempt`
+    /// itself already uses for `do_attempt_claim`/`do_episode_step`.
+    async fn replay_final_proof(&self, session_uuid: Uuid, args: ProofSessionReplayArgs) -> Result<serde_json::Value, McpError> {
+        let episode_id = args.episode_id.ok_or_else(|| mcp_invalid_params("mode=\"final_proof\" requires episode_id"))?;
+        let action_request_id = args.action_request_id.ok_or_else(|| mcp_invalid_params("mode=\"final_proof\" requires action_request_id"))?;
+        let idempotency_key = args.idempotency_key.ok_or_else(|| mcp_invalid_params("mode=\"final_proof\" requires idempotency_key"))?;
+        let expected_revision = args.expected_revision.ok_or_else(|| mcp_invalid_params("mode=\"final_proof\" requires expected_revision"))?;
+        let cost_micros = args.cost_micros.ok_or_else(|| mcp_invalid_params("mode=\"final_proof\" requires cost_micros"))?;
+
+        let (script_id, tactic_block, reconstruction) = match (args.reconstructed_script_id, args.tactic_block) {
+            (Some(script_id), Some(tactic_block)) => (script_id, tactic_block, serde_json::Value::Null),
+            (Some(_), None) | (None, Some(_)) => return Err(mcp_invalid_params(
+                "mode=\"final_proof\" requires reconstructed_script_id and tactic_block together, or neither (to reconstruct fresh from selected_node_id)"
+            )),
+            (None, None) => {
+                let selected_node_id = match args.selected_node_id {
+                    Some(id) => id,
+                    None => {
+                        let conn = self.conn.lock().await;
+                        let session = idb::get_session(&conn, session_uuid).map_err(rs)?
+                            .ok_or_else(|| mcp_invalid_params(format!("unknown session_id: {}", session_uuid)))?;
+                        session.selected_final_node_id.or(session.root_node_id)
+                            .ok_or_else(|| mcp_internal_error("session has no root node — internal invariant violated"))?
+                            .to_string()
+                    }
+                };
+                // This auto-reconstruct-from-selected_node_id path goes
+                // through the SAME live interactive_gateway.reconstruct_script
+                // call `replay_backend` depends on — it is NOT independent of
+                // live gateway state (see that method's doc comment). If the
+                // session is closed or the process restarted, tell the
+                // caller the one path that IS independent of live state:
+                // supplying reconstructed_script_id + tactic_block explicitly
+                // from an earlier proof_session_reconstruct call.
+                let reconstruct_args = serde_json::json!({ "session_id": session_uuid.to_string(), "selected_node_id": selected_node_id });
+                let reconstruct_result = self.do_proof_session_reconstruct(reconstruct_args).await.map_err(|e| mcp_invalid_params(format!(
+                    "mode=\"final_proof\" could not auto-reconstruct from selected_node_id ({}): {} — this auto-reconstruct path needs the SAME live gateway state as mode=\"backend\" (see its error message), so it fails the same way once a session is closed or after a process restart; if you already have this session's exact tactic_block text from an earlier proof_session_reconstruct call, retry with that text passed explicitly as reconstructed_script_id + tactic_block instead, which does not need the live gateway",
+                    selected_node_id, e.message
+                )))?;
+                let reconstruct_json = extract_tool_result_json(&reconstruct_result)?;
+                let script_id = reconstruct_json["reconstructed_script_id"].as_str()
+                    .ok_or_else(|| mcp_internal_error("proof_session_reconstruct did not return reconstructed_script_id"))?.to_string();
+                let tactic_block = reconstruct_json["tactic_block"].as_str()
+                    .ok_or_else(|| mcp_internal_error("proof_session_reconstruct did not return tactic_block"))?.to_string();
+                (script_id, tactic_block, reconstruct_json)
+            }
+        };
+
+        let promote_args = serde_json::json!({
+            "session_id": session_uuid.to_string(), "reconstructed_script_id": script_id, "tactic_block": tactic_block,
+            "episode_id": episode_id, "action_request_id": action_request_id,
+            "idempotency_key": idempotency_key, "expected_revision": expected_revision, "cost_micros": cost_micros,
+        });
+        let promote_result = self.do_proof_session_promote_to_attempt(promote_args).await?;
+        let promote_json = extract_tool_result_json(&promote_result)?;
+
+        Ok(serde_json::json!({
+            "session_id": session_uuid.to_string(),
+            "mode": "final_proof",
+            "reconstruction": reconstruction,
+            "promotion": promote_json,
+            "verified_attempt_id": promote_json["verified_attempt_id"],
+            "verification_outcome": promote_json["verification_outcome"],
+            "passed": promote_json["episode_step_result"]["accepted"].as_bool().unwrap_or(false),
+        }))
     }
 }
 
@@ -4884,10 +7520,20 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EpisodeCreateArgs>("episode_create", "Initialize an episode from a problem version whose fidelity_status is 'verified' or 'attested' + config. Returns first observation"),
             make_tool::<EpisodeResetArgs>("episode_reset", "Nondestructive: creates new episode from existing config, sets parent_episode_id"),
             make_tool::<EpisodeObserveArgs>("episode_observe", "Get the active observation and pending action request"),
-            make_tool::<AttemptClaimArgs>("attempt_claim", "Claim a pending action request to obtain the action_attempt_id + claim_token required by episode_step. Idempotent on idempotency_key"),
+            make_tool::<AttemptClaimArgs>("attempt_claim", "Claim a pending action request to obtain the action_attempt_id + claim_token required by episode_step. Idempotent on idempotency_key. Claims expire ~5 min after issue (see claim_expiration in the response), but an expired claim whose request is still untaken is revived automatically — by episode_step itself, or by re-calling attempt_claim with the SAME idempotency_key — so burst-parallel claim/step batches need no client-side throttling; only a claim whose request was taken by ANOTHER attempt must be re-claimed with a fresh key"),
             make_tool::<EpisodeStepArgs>("episode_step", "Submit a typed action against a claimed attempt. `action` is internally tagged — exactly one of: {\"type\":\"solve\",\"proof_term\":\"  norm_num\"} (Lean tactic block proving the target obligation), {\"type\":\"decompose\",\"sub_lemmas\":[\"<lean statement>\", ...]} (split the obligation into child lemmas), {\"type\":\"give_up\"} (terminate the episode). `expected_revision` must equal the episode_revision advertised on the action_request. Settles any lease attached to the attempt atomically. FLATTENED-SEQUENCE TRAP (issue #67): in a flat_tactic_sequence chain, an inline `by` consumes EVERYTHING after it on the line — `have h : T := by omega; have h2 : U := ...` parses the second `have` INSIDE h's completed by-block and dies with 'No goals to be solved' while the outer goal stays unsolved. Always parenthesize an inline by-block that is followed by more tactics: `have h : T := (by omega); have h2 : U := (by omega); linarith`"),
             make_tool::<EpisodeStatusArgs>("episode_status", "Retrieve current episode state, revision, budget, step count"),
             make_tool::<EpisodeCloseArgs>("episode_close", "Gracefully truncate an episode"),
+            make_tool::<ProofSessionStartArgs>("proof_session_start", "Issue #161: start a live, tactic-by-tactic interactive proof-state session (Pantograph-style) for ONE existing episode obligation, backed by an InteractiveProofGateway (issue #159) — today only the deterministic \"mock\" backend (no real Lean elaborator; every nonempty tactic closes the first open goal). SEARCH EVIDENCE ONLY, never proof authority — use this instead of episode_step's Solve/SubmitModule when you want to work a goal state tactic-by-tactic before committing to a whole-proof submission; see readme_first for when to prefer this family over Solve/SubmitModule. Requires obligation_id to be a real episode_obligations row already belonging to episode_id (e.g. from episode_create or a prior Decompose), and expected_revision to match the episode's current_revision (optionally also expected_observation_hash against the episode's current progress hash). Returns session_id + the root node_id needed for every later proof_session_* call on this session"),
+            make_tool::<ProofSessionObserveArgs>("proof_session_observe", "Issue #161: read back a session's currently selected node — goals, local context, target, proof_state_hash, a branch summary (sibling/child node counts), and which reconstructed scripts already exist for this session (each with its verified_attempt_id/verification_outcome, so you can see at a glance whether one was already promoted). Read-only; SEARCH EVIDENCE ONLY, never proof authority"),
+            make_tool::<ProofSessionTacticStepArgs>("proof_session_tactic_step", "Issue #161: apply ONE tactic to parent_node_id within an open session. On success, records a new child proof-state node and moves the session's selected node forward, returning goals/is_solved/proof_state_hash for the new node. On failure, records a structured diagnostic (#162's ProofStateDiagnostic, wrapping the same LeanDiagnostic shape episode_step's own failures use) as a normal, queryable step row — NEVER erased or turned into a bare error string — and leaves the selected node unchanged. Every call (success or failure) produces a stable step_id for later export/replay. SEARCH EVIDENCE ONLY — a is_solved:true node is not a verified proof; call proof_session_reconstruct + proof_session_promote_to_attempt to actually verify one"),
+            make_tool::<ProofSessionBranchArgs>("proof_session_branch", "Issue #161: like proof_session_tactic_step, but explicitly frames the call as starting a NAMED branch from any existing node (parent_node_id need not be the session's current selected node) — prior branches from the same parent are never deleted or overwritten (interactive_proof_nodes is append-only). branch_name is a free-text label echoed back in the response for your own bookkeeping; it is not interpreted or unique-constrained. Same structured-diagnostic-on-failure and stable step_id guarantees as proof_session_tactic_step"),
+            make_tool::<ProofSessionSelectNodeArgs>("proof_session_select_node", "Issue #161: move the session's convenience \"selected node\" pointer to any existing node in this session's tree (e.g. after branching, to switch which branch you're working). CONVENIENCE STATE ONLY — this never applies a tactic, verifies anything, or is proof authority in any sense; it only changes what proof_session_observe / proof_session_reconstruct default to next"),
+            make_tool::<ProofSessionReconstructArgs>("proof_session_reconstruct", "Issue #161: reconstruct a Lean tactic script from the root-to-selected_node_id path of a session's proof-state tree (#159's reconstruct_script), record its source hash (interactive_proof_reconstructed_scripts), and return the reconstructed tactic_block text directly — raw tactic text is not durably stored server-side, only its hash, so this response is the ONE place you get it back verbatim. reports_complete reflects the session's OWN internal is_solved claim at the selected node — it is still SEARCH EVIDENCE ONLY, not a verified proof. To actually verify, pass the returned reconstructed_script_id and the EXACT tactic_block back into proof_session_promote_to_attempt"),
+            make_tool::<ProofSessionPromoteToAttemptArgs>("proof_session_promote_to_attempt", "Issue #161: THE ONLY proof_session_* tool that can affect an obligation's status. Takes a reconstructed_script_id (from proof_session_reconstruct) plus the exact tactic_block text (checked against that script's recorded proof_source_hash — a caller cannot promote text that wasn't actually reconstructed from this session), then internally calls the EXACT SAME attempt_claim + episode_step(Solve) internal path a normal two-call round trip uses: claims action_request_id with idempotency_key/expected_revision, then submits a Solve action with the reconstructed tactic_block through the real Lean kernel. Requires action_request_id to target the SAME obligation this session was interactively working on. The response's verification_outcome is read directly off the resulting action_attempts row (committed/rejected/infrastructure_failed/...), and episode_step_result carries the full underlying episode_step response (accepted/outcome/reward/...) — this tool changes nothing by itself; the kernel verdict inside episode_step_result is what (if anything) changed the obligation's status"),
+            make_tool::<ProofSessionCloseArgs>("proof_session_close", "Issue #161: mark a session closed with reason \"closed\" (normal completion), \"abandoned\" (given up on), or \"superseded\" (replaced by a different session/approach). SESSION LIFECYCLE ONLY — this records no new proof-state evidence, applies no tactic, and cannot affect an obligation's status; it is neither the evidence-recording nor the final-verification half of this tool family. The session's full trace (every node/step, including failed tactics) stays visible and queryable afterward — closing never deletes anything. Also best-effort releases the live gateway's in-memory session"),
+            make_tool::<ProofSessionExportArgs>("proof_session_export", "Issue #164 (closes out #161's deferred item): export ONE interactive proof session, scoped narrower than proof_export/trajectory_export (which cover a whole episode's interactive sessions among everything else). format: \"public_summary\" (default — session count fixed at 1, backend kind, step/branch counts, final outcome, high-level failure categories; never requires the opt-in flag, never carries tactic/goal text) | \"audit_archive\" (full node/step trace, hashes, reconstructed-script linkage to the final verification attempt, real tactic text for FAILED steps) | \"training_export\" (per-step records including negative-space failed routes, plus the reconstructed script's real verified proof text ONLY when promoted). Same allow_putnambench_proof_export gate as proof_export/trajectory_export for audit_archive/training_export on a benchmark-linked episode. SEARCH EVIDENCE ONLY unless a reconstructed script's verified_attempt_id/verification_outcome show kernel_verified — never inferred from is_solved/reports_complete alone"),
+            make_tool::<ProofSessionReplayArgs>("proof_session_replay", "Issue #163: replay a session from PERSISTED DB state (interactive_proof_sessions/_nodes/_steps/_reconstructed_scripts for session_id), not a caller-supplied in-memory trace — a closed/historical session stays replayable from what is actually stored. mode=\"trace_only\": pure DB-record consistency check (no backend/kernel call) — verifies every node's parent link resolves, every applied step's child node exists and its recorded proof_state_hash is internally consistent with its own persisted goals + tactic-text hash, session state/closed_at consistency, and returns a branch_report that explicitly surfaces failed steps and abandoned (unselected, still-open) leaf nodes rather than hiding them. mode=\"backend\": re-runs the root-to-selected_node_id tactic path against a FRESH interactive-backend session (sourcing tactic text from the live original session, since raw text is never durably stored) and compares outcomes/hashes to what was recorded — reports backend_mismatch if the session's recorded backend_kind no longer matches the currently configured backend, or backend_replay_available:false if the live backend can no longer supply the path (e.g. after proof_session_close or a process restart). mode=\"final_proof\": THE TRUST GATE — reconstructs the selected script (or re-verifies an already-reconstructed one via reconstructed_script_id+tactic_block) and resubmits it through the EXISTING attempt_claim + episode_step Solve path by calling proof_session_reconstruct's/proof_session_promote_to_attempt's own internal logic, not a second parallel verification path. Only final_proof's result is proof evidence — trace_only and backend remain SEARCH EVIDENCE ONLY, same as every other proof_session_* tool"),
             make_tool::<ModelCallReserveArgs>("model_call_reserve", "Reserve a model-call budget lease and immediately debit bounded episode budget"),
             make_tool::<ModelCallSettleArgs>("model_call_settle", "Settle or void a lease, applying only the reserved-vs-actual budget delta"),
             make_tool::<TrajectoryExportArgs>("trajectory_export", "Export trajectory with pagination (cursor + page_size). Raw event payload_json can expose a completed proof body (proof_term/module_items) — for a benchmark-linked episode this requires allow_putnambench_proof_export=true, same contamination policy as proof_export (issue #33)"),
@@ -5026,6 +7672,14 @@ impl ServerHandler for ChatDbMcp {
                         "decompose": "Use Decompose to split the current obligation into child sub-lemma obligations when the root goal is too large to attack directly.",
                         "why_this_matters": "A proof attempt checked some OTHER way (e.g. a bare `lake env lean` invocation outside this episode, or an internal LeanGateway call bypassed around episode_step) and then only submitted as a final winning SubmitModule/Solve loses every failed attempt, every Lean diagnostic, every repair step — the data this environment exists to preserve. Untracked checks do not count as valid benchmark or training attempts, and a run built that way should be reported as incomplete, not as a clean success."
                     },
+                    "interactive_sessions": {
+                        "what_this_is": "Issue #161's proof_session_* tool family (proof_session_start / proof_session_observe / proof_session_tactic_step / proof_session_branch / proof_session_select_node / proof_session_reconstruct / proof_session_promote_to_attempt / proof_session_close) lets you work a single obligation's goal state TACTIC-BY-TACTIC — Pantograph-style live proof-state interaction — instead of only submitting a complete Solve/SubmitModule and finding out afterward whether it checked. This sits ALONGSIDE episode_step, not on top of it: nothing in this family changes how Solve/SubmitModule/Decompose/GiveUp work.",
+                        "when_to_use_interactive": "Prefer proof_session_* when you want to explore a goal incrementally — try one tactic, see the resulting goal state, branch to try an alternative from an earlier point (proof_session_branch), and only commit to a full submission once you can see a closed (is_solved) node. This is especially useful for a goal you are not confident you can write correctly in one shot.",
+                        "when_to_use_solve_or_submit_module": "Prefer episode_step's Solve/SubmitModule directly when you already have (or can write in one pass) a complete tactic script or module — it is fewer round trips and goes straight to real Lean kernel verification with no intermediate bookkeeping.",
+                        "trust_boundary_for_interactive_sessions": "EVERY proof_session_* response is SEARCH EVIDENCE, NEVER PROOF AUTHORITY — a node reporting is_solved:true is only the session's OWN internal claim (today's \"mock\" backend deterministically closes the first open goal on every nonempty tactic; it never asks a real elaborator whether the tactic actually discharges the goal). The ONLY way an interactive session can affect an obligation's status is: proof_session_reconstruct (turn a root-to-node path into a tactic script) followed by proof_session_promote_to_attempt, which resubmits that EXACT script through the existing attempt_claim + episode_step Solve path — the same real Lean kernel check every other Solve goes through. Do not report a goal as proved based on proof_session_tactic_step/observe/branch/select_node/reconstruct output alone.",
+                        "external_sessions_warning": "A Pantograph install you run yourself, a bare `lake env lean` REPL, or ANY other proof-state tool driven OUTSIDE these proof_session_* tools produces NO trace in this environment at all — proof_session_* only records steps you route through it, and there is no separate ingestion path for an externally-run session's history. If you explore a goal outside MCP, either replay the tactic decisions that mattered through proof_session_tactic_step/branch so they become real, queryable search evidence here, or skip the session machinery entirely and submit the final result straight through Solve/SubmitModule (which never requires an interactive session at all). An external session succeeding tells this environment nothing until its result is submitted through one of those two tracked paths.",
+                        "backend_availability": "Two `backend` values are recognized by proof_session_start. \"mock\" (issue #161, the default) is deterministic and always available, but has no real Lean elaborator behind it — every nonempty tactic just closes the first open goal, so its outcomes carry no elaboration evidence. \"pantograph\" (issue #166) is a RECOGNIZED value, not yet a USABLE one: it runs a real PATH/lake-manifest/toolchain compatibility probe against this environment and always fails closed today, because this prototype has no process-spawning/IPC implementation behind it — check environment_describe's pantograph_available/pantograph_reason flags for exactly why, in this environment, right now. Any other `backend` value is rejected outright."
+                    },
                     "lookup_and_planning_tools": "Use lean_declaration_lookup, mathlib_search_declarations, mathlib_search_local_artifacts, proof_pattern_search, draft_create/draft_extract_moves, and formalization_plan_* tools rather than an external side channel for the same job during a tracked run — that keeps the reasoning trail inside the environment's own ledger, replayable and auditable later.",
                     "cost_boundary": "cost_micros (episode_step), model_call_reserve/model_call_settle, and the episode budget ledger are enforcement/accounting mechanisms for this environment's MCP-visible budget, not proof-soundness claims. episode_step.cost_micros is reserved before a step executes; model_call_reserve immediately reserves bounded episode budget; model_call_settle adjusts only the reserved-vs-actual delta or refunds a voided reservation. They are NOT the total cost of running you (the external host/model). Host-side reasoning cost (tokens spent thinking, editing, or calling other tools before or around an MCP call) is invisible to LLM-Driven Proof Search Environment entirely unless you report it through model_call_reserve/model_call_settle. Never present MCP-visible cost_micros as if it were the complete cost of a run.",
                     "benchmark_mode": "Development/exploratory use and a frozen benchmark run (e.g. PutnamBench) are different modes with different rules. In benchmark mode: every candidate attempt must flow through episode_step (see proof_attempts above) so the run counts as valid evidence, not just a trophy case; and public reports of benchmark results follow a redaction policy — a public summary must not contain completed proof source by default, only aggregate status/hashes/replay information. Check the benchmark documentation (docs/benchmarks/) for the exact export mode to use before publishing any benchmark result.",
@@ -5033,7 +7687,8 @@ impl ServerHandler for ChatDbMcp {
                         "Do not infer that a declaration is absent from the pinned Mathlib from one 'unknown_declaration' result — call lean_declaration_lookup(deep_check=true) first.",
                         "Do not treat a prior model's or paper's proof as verified — it is a candidate until THIS pinned verifier checks it via episode_step.",
                         "Do not submit a proof attempt that was actually checked outside this episode's tracked flow and present it as if it were tracked.",
-                        "Do not present MCP-visible cost accounting as the total cost of the run."
+                        "Do not present MCP-visible cost accounting as the total cost of the run.",
+                        "Do not report a goal as proved because a proof_session_tactic_step/observe/branch node shows is_solved:true — that is the interactive session's own internal claim, not a kernel verdict. Only proof_session_promote_to_attempt's resulting episode_step_result (or a direct episode_step Solve/SubmitModule) is evidence of a kernel verdict."
                     ]
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
@@ -5046,6 +7701,10 @@ impl ServerHandler for ChatDbMcp {
                 // the same checkout actually compiles. Registry entries are
                 // metadata only — they never grant proof authority.
                 let kit_registry = embedded_kit_registry();
+                // Issue #166: computed once, reused for both flags below, so
+                // "pantograph_available" and "pantograph_reason" can never
+                // disagree with each other.
+                let pantograph_status = detect_pantograph_status(&self.lean_project_path);
                 let res = serde_json::json!({
                     "environment_version": "0.3.27",
                     "kit_registry": kit_registry,
@@ -5060,6 +7719,19 @@ impl ServerHandler for ChatDbMcp {
                     "lean_environment": self.lean_environment.as_ref().map(|e| serde_json::json!({
                         "descriptor": e.descriptor, "hash": e.hash
                     })),
+                    // Issue #166: a real (not hardcoded) capability flag for
+                    // the optional Pantograph interactive backend — probes
+                    // this environment's PATH and lake-manifest.json the
+                    // same way `proof_session_start`'s `backend: "pantograph"`
+                    // path does, via the SAME `detect_pantograph_status`
+                    // function, so this flag and that tool's actual behavior
+                    // can never disagree. Always `false` in this prototype
+                    // (see `PantographInteractiveGateway`'s doc for why even
+                    // a detected-and-toolchain-matching Pantograph still
+                    // wouldn't flip this to `true`) — `pantograph_reason`
+                    // explains specifically why.
+                    "pantograph_available": pantograph_status.is_available(),
+                    "pantograph_reason": pantograph_status.reason(),
                     "action_schema": action_schema,
                     "action_examples": [
                         {"type": "solve", "proof_term": "  norm_num"},
@@ -5086,8 +7758,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 89,
-                        "total_tool_count": 89,
+                        "classified_tool_count": 99,
+                        "total_tool_count": 99,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -5983,6 +8655,106 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none",
                                 "required_run_mode": "any — but the trust assertion itself is a maintainer-level act; the audit row is what makes that accountable",
                                 "unresolved_design_question": "should raising trust additionally require a second, distinct approver (two-person rule)? Left open — single-approver-with-audit matches the rest of the attestation surface today"
+                            },
+                            "proof_session_start": {
+                                "side_effect": "mutating — inserts interactive_proof_sessions + its root interactive_proof_nodes row; never touches episodes/episode_obligations/action_attempts",
+                                "trust_level": "search_evidence_only — issue #161/#159/#162's trust boundary: nothing this tool (or any other proof_session_* tool except proof_session_promote_to_attempt) writes can mark an obligation proved",
+                                "cost_surface": "none tracked — the mock backend is in-memory and synchronous; a future real backend (e.g. Pantograph) would need its own cost accounting, not yet designed",
+                                "benchmark_safety": "contamination_risk at the source, same category as episode_step's Solve proof_term: the session's goal/tactic content is untracked search content until reconstructed+promoted; issue #164 added the same redaction gate proof_export/trajectory_export already have to proof_export/trajectory_export/proof_session_export before any interactive trace leaves this environment",
+                                "replayability": "not yet replayable across process restarts — MockInteractiveGateway's live session state is in-memory only (Arc-shared for this server process's lifetime); the persisted interactive_proof_nodes/interactive_proof_steps rows are a durable audit trail but cannot resume live tactic-stepping after a restart with today's mock backend",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body (goal/tactic text, same category as episode_step's Solve payload)",
+                                "required_run_mode": "any — enforcement belongs at export time (proof_export/trajectory_export/proof_session_export, issue #164), not session-start time"
+                            },
+                            "proof_session_observe": {
+                                "side_effect": "read_only",
+                                "trust_level": "search_evidence_only",
+                                "cost_surface": "none",
+                                "benchmark_safety": "contamination_risk — returns goal/tactic content already in the session; same export-gate note as proof_session_start",
+                                "replayability": "deterministic given current DB state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body",
+                                "required_run_mode": "any"
+                            },
+                            "proof_session_tactic_step": {
+                                "side_effect": "mutating — inserts one interactive_proof_nodes row (on success) and one interactive_proof_steps row (always, success or failure), and moves interactive_proof_sessions.selected_final_node_id forward on success",
+                                "trust_level": "search_evidence_only — the mock backend's own doc comment is explicit that it never asks a real elaborator whether a tactic actually discharges a goal; a real (e.g. Pantograph) backend would still only be search evidence per the module-level trust boundary, not a kernel verdict",
+                                "cost_surface": "none tracked for the mock backend (synchronous, in-memory); wall_time_ms is recorded per step regardless",
+                                "benchmark_safety": "contamination_risk — tactic text is the same category of content episode_step's Solve proof_term is",
+                                "replayability": "replay_session (#159) exists at the InteractiveProofGateway level but is not yet exposed as its own MCP tool by #161 — deferred, see PR description",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body",
+                                "required_run_mode": "any"
+                            },
+                            "proof_session_branch": {
+                                "side_effect": "mutating — identical write shape to proof_session_tactic_step (it IS proof_session_tactic_step's shared core, apply_tactic_core, plus a caller-facing branch_name label)",
+                                "trust_level": "search_evidence_only",
+                                "cost_surface": "none tracked",
+                                "benchmark_safety": "contamination_risk — same as proof_session_tactic_step",
+                                "replayability": "same as proof_session_tactic_step",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body",
+                                "required_run_mode": "any"
+                            },
+                            "proof_session_select_node": {
+                                "side_effect": "mutating — updates interactive_proof_sessions.selected_final_node_id only; writes no node/step/diagnostic content",
+                                "trust_level": "mcp_generated — pure convenience-pointer bookkeeping, not evidence about the proof state itself (the pointed-to node's content was already recorded by whatever step created it)",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output by itself (a node id + which goals it points at, echoed back) — the echoed goals field carries the same contamination_risk category as proof_session_observe",
+                                "replayability": "deterministic given current DB state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body (via the echoed goals field)",
+                                "required_run_mode": "any"
+                            },
+                            "proof_session_reconstruct": {
+                                "side_effect": "mutating — inserts one interactive_proof_reconstructed_scripts row (verified_attempt_id/verification_outcome always NULL at insert — see schema_v1.rs's doc comment on that table) and updates interactive_proof_sessions.reconstructed_script_hash",
+                                "trust_level": "search_evidence_only — reports_complete is the session's OWN is_solved claim, never a kernel verdict; the module doc for crate::lean::interactive::ReconstructedScript is explicit about this",
+                                "cost_surface": "none",
+                                "benchmark_safety": "contamination_risk (THE SOURCE of the raw tactic_block text a caller could copy straight into a public export) — this is exactly the kind of content proof_export's/trajectory_export's/proof_session_export's #33 redaction gates exist to keep out of public exports (issue #164 gave proof_session_export the identical gate)",
+                                "replayability": "deterministic given the same session/node state and the same (deterministic, mock) backend",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body",
+                                "required_run_mode": "any — enforcement belongs at export time"
+                            },
+                            "proof_session_promote_to_attempt": {
+                                "side_effect": "mutating — THE ONLY proof_session_* tool that can affect episode_obligations status, and only INDIRECTLY: it calls the exact same internal do_attempt_claim/do_episode_step methods episode_step's own MCP arm calls, so every write episode_step can make (action_attempts, episodes, episode_obligations, episode_verified_lemmas/_modules) can happen here too, via that real path — plus one interactive_proof_reconstructed_scripts UPDATE (verified_attempt_id/verification_outcome) after the fact",
+                                "trust_level": "verifier_backed for the actual proof verdict (it IS episode_step's Solve path, real Lean kernel decides), but the CHOICE of what tactic_block to submit is untrusted_input, exactly like episode_step's Solve proof_term — this tool adds one extra integrity check episode_step alone doesn't have: the submitted tactic_block must hash-match the named reconstructed_script_id's recorded proof_source_hash, so a caller cannot claim interactive provenance for text that wasn't actually reconstructed from this session",
+                                "cost_surface": "verifier_side, identical to episode_step's Solve path (this tool does not call the Lean gateway itself — do_episode_step does)",
+                                "benchmark_safety": "contamination_risk at the source, identical to episode_step's Solve action — same content, same gate requirement at export time",
+                                "replayability": "replayable_with_hashes via the SAME mechanism episode_step's own action_attempts row already gives (episode_replay re-executes typed actions); the interactive session's OWN branching history is separately, append-only recorded regardless of promotion outcome",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body",
+                                "required_run_mode": "any — enforcement belongs at export time, exactly like episode_step"
+                            },
+                            "proof_session_close": {
+                                "side_effect": "mutating — updates interactive_proof_sessions.state/closed_at/close_reason only; deletes nothing (every node/step stays queryable)",
+                                "trust_level": "mcp_generated — a status transition, not new evidence about the proof state",
+                                "cost_surface": "none",
+                                "benchmark_safety": "safe_public_output",
+                                "replayability": "deterministic given current DB state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "none",
+                                "required_run_mode": "any"
+                            },
+                            "proof_session_replay": {
+                                "side_effect": "mode-dependent — trace_only and backend are read-only (no interactive_proof_* writes); final_proof is mutating via the EXACT SAME do_proof_session_reconstruct/do_proof_session_promote_to_attempt internal paths those tools themselves use (a fresh interactive_proof_reconstructed_scripts row, plus whatever action_attempts/episodes/episode_obligations writes a real Solve verification makes)",
+                                "trust_level": "trace_only and backend are search_evidence_only (a pure DB-consistency check and a live-backend re-run, neither touches the kernel); final_proof is verifier_backed — it IS the trust gate, the real Lean kernel decides, by reusing episode_step's own Solve path rather than a second verification path",
+                                "cost_surface": "none for trace_only/backend; identical to episode_step's Solve path for final_proof (this tool does not call the Lean gateway itself — do_episode_step does, via do_proof_session_promote_to_attempt)",
+                                "benchmark_safety": "contamination_risk — backend/final_proof can surface tactic/proof-body content (same category as proof_session_tactic_step/reconstruct); trace_only's report also echoes diagnostic categories/tactic hashes from stored steps",
+                                "replayability": "this tool IS the replay mechanism — trace_only/backend read persisted state deterministically given unchanged DB/live-gateway state; final_proof's result is replayable_with_hashes via the same action_attempts row episode_replay already re-executes",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body (goal/tactic/diagnostic content echoed in the report, or submitted for verification in final_proof mode)",
+                                "required_run_mode": "any — enforcement belongs at export time, exactly like the rest of the proof_session_* family"
+                            },
+                            "proof_session_export": {
+                                "side_effect": "read_only — renders persisted interactive_proof_sessions/_nodes/_steps/_reconstructed_scripts state; writes nothing",
+                                "trust_level": "search_evidence_only unless a rendered reconstruction's verified_attempt_id/verification_outcome show kernel_verified (verification_outcome == \"committed\") — never inferred from is_solved/reports_complete alone (issue #164's trust-boundary rule, identical to proof_export's interactive-session sections)",
+                                "cost_surface": "none",
+                                "benchmark_safety": "public_summary is safe_public_output (counts/categories only, never gated); audit_archive/training_export are contamination_risk (real tactic text for FAILED steps, and a promoted reconstruction's real verified proof text) — gated by allow_putnambench_proof_export exactly like proof_export/trajectory_export (issue #33/#164)",
+                                "replayability": "deterministic given current DB state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body for audit_archive/training_export; none for public_summary",
+                                "required_run_mode": "any"
                             }
                         }
                     }
@@ -6542,319 +9314,8 @@ impl ServerHandler for ChatDbMcp {
                     }
                 }
             }
-            "attempt_claim" => {
-                let args: AttemptClaimArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let ep_uuid = Uuid::parse_str(&args.episode_id)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid episode Uuid: {}", e)))?;
-                let req_uuid = Uuid::parse_str(&args.action_request_id)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid action_request Uuid: {}", e)))?;
-
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                attempts::attempt_recover_expired(&tx).map_err(rs)?;
-                attempts::request_recover_expired(&tx, ep_uuid).map_err(rs)?;
-
-                let ep_state: Option<String> = tx.query_row(
-                    "SELECT state FROM episodes WHERE id = ?1", [&args.episode_id], |row| row.get(0)
-                ).optional().map_err(rs)?;
-                match ep_state.as_deref() {
-                    None => return Err(mcp_invalid_params(format!("unknown episode_id: {}", args.episode_id))),
-                    Some("terminated") | Some("truncated") => return Err(mcp_invalid_params(format!(
-                        "episode {} is {} — create a new episode (episode_create) or fork it (episode_reset)",
-                        args.episode_id, ep_state.as_deref().unwrap()
-                    ))),
-                    _ => {}
-                }
-
-                let claim = attempts::attempt_claim(&tx, ep_uuid, req_uuid, &args.idempotency_key, args.expected_revision)
-                    .map_err(rs)?;
-
-                match claim {
-                    Some(c) => {
-                        tx.commit().map_err(rs)?;
-                        let res = serde_json::json!({
-                            "action_attempt_id": c.attempt_id.to_string(),
-                            "claim_token": c.claim_token,
-                        });
-                        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-                    }
-                    None => {
-                        // Diagnose exactly why the claim was refused instead of a bare error.
-                        let req_info: Option<(String, Option<String>)> = tx.query_row(
-                            "SELECT status, expiration_at FROM action_requests WHERE id = ?1 AND episode_id = ?2",
-                            (&args.action_request_id, &args.episode_id),
-                            |row| Ok((row.get(0)?, row.get(1)?)),
-                        ).optional().map_err(rs)?;
-
-                        let key_used: Option<String> = tx.query_row(
-                            "SELECT status FROM action_attempts WHERE episode_id = ?1 AND idempotency_key = ?2",
-                            (&args.episode_id, &args.idempotency_key),
-                            |row| row.get(0),
-                        ).optional().map_err(rs)?;
-
-                        let msg = if let Some(attempt_status) = key_used {
-                            format!(
-                                "idempotency_key '{}' was already used by an attempt now in state '{}' — retry with a fresh idempotency_key",
-                                args.idempotency_key, attempt_status
-                            )
-                        } else {
-                            match req_info {
-                                None => format!("unknown action_request_id {} for episode {} — call episode_observe for the current request", args.action_request_id, args.episode_id),
-                                Some((status, exp)) => match status.as_str() {
-                                    "claimed" => "request is currently claimed by another attempt (claims auto-expire ~5 min after issue and are recovered on the next observe/claim) — call episode_observe and retry".to_string(),
-                                    "fulfilled" => "request was already fulfilled by a committed step — call episode_observe for the next request".to_string(),
-                                    "expired" | "cancelled" => format!(
-                                        "action request {}{} — call episode_observe for the current request",
-                                        status,
-                                        exp.map(|e| format!(" (expired at {})", e)).unwrap_or_default()
-                                    ),
-                                    other => format!("request is in state '{}' and not claimable — call episode_observe", other),
-                                },
-                            }
-                        };
-                        Err(mcp_invalid_params(msg))
-                    }
-                }
-            }
-            "episode_step" => {
-                let args: EpisodeStepArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!(
-                        "Invalid params: {}. `action` must be one of: {{\"type\":\"solve\",\"proof_term\":\"  norm_num\"}} | {{\"type\":\"decompose\",\"sub_lemmas\":[\"...\"]}} | {{\"type\":\"submit_module\",\"module_items\":[{{\"item_kind\":\"def\",\"name\":\"f\",\"type_signature\":\"Nat → Nat\",\"body\":\"fun n => n\"}}],\"root_theorem\":{{\"name\":\"root\",\"statement\":\"<must hash-match registered root>\",\"proof_term\":\"  rfl\"}}}} | {{\"type\":\"give_up\"}} (see environment_describe.action_schema)", e
-                    )))?;
-
-                if args.cost_micros < 0 {
-                    return Err(mcp_invalid_params("invalid_cost: cost_micros must be >= 0"));
-                }
-
-                let ep_uuid = Uuid::parse_str(&args.episode_id)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid episode Uuid: {}", e)))?;
-
-                let attempt_uuid = Uuid::parse_str(&args.action_attempt_id)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid attempt Uuid: {}", e)))?;
-
-                let mut conn = self.conn.lock().await;
-
-                // Everything that touches `tx1` lives in this block and the block ends
-                // (dropping `tx1`) before any `.await` — a `Transaction` borrows from
-                // `Connection`, which is `!Sync` (hence `!Send`), so it must be
-                // LEXICALLY out of scope, not merely logically unused, before crossing
-                // an await point in an async fn (the generator transform otherwise
-                // reserves state for it and the whole future stops being `Send`).
-                // `conn` itself is only ever mutably BORROWED by `tx1.transaction()`,
-                // never moved, so it's still ours to use/drop once this block ends.
-                enum Prepared {
-                    Resolved(PostProcessing),
-                    NeedsGateway { request: step::GatewayRequest, ctx: step::FinalizeContext },
-                }
-                let (prepared, target_obligation_id, state_hash_before) = {
-                    let tx1 = conn.transaction().map_err(rs)?;
-                    attempts::attempt_recover_expired(&tx1).map_err(rs)?;
-
-                    // Capture what this attempt targets before attempt_prepare mutates
-                    // state, so the trajectory payload reflects what was actually acted on.
-                    let action_request_id: Option<String> = tx1.query_row(
-                        "SELECT action_request_id FROM action_attempts WHERE id = ?1",
-                        [args.action_attempt_id.clone()],
-                        |row| row.get(0),
-                    ).optional().map_err(rs)?;
-                    let target_obligation_id: Option<String> = match &action_request_id {
-                        Some(rid) => tx1.query_row(
-                            "SELECT target_obligation_id FROM action_requests WHERE id = ?1",
-                            [rid], |row| row.get::<_, Option<String>>(0),
-                        ).optional().map_err(rs)?.flatten(),
-                        None => None,
-                    };
-                    let state_hash_before: String = match &action_request_id {
-                        Some(rid) => tx1.query_row(
-                            "SELECT state_hash_before FROM action_requests WHERE id = ?1",
-                            [rid], |row| row.get::<_, Option<String>>(0),
-                        ).optional().map_err(rs)?.flatten().unwrap_or_else(|| "GENESIS".to_string()),
-                        None => "GENESIS".to_string(),
-                    };
-
-                    // Two-phase commit: `attempt_prepare` validates the attempt/claim/CAS
-                    // and either (a) fully executes a non-Lean action (Decompose / GiveUp /
-                    // ExternalResponseRejected / a policy-rejected SubmitModule) within
-                    // tx1, or (b) marks the attempt 'executing' and returns exactly what's
-                    // needed to call the Lean gateway — WITHOUT calling it. Case (b) is why
-                    // this is split: the gateway call (up to 60-120s) must never run while
-                    // the DB mutex (`self.conn`) is held, or every other concurrent tool
-                    // call on this session blocks on it for the duration.
-                    let prep_res = step::attempt_prepare(
-                        &tx1, attempt_uuid, args.expected_revision, &args.claim_token, &args.action, args.cost_micros as i128,
-                    );
-
-                    let prepared = match prep_res {
-                        Err(e) => {
-                            let post = run_step_post_processing(
-                                &tx1, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
-                                Err(e), &target_obligation_id, &state_hash_before,
-                            )?;
-                            tx1.commit().map_err(rs)?;
-                            Prepared::Resolved(post)
-                        }
-                        Ok(step::PrepOutcome::Done { outcome, .. }) => {
-                            settle_reserved_model_call_leases_for_attempt(
-                                &tx1,
-                                &args.episode_id,
-                                &args.action_attempt_id,
-                                args.cost_micros,
-                            )?;
-                            let post = run_step_post_processing(
-                                &tx1, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
-                                Ok(outcome), &target_obligation_id, &state_hash_before,
-                            )?;
-                            tx1.commit().map_err(rs)?;
-                            Prepared::Resolved(post)
-                        }
-                        Ok(step::PrepOutcome::NeedsGateway { request, ctx }) => {
-                            settle_reserved_model_call_leases_for_attempt(
-                                &tx1,
-                                &args.episode_id,
-                                &args.action_attempt_id,
-                                args.cost_micros,
-                            )?;
-                            tx1.commit().map_err(rs)?; // commit prepare-only writes (mark-executing, attempt_count)
-                            Prepared::NeedsGateway { request, ctx }
-                        }
-                    };
-                    (prepared, target_obligation_id, state_hash_before)
-                }; // tx1 fully out of scope here — safe to cross an .await below.
-
-                let post = match prepared {
-                    Prepared::Resolved(post) => post,
-                    Prepared::NeedsGateway { request, ctx } => {
-                        drop(conn); // RELEASE THE LOCK — no other tool call is blocked while Lean runs.
-
-                        let response = match request {
-                            step::GatewayRequest::Solve { obl, proof_term, proof_format, dep_ids, env_hash, import_manifest } => {
-                                step::GatewayResponse::Solve(self.gateway.verify_exact(&obl, &proof_term, &dep_ids, &env_hash, &import_manifest, proof_format))
-                            }
-                            step::GatewayRequest::SubmitModule { assembled, env_hash } => {
-                                step::GatewayResponse::SubmitModule(self.gateway.verify_module(&assembled, &env_hash))
-                            }
-                        };
-
-                        conn = self.conn.lock().await; // reacquire
-                        let post = {
-                            let tx2 = conn.transaction().map_err(rs)?;
-                            let finalize_res = step::attempt_finalize(&tx2, attempt_uuid, &args.claim_token, args.cost_micros as i128, ctx, response);
-                            let post = run_step_post_processing(
-                                &tx2, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
-                                finalize_res, &target_obligation_id, &state_hash_before,
-                            )?;
-                            tx2.commit().map_err(rs)?;
-                            post
-                        }; // tx2 out of scope here too.
-                        post
-                    }
-                };
-
-                let PostProcessing { disposition, accepted, error_msg, outcome_enum, term_reason, trunc_reason, next_req_id } = post;
-                let is_terminated = term_reason.is_some();
-                let is_truncated = trunc_reason.is_some();
-
-                // Calculate reward. `accepted` doubles as "not a Lean kernel_fail" for
-                // Solve/SubmitModule and as a generic accept/reject signal for
-                // Decompose/GiveUp — only treat it as a proof-verification result
-                // (kernel_pass/kernel_fail reward) for an actual verification action.
-                let is_verification_action = matches!(args.action, TypedAction::Solve { .. } | TypedAction::SubmitModule { .. });
-                let mut reward_components = Vec::new();
-                let policy = RewardPolicy::default_policy();
-                if disposition == StepDisposition::Accepted {
-                    reward_components.push(RewardComponent {
-                        id: RewardComponentId::StepPenalty,
-                        value_scaled: policy.step_penalty,
-                    });
-                    if is_verification_action && accepted {
-                        reward_components.push(RewardComponent {
-                            id: RewardComponentId::KernelPass,
-                            value_scaled: policy.kernel_pass,
-                        });
-                    } else if is_verification_action && !is_terminated {
-                        reward_components.push(RewardComponent {
-                            id: RewardComponentId::KernelFail,
-                            value_scaled: policy.kernel_fail,
-                        });
-                    }
-                }
-                if outcome_enum == Some(EpisodeOutcome::Certified) || outcome_enum == Some(EpisodeOutcome::KernelVerified) {
-                    // Real work either way: the prover proved exactly the formal
-                    // statement it was given. Composite success (TerminalSuccess) is
-                    // reserved for when fidelity is ALSO verified — never award it for
-                    // a kernel_verified-but-not-certified outcome, or a prover that
-                    // faithfully proved a bad formalization looks identical to one
-                    // that solved the real problem.
-                    reward_components.push(RewardComponent {
-                        id: RewardComponentId::RootKernelVerified,
-                        value_scaled: policy.root_kernel_verified,
-                    });
-                    if outcome_enum == Some(EpisodeOutcome::Certified) {
-                        reward_components.push(RewardComponent {
-                            id: RewardComponentId::TerminalSuccess,
-                            value_scaled: policy.terminal_success,
-                        });
-                    }
-                } else if is_truncated {
-                    reward_components.push(RewardComponent {
-                        id: RewardComponentId::TruncationPenalty,
-                        value_scaled: policy.truncation_penalty,
-                    });
-                }
-
-                let next_action_request = if let Some(req_id) = next_req_id {
-                    Some(query_action_request(&conn, req_id).map_err(rs)?)
-                } else {
-                    None
-                };
-
-                let observation = if let Some(ref req) = next_action_request {
-                    let obs_json: Option<String> = conn.query_row(
-                        "SELECT observation_json FROM action_requests WHERE id = ?1",
-                        [req.id.to_string()],
-                        |row| row.get(0),
-                    ).optional().map_err(rs)?.flatten();
-                    obs_json.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(serde_json::Value::Null)
-                } else {
-                    serde_json::Value::Null
-                };
-
-                // A rejected verification action (a kernel-failed Solve, or a
-                // module refused by policy or the staged kernel) preserves its
-                // reason as the obligation's failure_lesson. Surface it directly on
-                // the step response so a client gets structured feedback about WHY
-                // the draft was rejected without a second observe round-trip — the
-                // module trust boundary demands the rejection be legible, not silent.
-                let rejection_diagnostic: Option<String> = if is_verification_action
-                    && disposition == StepDisposition::Accepted && !accepted {
-                    match &target_obligation_id {
-                        Some(oid) => conn.query_row(
-                            "SELECT failure_lesson FROM episode_obligations WHERE id = ?1",
-                            [oid], |row| row.get::<_, Option<String>>(0),
-                        ).optional().map_err(rs)?.flatten(),
-                        None => None,
-                    }
-                } else {
-                    None
-                };
-
-                let res = serde_json::json!({
-                    "accepted": accepted,
-                    "disposition": disposition,
-                    "counts_as_environment_step": disposition == StepDisposition::Accepted,
-                    "reward": reward_components,
-                    "outcome": outcome_enum,
-                    "termination_reason": term_reason,
-                    "truncation_reason": trunc_reason,
-                    "diagnostics": error_msg,
-                    "rejection_diagnostic": rejection_diagnostic,
-                    "next_action_request": next_action_request,
-                    "observation": observation
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
+            "attempt_claim" => self.do_attempt_claim(args_val).await,
+            "episode_step" => self.do_episode_step(args_val).await,
             "episode_status" => {
                 let args: EpisodeStatusArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -6924,6 +9385,16 @@ impl ServerHandler for ChatDbMcp {
                 let res = serde_json::json!({ "status": "closed" });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
+            "proof_session_start" => self.do_proof_session_start(args_val).await,
+            "proof_session_observe" => self.do_proof_session_observe(args_val).await,
+            "proof_session_tactic_step" => self.do_proof_session_tactic_step(args_val).await,
+            "proof_session_branch" => self.do_proof_session_branch(args_val).await,
+            "proof_session_select_node" => self.do_proof_session_select_node(args_val).await,
+            "proof_session_reconstruct" => self.do_proof_session_reconstruct(args_val).await,
+            "proof_session_promote_to_attempt" => self.do_proof_session_promote_to_attempt(args_val).await,
+            "proof_session_close" => self.do_proof_session_close(args_val).await,
+            "proof_session_replay" => self.do_proof_session_replay(args_val).await,
+            "proof_session_export" => self.do_proof_session_export(args_val).await,
             "model_call_reserve" => {
                 let args: ModelCallReserveArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -7030,7 +9501,7 @@ impl ServerHandler for ChatDbMcp {
                      ORDER BY event_sequence_number ASC LIMIT ?3"
                 ).map_err(rs)?;
 
-                let rows = stmt.query_map((args.episode_id.clone(), cursor, page_size), |row| {
+                let mut rows = stmt.query_map((args.episode_id.clone(), cursor, page_size), |row| {
                     Ok(serde_json::json!({
                         "id": row.get::<_, i64>(0)?,
                         "event_sequence_number": row.get::<_, i64>(1)?,
@@ -7046,6 +9517,93 @@ impl ServerHandler for ChatDbMcp {
                 }).map_err(rs)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(rs)?;
+
+                // Issue #164: interactive proof-session steps, appended as
+                // additional ordered entries in the SAME homogeneous shape
+                // trajectory_events rows above already use (id/
+                // event_sequence_number/event_type/event_hash/
+                // previous_event_hash/state_hash_before/state_hash_after/
+                // lean_environment_hash/payload/created_at) — chosen over a
+                // second top-level field (a "linked sub-trace") because that
+                // would change this tool's response from a bare array to an
+                // object and break every existing `.as_array()` caller;
+                // appending keeps the response shape unchanged for an
+                // episode with no interactive sessions. event_sequence_number/
+                // event_hash/previous_event_hash are `null` for these entries
+                // — no hash chain applies to interactive_proof_steps (see
+                // schema_v1.rs) — and `source: "interactive_proof_session"`
+                // distinguishes them from a real hash-chained trajectory_events
+                // row. NOT subject to the cursor/page_size pagination above
+                // (that pagination is keyed on trajectory_events' own
+                // event_sequence_number, which these entries do not share);
+                // every interactive step for this episode is included every
+                // call, matching how audit-style "full trace" surfaces
+                // elsewhere in this codebase behave. Gated identically to the
+                // payload_json above (the allow_putnambench_proof_export
+                // check already ran above this point) — a failed step's real
+                // tactic text is only durably persisted at all for a failed
+                // outcome (see interactive_step_failure_category's doc), so
+                // it is included here the same way a real trajectory event's
+                // solve proof_term already is.
+                let interactive_bundles = gather_interactive_sessions(&conn, &args.episode_id)?;
+                for b in &interactive_bundles {
+                    let node_by_id: std::collections::HashMap<Uuid, &idb::NodeRow> = b.nodes.iter().map(|n| (n.id, n)).collect();
+                    let root_state_hash = b.session.root_node_id.and_then(|rid| node_by_id.get(&rid)).map(|n| n.proof_state_hash.clone());
+                    rows.push(serde_json::json!({
+                        "id": serde_json::Value::Null,
+                        "event_sequence_number": serde_json::Value::Null,
+                        "event_type": "interactive_session_started",
+                        "event_hash": serde_json::Value::Null,
+                        "previous_event_hash": serde_json::Value::Null,
+                        "state_hash_before": serde_json::Value::Null,
+                        "state_hash_after": root_state_hash,
+                        "lean_environment_hash": b.session.environment_hash,
+                        "payload": {
+                            "session_id": b.session.id.to_string(),
+                            "backend_kind": b.session.backend_kind,
+                            "backend_version": b.session.backend_version,
+                            "obligation_id": b.session.obligation_id.to_string(),
+                            "state": b.session.state,
+                            "close_reason": b.session.close_reason,
+                        },
+                        "created_at": b.session.created_at.to_rfc3339(),
+                        "source": "interactive_proof_session",
+                    }));
+                    for s in &b.steps {
+                        let negative = s.outcome == "failed";
+                        let (tactic_text, diagnostic_val) = if negative {
+                            let diag_val: serde_json::Value = s.diagnostic_json.as_deref()
+                                .and_then(|j| serde_json::from_str(j).ok()).unwrap_or(serde_json::Value::Null);
+                            let raw = diag_val.get("tactic_text").and_then(|v| v.as_str()).map(|s| s.to_string());
+                            (raw, diag_val)
+                        } else {
+                            (None, serde_json::Value::Null)
+                        };
+                        rows.push(serde_json::json!({
+                            "id": s.id.to_string(),
+                            "event_sequence_number": serde_json::Value::Null,
+                            "event_type": format!("interactive_tactic_{}", s.outcome),
+                            "event_hash": serde_json::Value::Null,
+                            "previous_event_hash": serde_json::Value::Null,
+                            "state_hash_before": node_by_id.get(&s.parent_node_id).map(|n| n.proof_state_hash.clone()),
+                            "state_hash_after": s.child_node_id.and_then(|c| node_by_id.get(&c)).map(|n| n.proof_state_hash.clone()),
+                            "lean_environment_hash": b.session.environment_hash,
+                            "payload": {
+                                "session_id": b.session.id.to_string(),
+                                "step_id": s.id.to_string(),
+                                "parent_node_id": s.parent_node_id.to_string(),
+                                "child_node_id": s.child_node_id.map(|c| c.to_string()),
+                                "outcome": s.outcome,
+                                "tactic_text_hash": s.tactic_text_hash,
+                                "tactic_text": tactic_text,
+                                "diagnostic": diagnostic_val,
+                                "wall_time_ms": s.wall_time_ms,
+                            },
+                            "created_at": s.created_at.to_rfc3339(),
+                            "source": "interactive_proof_session",
+                        }));
+                    }
+                }
 
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&rows).unwrap())]))
             }
@@ -11212,6 +13770,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         }
     }
 
@@ -11264,8 +13823,12 @@ mod tests {
 
         let list_res = client.peer().list_tools(None).await.unwrap();
         // 86 through v0.3.23 + benchmark_suite_observe / benchmark_problem_observe /
-        // benchmark_suite_set_trust (issue #65).
-        assert_eq!(list_res.tools.len(), 89);
+        // benchmark_suite_set_trust (issue #65) = 89, + 8 proof_session_*
+        // tools (issue #161: start/observe/tactic_step/branch/select_node/
+        // reconstruct/promote_to_attempt/close) = 97, + proof_session_replay
+        // (issue #163: trace_only/backend/final_proof replay modes) = 98,
+        // + proof_session_export (issue #164: closes out #161's deferred item).
+        assert_eq!(list_res.tools.len(), 99);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -11640,6 +14203,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -11692,6 +14256,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -12125,6 +14690,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -12346,6 +14912,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -12440,6 +15007,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -12518,6 +15086,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -12620,6 +15189,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -12769,6 +15339,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -12804,6 +15375,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -12840,6 +15412,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -12884,6 +15457,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -12922,6 +15496,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -12950,6 +15525,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -12985,6 +15561,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -13013,6 +15590,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -13048,6 +15626,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -13083,6 +15662,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -13117,6 +15697,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -13588,7 +16169,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -13966,6 +16547,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -14034,6 +16616,7 @@ mod tests {
         let handler = ChatDbMcp {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -14209,6 +16792,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -14503,7 +17087,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -14695,7 +17279,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -14883,7 +17467,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -14967,7 +17551,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -15239,6 +17823,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -15348,6 +17933,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -15668,7 +18254,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -15868,7 +18454,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -15985,7 +18571,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -16168,6 +18754,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: synthetic.root.clone(),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -16225,6 +18812,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: synthetic.root.clone(),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -16261,6 +18849,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: synthetic.root.clone(),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -16374,7 +18963,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -16430,7 +19019,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -16871,7 +19460,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -16991,7 +19580,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy") };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -17392,6 +19981,7 @@ mod tests {
                 hash: "deadbeefcafef00d0000000000000000000000000000000000000000000000".to_string(),
             }),
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -17757,6 +20347,7 @@ mod tests {
             lean_available: false,
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -19237,5 +21828,1940 @@ mod tests {
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #161: interactive (tactic-by-tactic) proof-state sessions.
+    // -----------------------------------------------------------------
+
+    /// Sets up a dev-attested, solvable episode (statement "1 + 1 = 2") and
+    /// returns (episode_id, root obligation_id, pending action_request_id,
+    /// episode_revision) — the fixture every proof_session_* test below
+    /// starts from.
+    async fn setup_solvable_episode(
+        peer: &rmcp::service::Peer<rmcp::RoleClient>,
+        conn_arc: &Arc<Mutex<Connection>>,
+    ) -> (String, String, String, i64) {
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "Prove that 1 + 1 = 2.", "root_formal_statement": "1 + 1 = 2",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 10, "cost_budget_micros": 1_000_000,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let obligation_id: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row(
+                "SELECT id FROM episode_obligations WHERE episode_id = ?1 AND kind = 'root'",
+                [&episode_id],
+                |row| row.get(0),
+            ).unwrap()
+        };
+
+        (episode_id, obligation_id, request_id, revision)
+    }
+
+    #[tokio::test]
+    async fn test_proof_session_start_observe_tactic_step_and_close() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+
+        // --- start: requires valid episode/obligation linkage ---
+        let bad_start = peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": Uuid::new_v4().to_string(), "expected_revision": revision,
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_start.is_err(), "starting a session against an unrelated obligation_id must be rejected");
+
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+        assert_eq!(start["is_solved"], false, "{:?}", start);
+        assert!(start["trust_boundary"].as_str().unwrap().to_lowercase().contains("evidence"), "{:?}", start);
+        assert_eq!(start["goals"].as_array().unwrap().len(), 1, "{:?}", start);
+
+        // --- observe: reflects the root node before any tactic ---
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["selected_node_id"], root_node_id);
+        assert_eq!(observed["is_solved"], false, "{:?}", observed);
+        assert_eq!(observed["state"], "open");
+        assert_eq!(observed["available_reconstructions"].as_array().unwrap().len(), 0);
+
+        // --- tactic_step: success closes the only goal ---
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(applied["outcome"], "applied", "{:?}", applied);
+        assert_eq!(applied["is_solved"], true, "{:?}", applied);
+        assert!(applied["diagnostic"].is_null(), "{:?}", applied);
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+        assert_ne!(solved_node_id, root_node_id);
+
+        // observe now reflects the new selected (solved) node.
+        let observed2 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed2["selected_node_id"], solved_node_id);
+        assert_eq!(observed2["is_solved"], true, "{:?}", observed2);
+
+        // --- tactic_step: failure on a node with no goals remaining produces
+        // a STRUCTURED diagnostic, not a bare error string, and does not
+        // move the selected node.
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "rfl",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(failed["outcome"], "failed", "{:?}", failed);
+        assert!(failed["node_id"].is_null(), "{:?}", failed);
+        assert!(failed["diagnostic"].is_object(), "failed tactic must carry a structured diagnostic, not a bare string: {:?}", failed);
+        assert!(failed["diagnostic"]["diagnostic"]["primary_message"].as_str().unwrap().len() > 0, "{:?}", failed);
+        assert!(failed["step_id"].as_str().is_some(), "failed step must still carry a stable step_id for later export/replay: {:?}", failed);
+
+        // Selected node is unchanged by the failed step.
+        let observed3 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed3["selected_node_id"], solved_node_id);
+
+        // --- close: reason must be one of the three allowed values ---
+        let bad_close = peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+            "session_id": session_id, "reason": "nonsense",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_close.is_err());
+
+        let closed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+            "session_id": session_id, "reason": "closed",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(closed["state"], "closed");
+        assert_eq!(closed["close_reason"], "closed");
+
+        // A closed session's trace stays visible via observe...
+        let observed_after_close = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed_after_close["state"], "closed");
+
+        // ...but no further tactic stepping is allowed.
+        let step_after_close = peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await;
+        assert!(step_after_close.is_err(), "a closed session must reject further tactic_step calls");
+
+        // The obligation was never touched by any of this — interactive
+        // session state alone can never prove anything.
+        let obl_status: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(obl_status, "open", "a session that never promotes must never change obligation status");
+    }
+
+    #[tokio::test]
+    async fn test_proof_session_branch_creates_non_destructive_siblings() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let branch_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "try-norm-num", "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(branch_a["outcome"], "applied", "{:?}", branch_a);
+        assert_eq!(branch_a["branch_name"], "try-norm-num");
+
+        // A second branch from the SAME parent must not delete or overwrite the first.
+        let branch_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "try-decide", "tactic": "decide",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(branch_b["outcome"], "applied", "{:?}", branch_b);
+        assert_ne!(branch_a["node_id"], branch_b["node_id"]);
+
+        let sibling_count: i64 = {
+            let conn = conn_arc.lock().await;
+            conn.query_row(
+                "SELECT COUNT(*) FROM interactive_proof_nodes WHERE parent_node_id = ?1",
+                [&root_node_id],
+                |row| row.get(0),
+            ).unwrap()
+        };
+        assert_eq!(sibling_count, 2, "both branches must survive as distinct sibling nodes");
+
+        // select_node moves the convenience pointer to whichever branch you want to keep working.
+        let selected = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_select_node").with_arguments(serde_json::json!({
+            "session_id": session_id, "node_id": branch_b["node_id"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(selected["selected_node_id"], branch_b["node_id"]);
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["selected_node_id"], branch_b["node_id"]);
+    }
+
+    /// The full trust-boundary-critical path: reconstruct a script from a
+    /// solved interactive node, promote it, and confirm promotion actually
+    /// goes through attempt_claim + episode_step (real kernel verification,
+    /// via MockGateway) and DOES change the obligation's status — while
+    /// everything up to reconstruction alone could not have.
+    #[tokio::test]
+    async fn test_proof_session_reconstruct_and_promote_to_attempt_verifies_and_certifies() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+        assert_eq!(applied["is_solved"], true);
+
+        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+            "session_id": session_id, "selected_node_id": solved_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(reconstructed["reports_complete"], true, "{:?}", reconstructed);
+        let script_id = reconstructed["reconstructed_script_id"].as_str().unwrap().to_string();
+        let tactic_block = reconstructed["tactic_block"].as_str().unwrap().to_string();
+        assert_eq!(tactic_block, "norm_num");
+
+        // At this point NOTHING has proved the obligation yet — reconstruction
+        // alone is still search evidence only.
+        let obl_status_before: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(obl_status_before, "open");
+
+        // A tampered tactic_block (doesn't match the recorded proof_source_hash) must be rejected.
+        let tampered = peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+            "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": "sorry",
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "promote-tampered", "expected_revision": revision, "cost_micros": 100,
+        }).as_object().unwrap().clone())).await;
+        assert!(tampered.is_err(), "a tactic_block that doesn't match the reconstructed script's hash must be rejected");
+
+        // The real promotion: goes through attempt_claim + episode_step(Solve).
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+            "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "promote-1", "expected_revision": revision, "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(promoted["verification_outcome"], "committed", "{:?}", promoted);
+        // Capped at kernel_verified (not certified): setup_solvable_episode
+        // uses unsafe_dev_attestation, which never reaches fidelity 'verified'.
+        assert_eq!(promoted["episode_step_result"]["outcome"], "kernel_verified", "{:?}", promoted);
+        assert_eq!(promoted["episode_step_result"]["accepted"], true, "{:?}", promoted);
+        assert!(promoted["verified_attempt_id"].as_str().is_some(), "{:?}", promoted);
+
+        // The obligation IS now proved — via the real episode_step path.
+        let obl_status_after: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(obl_status_after, "proved");
+
+        // A repeat promotion of the SAME reconstructed_script_id is refused
+        // (it already has a verified_attempt_id) rather than silently
+        // reclaiming/re-submitting.
+        let repeat = peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+            "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "promote-2", "expected_revision": revision, "cost_micros": 100,
+        }).as_object().unwrap().clone())).await;
+        assert!(repeat.is_err(), "promoting an already-promoted reconstructed_script_id must be rejected");
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #163: proof_session_replay (trace_only / backend / final_proof).
+    // -----------------------------------------------------------------
+
+    /// (a) trace_only replay on a healthy successful linear tactic path
+    /// passes cleanly, AND (b) it correctly surfaces a failed branch in its
+    /// branch_report rather than hiding it — a failed step is expected data,
+    /// not an integrity failure, so `passed` stays true while the failed
+    /// step is still visible in the report.
+    #[tokio::test]
+    async fn test_proof_session_replay_trace_only_passes_and_surfaces_failed_branch() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+        assert_eq!(applied["is_solved"], true);
+
+        // A failed branch off the now-solved (goal-less) node.
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "rfl",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(failed["outcome"], "failed");
+
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "trace_only",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        assert_eq!(replay["mode"], "trace_only", "{:?}", replay);
+        assert_eq!(replay["passed"], true, "a healthy path plus one expected failed step must still pass trace_only replay: {:?}", replay);
+        assert_eq!(replay["failures"].as_array().unwrap().len(), 0, "{:?}", replay);
+        assert_eq!(replay["node_count"], 2, "{:?}", replay); // root + solved node (the failed tactic created no node)
+        assert_eq!(replay["step_count"], 2, "{:?}", replay); // one applied, one failed
+        let failed_steps = replay["branch_report"]["failed_steps"].as_array().unwrap();
+        assert_eq!(failed_steps.len(), 1, "the failed branch must be surfaced, not hidden: {:?}", replay);
+        assert_eq!(failed_steps[0]["parent_node_id"], solved_node_id, "{:?}", failed_steps);
+        assert!(replay["trust_boundary"].as_str().unwrap().to_lowercase().contains("evidence"), "{:?}", replay);
+    }
+
+    /// (d) trace_only replay detects a corrupted DB row: directly tamper
+    /// with a node's recorded `proof_state_hash` (a class of integrity
+    /// failure referential/parent-link checks alone would not catch) and
+    /// confirm replay flags it rather than reporting a clean pass.
+    #[tokio::test]
+    async fn test_proof_session_replay_trace_only_detects_corrupted_proof_state_hash() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        // Replay is clean before corruption.
+        let clean_replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "trace_only",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(clean_replay["passed"], true, "{:?}", clean_replay);
+
+        // Directly corrupt the solved node's recorded proof_state_hash —
+        // simulates an edited/corrupted row, not reachable via any MCP tool.
+        {
+            let conn = conn_arc.lock().await;
+            let updated = conn.execute(
+                "UPDATE interactive_proof_nodes SET proof_state_hash = 'deliberately-corrupted-hash' WHERE id = ?1",
+                [&solved_node_id],
+            ).unwrap();
+            assert_eq!(updated, 1);
+        }
+
+        let corrupted_replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "trace_only",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(corrupted_replay["passed"], false, "corrupted proof_state_hash must be detected: {:?}", corrupted_replay);
+        let failures = corrupted_replay["failures"].as_array().unwrap();
+        assert!(
+            failures.iter().any(|f| f["kind"] == "proof_state_hash_mismatch" && f["node_id"] == solved_node_id),
+            "expected a proof_state_hash_mismatch failure for node {}: {:?}", solved_node_id, failures
+        );
+    }
+
+    /// mode="backend": re-running the recorded tactic path against a fresh
+    /// session (via the live gateway, which still holds the real tactic
+    /// text) reproduces the same outcomes/hashes that were stored.
+    #[tokio::test]
+    async fn test_proof_session_replay_backend_mode_matches_recorded_steps() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "backend", "selected_node_id": solved_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        assert_eq!(replay["mode"], "backend", "{:?}", replay);
+        assert_eq!(replay["backend_mismatch"], false, "{:?}", replay);
+        assert_eq!(replay["backend_replay_available"], true, "{:?}", replay);
+        assert_eq!(replay["passed"], true, "{:?}", replay);
+        assert_eq!(replay["mismatches"].as_array().unwrap().len(), 0, "{:?}", replay);
+        let steps = replay["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 1, "{:?}", replay);
+        assert_eq!(steps[0]["outcome_match"], true, "{:?}", steps);
+        assert_eq!(steps[0]["tactic_hash_match"], true, "{:?}", steps);
+        assert_eq!(steps[0]["proof_state_hash_match"], true, "{:?}", steps);
+    }
+
+    /// (c) mode="final_proof" is THE TRUST GATE: reconstructing fresh from a
+    /// solved node and resubmitting through it actually goes through
+    /// attempt_claim + episode_step (real kernel verification, via
+    /// MockGateway) and changes the obligation's status — reusing exactly
+    /// the same do_proof_session_reconstruct/do_proof_session_promote_to_attempt
+    /// internal paths those standalone tools use.
+    #[tokio::test]
+    async fn test_proof_session_replay_final_proof_verifies_and_certifies() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+        assert_eq!(applied["is_solved"], true);
+
+        // Nothing has proved the obligation yet.
+        let obl_status_before: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(obl_status_before, "open");
+
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "final_proof", "selected_node_id": solved_node_id,
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "replay-final-proof-1", "expected_revision": revision, "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        assert_eq!(replay["mode"], "final_proof", "{:?}", replay);
+        assert_eq!(replay["passed"], true, "{:?}", replay);
+        assert_eq!(replay["verification_outcome"], "committed", "{:?}", replay);
+        assert_eq!(replay["promotion"]["episode_step_result"]["outcome"], "kernel_verified", "{:?}", replay);
+        assert!(replay["verified_attempt_id"].as_str().is_some(), "{:?}", replay);
+        assert!(replay["trust_boundary"].as_str().unwrap().to_lowercase().contains("evidence"), "{:?}", replay);
+
+        // The obligation IS now proved — via the real episode_step path,
+        // reached through proof_session_replay's final_proof mode.
+        let obl_status_after: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(obl_status_after, "proved");
+    }
+
+    #[tokio::test]
+    async fn test_proof_session_replay_rejects_unknown_mode() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+
+        let bad = peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "nonsense",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad.is_err(), "an unknown replay mode must be rejected");
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #167: interactive-session test lock-down. #159-#163 each carry
+    // their own thorough test coverage (see those tests above); this batch
+    // fills the specific gaps issue #167 calls out by name and adds ONE
+    // consolidated vertical-slice regression test that drives the full real
+    // MCP tool surface end to end, exactly the way #161/#163's own
+    // integration tests are structured (peer.call_tool(...), never internal
+    // Rust calls) — see this crate's PR description for why these tests
+    // live here (inline in this `mod tests`) rather than in a separate
+    // `tests/` file: every proof_session_* integration test #159-#163 wrote
+    // already lives in this exact module, reusing private helpers
+    // (`connected_client`, `tool_json`, `setup_solvable_episode`, the local
+    // `MockGateway`) that are not `pub` and so cannot be reused from a
+    // separate integration-test crate without either duplicating them or
+    // widening this crate's public surface purely for tests — matching the
+    // established convention was judged more consistent than either.
+    //
+    // Test class 7 ("Export policy": public_summary / audit_archive /
+    // training_export redaction semantics for interactive sessions) is
+    // covered by issue #164's own tests (search this file for "issue #164" /
+    // "issue164") rather than here — #164 is what actually designed the
+    // redaction mechanism this class needed, closing out the gap this
+    // comment used to describe.
+    // -----------------------------------------------------------------
+
+    /// Test class 1 gap: "close abandoned session" and "close completed
+    /// session" are two DISTINCT close-reason paths, not just two strings
+    /// accepted by the same code path. Session A is abandoned before ever
+    /// reaching a solved node; session B is closed only after its one goal
+    /// is closed. Both must persist their own `close_reason` independently
+    /// and remain separately observable afterward.
+    #[tokio::test]
+    async fn test_proof_session_close_abandoned_vs_completed_are_distinct_paths() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        // --- Session A: abandoned before any tactic is ever applied. ---
+        let (episode_a, obligation_a, _req_a, rev_a) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_a, "obligation_id": obligation_a, "expected_revision": rev_a,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_a = start_a["session_id"].as_str().unwrap().to_string();
+
+        let closed_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+            "session_id": session_a, "reason": "abandoned",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(closed_a["close_reason"], "abandoned", "{:?}", closed_a);
+        assert_eq!(closed_a["state"], "closed");
+
+        // --- Session B: closed only after its goal is actually solved. ---
+        let (episode_b, obligation_b, _req_b, rev_b) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_b, "obligation_id": obligation_b, "expected_revision": rev_b,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_b = start_b["session_id"].as_str().unwrap().to_string();
+        let root_b = start_b["node_id"].as_str().unwrap().to_string();
+        let applied_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_b, "parent_node_id": root_b, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(applied_b["is_solved"], true);
+
+        let closed_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+            "session_id": session_b, "reason": "closed",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(closed_b["close_reason"], "closed", "{:?}", closed_b);
+        assert_eq!(closed_b["state"], "closed");
+
+        // Each session independently and durably remembers its own
+        // close_reason — abandoning one never leaks into or overwrites the
+        // other, and both are still observable via proof_session_observe
+        // (closing never deletes anything).
+        let observed_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_a,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed_a["close_reason"], "abandoned", "{:?}", observed_a);
+        assert_eq!(observed_a["is_solved"], false, "session A was abandoned before solving anything: {:?}", observed_a);
+
+        let observed_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_b,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed_b["close_reason"], "closed", "{:?}", observed_b);
+        assert_eq!(observed_b["is_solved"], true, "{:?}", observed_b);
+
+        // Neither session's closure — abandoned OR completed — ever touched
+        // its obligation's status by itself.
+        let (status_a, status_b): (String, String) = {
+            let conn = conn_arc.lock().await;
+            (
+                conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_a], |row| row.get(0)).unwrap(),
+                conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_b], |row| row.get(0)).unwrap(),
+            )
+        };
+        assert_eq!(status_a, "open");
+        assert_eq!(status_b, "open", "session B's in-session solved goal is search evidence only, until promote_to_attempt runs");
+    }
+
+    /// Test class 2 gap: an explicit, dedicated check that a successful
+    /// `proof_session_tactic_step` call's `proof_state_hash` is STABLE and
+    /// REPRODUCIBLE through the real tool surface — not merely internally
+    /// consistent within one call. Two independently-started sessions
+    /// against the identical statement, given the identical tactic, must
+    /// compute the identical `full_state_hash` (the hash is a function of
+    /// canonically-rendered content, never of session/node identity), and
+    /// re-observing the same node twice must return that same hash again.
+    #[tokio::test]
+    async fn test_proof_session_tactic_step_success_produces_stable_reproducible_hash() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        // Two structurally-identical, but fully independent, sessions
+        // (different episodes/obligations/node UUIDs throughout).
+        let (episode_1, obligation_1, _req_1, rev_1) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start_1 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_1, "obligation_id": obligation_1, "expected_revision": rev_1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_1 = start_1["session_id"].as_str().unwrap().to_string();
+        let root_1 = start_1["node_id"].as_str().unwrap().to_string();
+
+        let (episode_2, obligation_2, _req_2, rev_2) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start_2 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_2, "obligation_id": obligation_2, "expected_revision": rev_2,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_2 = start_2["session_id"].as_str().unwrap().to_string();
+        let root_2 = start_2["node_id"].as_str().unwrap().to_string();
+
+        // Two DIFFERENT sessions never produce colliding node ids, but their
+        // root proof_state_hash (same statement, no tactic yet) must match.
+        assert_ne!(session_1, session_2);
+        assert_ne!(root_1, root_2);
+        assert_eq!(start_1["proof_state_hash"]["full_state_hash"], start_2["proof_state_hash"]["full_state_hash"],
+            "identical root statements must hash identically regardless of session identity: {:?} vs {:?}", start_1, start_2);
+
+        let applied_1 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_1, "parent_node_id": root_1, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let applied_2 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_2, "parent_node_id": root_2, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // Same tactic, same resulting (empty) goal set, from two
+        // independent sessions -> identical full_state_hash.
+        assert_eq!(applied_1["proof_state_hash"]["full_state_hash"], applied_2["proof_state_hash"]["full_state_hash"],
+            "identical tactic applied to identical prior states must hash identically: {:?} vs {:?}", applied_1, applied_2);
+        assert_ne!(applied_1["proof_state_hash"]["full_state_hash"], start_1["proof_state_hash"]["full_state_hash"],
+            "applying a tactic must change the hash relative to its own parent");
+
+        // Re-observing the SAME node twice reproduces the SAME hash — the
+        // hash is a pure function of persisted content, not recomputed
+        // freshly (and differently) on every read.
+        let solved_node_1 = applied_1["node_id"].as_str().unwrap().to_string();
+        let observed_first = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let observed_second = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+            "session_id": session_1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed_first["selected_node_id"], solved_node_1);
+        assert_eq!(observed_first["proof_state_hash"], observed_second["proof_state_hash"],
+            "repeated reads of the same node must reproduce the identical stored hash: {:?} vs {:?}", observed_first, observed_second);
+        assert_eq!(observed_first["proof_state_hash"], applied_1["proof_state_hash"]["full_state_hash"],
+            "the hash read back via observe must match the hash returned at tactic-application time");
+    }
+
+    /// Test class 4: confirms the DB layer preserves BOTH a failed branch
+    /// and its sibling successful branches after the fact — a failed branch
+    /// is not overwritten, deleted, or hidden when a sibling branch
+    /// succeeds. `MockInteractiveGateway` deterministically fails a tactic
+    /// only when applied to a node with no goals remaining (see its doc
+    /// comment), so "one branch fails, one succeeds" cannot come from the
+    /// exact same still-open parent node with this backend (outcome is a
+    /// pure function of the parent's own goal state, not of the tactic
+    /// text) — this test instead branches twice off the ROOT (both succeed,
+    /// non-destructive siblings) and then attempts a further branch off one
+    /// of the now-solved children (which deterministically fails), which is
+    /// the closest honest reproduction of "one branch fails, one succeeds"
+    /// this backend can produce without fabricating failure behavior it
+    /// doesn't have. Skips exporting both branches (export machinery is
+    /// out of scope — see the #167 test-class-7 note above) and instead
+    /// confirms both remain independently queryable via direct node/step
+    /// listing AND via `proof_session_replay` mode="trace_only", per the
+    /// issue's own "whichever is more natural" allowance.
+    #[tokio::test]
+    async fn test_proof_session_branching_preserves_both_failed_and_successful_branches_after_the_fact() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        // Two successful siblings off root.
+        let branch_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "branch-a", "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(branch_a["outcome"], "applied", "{:?}", branch_a);
+        let branch_a_node = branch_a["node_id"].as_str().unwrap().to_string();
+
+        let branch_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "branch-b", "tactic": "decide",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(branch_b["outcome"], "applied", "{:?}", branch_b);
+        let branch_b_node = branch_b["node_id"].as_str().unwrap().to_string();
+        assert_ne!(branch_a_node, branch_b_node);
+
+        // A further branch attempt off branch_a's now-solved node fails.
+        let failed_branch = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": branch_a_node, "branch_name": "branch-a-followup", "tactic": "rfl",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(failed_branch["outcome"], "failed", "{:?}", failed_branch);
+        assert!(failed_branch["node_id"].is_null());
+        assert!(failed_branch["diagnostic"].is_object());
+
+        // --- Direct DB check: nothing was overwritten or deleted. ---
+        let sibling_count: i64 = {
+            let conn = conn_arc.lock().await;
+            conn.query_row(
+                "SELECT COUNT(*) FROM interactive_proof_nodes WHERE parent_node_id = ?1",
+                [&root_node_id], |row| row.get(0),
+            ).unwrap()
+        };
+        assert_eq!(sibling_count, 2, "both successful root branches must survive as distinct sibling nodes");
+
+        let (failed_step_count, applied_step_count): (i64, i64) = {
+            let conn = conn_arc.lock().await;
+            (
+                conn.query_row(
+                    "SELECT COUNT(*) FROM interactive_proof_steps WHERE session_id = ?1 AND outcome = 'failed'",
+                    [&session_id], |row| row.get(0),
+                ).unwrap(),
+                conn.query_row(
+                    "SELECT COUNT(*) FROM interactive_proof_steps WHERE session_id = ?1 AND outcome = 'applied'",
+                    [&session_id], |row| row.get(0),
+                ).unwrap(),
+            )
+        };
+        assert_eq!(failed_step_count, 1, "the failed branch step must remain, not be pruned");
+        assert_eq!(applied_step_count, 2, "both successful branch steps must remain alongside the failed one");
+
+        // --- Independently queryable via proof_session_replay trace_only. ---
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "trace_only",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(replay["passed"], true, "an expected failed branch alongside successful siblings is not a corruption: {:?}", replay);
+        assert_eq!(replay["node_count"], 3, "{:?}", replay); // root + branch_a + branch_b
+        assert_eq!(replay["step_count"], 3, "{:?}", replay); // 2 applied + 1 failed
+        let failed_steps = replay["branch_report"]["failed_steps"].as_array().unwrap();
+        assert_eq!(failed_steps.len(), 1, "{:?}", replay);
+        assert_eq!(failed_steps[0]["parent_node_id"], branch_a_node, "{:?}", failed_steps);
+    }
+
+    /// Test class 6: a clear, explicit, well-named trust-boundary
+    /// regression test. Runs start + tactic_step (success) + branch +
+    /// reconstruct — deliberately WITHOUT ever calling
+    /// promote_to_attempt — and confirms `episode_obligations.status` is
+    /// byte-for-byte unchanged from before the session even started. Only
+    /// then calls promote_to_attempt and confirms status changes, proving
+    /// the state change is caused by promote_to_attempt's real kernel
+    /// verification, not by anything upstream of it.
+    #[tokio::test]
+    async fn test_interactive_session_alone_cannot_prove_obligation_only_promote_to_attempt_can() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+
+        let status_before_anything: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(status_before_anything, "open");
+
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(applied["is_solved"], true, "{:?}", applied);
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        let _branch = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "alt", "tactic": "decide",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+            "session_id": session_id, "selected_node_id": solved_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(reconstructed["reports_complete"], true, "{:?}", reconstructed);
+        let script_id = reconstructed["reconstructed_script_id"].as_str().unwrap().to_string();
+        let tactic_block = reconstructed["tactic_block"].as_str().unwrap().to_string();
+
+        // Start + a successful tactic_step + a branch + reconstruct — and
+        // STILL nothing has changed about the obligation itself. This is
+        // the entire point of the trust boundary: is_solved=true in-session
+        // is evidence, not authority.
+        let status_after_session_work: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(status_after_session_work, status_before_anything,
+            "an interactive session — including a solved node, a branch, and a reconstruction — must never itself change obligation status");
+
+        // Only promote_to_attempt (real attempt_claim + episode_step Solve,
+        // real Lean kernel verification via MockGateway) can move it.
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+            "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "trust-boundary-promote-1", "expected_revision": revision, "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(promoted["episode_step_result"]["accepted"], true, "{:?}", promoted);
+
+        let status_after_promote: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(status_after_promote, "proved", "only promote_to_attempt's real kernel verification may change obligation status");
+    }
+
+    /// The parent epic's vertical-slice success case, driven end to end
+    /// through the FULL real MCP tool surface (issue #167 acceptance
+    /// criterion: "Regression tests cover the parent epic's vertical-slice
+    /// success case"): start -> tactic_step (success) -> tactic_step
+    /// (failure, attempted off the now-solved node — "on a branch" in the
+    /// sense that it is a doomed offshoot, not an extension of the main
+    /// line) -> branch (a genuine second named branch off the root) ->
+    /// select_node (switch the working pointer onto that branch) ->
+    /// reconstruct (from the selected branch) -> promote_to_attempt (real
+    /// kernel verification) -> close. Every step is asserted, not just the
+    /// last one, so a regression anywhere in the chain fails this test.
+    #[tokio::test]
+    async fn test_issue167_full_vertical_slice_start_tactic_branch_select_reconstruct_promote_close() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        // 1) episode/obligation fixture, same as every other #159-#163 test.
+        let (episode_id, obligation_id, request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+
+        // 2) proof_session_start.
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+        assert_eq!(start["is_solved"], false, "{:?}", start);
+
+        // 3) proof_session_tactic_step: success.
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(applied["outcome"], "applied", "{:?}", applied);
+        assert_eq!(applied["is_solved"], true, "{:?}", applied);
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        // 4) proof_session_tactic_step: failure, on the now-solved (goal-less) node.
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "rfl",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(failed["outcome"], "failed", "{:?}", failed);
+        assert!(failed["node_id"].is_null(), "{:?}", failed);
+        assert!(failed["diagnostic"]["diagnostic"]["primary_message"].as_str().unwrap().len() > 0, "{:?}", failed);
+
+        // 5) proof_session_branch: a genuine second named branch off root.
+        let branch = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "vertical-slice-alt", "tactic": "decide",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(branch["outcome"], "applied", "{:?}", branch);
+        assert_eq!(branch["branch_name"], "vertical-slice-alt");
+        let branch_node_id = branch["node_id"].as_str().unwrap().to_string();
+        assert_ne!(branch_node_id, solved_node_id, "the branch must be a genuinely distinct sibling node, not the earlier solved node");
+
+        // 6) proof_session_select_node: move the working pointer onto the branch.
+        let selected = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_select_node").with_arguments(serde_json::json!({
+            "session_id": session_id, "node_id": branch_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(selected["selected_node_id"], branch_node_id, "{:?}", selected);
+
+        // 7) proof_session_reconstruct: from the SELECTED branch node.
+        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+            "session_id": session_id, "selected_node_id": branch_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(reconstructed["reports_complete"], true, "{:?}", reconstructed);
+        let script_id = reconstructed["reconstructed_script_id"].as_str().unwrap().to_string();
+        let tactic_block = reconstructed["tactic_block"].as_str().unwrap().to_string();
+        assert_eq!(tactic_block, "decide", "must reconstruct the BRANCH's own tactic, not the earlier abandoned main-line one");
+        let proof_source_hash_first = reconstructed["proof_source_hash"].as_str().unwrap().to_string();
+
+        // Reconstructing the identical path again reproduces the identical hash.
+        let reconstructed_again = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+            "session_id": session_id, "selected_node_id": branch_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(reconstructed_again["proof_source_hash"].as_str().unwrap(), proof_source_hash_first,
+            "reconstructing the same path twice must hash identically");
+
+        // Nothing so far has changed the obligation's status.
+        let status_before_promote: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(status_before_promote, "open");
+
+        // 8) proof_session_promote_to_attempt: the ONLY step that can prove anything.
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+            "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "vertical-slice-promote-1", "expected_revision": revision, "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(promoted["verification_outcome"], "committed", "{:?}", promoted);
+        assert_eq!(promoted["episode_step_result"]["outcome"], "kernel_verified", "{:?}", promoted);
+        assert_eq!(promoted["episode_step_result"]["accepted"], true, "{:?}", promoted);
+
+        let status_after_promote: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(status_after_promote, "proved");
+
+        // 9) proof_session_close.
+        let closed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+            "session_id": session_id, "reason": "closed",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(closed["state"], "closed", "{:?}", closed);
+        assert_eq!(closed["close_reason"], "closed");
+
+        // Full trace — the successful main line, the failed offshoot, AND
+        // the promoted branch — is all still intact and consistent after
+        // close, confirmed independently via replay trace_only.
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "trace_only",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(replay["passed"], true, "{:?}", replay);
+        assert_eq!(replay["node_count"], 3, "{:?}", replay); // root + solved_node_id + branch_node_id
+        assert_eq!(replay["step_count"], 3, "{:?}", replay); // applied + failed + branch-applied
+        let failed_steps = replay["branch_report"]["failed_steps"].as_array().unwrap();
+        assert_eq!(failed_steps.len(), 1, "{:?}", replay);
+    }
+
+    /// Acceptance criterion: "A failing interactive backend does not break
+    /// whole-proof verification." Constructs a handler whose
+    /// `interactive_gateway` is `FallbackInteractiveGateway` (issue #159's
+    /// "no interactive backend available" stand-in, which errors on every
+    /// live-stepping operation) and confirms a completely ordinary
+    /// attempt_claim + episode_step(Solve) round trip — the SAME whole-
+    /// theorem-verification path Solve/SubmitModule always use, untouched
+    /// by any proof_session_* call — still succeeds. Also confirms
+    /// proof_session_start itself fails cleanly (not a panic) against this
+    /// backend, so the "failing interactive backend" premise is real, not
+    /// vacuous.
+    #[tokio::test]
+    async fn test_solve_via_episode_step_succeeds_when_interactive_gateway_is_fallback_only() {
+        use proofsearch_core::lean::interactive::FallbackInteractiveGateway;
+
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(FallbackInteractiveGateway),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, _obligation_id, request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+
+        // The "failing interactive backend" premise is real: proof_session_start
+        // itself is rejected cleanly (not a panic, not a hang) against this backend.
+        let session_attempt = peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": _obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await;
+        assert!(session_attempt.is_err(), "FallbackInteractiveGateway must cleanly refuse to start a session");
+
+        // Whole-proof verification (attempt_claim + episode_step Solve) is
+        // completely unaffected — it never touches interactive_gateway at all.
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "fallback-gateway-solve-1", "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+            "expected_revision": revision, "claim_token": claim["claim_token"],
+            "action": {"type": "solve", "proof_term": "norm_num"}, "cost_micros": 1,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(step["outcome"], "kernel_verified", "{:?}", step);
+        assert_eq!(step["accepted"], true, "{:?}", step);
+    }
+
+    /// Issue #166 acceptance: `proof_session_start` accepts `"pantograph"` as
+    /// a recognized `backend` value (unlike an arbitrary unknown string,
+    /// which is still rejected as "unsupported" below) but, since Pantograph
+    /// is genuinely not installed in this test/CI environment, starting a
+    /// session against it fails with the SAME clear, structured "unavailable"
+    /// error `PantographInteractiveGateway`/`detect_pantograph_status`
+    /// produce directly (issue #166's core lean crate tests cover those in
+    /// isolation) — exercised here through the real MCP tool call, not just
+    /// the internal Rust type.
+    #[tokio::test]
+    async fn test_proof_session_start_pantograph_backend_fails_closed_through_mcp_tool() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let handler = ChatDbMcp {
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
+
+        // "pantograph" is a RECOGNIZED backend value — it must not be
+        // rejected the same way a typo'd/unknown backend string is (that
+        // case is covered separately below). It still fails, but for a
+        // different, more specific reason: environment unavailability.
+        let session_attempt = peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+            "backend": "pantograph",
+        }).as_object().unwrap().clone())).await;
+        let err = session_attempt.expect_err("starting a pantograph session must fail cleanly (not a panic) in this Pantograph-less environment");
+        let err_text = format!("{err:?}").to_lowercase();
+        assert!(err_text.contains("pantograph"), "error should name the pantograph backend specifically: {err_text}");
+        assert!(
+            err_text.contains("not installed") || err_text.contains("unavailable") || err_text.contains("no `pantograph`") || err_text.contains("no pantograph"),
+            "error should explain WHY (missing binary / incompatible toolchain / etc), not just say 'error': {err_text}"
+        );
+
+        // An actually-unknown backend string is still rejected as
+        // unsupported (unchanged behavior, additive-only diff): the new
+        // "pantograph" acceptance did not loosen validation generally.
+        let bad_backend = peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+            "backend": "totally-not-a-real-backend",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_backend.is_err(), "an unrecognized backend value must still be rejected");
+    }
+
+    /// Issue #166 acceptance: `environment_describe` exposes a real
+    /// `pantograph_available` capability flag (plus a `pantograph_reason`
+    /// string) rather than crashing or omitting Pantograph entirely. In this
+    /// real test environment Pantograph is genuinely absent, so this must
+    /// report `false` with a reason explaining why — not a hardcoded stub.
+    #[tokio::test]
+    async fn test_environment_describe_reports_pantograph_unavailable_with_reason() {
+        let client = connected_client(test_handler()).await;
+        let res = tool_json(&client.peer().call_tool(CallToolRequestParams::new("environment_describe")).await.unwrap());
+
+        assert_eq!(res["pantograph_available"], false, "{:?}", res);
+        let reason = res["pantograph_reason"].as_str().expect("pantograph_reason must be a string");
+        assert!(!reason.is_empty(), "pantograph_reason must explain why, not be empty: {:?}", res);
+        assert!(reason.to_lowercase().contains("pantograph"), "{:?}", res);
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #164: interactive-session export coverage — proof_export's
+    // public_summary/audit_archive/training_export, trajectory_export, and
+    // the new proof_session_export tool. Closes out #167's Test class 7 gap
+    // (see the comment left where that class used to be skipped, above).
+    // -----------------------------------------------------------------
+
+    /// Like `setup_solvable_episode`, but lets the caller choose the root
+    /// statement — needed so a benchmark-linked test can register the
+    /// benchmark problem with the SAME statement before creating the
+    /// problem_version, and so a benchmark-unlinked test can pick a distinct
+    /// statement per test (avoiding accidental cross-test benchmark linkage
+    /// via a shared "1 + 1 = 2" statement hash).
+    async fn setup_solvable_episode_with_statement(
+        peer: &rmcp::service::Peer<rmcp::RoleClient>,
+        conn_arc: &Arc<Mutex<Connection>>,
+        statement: &str,
+    ) -> (String, String, String, i64) {
+        let pv_id = create_problem(peer, statement).await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id, "max_steps": 10, "cost_budget_micros": 1_000_000,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let req = &ep["next_action_request"];
+        let request_id = req["id"].as_str().unwrap().to_string();
+        let revision = req["episode_revision"].as_i64().unwrap();
+
+        let obligation_id: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row(
+                "SELECT id FROM episode_obligations WHERE episode_id = ?1 AND kind = 'root'",
+                [&episode_id],
+                |row| row.get(0),
+            ).unwrap()
+        };
+        (episode_id, obligation_id, request_id, revision)
+    }
+
+    fn issue164_test_handler(conn_arc: Arc<Mutex<Connection>>) -> ChatDbMcp {
+        ChatDbMcp {
+            conn: conn_arc, gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        }
+    }
+
+    /// Acceptance criterion: "Public summary remains safe." An interactive
+    /// session's applied AND failed tactic text must never leak into
+    /// public_summary, matching `test_proof_export_public_summary_never_contains_proof_body`'s
+    /// pattern but extended to interactive-session content — and the new
+    /// `interactive_sessions` section must carry exactly the issue's listed
+    /// fields (session count, backend kind, step count, branch count, final
+    /// outcome, high-level failure categories), never the trust-inflating
+    /// `is_solved`/`reports_complete` claims by themselves.
+    #[tokio::test]
+    async fn test_issue164_public_summary_redacts_interactive_session_content() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let client = connected_client(issue164_test_handler(conn_arc.clone())).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _req, revision) =
+            setup_solvable_episode_with_statement(&peer, &conn_arc, "164 + 1 = 165").await;
+
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "secret_applied_tactic_164",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "secret_failed_tactic_164",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(failed["outcome"], "failed", "{:?}", failed);
+
+        let summary = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let text = serde_json::to_string(&summary).unwrap();
+        assert!(!text.contains("secret_applied_tactic_164"), "public_summary must never leak an applied tactic's text: {text}");
+        assert!(!text.contains("secret_failed_tactic_164"), "public_summary must never leak a failed tactic's raw text: {text}");
+
+        let is = &summary["interactive_sessions"];
+        assert_eq!(is["session_count"], 1, "{:?}", is);
+        assert_eq!(is["proof_body_redacted"], true, "{:?}", is);
+        let sess = &is["sessions"][0];
+        assert_eq!(sess["backend_kind"], "mock", "{:?}", sess);
+        assert_eq!(sess["step_count"]["applied"], 1, "{:?}", sess);
+        assert_eq!(sess["step_count"]["failed"], 1, "{:?}", sess);
+        assert_eq!(sess["step_count"]["total"], 2, "{:?}", sess);
+        let failure_category_total: i64 = sess["failure_categories"].as_object().unwrap()
+            .values().map(|v| v.as_i64().unwrap()).sum();
+        assert!(failure_category_total >= 1, "at least one failure category count expected: {sess:?}");
+        // Never promoted — must not read as verified.
+        assert_eq!(sess["kernel_verified"], false, "{:?}", sess);
+        assert_eq!(sess["final_outcome"], "search_in_progress", "{:?}", sess);
+    }
+
+    /// Acceptance criterion: "Tests cover... audit archive export." Confirms
+    /// full trace (every node, every step — applied AND failed), hashes, and
+    /// reconstructed-artifact linkage are present, and that a FAILED step's
+    /// real tactic text (the one case it is durably persisted — see
+    /// `interactive_step_failure_category`'s doc) is included since this
+    /// mode is gated identically to the whole-proof body.
+    #[tokio::test]
+    async fn test_issue164_audit_archive_includes_full_interactive_trace() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let client = connected_client(issue164_test_handler(conn_arc.clone())).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _req, revision) =
+            setup_solvable_episode_with_statement(&peer, &conn_arc, "164 + 2 = 166").await;
+
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "audit_applied_tactic_164",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "audit_failed_tactic_164",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let archive = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "audit_archive",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let md = archive.content[0].as_text().unwrap().text.clone();
+
+        assert!(md.contains("Interactive proof sessions"), "{md}");
+        assert!(md.contains(&session_id[..8]), "session id must appear in the archive: {md}");
+        // The failed step's real tactic text IS included (audit_archive is
+        // gated identically to the whole-proof body, so this is safe here).
+        assert!(md.contains("audit_failed_tactic_164"), "audit_archive must include a failed step's real tactic text: {md}");
+        // The applied step's raw text is NOT durably persisted server-side
+        // by design (#161) — audit_archive cannot show what was never stored.
+        assert!(!md.contains("audit_applied_tactic_164"), "an applied step's raw tactic text is never persisted, so audit_archive cannot show it: {md}");
+        assert!(md.contains(INTERACTIVE_TRUST_BOUNDARY_NOTICE), "{md}");
+    }
+
+    /// Acceptance criterion: "Training export includes negative-space failed
+    /// routes when permitted" + trust-boundary labeling — a session that
+    /// never reached promote_to_attempt must not read as a verified proof,
+    /// and once it DOES promote, the real verified proof text and a
+    /// `verification_outcome` of `"committed"` (not `is_solved`/
+    /// `reports_complete`) are what mark it kernel_verified.
+    #[tokio::test]
+    async fn test_issue164_training_export_negative_routes_and_trust_boundary() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let client = connected_client(issue164_test_handler(conn_arc.clone())).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, request_id, revision) =
+            setup_solvable_episode_with_statement(&peer, &conn_arc, "164 + 3 = 167").await;
+
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        // MockInteractiveGateway deterministically closes a node's first open
+        // goal on any nonempty tactic — a step only FAILS when applied to a
+        // node with zero goals remaining (see MockInteractiveGateway::apply_tactic).
+        // So: succeed on root first, THEN apply the negative-space failed
+        // route on the now-goal-less solved node — matching the same
+        // sequencing every other proof_session_* test in this file uses.
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "train_applied_tactic_164",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(applied["outcome"], "applied", "{:?}", applied);
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "train_failed_tactic_164",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(failed["outcome"], "failed", "{:?}", failed);
+
+        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+            "session_id": session_id, "selected_node_id": solved_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let script_id = reconstructed["reconstructed_script_id"].as_str().unwrap().to_string();
+        let tactic_block = reconstructed["tactic_block"].as_str().unwrap().to_string();
+
+        // BEFORE promotion: must not read as verified.
+        let before = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "training_export",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let sess_before = &before["interactive_sessions"]["sessions"][0];
+        assert_eq!(sess_before["kernel_verified"], false, "{:?}", sess_before);
+        assert_eq!(sess_before["trust_boundary_outcome"], "reconstructed_not_promoted", "{:?}", sess_before);
+        let recon_before = &sess_before["reconstructions"][0];
+        assert!(recon_before["verified_attempt_id"].is_null(), "{:?}", recon_before);
+        assert!(recon_before["verified_proof_text"].is_null(), "{:?}", recon_before);
+        // The failed route IS present, tagged as a negative example, with its real tactic text.
+        let failed_step = sess_before["steps"].as_array().unwrap().iter()
+            .find(|s| s["outcome"] == "failed").expect("failed step recorded");
+        assert_eq!(failed_step["negative_example"], true, "{:?}", failed_step);
+        assert_eq!(failed_step["tactic_text"], "train_failed_tactic_164", "{:?}", failed_step);
+        // The interactive_session_records array (dataset::export_interactive_rl) also carries it.
+        let neg_records: Vec<&serde_json::Value> = before["interactive_session_records"].as_array().unwrap().iter()
+            .filter(|r| r["info"]["negative_example"] == true).collect();
+        assert!(!neg_records.is_empty(), "{:?}", before["interactive_session_records"]);
+        assert_eq!(neg_records[0]["reward"], -1.0, "{:?}", neg_records[0]);
+
+        // Promote.
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+            "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "issue164-train-promote-1", "expected_revision": revision, "cost_micros": 10,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(promoted["verification_outcome"], "committed", "{:?}", promoted);
+
+        // AFTER promotion: now (and only now) reads as kernel_verified, with the real proof text.
+        let after = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "training_export",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let sess_after = &after["interactive_sessions"]["sessions"][0];
+        assert_eq!(sess_after["kernel_verified"], true, "{:?}", sess_after);
+        assert_eq!(sess_after["trust_boundary_outcome"], "promoted_committed", "{:?}", sess_after);
+        let recon_after = &sess_after["reconstructions"][0];
+        assert_eq!(recon_after["verification_outcome"], "committed", "{:?}", recon_after);
+        assert_eq!(recon_after["kernel_verified"], true, "{:?}", recon_after);
+        assert_eq!(recon_after["verified_proof_text"], tactic_block, "{:?}", recon_after);
+    }
+
+    /// Acceptance criterion: "Benchmark-linked episodes do not leak proof
+    /// bodies unless existing proof_export policy allows it" — extended to
+    /// interactive-session content across proof_export (audit_archive),
+    /// trajectory_export, and the new proof_session_export tool. Mirrors
+    /// `test_proof_export_gates_proof_body_for_benchmark_linked_problem`'s
+    /// structure.
+    #[tokio::test]
+    async fn test_issue164_benchmark_linked_interactive_session_gated_same_as_whole_proof() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let client = connected_client(issue164_test_handler(conn_arc.clone())).await;
+        let peer = client.peer();
+
+        let suite_id = create_suite(&peer, "PutnamBench").await;
+        let statement = "putnam_interactive_export_164";
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            "suite_id": suite_id, "upstream_problem_id": "i164", "theorem_name": "i164", "root_formal_statement": statement,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let (episode_id, obligation_id, _req, revision) =
+            setup_solvable_episode_with_statement(&peer, &conn_arc, statement).await;
+
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "bench_applied_tactic_164",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "bench_secret_failed_tactic_164",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        // proof_export audit_archive: denied without the flag, allowed with it.
+        let denied = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "audit_archive",
+        }).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "audit_archive of a benchmark-linked episode's interactive session must be gated");
+        let allowed = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "audit_archive", "allow_putnambench_proof_export": true,
+        }).as_object().unwrap().clone())).await.unwrap();
+        assert!(allowed.content[0].as_text().unwrap().text.contains("bench_secret_failed_tactic_164"));
+
+        // public_summary: never gated, never leaks the secret tactic text.
+        let summary = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let summary_text = serde_json::to_string(&summary).unwrap();
+        assert!(!summary_text.contains("bench_secret_failed_tactic_164"), "{summary_text}");
+        assert_eq!(summary["interactive_sessions"]["session_count"], 1, "{:?}", summary);
+
+        // trajectory_export: denied without the flag, allowed with it.
+        let traj_denied = peer.call_tool(CallToolRequestParams::new("trajectory_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(traj_denied.is_err(), "trajectory_export must gate a benchmark-linked episode's interactive sub-traces too");
+        let traj_allowed = tool_json(&peer.call_tool(CallToolRequestParams::new("trajectory_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "allow_putnambench_proof_export": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let traj_text = serde_json::to_string(&traj_allowed).unwrap();
+        assert!(traj_text.contains("bench_secret_failed_tactic_164"), "{traj_text}");
+        let interactive_rows: Vec<&serde_json::Value> = traj_allowed.as_array().unwrap().iter()
+            .filter(|r| r["source"] == "interactive_proof_session").collect();
+        assert!(!interactive_rows.is_empty(), "{:?}", traj_allowed);
+
+        // proof_session_export: same gate, scoped to the one session.
+        let pse_denied = peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+            "session_id": session_id, "format": "audit_archive",
+        }).as_object().unwrap().clone())).await;
+        assert!(pse_denied.is_err(), "proof_session_export must gate a benchmark-linked session's audit_archive too");
+        let pse_allowed = peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+            "session_id": session_id, "format": "audit_archive", "allow_putnambench_proof_export": true,
+        }).as_object().unwrap().clone())).await.unwrap();
+        assert!(pse_allowed.content[0].as_text().unwrap().text.contains("bench_secret_failed_tactic_164"));
+        let pse_summary = peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+            "session_id": session_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap();
+        let pse_summary_text = pse_summary.content[0].as_text().unwrap().text.clone();
+        assert!(!pse_summary_text.contains("bench_secret_failed_tactic_164"), "{pse_summary_text}");
+    }
+
+    /// Acceptance criterion: trajectory_export must include interactive
+    /// proof-session events without breaking its existing bare-array
+    /// response shape (existing callers use `.as_array()`).
+    #[tokio::test]
+    async fn test_issue164_trajectory_export_includes_interactive_subtraces() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let client = connected_client(issue164_test_handler(conn_arc.clone())).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _req, revision) =
+            setup_solvable_episode_with_statement(&peer, &conn_arc, "164 + 4 = 168").await;
+
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "traj_applied_tactic_164",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let traj = tool_json(&peer.call_tool(CallToolRequestParams::new("trajectory_export").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let rows = traj.as_array().unwrap();
+        assert!(rows.iter().any(|r| r["event_type"] == "episode_created"), "existing trajectory events must still be present: {:?}", rows);
+        assert!(rows.iter().any(|r| r["source"] == "interactive_proof_session" && r["event_type"] == "interactive_session_started"),
+            "expected a session-started sub-trace entry: {:?}", rows);
+        assert!(rows.iter().any(|r| r["source"] == "interactive_proof_session" && r["event_type"] == "interactive_tactic_applied"),
+            "expected an applied-step sub-trace entry: {:?}", rows);
+    }
+
+    /// Acceptance criterion: proof_session_export is a clean, working
+    /// wrapper — its public_summary/training_export output for one session
+    /// matches proof_export's interactive_sessions view for that same
+    /// session, and it rejects a whole-episode-only format.
+    #[tokio::test]
+    async fn test_issue164_proof_session_export_thin_wrapper() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let client = connected_client(issue164_test_handler(conn_arc.clone())).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, request_id, revision) =
+            setup_solvable_episode_with_statement(&peer, &conn_arc, "164 + 5 = 169").await;
+
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "pse_applied_tactic_164",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        // Rejects a whole-episode-only format.
+        let bad_format = peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+            "session_id": session_id, "format": "markdown",
+        }).as_object().unwrap().clone())).await;
+        assert!(bad_format.is_err(), "proof_session_export must reject a whole-episode-only format like markdown");
+
+        // Unknown session_id is rejected cleanly.
+        let unknown = peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+            "session_id": Uuid::new_v4().to_string(),
+        }).as_object().unwrap().clone())).await;
+        assert!(unknown.is_err());
+
+        // Default format (public_summary) requires no flag and works.
+        let default_summary = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+            "session_id": session_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(default_summary["session_count"], 1, "{:?}", default_summary);
+        assert_eq!(default_summary["sessions"][0]["kernel_verified"], false, "{:?}", default_summary);
+
+        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+            "session_id": session_id, "selected_node_id": solved_node_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let script_id = reconstructed["reconstructed_script_id"].as_str().unwrap().to_string();
+        let tactic_block = reconstructed["tactic_block"].as_str().unwrap().to_string();
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+            "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
+            "episode_id": episode_id, "action_request_id": request_id,
+            "idempotency_key": "issue164-pse-promote-1", "expected_revision": revision, "cost_micros": 10,
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(promoted["verification_outcome"], "committed", "{:?}", promoted);
+
+        let training = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+            "session_id": session_id, "format": "training_export",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let sess = &training["sessions"][0];
+        assert_eq!(sess["kernel_verified"], true, "{:?}", sess);
+        assert_eq!(sess["reconstructions"][0]["verified_proof_text"], tactic_block, "{:?}", sess);
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #165: derived progress/failure/repair/branch labels for
+    // interactive-session steps.
+    //
+    // Unit tests exercise `compute_step_progress_labels` /
+    // `step_has_prior_failure_on_same_parent` / `interactive_session_branch_topology`
+    // directly against hand-built `idb::NodeRow`/`idb::StepRow`/`idb::SessionRow`
+    // values — needed because `MockInteractiveGateway` is DETERMINISTIC (it
+    // always removes exactly one goal on every successful `apply_tactic`),
+    // so several labels (`no_progress`, `goal_count_increased`,
+    // `target_simplified`, `context_changed`) can never actually be produced
+    // by a real round trip through the mock backend; constructing the
+    // node/step rows directly is the only way to exercise their EXACT
+    // trigger conditions. Integration tests below exercise the full MCP
+    // surface (`proof_session_tactic_step`, `proof_session_replay`,
+    // `proof_session_export`) for the labels the mock backend CAN produce,
+    // plus the trust-boundary rule.
+    // -----------------------------------------------------------------
+
+    use proofsearch_core::lean::observation::{ProofTarget, LocalHypothesis};
+
+    fn issue165_goal(raw: &str, ctx: Option<Vec<LocalHypothesis>>) -> ProofGoal {
+        ProofGoal { goal_index: 0, target: ProofTarget { raw_rendering: raw.to_string(), pretty_rendering: None }, local_context: ctx }
+    }
+
+    fn issue165_node(session_id: Uuid, id: Uuid, parent: Option<Uuid>, goals: &[ProofGoal], status: &str) -> idb::NodeRow {
+        idb::NodeRow {
+            id, session_id, parent_node_id: parent, depth: if parent.is_none() { 0 } else { 1 },
+            node_kind: if parent.is_none() { "root".to_string() } else { "tactic_result".to_string() },
+            proof_state_hash: format!("hash-{id}"),
+            goals_json: serde_json::to_string(goals).unwrap(),
+            selected_goal_index: if goals.is_empty() { None } else { Some(0) },
+            status: status.to_string(), created_at: Utc::now(),
+        }
+    }
+
+    fn issue165_step(session_id: Uuid, id: Uuid, parent_node_id: Uuid, child_node_id: Option<Uuid>, outcome: &str, diagnostic_json: Option<String>) -> idb::StepRow {
+        idb::StepRow {
+            id, session_id, parent_node_id, child_node_id,
+            tactic_text_hash: format!("tactic-hash-{id}"), tactic_text_artifact_hash: None, redacted_text: false,
+            outcome: outcome.to_string(), diagnostic_json, diagnostics_hash: None,
+            wall_time_ms: Some(1), created_at: Utc::now(),
+        }
+    }
+
+    fn issue165_diagnostic_json(category: &str) -> String {
+        serde_json::json!({"diagnostic": {"category": category, "primary_message": "boom"}}).to_string()
+    }
+
+    /// `tactic_failed` + failure-category alignment: `failure_category` must
+    /// be the SAME `LeanDiagnosticCategory` serde value stored in the
+    /// diagnostic (via `interactive_step_failure_category`), never a
+    /// parallel classification — and `no_progress`/`progress_made` must
+    /// never co-occur with `tactic_failed`.
+    #[test]
+    fn test_issue165_failed_step_labels_tactic_failed_and_aligned_failure_category() {
+        let session_id = Uuid::new_v4();
+        let parent = issue165_node(session_id, Uuid::new_v4(), None, &[issue165_goal("P", None)], "open");
+        let diag = issue165_diagnostic_json("unsolved_goals");
+
+        let result = compute_step_progress_labels(
+            "failed", &Some(diag), &parent, None, false,
+            &std::collections::HashSet::new(), &std::collections::HashSet::new(),
+        ).unwrap();
+
+        assert_eq!(result.labels, vec!["tactic_failed".to_string()]);
+        assert_eq!(result.failure_category.as_deref(), Some("unsolved_goals"),
+            "failure_category must reuse the exact LeanDiagnosticCategory value already stored in the diagnostic");
+        assert!(!result.labels.contains(&"no_progress".to_string()));
+        assert!(!result.labels.contains(&"progress_made".to_string()));
+    }
+
+    /// Successful progress: closing the only goal fires `progress_made`,
+    /// `goal_closed`, AND `goal_count_reduced` together (both trigger
+    /// conditions are simultaneously true here, which is expected — labels
+    /// are not mutually exclusive).
+    #[test]
+    fn test_issue165_successful_step_closing_the_only_goal_is_progress_made_and_goal_closed() {
+        let session_id = Uuid::new_v4();
+        let parent = issue165_node(session_id, Uuid::new_v4(), None, &[issue165_goal("1 + 1 = 2", None)], "open");
+        let child = issue165_node(session_id, Uuid::new_v4(), Some(parent.id), &[], "solved");
+
+        let result = compute_step_progress_labels(
+            "applied", &None, &parent, Some(&child), false,
+            &std::collections::HashSet::new(), &std::collections::HashSet::new(),
+        ).unwrap();
+
+        for expected in ["progress_made", "goal_closed", "goal_count_reduced"] {
+            assert!(result.labels.contains(&expected.to_string()), "expected {expected} in {:?}", result.labels);
+        }
+        assert!(!result.labels.contains(&"no_progress".to_string()));
+        assert!(!result.labels.contains(&"tactic_failed".to_string()));
+        assert!(result.failure_category.is_none());
+    }
+
+    /// `no_progress`: an APPLIED step whose child has an identical goal set
+    /// (same count, same target text, same — absent — context) to its
+    /// parent. Distinct from `tactic_failed` (this step succeeded), and
+    /// mutually exclusive with `progress_made` by construction.
+    #[test]
+    fn test_issue165_no_progress_when_goal_count_and_content_are_unchanged() {
+        let session_id = Uuid::new_v4();
+        let goal = issue165_goal("n : Nat |- P n", None);
+        let parent = issue165_node(session_id, Uuid::new_v4(), None, &[goal.clone()], "open");
+        let child = issue165_node(session_id, Uuid::new_v4(), Some(parent.id), &[goal], "open");
+
+        let result = compute_step_progress_labels(
+            "applied", &None, &parent, Some(&child), false,
+            &std::collections::HashSet::new(), &std::collections::HashSet::new(),
+        ).unwrap();
+
+        assert_eq!(result.labels, vec!["no_progress".to_string()],
+            "an applied step with an unchanged parent/child goal set must be exactly no_progress and nothing else: {:?}", result.labels);
+    }
+
+    /// `goal_count_increased` (a `cases`-like split introducing more
+    /// subgoals — not counted as progress by itself), `target_simplified`
+    /// (goal count unchanged, textually shorter — the documented HEURISTIC,
+    /// gated to only fire when the count didn't change), and
+    /// `context_changed` (goal count AND target text unchanged, but a
+    /// hypothesis was introduced) — three independent trigger conditions,
+    /// each isolated in its own scenario so no other signal could be
+    /// responsible for the assertion passing.
+    #[test]
+    fn test_issue165_goal_count_increased_and_target_simplified_and_context_changed_are_independent() {
+        let session_id = Uuid::new_v4();
+        let empty_sets = (std::collections::HashSet::new(), std::collections::HashSet::new());
+
+        // goal_count_increased.
+        let parent_a = issue165_node(session_id, Uuid::new_v4(), None, &[issue165_goal("P n", None)], "open");
+        let child_a = issue165_node(session_id, Uuid::new_v4(), Some(parent_a.id),
+            &[issue165_goal("P 0", None), issue165_goal("P (n+1)", None)], "open");
+        let result_a = compute_step_progress_labels("applied", &None, &parent_a, Some(&child_a), false, &empty_sets.0, &empty_sets.1).unwrap();
+        assert!(result_a.labels.contains(&"goal_count_increased".to_string()), "{:?}", result_a.labels);
+        assert!(!result_a.labels.contains(&"goal_count_reduced".to_string()));
+
+        // target_simplified: goal count UNCHANGED, remaining goal's text got shorter.
+        let parent_b = issue165_node(session_id, Uuid::new_v4(), None,
+            &[issue165_goal("1 + 1 + 1 + 1 + 1 + 1 = 6", None)], "open");
+        let child_b = issue165_node(session_id, Uuid::new_v4(), Some(parent_b.id),
+            &[issue165_goal("6 = 6", None)], "open");
+        let result_b = compute_step_progress_labels("applied", &None, &parent_b, Some(&child_b), false, &empty_sets.0, &empty_sets.1).unwrap();
+        assert!(result_b.labels.contains(&"target_simplified".to_string()), "{:?}", result_b.labels);
+        assert!(result_b.labels.contains(&"progress_made".to_string()));
+        assert!(!result_b.labels.contains(&"goal_count_reduced".to_string()));
+        assert!(!result_b.labels.contains(&"goal_count_increased".to_string()));
+
+        // context_changed: goal count AND target text UNCHANGED, a hypothesis appeared.
+        let target_text = "P n";
+        let parent_c = issue165_node(session_id, Uuid::new_v4(), None, &[issue165_goal(target_text, None)], "open");
+        let child_c = issue165_node(session_id, Uuid::new_v4(), Some(parent_c.id),
+            &[issue165_goal(target_text, Some(vec![LocalHypothesis { raw_rendering: "n : Nat".to_string(), name: None, type_rendering: None }]))], "open");
+        let result_c = compute_step_progress_labels("applied", &None, &parent_c, Some(&child_c), false, &empty_sets.0, &empty_sets.1).unwrap();
+        assert!(result_c.labels.contains(&"context_changed".to_string()), "{:?}", result_c.labels);
+        assert!(result_c.labels.contains(&"progress_made".to_string()));
+        assert!(!result_c.labels.contains(&"target_simplified".to_string()));
+    }
+
+    /// `tactic_repaired_previous_failure`: a later APPLIED step on the SAME
+    /// parent as an earlier FAILED step. Tests both the raw ordered-step
+    /// detection (`step_has_prior_failure_on_same_parent`) and its effect on
+    /// `compute_step_progress_labels`'s output.
+    #[test]
+    fn test_issue165_tactic_repaired_previous_failure_on_a_retry_after_failure() {
+        let session_id = Uuid::new_v4();
+        let parent_id = Uuid::new_v4();
+        let child_id = Uuid::new_v4();
+
+        let failed_step = issue165_step(session_id, Uuid::new_v4(), parent_id, None, "failed", Some(issue165_diagnostic_json("tactic_failure")));
+        let applied_step = issue165_step(session_id, Uuid::new_v4(), parent_id, Some(child_id), "applied", None);
+        let ordered = vec![failed_step.clone(), applied_step.clone()];
+
+        assert!(step_has_prior_failure_on_same_parent(&ordered, &applied_step),
+            "a later applied step on the SAME parent as an earlier failed step must detect the prior failure");
+        assert!(!step_has_prior_failure_on_same_parent(&ordered, &failed_step),
+            "the FIRST step tried against a parent has no prior failure to detect");
+
+        let parent = issue165_node(session_id, parent_id, None, &[issue165_goal("P", None)], "open");
+        let child = issue165_node(session_id, child_id, Some(parent_id), &[], "solved");
+        let result = compute_step_progress_labels("applied", &None, &parent, Some(&child), true,
+            &std::collections::HashSet::new(), &std::collections::HashSet::new()).unwrap();
+        assert!(result.labels.contains(&"tactic_repaired_previous_failure".to_string()), "{:?}", result.labels);
+    }
+
+    /// `branch_selected_for_reconstruction` vs `branch_abandoned`: two
+    /// sibling leaves off the same parent, one on the session's selected
+    /// path, one not — `interactive_session_branch_topology`'s sets AND
+    /// `compute_step_progress_labels`'s resulting labels must agree, and
+    /// the two labels must never both appear on the same node.
+    #[test]
+    fn test_issue165_branch_topology_selected_path_and_abandoned_leaf() {
+        let session_id = Uuid::new_v4();
+        let root_id = Uuid::new_v4();
+        let selected_child_id = Uuid::new_v4();
+        let abandoned_child_id = Uuid::new_v4();
+
+        let root = issue165_node(session_id, root_id, None, &[issue165_goal("P", None)], "open");
+        let selected_child = issue165_node(session_id, selected_child_id, Some(root_id), &[], "solved");
+        let abandoned_child = issue165_node(session_id, abandoned_child_id, Some(root_id), &[issue165_goal("Q", None)], "open");
+        let nodes = vec![root.clone(), selected_child.clone(), abandoned_child.clone()];
+
+        let session = idb::SessionRow {
+            id: session_id, episode_id: Uuid::new_v4(), problem_version_id: Uuid::new_v4(), obligation_id: Uuid::new_v4(),
+            backend_kind: "mock".to_string(), backend_version: None, import_manifest_hash: None, environment_hash: None,
+            state: "closed".to_string(), root_node_id: Some(root_id), selected_final_node_id: Some(selected_child_id),
+            reconstructed_script_hash: None, created_at: Utc::now(), closed_at: Some(Utc::now()), close_reason: Some("closed".to_string()),
+        };
+
+        let (selected_path, abandoned) = interactive_session_branch_topology(&session, &nodes);
+        assert!(selected_path.contains(&root_id));
+        assert!(selected_path.contains(&selected_child_id));
+        assert!(!selected_path.contains(&abandoned_child_id));
+        assert!(abandoned.contains(&abandoned_child_id));
+        assert!(!abandoned.contains(&selected_child_id));
+        assert!(!abandoned.contains(&root_id), "root has children, so it is never a LEAF regardless of selection");
+
+        let selected_labels = compute_step_progress_labels("applied", &None, &root, Some(&selected_child), false, &selected_path, &abandoned).unwrap();
+        assert!(selected_labels.labels.contains(&"branch_selected_for_reconstruction".to_string()), "{:?}", selected_labels.labels);
+        assert!(!selected_labels.labels.contains(&"branch_abandoned".to_string()));
+
+        let abandoned_labels = compute_step_progress_labels("applied", &None, &root, Some(&abandoned_child), false, &selected_path, &abandoned).unwrap();
+        assert!(abandoned_labels.labels.contains(&"branch_abandoned".to_string()), "{:?}", abandoned_labels.labels);
+        assert!(!abandoned_labels.labels.contains(&"branch_selected_for_reconstruction".to_string()));
+    }
+
+    /// Full MCP-surface integration: `proof_session_tactic_step`'s response
+    /// carries `progress_labels`/`failure_category` for both a successful
+    /// and a failed step, matching what the mock backend can actually
+    /// produce end to end (acceptance criteria: "Interactive steps receive
+    /// deterministic progress/failure labels ... stored with the step or
+    /// exported as derived metadata").
+    #[tokio::test]
+    async fn test_issue165_tactic_step_response_carries_progress_labels() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let client = connected_client(issue164_test_handler(conn_arc.clone())).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _req, revision) =
+            setup_solvable_episode_with_statement(&peer, &conn_arc, "165 + 1 = 166").await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let applied_labels: Vec<String> = applied["progress_labels"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        for expected in ["progress_made", "goal_closed", "goal_count_reduced"] {
+            assert!(applied_labels.contains(&expected.to_string()), "expected {expected} in {:?}", applied_labels);
+        }
+        assert!(applied["failure_category"].is_null(), "{:?}", applied);
+        let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
+
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "rfl",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(failed["progress_labels"], serde_json::json!(["tactic_failed"]), "{:?}", failed);
+        assert_eq!(failed["failure_category"], "tactic_failure",
+            "must reuse the SAME LeanDiagnosticCategory value MockInteractiveGateway::apply_tactic's 'no goals remaining' diagnostic already carries");
+    }
+
+    /// Full MCP-surface integration: `proof_session_replay(mode="trace_only")`
+    /// reports `branch_selected_for_reconstruction` on the branch that ends
+    /// up selected when the session closes, and `branch_abandoned` on the
+    /// sibling that doesn't — the acceptance criteria's "selected final
+    /// path" test case, driven through the real tool surface rather than the
+    /// pure function directly.
+    #[tokio::test]
+    async fn test_issue165_replay_trace_only_reports_branch_selected_and_abandoned_labels() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let client = connected_client(issue164_test_handler(conn_arc.clone())).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _req, revision) =
+            setup_solvable_episode_with_statement(&peer, &conn_arc, "165 + 3 = 168").await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let branch_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "a", "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let branch_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "b", "tactic": "decide",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let branch_a_node = branch_a["node_id"].as_str().unwrap().to_string();
+
+        let _selected = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_select_node").with_arguments(serde_json::json!({
+            "session_id": session_id, "node_id": branch_a_node,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let _closed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+            "session_id": session_id, "reason": "closed",
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+            "session_id": session_id, "mode": "trace_only",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(replay["passed"], true, "{:?}", replay);
+
+        let step_labels = replay["step_progress_labels"].as_array().unwrap();
+        let step_a = step_labels.iter().find(|s| s["step_id"] == branch_a["step_id"]).unwrap();
+        let step_b = step_labels.iter().find(|s| s["step_id"] == branch_b["step_id"]).unwrap();
+        let labels_a: Vec<String> = step_a["progress_labels"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        let labels_b: Vec<String> = step_b["progress_labels"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert!(labels_a.contains(&"branch_selected_for_reconstruction".to_string()), "{:?}", step_a);
+        assert!(!labels_a.contains(&"branch_abandoned".to_string()), "{:?}", step_a);
+        assert!(!labels_b.contains(&"branch_selected_for_reconstruction".to_string()), "{:?}", step_b);
+        // NOTE: `branch_abandoned` is deliberately NOT asserted for branch B
+        // here. MockInteractiveGateway always starts a session with exactly
+        // ONE goal and closes it entirely on ANY syntactically nonempty
+        // tactic (see that gateway's own doc), so every node it ever
+        // produces via a successful `apply_tactic` is immediately
+        // `status == "solved"` — there is no way to reach an OPEN,
+        // childless, unselected leaf (an "abandoned" node, by definition)
+        // through a real round trip against this deterministic backend.
+        // `branch_abandoned`'s exact trigger condition IS still fully
+        // covered — see `test_issue165_branch_topology_selected_path_and_abandoned_leaf`,
+        // which constructs the open/unselected/childless node this backend
+        // structurally cannot produce.
+        assert!(!labels_b.contains(&"branch_abandoned".to_string()), "{:?}", step_b);
+    }
+
+    /// THE issue #165 reward-interaction rule, tested directly: a session
+    /// whose applied step carries `progress_made`/`goal_closed` labels, and
+    /// which is NEVER promoted, must still report `kernel_verified: false`
+    /// everywhere that field is surfaced, and the obligation's own status
+    /// must stay untouched. Also confirms the check isn't vacuous — the
+    /// session DID accrue real positive labels — so this isn't passing
+    /// merely because nothing happened.
+    #[tokio::test]
+    async fn test_issue165_progress_labels_never_imply_kernel_verified() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
+        let client = connected_client(issue164_test_handler(conn_arc.clone())).await;
+        let peer = client.peer();
+
+        let (episode_id, obligation_id, _req, revision) =
+            setup_solvable_episode_with_statement(&peer, &conn_arc, "165 + 2 = 167").await;
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let session_id = start["session_id"].as_str().unwrap().to_string();
+        let root_node_id = start["node_id"].as_str().unwrap().to_string();
+
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+            "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
+        }).as_object().unwrap().clone())).await.unwrap());
+        let applied_labels: Vec<String> = applied["progress_labels"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert!(applied_labels.contains(&"goal_closed".to_string()), "{:?}", applied);
+        assert!(applied.get("kernel_verified").is_none(),
+            "the tactic_step response must never carry a kernel_verified-shaped field — progress labels are a completely separate vocabulary from proof authority");
+
+        let obl_status: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row("SELECT status FROM episode_obligations WHERE id = ?1", [&obligation_id], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(obl_status, "open", "a session that only accrued progress labels — never promoted — must never change obligation status");
+
+        let public_summary = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+            "session_id": session_id, "format": "public_summary",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(public_summary["sessions"][0]["kernel_verified"], false, "{:?}", public_summary);
+        let label_counts = public_summary["sessions"][0]["progress_label_counts"].as_object().unwrap();
+        assert!(label_counts.get("goal_closed").and_then(|v| v.as_i64()).unwrap_or(0) > 0,
+            "the session DID accrue positive progress labels — this proves the kernel_verified=false assertion above isn't vacuous: {:?}", label_counts);
+
+        let training_export = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+            "session_id": session_id, "format": "training_export",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(training_export["sessions"][0]["kernel_verified"], false, "{:?}", training_export);
+        let step0 = &training_export["sessions"][0]["steps"][0];
+        assert!(step0["progress_labels"].as_array().unwrap().iter().any(|v| v == "goal_closed"), "{:?}", step0);
     }
 }
