@@ -6375,16 +6375,20 @@ impl ChatDbMcp {
                 "backend_mismatch": false,
                 "backend_replay_available": false,
                 "detail": format!(
-                    "live backend session unavailable for replay ({e}) — expected once a session has been closed or after a process restart (the mock backend's live state is in-memory only); use mode=\"final_proof\" for a durable trust gate that does not depend on live gateway state"
+                    "live backend session unavailable for replay ({e}) — expected once a session has been closed or after a process restart (the mock backend's live state is in-memory only); this is a real architectural limit shared by BOTH replay modes that need live tactic text (backend replay always, and final_proof's auto-reconstruct-from-selected_node_id path) — if you already have this session's exact tactic_block text from an EARLIER proof_session_reconstruct call, mode=\"final_proof\" with an explicit reconstructed_script_id + tactic_block does NOT depend on live gateway state and remains available"
                 ),
             })),
         };
 
-        let tactics: Vec<String> = if original_script.tactic_block.is_empty() {
-            vec![]
-        } else {
-            original_script.tactic_block.split('\n').map(|s| s.to_string()).collect()
-        };
+        // Issue #163: use the per-step `tactics` field directly rather than
+        // `tactic_block.split('\n')` — that split is NOT a safe inverse of
+        // `tactics.join("\n")` when a single step's own tactic text
+        // legitimately contains an embedded newline (a multi-line tactic
+        // block); splitting on it would fragment one real step into several
+        // spurious pseudo-steps and misalign the comparison below against
+        // the recorded step boundaries. See `ReconstructedScript::tactics`'s
+        // doc comment in `lean/interactive.rs`.
+        let tactics: Vec<String> = original_script.tactics.clone();
 
         let request = {
             let conn = self.conn.lock().await;
@@ -6498,8 +6502,19 @@ impl ChatDbMcp {
                             .to_string()
                     }
                 };
+                // This auto-reconstruct-from-selected_node_id path goes
+                // through the SAME live interactive_gateway.reconstruct_script
+                // call `replay_backend` depends on — it is NOT independent of
+                // live gateway state (see that method's doc comment). If the
+                // session is closed or the process restarted, tell the
+                // caller the one path that IS independent of live state:
+                // supplying reconstructed_script_id + tactic_block explicitly
+                // from an earlier proof_session_reconstruct call.
                 let reconstruct_args = serde_json::json!({ "session_id": session_uuid.to_string(), "selected_node_id": selected_node_id });
-                let reconstruct_result = self.do_proof_session_reconstruct(reconstruct_args).await?;
+                let reconstruct_result = self.do_proof_session_reconstruct(reconstruct_args).await.map_err(|e| mcp_invalid_params(format!(
+                    "mode=\"final_proof\" could not auto-reconstruct from selected_node_id ({}): {} — this auto-reconstruct path needs the SAME live gateway state as mode=\"backend\" (see its error message), so it fails the same way once a session is closed or after a process restart; if you already have this session's exact tactic_block text from an earlier proof_session_reconstruct call, retry with that text passed explicitly as reconstructed_script_id + tactic_block instead, which does not need the live gateway",
+                    selected_node_id, e.message
+                )))?;
                 let reconstruct_json = extract_tool_result_json(&reconstruct_result)?;
                 let script_id = reconstruct_json["reconstructed_script_id"].as_str()
                     .ok_or_else(|| mcp_internal_error("proof_session_reconstruct did not return reconstructed_script_id"))?.to_string();
