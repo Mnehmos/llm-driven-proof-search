@@ -104,6 +104,98 @@ still open and sit at the Level 2 → Level 3 seam:
 no shared namespace or joint verification — that's still Level 1 done twice,
 not a local theory.
 
+### Level 2.5 — interactive proof-state search *(current: v0.3.27, mock backend only)*
+
+**Definition:** Beside whole-proof-attempt verification (Level 2), a client
+can work **one** obligation's goal state tactic-by-tactic through a live
+`InteractiveProofGateway` backend: start a session, apply tactics one at a
+time, branch to try alternatives, observe canonical hashed proof-state
+snapshots, and reconstruct a tactic script once a path closes. This is a
+search-space *workbench* sitting between whole-module verification (Level 2)
+and higher-level formalization planning (Level 3) — it doesn't change what
+counts as a proof, it changes how much of the search that *led to* a proof
+attempt is captured as replayable, auditable evidence along the way.
+
+**Required artifacts:** `interactive_proof_sessions`, `interactive_proof_nodes`,
+`interactive_proof_steps`, `interactive_proof_reconstructed_scripts`
+(append-only — failed steps are never deleted; see
+`crates/proofsearch-core/src/db/schema_v1.rs`), plus the canonical, stably
+hashed `ProofStateObservation` / `ProofGoal` / `LocalHypothesis` /
+`ProofTarget` / `ProofStateDiagnostic` model (JCS + SHA-256 hashing, same
+convention as every other canonical hash in this codebase; see
+`crates/proofsearch-core/src/lean/observation.rs`, issue #162).
+
+**Required tools/actions:** the `proof_session_*` family —
+`proof_session_start`, `proof_session_observe`, `proof_session_tactic_step`,
+`proof_session_branch`, `proof_session_select_node`,
+`proof_session_reconstruct`, `proof_session_promote_to_attempt`,
+`proof_session_close`, `proof_session_replay` (`trace_only` / `backend` /
+`final_proof` modes), `proof_session_export` (`public_summary` /
+`audit_archive` / `training_export`). See the README's
+[Interactive Proof Sessions](../README.md) section for the tool-by-tool
+breakdown and the exact `start` → `tactic_step`/`branch`/`select_node` →
+`reconstruct` → `promote_to_attempt` loop.
+
+**Required backend abstraction:** `InteractiveProofGateway`
+(`crates/proofsearch-core/src/lean/interactive.rs`, issue #159) — a
+deterministic `MockInteractiveGateway` (always available, no real
+elaborator: every nonempty tactic closes the first open goal), a
+`FallbackInteractiveGateway` (clean "not supported" stub for when no
+interactive backend is configured), and a `PantographInteractiveGateway`
+prototype (issue #166: real PATH / `lake-manifest.json` / `lean-toolchain`
+compatibility detection, but no process-spawning or IPC implementation yet —
+fails closed on every live operation regardless of what the detection probe
+finds, including its most favorable outcome).
+
+**Required trust boundary:** the same rule as Level 2's, one layer further
+from the kernel: every `proof_session_*` result is search evidence, never
+proof authority, **regardless of `is_solved` / `reports_complete`**. The only
+path from an interactive session to a changed obligation status is
+`proof_session_promote_to_attempt` (or `proof_session_replay(mode=
+"final_proof")`), and both route through the *same* `attempt_claim` +
+`episode_step(Solve)` code path a direct `Solve` submission already uses —
+not a second, parallel verification mechanism. **This level is an auditable
+proof-search capability layered in front of Lean kernel verification, not a
+replacement for it.**
+
+**MathCorpus / negative-space training value:** every failed tactic
+application is recorded as a first-class negative example
+(`interactive_proof_steps.outcome = 'failed'`, never deleted, carrying the
+real failing tactic text and its full diagnostic — see
+`crates/proofsearch-core/src/orchestrator/dataset.rs`). `proof_session_export
+(format="training_export")` and the interactive-session branch of the
+dataset-export path (issues #164/#165) surface these failed routes as
+structured per-step training records, the interactive-session analogue of
+`export_rl`'s whole-proof RL tuples. This is Level 1's "don't discard failed
+attempts" principle, extended down from whole `episode_step` actions to
+individual tactic-level decisions — exactly the kind of negative-space
+evidence (what *doesn't* work, and why) a training corpus needs alongside
+positive kernel-verified examples.
+
+**Required tests/playtests:** the interactive-session vertical-slice tests
+(issue #167: a simple theorem solved by tactic stepping through the `mock`
+backend, reconstructed, and promoted through the real kernel, end to end),
+plus the `PantographInteractiveGateway` real-environment detection tests
+(issue #166: confirms this repo's own Pantograph-absent state classifies
+correctly and that every trait method fails closed against the real,
+unmocked environment).
+
+**Related issues:** #158 (epic), #159 (backend trait), #160 (DB schema),
+#161 (MCP tools — `proof_session_export` deferred to #164), #162 (observation
+model), #163 (reconstruction + replay), #164 (exports, closes out #161's
+deferred item), #165 (progress scoring / negative-space labels), #166
+(Pantograph prototype adapter), #167 (vertical-slice tests — export-policy
+tests deferred to #164), #168 (this documentation pass).
+
+**Status:** Shipped as a search/evidence layer. The `mock` backend supports
+the full loop end to end (start → step → branch → reconstruct → promote); the
+Pantograph adapter is a real, fail-closed *detection* prototype only — no
+interactive Lean backend other than `mock` is actually usable yet.
+**Does NOT count** as a Level 2 or Level 3 capability by itself: an
+interactive session that never promotes through the kernel path has produced
+search evidence, not a verified proof, no matter how many nodes report
+`is_solved: true`.
+
 ### Level 3 — formalization assistant
 
 **Definition:**
@@ -803,6 +895,7 @@ toward, not a near-term milestone.
 |---|---|---|
 | 1 | #1–#4 (closed) | — |
 | 2 | #19 (closed) | #5, #6, #7 (open) |
+| 2.5 | #158 (epic), #159, #160, #161, #162, #163, #164, #165, #166, #167 (closed) | #168 (docs, shared with 2 and 3) |
 | 3 | #10, #23, #24, #25, #34, #35, #38 | #6 (shared with 2) |
 | 4 | #8, #9, #11, #12, #13, #14, #26, #27 | #7 (shared with 2) |
 | PutnamBench sprint | #28, #29, #30, #31, #32, #33, #36, #37 | #34, #38 (shared with 3) |
