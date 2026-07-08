@@ -6479,6 +6479,22 @@ impl ChatDbMcp {
                 let goals_json = serde_json::to_string(&goals).map_err(|e| mcp_internal_error(e.to_string()))?;
                 let child_id = state.node.0;
 
+                // Issue #165 / CodeRabbit fix: this MUST be fetched BEFORE
+                // `idb::insert_step` below inserts the current step's own
+                // row — see `any_failed_step_on_parent`'s doc comment, which
+                // documents exactly this ordering requirement. Fetching
+                // after the insert would be harmless TODAY only because this
+                // call site is on the `outcome: "applied"` branch and
+                // `any_failed_step_on_parent` only counts `outcome ==
+                // "failed"` rows (so an applied step could never spuriously
+                // count itself); it would silently corrupt
+                // `tactic_repaired_previous_failure` the moment this same
+                // pattern were ever reused on a FAILED step's own insertion
+                // path, where the just-inserted row WOULD match. Fetch here,
+                // before either insert below, so the ordering can't drift.
+                let existing_steps = idb::list_steps_for_session(&tx, session_uuid).map_err(rs)?;
+                let prior_failed_on_same_parent = any_failed_step_on_parent(&existing_steps, parent_uuid);
+
                 idb::insert_node(&tx, &idb::NewNode {
                     id: child_id, session_id: session_uuid, parent_node_id: Some(parent_uuid),
                     depth: parent_node.depth + 1, node_kind: "tactic_result".to_string(),
@@ -6509,8 +6525,8 @@ impl ChatDbMcp {
                 // response to one apply_tactic call whose own
                 // set_session_selected_node call above trivially makes the
                 // just-applied node "selected" every single time.
-                let existing_steps = idb::list_steps_for_session(&tx, session_uuid).map_err(rs)?;
-                let prior_failed_on_same_parent = any_failed_step_on_parent(&existing_steps, parent_uuid);
+                // `existing_steps`/`prior_failed_on_same_parent` were already
+                // computed ABOVE, before either insert — see that comment.
                 let child_node_for_labels = idb::NodeRow {
                     id: child_id, session_id: session_uuid, parent_node_id: Some(parent_uuid),
                     depth: parent_node.depth + 1, node_kind: "tactic_result".to_string(),
