@@ -192,6 +192,37 @@ impl RealLeanGateway {
         }
         (imports, open_directives)
     }
+
+    /// Assembles the exact Lean source `verify_exact` submits to the kernel —
+    /// pulled out into its own pure, unit-testable function (issue #141) so
+    /// the whitespace contract between `:= by` and the proof body can be
+    /// checked directly, without spawning a real Lean subprocess.
+    ///
+    /// The literal `by\n` in the format string is load-bearing: it puts a
+    /// real newline between `by` and `proof_term` unconditionally, so the
+    /// first proof line can NEVER land on the same physical source line as
+    /// `by` — regardless of `statement`'s length or whether `proof_term`
+    /// itself starts with a leading `\n`. That is the exact failure mode
+    /// issue #141 reported (a long statement pushed `by` far enough right
+    /// that a proof_term with no leading newline shared its line, breaking
+    /// Lean 4's indentation-sensitive tactic parser). See
+    /// `assemble_root_theorem_source_never_shares_by_line_regardless_of_statement_length_or_leading_newline`
+    /// below for the regression test.
+    fn assemble_root_theorem_source(
+        imports: &str,
+        problem_namespace: &str,
+        open_block: &str,
+        theorem_name: &str,
+        statement: &str,
+        proof_term: &str,
+        proof_format: ProofFormat,
+    ) -> String {
+        let indented_proof = normalize_proof(proof_term, proof_format);
+        format!(
+            "{}\nnamespace {}\n\n{}theorem {} : {} := by\n{}\n\nend {}\n",
+            imports, problem_namespace, open_block, theorem_name, statement, indented_proof, problem_namespace,
+        )
+    }
 }
 
 /// Human-readable identity of the actual Lean+Mathlib environment the gateway
@@ -312,16 +343,9 @@ impl LeanGateway for RealLeanGateway {
         // whitespace-sensitive parser as nesting rather than sequencing);
         // raw_lean_block instead preserves relative indentation for proofs that
         // intentionally use it. Whitespace only — the kernel still decides.
-        let indented_proof = normalize_proof(candidate_source, proof_format);
-        let file_content = format!(
-            "{}\nnamespace {}\n\n{}theorem {} : {} := by\n{}\n\nend {}\n",
-            imports,
-            problem_namespace,
-            open_block,
-            theorem_name,
-            obligation.lean_statement,
-            indented_proof,
-            problem_namespace
+        let file_content = Self::assemble_root_theorem_source(
+            &imports, &problem_namespace, &open_block, &theorem_name,
+            &obligation.lean_statement, candidate_source, proof_format,
         );
 
         // 4/5. Write + run.
@@ -783,6 +807,48 @@ mod tests {
 
     fn default_manifest() -> Vec<String> {
         vec!["Mathlib.Tactic.Ring".to_string(), "Mathlib.Tactic.NormNum".to_string()]
+    }
+
+    /// Regression test for issue #141: a `solve` submission with
+    /// `proof_format: "raw_lean_block"` whose `proof_term` does NOT start
+    /// with an explicit leading `\n`, assembled against a deliberately long
+    /// statement (so `by` lands far to the right, at whatever column the
+    /// statement text happens to end) — the exact scenario the issue
+    /// reported failing with `unexpected identifier; expected command` on
+    /// the second tactic line. Asserts the assembled source's `by` is
+    /// followed by a real newline, at every statement length, regardless of
+    /// whether `proof_term` supplies its own leading `\n` — i.e. the first
+    /// tactic line can never share `by`'s physical source line.
+    #[test]
+    fn assemble_root_theorem_source_never_shares_by_line_regardless_of_statement_length_or_leading_newline() {
+        let long_statement = "∀ (t : ℕ) (ht : 0 < t) (α : ℝ) (h : Filter.Tendsto (fun n => (t : ℝ) * α ^ n) Filter.atTop (nhds 0)), True";
+        for proof_term in [
+            // No leading '\n' -- the exact shape issue #141 reported.
+            "intro t ht α h\n  rw [Filter.eventually_atTop] at h\n  trivial",
+            // A leading '\n' -- should behave identically; this is not a
+            // workaround the assembly should depend on.
+            "\nintro t ht α h\n  rw [Filter.eventually_atTop] at h\n  trivial",
+            // A single-line proof, and an empty one -- boundary cases.
+            "trivial",
+            "",
+        ] {
+            for statement in [long_statement, "True"] {
+                let source = RealLeanGateway::assemble_root_theorem_source(
+                    "import Mathlib\n", "ProofSearch.P_test", "", "O_test",
+                    statement, proof_term, ProofFormat::RawLeanBlock,
+                );
+                let by_pos = source.find(" := by\n")
+                    .expect(&format!("assembled source must contain ' := by\\n' literally: {source:?}"));
+                // Confirm it's really a newline immediately after `by`, not
+                // just that the literal substring above matched -- i.e. the
+                // character right after "by" is '\n', full stop, and
+                // whatever comes after that newline is not itself blank
+                // trailing whitespace hiding a same-line token.
+                let after_by = &source[by_pos + " := by".len()..];
+                assert!(after_by.starts_with('\n'),
+                    "no real newline immediately after 'by' for statement={statement:?} proof_term={proof_term:?}: {source:?}");
+            }
+        }
     }
 
     #[test]
