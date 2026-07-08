@@ -13,6 +13,13 @@ pub mod module;
 use module::{AssembledModule, normalize_proof};
 use crate::models::action::ProofFormat;
 
+/// Interactive (tactic-by-tactic) proof-state sessions — issue #159. Additive
+/// and separate from `LeanGateway`: see `interactive`'s module doc for the
+/// trust-boundary rule (results there are search evidence, never proof
+/// authority) and for why Pantograph is an optional future backend, not the
+/// API surface itself.
+pub mod interactive;
+
 pub trait LeanGateway {
     fn verify_exact(
         &self,
