@@ -39,6 +39,7 @@
 //! a hard "not supported" stub.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use schemars::JsonSchema;
@@ -487,6 +488,336 @@ impl InteractiveProofGateway for FallbackInteractiveGateway {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Pantograph adapter (issue #166) — a real detection path, permanently
+// fail-closed on live operations in this prototype
+// ---------------------------------------------------------------------------
+
+/// Result of genuinely probing this environment for a usable Pantograph
+/// installation. Every variant is reachable from real filesystem/PATH state
+/// (see [`detect_pantograph_status`]) — none of it is a hardcoded stub.
+/// Deliberately has NO variant meaning "ready to step tactics": even the two
+/// most favorable outcomes below (`ReferencedButNotFetched`'s opposite case,
+/// `CompatibleButNoIpcImplemented`) only establish STATIC compatibility
+/// (matching `lean-toolchain` files); this prototype adapter never spawns a
+/// Pantograph process or speaks its wire protocol, so no state here ever
+/// authorizes [`PantographInteractiveGateway`] to actually perform a live
+/// operation — see the struct doc for why, and the module-level trust
+/// boundary note for why that would still only be search evidence even if
+/// it did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PantographStatus {
+    /// No `pantograph`/`pantograph.exe` executable was found in any of the
+    /// searched `PATH` directories, and this project's `lake-manifest.json`
+    /// has no package entry named `pantograph`.
+    NotInstalled { path_dirs_checked: usize },
+    /// A `pantograph` executable exists somewhere on `PATH`, but this
+    /// adapter has no IPC implementation to ask it anything (e.g. its
+    /// declared Lean toolchain) — presence on `PATH` alone is not evidence
+    /// of compatibility with this project's pinned toolchain.
+    BinaryFoundNoIpc { binary_path: PathBuf },
+    /// `lake-manifest.json` declares a `pantograph` package dependency, but
+    /// no fetched checkout is present under `.lake/packages/pantograph` (or
+    /// the legacy `lake-packages/pantograph`) to compare its own
+    /// `lean-toolchain` against this project's — `lake build`/`lake update`
+    /// has not actually pulled it down in this environment.
+    ReferencedButNotFetched { manifest_rev: Option<String> },
+    /// This project's own `lean-toolchain` could not be read (the same
+    /// condition [`crate::lean::detect_environment`] reports as `None`,
+    /// i.e. `lean_available == false`) — compatibility cannot be assessed
+    /// without it, independent of whatever was found for Pantograph itself.
+    ProjectToolchainUndetected,
+    /// A fetched Pantograph checkout's `lean-toolchain` was compared
+    /// byte-for-byte (after trimming) against this project's own — and they
+    /// DIFFER. The strongest evidence of incompatibility this adapter can
+    /// gather without invoking either toolchain.
+    IncompatibleToolchain { pantograph_toolchain: String, project_toolchain: String },
+    /// A fetched checkout's `lean-toolchain` matches this project's exactly.
+    /// The strongest STATIC evidence of compatibility available — but this
+    /// prototype adapter still has no real process/IPC implementation
+    /// behind it, so it still cannot perform a single live operation. See
+    /// the struct doc for what a real integration would still need to add.
+    CompatibleButNoIpcImplemented { toolchain: String },
+}
+
+impl PantographStatus {
+    /// Always `false` in this prototype — see the enum doc: no variant here
+    /// represents a backend actually capable of live tactic stepping, only
+    /// gradations of "why not, specifically."
+    pub fn is_available(&self) -> bool {
+        false
+    }
+
+    /// Human-readable explanation, safe to surface directly in an MCP error
+    /// message or `environment_describe` capability flag.
+    pub fn reason(&self) -> String {
+        match self {
+            PantographStatus::NotInstalled { path_dirs_checked } => format!(
+                "no `pantograph` executable found on PATH ({path_dirs_checked} directories searched) \
+                 and no `pantograph` package entry in this project's lake-manifest.json — Pantograph is not installed in this environment"
+            ),
+            PantographStatus::BinaryFoundNoIpc { binary_path } => format!(
+                "a `pantograph` executable was found at {} on PATH, but this adapter has no process/IPC \
+                 implementation to query or drive it — presence on PATH is not itself confirmation of \
+                 toolchain compatibility or a working integration",
+                binary_path.display()
+            ),
+            PantographStatus::ReferencedButNotFetched { manifest_rev } => format!(
+                "lake-manifest.json declares a `pantograph` dependency{} but no fetched checkout is present \
+                 under .lake/packages/pantograph — run the project's normal `lake update`/`lake build` to \
+                 fetch it before compatibility can be assessed",
+                manifest_rev.as_deref().map(|r| format!(" (rev {r})")).unwrap_or_default()
+            ),
+            PantographStatus::ProjectToolchainUndetected => {
+                "this project's own lean-toolchain/lake-manifest.json could not be read (same condition \
+                 RealLeanGateway reports as lean_available=false) — compatibility cannot be assessed \
+                 without a pinned toolchain to compare against".to_string()
+            }
+            PantographStatus::IncompatibleToolchain { pantograph_toolchain, project_toolchain } => format!(
+                "fetched Pantograph checkout declares lean-toolchain '{pantograph_toolchain}', which does not \
+                 match this project's pinned '{project_toolchain}' — incompatible toolchains, refusing to proceed"
+            ),
+            PantographStatus::CompatibleButNoIpcImplemented { toolchain } => format!(
+                "fetched Pantograph checkout's lean-toolchain matches this project's pinned '{toolchain}' \
+                 exactly, but this prototype adapter has no real process spawning/IPC implementation — static \
+                 toolchain compatibility alone does not make live tactic stepping available"
+            ),
+        }
+    }
+}
+
+/// Searches `PATH` (or, in tests, an explicit override string standing in
+/// for it, so tests never mutate the real process-wide `PATH` env var) for
+/// an executable named `name`. Windows resolves bare names via `PATHEXT`
+/// (`.exe`/`.cmd`/`.bat`, most commonly); this checks the same handful of
+/// suffixes plus the bare name, which covers how `pantograph` would
+/// realistically be installed (a prebuilt `.exe`, or a `lake exe`-style
+/// wrapper script) without adding a `which`-style crate dependency this
+/// workspace doesn't already have. Returns the number of directories
+/// searched (for the "not found" message) alongside the first hit, if any.
+fn find_binary_on_path(name: &str, path_override: Option<&str>) -> (usize, Option<PathBuf>) {
+    let path_var = match path_override {
+        Some(p) => std::ffi::OsString::from(p),
+        None => std::env::var_os("PATH").unwrap_or_default(),
+    };
+    let dirs: Vec<PathBuf> = std::env::split_paths(&path_var).collect();
+    let candidates: Vec<String> = if cfg!(windows) {
+        vec![format!("{name}.exe"), format!("{name}.cmd"), format!("{name}.bat"), name.to_string()]
+    } else {
+        vec![name.to_string()]
+    };
+    for dir in &dirs {
+        for candidate in &candidates {
+            let path = dir.join(candidate);
+            if path.is_file() {
+                return (dirs.len(), Some(path));
+            }
+        }
+    }
+    (dirs.len(), None)
+}
+
+/// Looks up one named package's `rev` field in `lean_project_path`'s
+/// `lake-manifest.json` — the same file/shape
+/// [`crate::lean::detect_environment`] already reads to find Mathlib's
+/// pinned revision, reused here (not reinvented) for `package_name` instead.
+fn lake_manifest_package_rev(lean_project_path: &Path, package_name: &str) -> Option<String> {
+    let manifest_str = std::fs::read_to_string(lean_project_path.join("lake-manifest.json")).ok()?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_str).ok()?;
+    manifest
+        .get("packages")?
+        .as_array()?
+        .iter()
+        .find(|p| p.get("name").and_then(|n| n.as_str()) == Some(package_name))?
+        .get("rev")
+        .and_then(|r| r.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Reads a fetched Pantograph checkout's own `lean-toolchain` file, checking
+/// both the current (`.lake/packages/...`) and legacy (`lake-packages/...`)
+/// Lake layouts — the same two layouts this codebase's Mathlib source-scan
+/// path (`mathlib_source_dir`) already has to account for.
+fn fetched_pantograph_toolchain(lean_project_path: &Path) -> Option<String> {
+    for rel in [".lake/packages/pantograph/lean-toolchain", "lake-packages/pantograph/lean-toolchain"] {
+        if let Ok(content) = std::fs::read_to_string(lean_project_path.join(rel)) {
+            return Some(content.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Genuinely probes this environment for a usable Pantograph installation
+/// compatible with `lean_project_path`'s pinned Lean toolchain — real
+/// filesystem/PATH checks, not a stub. See [`PantographStatus`] for what
+/// each outcome means.
+pub fn detect_pantograph_status(lean_project_path: &Path) -> PantographStatus {
+    detect_pantograph_status_impl(lean_project_path, None)
+}
+
+/// `path_override` lets tests substitute a synthetic `PATH` string instead
+/// of mutating the real, process-global `PATH` env var (which would race
+/// against Rust's parallel test execution) — `None` (the only value
+/// production code ever passes, via [`detect_pantograph_status`]) means
+/// "use the real PATH".
+fn detect_pantograph_status_impl(lean_project_path: &Path, path_override: Option<&str>) -> PantographStatus {
+    let (path_dirs_checked, binary_path) = find_binary_on_path("pantograph", path_override);
+    let manifest_rev = lake_manifest_package_rev(lean_project_path, "pantograph");
+
+    if manifest_rev.is_none() {
+        return match binary_path {
+            Some(binary_path) => PantographStatus::BinaryFoundNoIpc { binary_path },
+            None => PantographStatus::NotInstalled { path_dirs_checked },
+        };
+    }
+
+    // A lake dependency on `pantograph` IS declared — assess it against
+    // this project's own pinned toolchain using the SAME detection
+    // mechanism RealLeanGateway/detect_environment already uses (issue
+    // #166's compatibility requirement), not a second, parallel notion of
+    // "the pinned toolchain".
+    let Some(project_env) = crate::lean::detect_environment(lean_project_path) else {
+        return PantographStatus::ProjectToolchainUndetected;
+    };
+    match fetched_pantograph_toolchain(lean_project_path) {
+        Some(pantograph_toolchain) if pantograph_toolchain == project_env.toolchain => {
+            PantographStatus::CompatibleButNoIpcImplemented { toolchain: project_env.toolchain }
+        }
+        Some(pantograph_toolchain) => PantographStatus::IncompatibleToolchain {
+            pantograph_toolchain,
+            project_toolchain: project_env.toolchain,
+        },
+        None => PantographStatus::ReferencedButNotFetched { manifest_rev },
+    }
+}
+
+/// Prototype [`InteractiveProofGateway`] adapter for Pantograph — issue
+/// #166, evaluating Pantograph as an optional backend for the interactive
+/// session epic (#158). Follows the same shape as [`FallbackInteractiveGateway`]
+/// (compiles, implements the trait, cleanly refuses every live-stepping
+/// operation) but backs its refusal with a REAL, filesystem/PATH-based
+/// probe of this environment (see [`detect_pantograph_status`]) instead of
+/// an unconditional stub — the returned error explains WHICH of several
+/// concrete reasons applies (missing binary vs. undetected/incompatible
+/// toolchain vs. detected-but-unintegrated), not just "not supported".
+///
+/// ## Why this can never reach "available" in this codebase (yet)
+/// Per issue #166's explicit scope, this adapter does not shell out to,
+/// link against, or vendor a real Pantograph process — no new crate
+/// dependency was added for this, and none is needed, since detection here
+/// is PATH/filesystem probing only. That means even the most favorable
+/// [`PantographStatus`] this adapter can compute
+/// (`CompatibleButNoIpcImplemented`, a fetched checkout's `lean-toolchain`
+/// matching this project's own byte-for-byte) still cannot authorize a live
+/// session: there is no code anywhere in this adapter that spawns a
+/// `pantograph` process, speaks its stdio/RPC protocol, or parses its
+/// responses. Every [`InteractiveProofGateway`] method below is
+/// unconditionally `Err` — the specific message just improves with the
+/// detected status.
+///
+/// ## Known compatibility risks a REAL integration would still need to handle
+/// (this is deliberately concrete, not a generic disclaimer — these are the
+/// specific hazards this prototype's static-file checks do NOT cover):
+/// - **Toolchain version drift**: this project's `lean-toolchain` can be
+///   bumped (as it already has been across this epic's issues) independent
+///   of any Pantograph release cadence. A byte-equal `lean-toolchain` match
+///   at detection time says nothing about whether it STAYS equal after the
+///   next `lean-toolchain` bump lands in this repo — a real integration
+///   needs this check to run on every session start, not once, and needs a
+///   CI signal (not just a runtime probe) when the two drift apart.
+/// - **Mathlib revision mismatches**: Pantograph's own Lake manifest pins
+///   its OWN Mathlib revision (transitively, as one of its dependencies).
+///   Even with an exactly matching Lean toolchain, a real integration must
+///   confirm Pantograph's resolved Mathlib commit does not diverge from
+///   this project's own `lake-manifest.json` Mathlib `rev` (the same field
+///   [`crate::lean::detect_environment`] already reads) — two different
+///   Mathlib commits under the same Lean version can still disagree on
+///   declaration names/signatures a proof session would reference, in
+///   exactly the way `lookup_declarations`'s "environmental scope collapse"
+///   documentation already warns about for import manifests generally.
+/// - **Process lifecycle/IPC concerns**: Pantograph is a long-lived
+///   subprocess exposing a stateful proof-search REPL (spawn once, issue
+///   many tactic-application requests against live in-process Lean
+///   elaborator state, eventually tear down) — nothing like the
+///   short-lived, one-shot `lake env lean --json` invocations
+///   `RealLeanGateway` already uses per verification call. A real adapter
+///   needs: (a) a supervised child process per session (or a pool), tied to
+///   `InteractiveSessionHandle`'s lifetime, not `LeanGateway`'s stateless
+///   spawn-per-call model; (b) a wire protocol codec for whatever framing
+///   Pantograph's REPL actually uses; (c) explicit handling for a crashed
+///   or hung Pantograph process mid-session (this adapter's `close_session`
+///   contract — "every other operation on `session` must return an `Err`,
+///   not panic" — would need to hold even when the underlying OS process is
+///   already dead); (d) concurrency behavior when multiple sessions are
+///   open at once (one process per session is the safe default, but has
+///   real memory/startup-latency cost per session that a pooled design
+///   would need to justify against).
+/// - **Trust boundary is unaffected either way**: none of the above changes
+///   this module's core rule — a real Pantograph-backed session's results
+///   remain search evidence only; `reconstruct_script`'s output still has
+///   to go through `LeanGateway::verify_exact`/`verify_module` (the real
+///   kernel) before any obligation status can change. A future real
+///   integration must not add any shortcut around that.
+#[derive(Debug, Clone)]
+pub struct PantographInteractiveGateway {
+    status: PantographStatus,
+}
+
+impl PantographInteractiveGateway {
+    /// Runs real detection (see [`detect_pantograph_status`]) against
+    /// `lean_project_path` — the same project path `RealLeanGateway` and
+    /// `detect_environment` are constructed against — and captures the
+    /// result. Cheap (a handful of filesystem stats plus a small JSON
+    /// parse), so callers may construct a fresh instance per call rather
+    /// than needing to cache one.
+    pub fn new(lean_project_path: &Path) -> Self {
+        Self { status: detect_pantograph_status(lean_project_path) }
+    }
+
+    pub fn status(&self) -> &PantographStatus {
+        &self.status
+    }
+
+    fn unavailable_message(&self) -> String {
+        format!("pantograph interactive backend is unavailable: {}", self.status.reason())
+    }
+}
+
+impl InteractiveProofGateway for PantographInteractiveGateway {
+    fn start_session(&self, _request: &InteractiveSessionRequest) -> Result<InteractiveSessionStart, String> {
+        Err(self.unavailable_message())
+    }
+
+    fn observe_state(&self, _session: InteractiveSessionHandle) -> Result<ProofStateSnapshot, String> {
+        Err(self.unavailable_message())
+    }
+
+    fn apply_tactic(
+        &self,
+        _session: InteractiveSessionHandle,
+        _parent_node: ProofStateNodeId,
+        _tactic: &str,
+    ) -> Result<TacticApplicationResult, String> {
+        Err(self.unavailable_message())
+    }
+
+    fn close_session(&self, _session: InteractiveSessionHandle) -> Result<(), String> {
+        Err(self.unavailable_message())
+    }
+
+    fn reconstruct_script(
+        &self,
+        _session: InteractiveSessionHandle,
+        _selected_node: ProofStateNodeId,
+    ) -> Result<ReconstructedScript, String> {
+        Err(self.unavailable_message())
+    }
+
+    fn replay_session(&self, _trace: &InteractiveSessionTrace) -> Result<SessionReplayResult, String> {
+        Err(self.unavailable_message())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -648,5 +979,223 @@ mod tests {
         assert!(gw.reconstruct_script(dummy_session, dummy_node).is_err());
         let trace = InteractiveSessionTrace { request: sample_request(), steps: vec![] };
         assert!(gw.replay_session(&trace).is_err());
+    }
+
+    // -----------------------------------------------------------------
+    // PantographInteractiveGateway (issue #166) — real-environment tests.
+    // Pantograph is genuinely NOT installed anywhere in this environment
+    // (no executable on PATH, no `pantograph` lake-manifest entry in the
+    // repo's lean-checker/) — these tests exercise the actual detection
+    // logic against the actual repo layout, not a mock or a skip.
+    // -----------------------------------------------------------------
+
+    /// This crate lives at `<repo>/crates/proofsearch-core`; the real Lean
+    /// project this repo verifies against is `<repo>/lean-checker`, the
+    /// SAME directory `RealLeanGateway`/`detect_environment` are pointed at
+    /// via `PROOFSEARCH_LEAN_PROJECT_PATH` in this repo's own `.mcp.json`.
+    fn real_lean_project_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lean-checker")
+    }
+
+    /// Sanity check the fixture itself: the real lean-checker project this
+    /// repo pins actually exists and has no pantograph dependency — i.e.
+    /// the "Pantograph is genuinely absent" premise the rest of these tests
+    /// rely on is real, not assumed.
+    #[test]
+    fn real_lean_project_has_no_pantograph_lake_dependency() {
+        let project = real_lean_project_path();
+        assert!(project.join("lean-toolchain").exists(), "fixture check: real lean-checker project should exist at {:?}", project);
+        assert!(
+            lake_manifest_package_rev(&project, "pantograph").is_none(),
+            "fixture assumption broken: this repo's lake-manifest.json now declares a pantograph dependency \
+             — PantographStatus::NotInstalled-focused tests below need updating"
+        );
+    }
+
+    /// Real detection, in this actual environment: no `pantograph` binary
+    /// on the real PATH (confirmed independently before writing this test —
+    /// see the task notes) and no lake-manifest entry (confirmed by the
+    /// fixture check above) must together classify as `NotInstalled`, using
+    /// the REAL PATH (path_override = None), not a synthetic one.
+    #[test]
+    fn detect_pantograph_status_reports_not_installed_in_this_real_environment() {
+        let status = detect_pantograph_status(&real_lean_project_path());
+        match status {
+            PantographStatus::NotInstalled { path_dirs_checked } => {
+                assert!(path_dirs_checked > 0, "PATH should have at least one directory in any real shell environment");
+            }
+            other => panic!(
+                "expected PantographStatus::NotInstalled in this real environment (no pantograph binary, no lake dependency), got {:?}",
+                other
+            ),
+        }
+        assert!(!status.is_available());
+        assert!(status.reason().to_lowercase().contains("pantograph"));
+    }
+
+    /// Every `InteractiveProofGateway` method on a gateway constructed
+    /// against the REAL (Pantograph-absent) environment must return a
+    /// structured `Err`, never panic — this is the fail-closed acceptance
+    /// criterion, exercised for real, not skipped/ignored.
+    #[test]
+    fn pantograph_gateway_fails_closed_on_every_trait_method_in_this_real_environment() {
+        let gw = PantographInteractiveGateway::new(&real_lean_project_path());
+        assert!(!gw.status().is_available());
+
+        let dummy_session = InteractiveSessionHandle(Uuid::new_v4());
+        let dummy_node = ProofStateNodeId(Uuid::new_v4());
+
+        let start_err = gw.start_session(&sample_request()).expect_err("start_session must fail closed");
+        assert!(start_err.contains("pantograph"), "error should name the backend: {start_err}");
+
+        let observe_err = gw.observe_state(dummy_session).expect_err("observe_state must fail closed");
+        assert!(observe_err.contains("pantograph"));
+
+        let apply_err = gw.apply_tactic(dummy_session, dummy_node, "rfl").expect_err("apply_tactic must fail closed");
+        assert!(apply_err.contains("pantograph"));
+
+        let close_err = gw.close_session(dummy_session).expect_err("close_session must fail closed");
+        assert!(close_err.contains("pantograph"));
+
+        let reconstruct_err = gw.reconstruct_script(dummy_session, dummy_node).expect_err("reconstruct_script must fail closed");
+        assert!(reconstruct_err.contains("pantograph"));
+
+        let trace = InteractiveSessionTrace { request: sample_request(), steps: vec![] };
+        let replay_err = gw.replay_session(&trace).expect_err("replay_session must fail closed");
+        assert!(replay_err.contains("pantograph"));
+    }
+
+    /// `NotInstalled` branch, isolated: an empty synthetic PATH and a
+    /// project directory with no lake-manifest.json at all.
+    #[test]
+    fn detect_pantograph_status_impl_not_installed_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let status = detect_pantograph_status_impl(tmp.path(), Some(""));
+        assert!(matches!(status, PantographStatus::NotInstalled { .. }));
+    }
+
+    /// `BinaryFoundNoIpc` branch, isolated: a synthetic PATH pointing at a
+    /// tempdir containing a fake `pantograph` file, no lake dependency.
+    #[test]
+    fn detect_pantograph_status_impl_binary_found_no_ipc_branch() {
+        let bin_dir = tempfile::tempdir().unwrap();
+        let bin_name = if cfg!(windows) { "pantograph.exe" } else { "pantograph" };
+        std::fs::write(bin_dir.path().join(bin_name), b"not a real binary").unwrap();
+
+        let project = tempfile::tempdir().unwrap();
+
+        let status = detect_pantograph_status_impl(project.path(), Some(bin_dir.path().to_str().unwrap()));
+        match &status {
+            PantographStatus::BinaryFoundNoIpc { binary_path } => {
+                assert_eq!(binary_path, &bin_dir.path().join(bin_name));
+            }
+            other => panic!("expected BinaryFoundNoIpc, got {:?}", other),
+        }
+        assert!(!status.is_available());
+    }
+
+    /// `ReferencedButNotFetched` branch, isolated: lake-manifest.json
+    /// declares a `pantograph` package, but no `.lake/packages/pantograph`
+    /// checkout exists on disk.
+    #[test]
+    fn detect_pantograph_status_impl_referenced_but_not_fetched_branch() {
+        let project = tempfile::tempdir().unwrap();
+        // detect_environment (reused for the project's own toolchain read)
+        // also requires a resolvable mathlib manifest entry, not just any
+        // lake-manifest.json — include one alongside pantograph's so this
+        // test reaches ReferencedButNotFetched rather than short-circuiting
+        // into ProjectToolchainUndetected (that branch has its own test).
+        std::fs::write(
+            project.path().join("lake-manifest.json"),
+            r#"{"packages":[{"name":"mathlib","rev":"abc123"},{"name":"pantograph","rev":"deadbeef"}]}"#,
+        ).unwrap();
+        std::fs::write(project.path().join("lean-toolchain"), "leanprover/lean4:v4.32.0-rc1\n").unwrap();
+
+        let status = detect_pantograph_status_impl(project.path(), Some(""));
+        match status {
+            PantographStatus::ReferencedButNotFetched { manifest_rev } => {
+                assert_eq!(manifest_rev.as_deref(), Some("deadbeef"));
+            }
+            other => panic!("expected ReferencedButNotFetched, got {:?}", other),
+        }
+    }
+
+    /// `ProjectToolchainUndetected` branch, isolated: a `pantograph` lake
+    /// dependency is declared, but this project itself has no
+    /// `lean-toolchain` file (mirroring `detect_environment`'s own
+    /// `lean_available == false` condition).
+    #[test]
+    fn detect_pantograph_status_impl_project_toolchain_undetected_branch() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("lake-manifest.json"),
+            r#"{"packages":[{"name":"pantograph","rev":"deadbeef"}]}"#,
+        ).unwrap();
+        // No lean-toolchain file written for this project.
+
+        let status = detect_pantograph_status_impl(project.path(), Some(""));
+        assert_eq!(status, PantographStatus::ProjectToolchainUndetected);
+    }
+
+    /// `IncompatibleToolchain` branch, isolated: a fetched Pantograph
+    /// checkout's `lean-toolchain` differs from this project's own.
+    #[test]
+    fn detect_pantograph_status_impl_incompatible_toolchain_branch() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join("lean-toolchain"), "leanprover/lean4:v4.32.0-rc1\n").unwrap();
+        std::fs::write(
+            project.path().join("lake-manifest.json"),
+            r#"{"packages":[{"name":"mathlib","rev":"abc123"},{"name":"pantograph","rev":"deadbeef"}]}"#,
+        ).unwrap();
+        let checkout_dir = project.path().join(".lake/packages/pantograph");
+        std::fs::create_dir_all(&checkout_dir).unwrap();
+        std::fs::write(checkout_dir.join("lean-toolchain"), "leanprover/lean4:v4.10.0\n").unwrap();
+
+        let status = detect_pantograph_status_impl(project.path(), Some(""));
+        match &status {
+            PantographStatus::IncompatibleToolchain { pantograph_toolchain, project_toolchain } => {
+                assert_eq!(pantograph_toolchain, "leanprover/lean4:v4.10.0");
+                assert_eq!(project_toolchain, "leanprover/lean4:v4.32.0-rc1");
+            }
+            other => panic!("expected IncompatibleToolchain, got {:?}", other),
+        }
+        assert!(!status.is_available());
+    }
+
+    /// `CompatibleButNoIpcImplemented` branch, isolated: a fetched
+    /// Pantograph checkout's `lean-toolchain` matches this project's own
+    /// exactly — the most favorable outcome this adapter can compute — and
+    /// it STILL must not report itself available, and a gateway built from
+    /// this exact project must still fail closed on every operation.
+    #[test]
+    fn detect_pantograph_status_impl_compatible_but_no_ipc_branch_still_fails_closed() {
+        let project = tempfile::tempdir().unwrap();
+        let toolchain = "leanprover/lean4:v4.32.0-rc1\n";
+        std::fs::write(project.path().join("lean-toolchain"), toolchain).unwrap();
+        std::fs::write(
+            project.path().join("lake-manifest.json"),
+            r#"{"packages":[{"name":"mathlib","rev":"abc123"},{"name":"pantograph","rev":"deadbeef"}]}"#,
+        ).unwrap();
+        let checkout_dir = project.path().join(".lake/packages/pantograph");
+        std::fs::create_dir_all(&checkout_dir).unwrap();
+        std::fs::write(checkout_dir.join("lean-toolchain"), toolchain).unwrap();
+
+        let status = detect_pantograph_status_impl(project.path(), Some(""));
+        match &status {
+            PantographStatus::CompatibleButNoIpcImplemented { toolchain: t } => {
+                assert_eq!(t, "leanprover/lean4:v4.32.0-rc1");
+            }
+            other => panic!("expected CompatibleButNoIpcImplemented, got {:?}", other),
+        }
+        // Even the most favorable static status still reports unavailable...
+        assert!(!status.is_available());
+
+        // ...and a gateway built with this status still fails closed on
+        // every single trait method — no path to a live session exists in
+        // this prototype regardless of what static detection concludes.
+        let gw = PantographInteractiveGateway { status };
+        let dummy_session = InteractiveSessionHandle(Uuid::new_v4());
+        assert!(gw.start_session(&sample_request()).is_err());
+        assert!(gw.observe_state(dummy_session).is_err());
     }
 }
