@@ -543,7 +543,7 @@ it checked. Every call has the shape
 
 ### The loop
 
-```
+```text
 proof_session {"action": {"type": "start", ...}}
     │  (root node)
     ▼
