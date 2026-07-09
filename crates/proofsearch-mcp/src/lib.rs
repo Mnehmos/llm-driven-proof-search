@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension, Transaction};
 use uuid::Uuid;
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
 
 use rmcp::ServerHandler;
@@ -1036,6 +1036,179 @@ pub struct ProofSessionExportArgs {
     pub allow_putnambench_proof_export: bool,
 }
 
+/// Issue #183 (epic #182 pilot): the single `proof_session` tool's
+/// internally-tagged action enum, mirroring `TypedAction`'s shape exactly
+/// (`#[serde(tag = "type", rename_all = "snake_case")]`). Each variant's
+/// fields are the corresponding pre-#183 flat `ProofSession*Args` struct's
+/// fields verbatim — those structs remain (unchanged) as what the
+/// `do_proof_session_*` handlers deserialize; this enum is only the MCP-layer
+/// dispatch shape. Unlike `episode_step`, there are NO shared wrapper fields:
+/// `session_id` is not shared (`start` is what creates one), so every field
+/// stays per-variant.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProofSessionAction {
+    Start {
+        episode_id: String,
+        /// Must be an `episode_obligations` row that already belongs to
+        /// `episode_id` (created the normal way — root obligation at
+        /// episode_create, or a child obligation from a prior Decompose).
+        obligation_id: String,
+        /// CAS guard, same convention as `attempt_claim`/`episode_step`: must
+        /// equal the episode's current `current_revision`.
+        expected_revision: i64,
+        /// Optional extra guard (issue #161: "expected episode revision OR
+        /// observation hash") — if supplied, must equal this episode's current
+        /// progress hash (the same hash `episode_observe`'s
+        /// `action_request.state_hash_before` is derived from). `None` skips
+        /// this extra check; `expected_revision` alone is always checked.
+        #[serde(default)]
+        expected_observation_hash: Option<String>,
+        /// Which `InteractiveProofGateway` backend to start the session against.
+        /// `"mock"` (issue #161) is the deterministic, always-available test
+        /// double. `"pantograph"` (issue #166) routes to a real, PATH/lake-
+        /// manifest-based Pantograph detection probe — it is a RECOGNIZED value,
+        /// not a usable one, until a compatible Pantograph installation exists
+        /// in this environment; see `environment_describe`'s `pantograph_available`
+        /// capability flag and `crate::lean::interactive::PantographInteractiveGateway`'s
+        /// doc for exactly what it checks and why it fails closed today.
+        /// Defaults to `"mock"`.
+        #[serde(default = "default_interactive_backend")]
+        backend: String,
+    },
+    Observe {
+        session_id: String,
+    },
+    TacticStep {
+        session_id: String,
+        /// The node to apply `tactic` to. Need not be the session's currently
+        /// selected node — branching from an earlier node is allowed (issue
+        /// #159's `apply_tactic` contract).
+        parent_node_id: String,
+        tactic: String,
+    },
+    Branch {
+        session_id: String,
+        parent_node_id: String,
+        /// Free-text label for this branch (audit/UI convenience only — not
+        /// interpreted, not unique-constrained).
+        branch_name: String,
+        tactic: String,
+    },
+    SelectNode {
+        session_id: String,
+        node_id: String,
+    },
+    Reconstruct {
+        session_id: String,
+        selected_node_id: String,
+    },
+    PromoteToAttempt {
+        session_id: String,
+        /// An id returned by a prior `reconstruct` action for this session.
+        reconstructed_script_id: String,
+        /// The EXACT reconstructed tactic text the `reconstruct` action
+        /// returned. Interactive sessions do not durably persist raw tactic
+        /// text server-side (only content hashes — the same convention this
+        /// schema already uses for `action_attempts.submitted_action_json`-
+        /// adjacent `*_artifact_hash` columns), so this is re-supplied here and
+        /// checked against the reconstructed script's recorded
+        /// `proof_source_hash` before anything is submitted — a caller cannot
+        /// promote text that does not match what was actually reconstructed
+        /// from this session's proof-state tree.
+        tactic_block: String,
+        episode_id: String,
+        /// A pending `action_request_id` targeting this session's obligation —
+        /// obtain one via `episode_observe`, exactly as the normal
+        /// `attempt_claim` flow requires.
+        action_request_id: String,
+        idempotency_key: String,
+        expected_revision: i64,
+        cost_micros: i64,
+    },
+    Close {
+        session_id: String,
+        /// One of `"closed"` (normal completion), `"abandoned"` (given up on),
+        /// or `"superseded"` (replaced by a different session/approach). All
+        /// three persist the session's full trace — see
+        /// `interactive_proof_sessions.close_reason` in `schema_v1.rs`.
+        reason: String,
+    },
+    /// Issue #164: closes out #161's explicitly-deferred session export
+    /// as a thin per-session convenience wrapper over the SAME interactive-
+    /// session export machinery `proof_export`/`trajectory_export` now share
+    /// (`gather_interactive_sessions` + the three `interactive_sessions_*`
+    /// renderers) — scoped to exactly ONE session rather than a whole episode.
+    /// Only the three interactive-aware `proof_export` formats apply here
+    /// (`public_summary` default, `audit_archive`, `training_export`); any other
+    /// `ExportMode` variant is rejected rather than silently ignored, since this
+    /// action never renders a whole-episode dossier.
+    Export {
+        session_id: String,
+        #[serde(default)]
+        format: Option<ExportMode>,
+        /// Same contamination gate `proof_export`/`trajectory_export` already
+        /// enforce (issue #33): required when `format` is `audit_archive` or
+        /// `training_export` AND this session's episode's problem is linked to a
+        /// tracked benchmark suite. Has no effect for `public_summary`, which
+        /// never exposes a proof body regardless of this flag.
+        #[serde(default)]
+        allow_putnambench_proof_export: bool,
+    },
+    /// Issue #163: replay a session from PERSISTED DB state
+    /// (`interactive_proof_sessions`/`_nodes`/`_steps`/`_reconstructed_scripts`
+    /// for `session_id`) — deliberately NOT #159's `replay_session`, which
+    /// operates on a caller-supplied in-memory `InteractiveSessionTrace`. The
+    /// whole point here is that a closed/historical session stays replayable
+    /// from what is actually stored, not just a live in-memory one.
+    Replay {
+        session_id: String,
+        /// One of `"trace_only"` (pure DB-record consistency check — no backend
+        /// or kernel call), `"backend"` (re-runs the root-to-node tactic path
+        /// against a FRESH interactive-backend session and compares outcomes/
+        /// hashes to what was recorded), or `"final_proof"` (THE TRUST GATE —
+        /// reconstructs the selected script and resubmits it through the
+        /// existing attempt_claim + episode_step Solve path for real Lean
+        /// kernel verification). Only `"final_proof"`'s result is proof
+        /// evidence; `"trace_only"` and `"backend"` remain SEARCH EVIDENCE ONLY.
+        mode: String,
+        /// `"backend"`, and `"final_proof"` when reconstructing fresh: which
+        /// node's root-to-node path to replay/reconstruct. Defaults to the
+        /// session's currently selected node if omitted.
+        #[serde(default)]
+        selected_node_id: Option<String>,
+        /// `"final_proof"` only, an ALTERNATIVE to `selected_node_id`: re-verify
+        /// an existing (not yet promoted) reconstructed script instead of
+        /// reconstructing a fresh one. Must be paired with `tactic_block` (same
+        /// hash-integrity check the `promote_to_attempt` action itself uses).
+        #[serde(default)]
+        reconstructed_script_id: Option<String>,
+        #[serde(default)]
+        tactic_block: Option<String>,
+        /// `"final_proof"` only: the same submission arguments the
+        /// `promote_to_attempt` action requires — all five are required
+        /// together when `mode = "final_proof"`.
+        #[serde(default)]
+        episode_id: Option<String>,
+        #[serde(default)]
+        action_request_id: Option<String>,
+        #[serde(default)]
+        idempotency_key: Option<String>,
+        #[serde(default)]
+        expected_revision: Option<i64>,
+        #[serde(default)]
+        cost_micros: Option<i64>,
+    },
+}
+
+/// Issue #183: args for the single consolidated `proof_session` tool. The
+/// entire payload lives on the internally-tagged `action` — see
+/// `ProofSessionAction`'s doc for why there are no shared wrapper fields.
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofSessionArgs {
+    pub action: ProofSessionAction,
+}
+
 #[derive(JsonSchema, Deserialize)]
 pub struct TrajectoryExportArgs {
     pub episode_id: String,
@@ -1059,7 +1232,7 @@ pub struct EpisodeReplayArgs {
     pub episode_id: String,
 }
 
-#[derive(JsonSchema, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, JsonSchema, Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum ExportMode {
     /// Full human-readable dossier: proof tree, assembled Lean source, attempt
@@ -6290,6 +6463,35 @@ impl ChatDbMcp {
     // attempt_claim + episode_step round trip uses.
     // -----------------------------------------------------------------
 
+    /// Issue #183 (epic #182 pilot): the single `proof_session` tool's
+    /// dispatcher. Deserializes `ProofSessionArgs`, matches on the
+    /// internally-tagged action, and routes to the pre-existing per-action
+    /// handlers below UNCHANGED. Each arm re-serializes the variant back to
+    /// JSON and passes that through: the variant's field names are identical
+    /// to the old flat `ProofSession*Args` shape by construction, and the
+    /// extra internal `"type"` tag is ignored by the handlers' serde derives.
+    /// This transitional double-serialization is deliberate — it keeps the ten
+    /// `do_proof_session_*` handlers byte-identical (the epic's key
+    /// risk-reducer) at negligible cost.
+    async fn do_proof_session(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofSessionArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize proof_session action: {}", e)))?;
+        match &args.action {
+            ProofSessionAction::Start { .. } => self.do_proof_session_start(inner).await,
+            ProofSessionAction::Observe { .. } => self.do_proof_session_observe(inner).await,
+            ProofSessionAction::TacticStep { .. } => self.do_proof_session_tactic_step(inner).await,
+            ProofSessionAction::Branch { .. } => self.do_proof_session_branch(inner).await,
+            ProofSessionAction::SelectNode { .. } => self.do_proof_session_select_node(inner).await,
+            ProofSessionAction::Reconstruct { .. } => self.do_proof_session_reconstruct(inner).await,
+            ProofSessionAction::PromoteToAttempt { .. } => self.do_proof_session_promote_to_attempt(inner).await,
+            ProofSessionAction::Close { .. } => self.do_proof_session_close(inner).await,
+            ProofSessionAction::Export { .. } => self.do_proof_session_export(inner).await,
+            ProofSessionAction::Replay { .. } => self.do_proof_session_replay(inner).await,
+        }
+    }
+
     async fn do_proof_session_start(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
         let args: ProofSessionStartArgs = serde_json::from_value(args_val)
             .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -7524,16 +7726,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EpisodeStepArgs>("episode_step", "Submit a typed action against a claimed attempt. `action` is internally tagged — exactly one of: {\"type\":\"solve\",\"proof_term\":\"  norm_num\"} (Lean tactic block proving the target obligation), {\"type\":\"decompose\",\"sub_lemmas\":[\"<lean statement>\", ...]} (split the obligation into child lemmas), {\"type\":\"give_up\"} (terminate the episode). `expected_revision` must equal the episode_revision advertised on the action_request. Settles any lease attached to the attempt atomically. FLATTENED-SEQUENCE TRAP (issue #67): in a flat_tactic_sequence chain, an inline `by` consumes EVERYTHING after it on the line — `have h : T := by omega; have h2 : U := ...` parses the second `have` INSIDE h's completed by-block and dies with 'No goals to be solved' while the outer goal stays unsolved. Always parenthesize an inline by-block that is followed by more tactics: `have h : T := (by omega); have h2 : U := (by omega); linarith`"),
             make_tool::<EpisodeStatusArgs>("episode_status", "Retrieve current episode state, revision, budget, step count"),
             make_tool::<EpisodeCloseArgs>("episode_close", "Gracefully truncate an episode"),
-            make_tool::<ProofSessionStartArgs>("proof_session_start", "Issue #161: start a live, tactic-by-tactic interactive proof-state session (Pantograph-style) for ONE existing episode obligation, backed by an InteractiveProofGateway (issue #159) — today only the deterministic \"mock\" backend (no real Lean elaborator; every nonempty tactic closes the first open goal). SEARCH EVIDENCE ONLY, never proof authority — use this instead of episode_step's Solve/SubmitModule when you want to work a goal state tactic-by-tactic before committing to a whole-proof submission; see readme_first for when to prefer this family over Solve/SubmitModule. Requires obligation_id to be a real episode_obligations row already belonging to episode_id (e.g. from episode_create or a prior Decompose), and expected_revision to match the episode's current_revision (optionally also expected_observation_hash against the episode's current progress hash). Returns session_id + the root node_id needed for every later proof_session_* call on this session"),
-            make_tool::<ProofSessionObserveArgs>("proof_session_observe", "Issue #161: read back a session's currently selected node — goals, local context, target, proof_state_hash, a branch summary (sibling/child node counts), and which reconstructed scripts already exist for this session (each with its verified_attempt_id/verification_outcome, so you can see at a glance whether one was already promoted). Read-only; SEARCH EVIDENCE ONLY, never proof authority"),
-            make_tool::<ProofSessionTacticStepArgs>("proof_session_tactic_step", "Issue #161: apply ONE tactic to parent_node_id within an open session. On success, records a new child proof-state node and moves the session's selected node forward, returning goals/is_solved/proof_state_hash for the new node. On failure, records a structured diagnostic (#162's ProofStateDiagnostic, wrapping the same LeanDiagnostic shape episode_step's own failures use) as a normal, queryable step row — NEVER erased or turned into a bare error string — and leaves the selected node unchanged. Every call (success or failure) produces a stable step_id for later export/replay. SEARCH EVIDENCE ONLY — a is_solved:true node is not a verified proof; call proof_session_reconstruct + proof_session_promote_to_attempt to actually verify one"),
-            make_tool::<ProofSessionBranchArgs>("proof_session_branch", "Issue #161: like proof_session_tactic_step, but explicitly frames the call as starting a NAMED branch from any existing node (parent_node_id need not be the session's current selected node) — prior branches from the same parent are never deleted or overwritten (interactive_proof_nodes is append-only). branch_name is a free-text label echoed back in the response for your own bookkeeping; it is not interpreted or unique-constrained. Same structured-diagnostic-on-failure and stable step_id guarantees as proof_session_tactic_step"),
-            make_tool::<ProofSessionSelectNodeArgs>("proof_session_select_node", "Issue #161: move the session's convenience \"selected node\" pointer to any existing node in this session's tree (e.g. after branching, to switch which branch you're working). CONVENIENCE STATE ONLY — this never applies a tactic, verifies anything, or is proof authority in any sense; it only changes what proof_session_observe / proof_session_reconstruct default to next"),
-            make_tool::<ProofSessionReconstructArgs>("proof_session_reconstruct", "Issue #161: reconstruct a Lean tactic script from the root-to-selected_node_id path of a session's proof-state tree (#159's reconstruct_script), record its source hash (interactive_proof_reconstructed_scripts), and return the reconstructed tactic_block text directly — raw tactic text is not durably stored server-side, only its hash, so this response is the ONE place you get it back verbatim. reports_complete reflects the session's OWN internal is_solved claim at the selected node — it is still SEARCH EVIDENCE ONLY, not a verified proof. To actually verify, pass the returned reconstructed_script_id and the EXACT tactic_block back into proof_session_promote_to_attempt"),
-            make_tool::<ProofSessionPromoteToAttemptArgs>("proof_session_promote_to_attempt", "Issue #161: THE ONLY proof_session_* tool that can affect an obligation's status. Takes a reconstructed_script_id (from proof_session_reconstruct) plus the exact tactic_block text (checked against that script's recorded proof_source_hash — a caller cannot promote text that wasn't actually reconstructed from this session), then internally calls the EXACT SAME attempt_claim + episode_step(Solve) internal path a normal two-call round trip uses: claims action_request_id with idempotency_key/expected_revision, then submits a Solve action with the reconstructed tactic_block through the real Lean kernel. Requires action_request_id to target the SAME obligation this session was interactively working on. The response's verification_outcome is read directly off the resulting action_attempts row (committed/rejected/infrastructure_failed/...), and episode_step_result carries the full underlying episode_step response (accepted/outcome/reward/...) — this tool changes nothing by itself; the kernel verdict inside episode_step_result is what (if anything) changed the obligation's status"),
-            make_tool::<ProofSessionCloseArgs>("proof_session_close", "Issue #161: mark a session closed with reason \"closed\" (normal completion), \"abandoned\" (given up on), or \"superseded\" (replaced by a different session/approach). SESSION LIFECYCLE ONLY — this records no new proof-state evidence, applies no tactic, and cannot affect an obligation's status; it is neither the evidence-recording nor the final-verification half of this tool family. The session's full trace (every node/step, including failed tactics) stays visible and queryable afterward — closing never deletes anything. Also best-effort releases the live gateway's in-memory session"),
-            make_tool::<ProofSessionExportArgs>("proof_session_export", "Issue #164 (closes out #161's deferred item): export ONE interactive proof session, scoped narrower than proof_export/trajectory_export (which cover a whole episode's interactive sessions among everything else). format: \"public_summary\" (default — session count fixed at 1, backend kind, step/branch counts, final outcome, high-level failure categories; never requires the opt-in flag, never carries tactic/goal text) | \"audit_archive\" (full node/step trace, hashes, reconstructed-script linkage to the final verification attempt, real tactic text for FAILED steps) | \"training_export\" (per-step records including negative-space failed routes, plus the reconstructed script's real verified proof text ONLY when promoted). Same allow_putnambench_proof_export gate as proof_export/trajectory_export for audit_archive/training_export on a benchmark-linked episode. SEARCH EVIDENCE ONLY unless a reconstructed script's verified_attempt_id/verification_outcome show kernel_verified — never inferred from is_solved/reports_complete alone"),
-            make_tool::<ProofSessionReplayArgs>("proof_session_replay", "Issue #163: replay a session from PERSISTED DB state (interactive_proof_sessions/_nodes/_steps/_reconstructed_scripts for session_id), not a caller-supplied in-memory trace — a closed/historical session stays replayable from what is actually stored. mode=\"trace_only\": pure DB-record consistency check (no backend/kernel call) — verifies every node's parent link resolves, every applied step's child node exists and its recorded proof_state_hash is internally consistent with its own persisted goals + tactic-text hash, session state/closed_at consistency, and returns a branch_report that explicitly surfaces failed steps and abandoned (unselected, still-open) leaf nodes rather than hiding them. mode=\"backend\": re-runs the root-to-selected_node_id tactic path against a FRESH interactive-backend session (sourcing tactic text from the live original session, since raw text is never durably stored) and compares outcomes/hashes to what was recorded — reports backend_mismatch if the session's recorded backend_kind no longer matches the currently configured backend, or backend_replay_available:false if the live backend can no longer supply the path (e.g. after proof_session_close or a process restart). mode=\"final_proof\": THE TRUST GATE — reconstructs the selected script (or re-verifies an already-reconstructed one via reconstructed_script_id+tactic_block) and resubmits it through the EXISTING attempt_claim + episode_step Solve path by calling proof_session_reconstruct's/proof_session_promote_to_attempt's own internal logic, not a second parallel verification path. Only final_proof's result is proof evidence — trace_only and backend remain SEARCH EVIDENCE ONLY, same as every other proof_session_* tool"),
+            make_tool::<ProofSessionArgs>("proof_session", "Issue #183: ONE tool for the entire interactive (tactic-by-tactic, Pantograph-style) proof-session family (issues #159/#161-#164/#166) — work ONE existing episode obligation's goal state live instead of only submitting a complete Solve/SubmitModule and finding out afterward whether it checked; see readme_first's interactive_sessions for when to prefer this over episode_step's Solve/SubmitModule. `action` is internally tagged — exactly one of: {\"type\":\"start\",\"episode_id\":\"..\",\"obligation_id\":\"..\",\"expected_revision\":N} (+ optional expected_observation_hash, backend \"mock\"|\"pantograph\" — \"mock\" is the deterministic default with NO real elaborator behind it (every nonempty tactic closes the first open goal); \"pantograph\" (issue #166) is recognized but fails closed today, see environment_describe's pantograph_available. Requires obligation_id to be a real episode_obligations row already belonging to episode_id and expected_revision to match the episode's current_revision; returns session_id + the root node_id every later action needs) | {\"type\":\"observe\",\"session_id\":\"..\"} (read-only: the selected node's goals/local context/target/proof_state_hash, a branch summary, and this session's reconstructed scripts with their verified_attempt_id/verification_outcome) | {\"type\":\"tactic_step\",\"session_id\":\"..\",\"parent_node_id\":\"..\",\"tactic\":\"..\"} (records evidence: a new child node + selected-node advance on success; a structured diagnostic step row on failure, never erased or reduced to a bare error string; a stable step_id either way) | {\"type\":\"branch\",\"session_id\":\"..\",\"parent_node_id\":\"..\",\"branch_name\":\"..\",\"tactic\":\"..\"} (same mechanics as tactic_step, explicitly starting a NAMED branch from ANY existing node — prior branches from the same parent are never deleted or overwritten; branch_name is a free-text label, not interpreted) | {\"type\":\"select_node\",\"session_id\":\"..\",\"node_id\":\"..\"} (CONVENIENCE WORKING STATE ONLY — moves the session's selected-node pointer; applies no tactic, verifies nothing, records no new evidence) | {\"type\":\"reconstruct\",\"session_id\":\"..\",\"selected_node_id\":\"..\"} (builds the root-to-node tactic script, records its source hash, and returns tactic_block verbatim — the ONE place raw tactic text comes back, since only hashes are durably stored server-side; reports_complete is the session's OWN is_solved claim, still search evidence) | {\"type\":\"promote_to_attempt\",\"session_id\":\"..\",\"reconstructed_script_id\":\"..\",\"tactic_block\":\"<EXACT text reconstruct returned>\",\"episode_id\":\"..\",\"action_request_id\":\"..\",\"idempotency_key\":\"..\",\"expected_revision\":N,\"cost_micros\":N} (THE ONLY action that can affect an obligation's status: tactic_block is checked against the script's recorded proof_source_hash — a caller cannot promote text that wasn't actually reconstructed from this session — then submitted through the EXACT SAME internal attempt_claim + episode_step(Solve) path a normal round trip uses, so the real Lean kernel decides; the response's verification_outcome and episode_step_result carry that verdict) | {\"type\":\"close\",\"session_id\":\"..\",\"reason\":\"closed\"|\"abandoned\"|\"superseded\"} (session lifecycle only — records no evidence and cannot affect an obligation's status; the full trace including failed tactics stays queryable, closing never deletes anything) | {\"type\":\"export\",\"session_id\":\"..\"} (+ optional format, allow_putnambench_proof_export — read-only render of ONE persisted session: \"public_summary\" default (counts/backend/outcome/high-level failure categories; never tactic or goal text, never gated), \"audit_archive\" (full node/step trace, hashes, reconstructed-script linkage to the final verification attempt, real tactic text for FAILED steps), \"training_export\" (per-step records including negative-space failed routes, plus the reconstructed script's real verified proof text ONLY when promoted). audit_archive/training_export on a benchmark-linked episode require allow_putnambench_proof_export=true — the same issue-#33 contamination gate proof_export/trajectory_export enforce; whole-episode formats like \"markdown\"/\"lean\" are rejected — use proof_export for those) | {\"type\":\"replay\",\"session_id\":\"..\",\"mode\":\"trace_only\"|\"backend\"|\"final_proof\"} (replay from PERSISTED DB state — interactive_proof_sessions/_nodes/_steps/_reconstructed_scripts — so a closed/historical session stays replayable: \"trace_only\" is a pure DB-record consistency check (no backend/kernel call; parent links, per-step hash integrity, session-state consistency, and a branch_report that surfaces failed steps and abandoned still-open leaves rather than hiding them); \"backend\" re-runs the root-to-node tactic path against a FRESH interactive-backend session and compares outcomes/hashes to what was recorded (reports backend_mismatch, or backend_replay_available:false when the live backend can no longer supply the path, e.g. after close or a process restart); \"final_proof\" is THE TRUST GATE — reconstructs the selected node's script (selected_node_id, defaulting to the session's selected node) or re-verifies an existing not-yet-promoted script (reconstructed_script_id + tactic_block, same hash-integrity check as promote_to_attempt) and resubmits it through promote_to_attempt's own internal path, not a second parallel verification path; final_proof requires episode_id/action_request_id/idempotency_key/expected_revision/cost_micros together). TRUST BOUNDARY: every action here is SEARCH EVIDENCE ONLY, never proof authority — an is_solved:true node is the session's own internal claim, not a kernel verdict — EXCEPT promote_to_attempt (and replay mode=\"final_proof\", which routes into it): those resubmit the reconstructed script through the existing attempt_claim + episode_step Solve path, and only that real Lean kernel verdict can affect an obligation's status"),
             make_tool::<ModelCallReserveArgs>("model_call_reserve", "Reserve a model-call budget lease and immediately debit bounded episode budget"),
             make_tool::<ModelCallSettleArgs>("model_call_settle", "Settle or void a lease, applying only the reserved-vs-actual budget delta"),
             make_tool::<TrajectoryExportArgs>("trajectory_export", "Export trajectory with pagination (cursor + page_size). Raw event payload_json can expose a completed proof body (proof_term/module_items) — for a benchmark-linked episode this requires allow_putnambench_proof_export=true, same contamination policy as proof_export (issue #33)"),
@@ -7673,12 +7866,12 @@ impl ServerHandler for ChatDbMcp {
                         "why_this_matters": "A proof attempt checked some OTHER way (e.g. a bare `lake env lean` invocation outside this episode, or an internal LeanGateway call bypassed around episode_step) and then only submitted as a final winning SubmitModule/Solve loses every failed attempt, every Lean diagnostic, every repair step — the data this environment exists to preserve. Untracked checks do not count as valid benchmark or training attempts, and a run built that way should be reported as incomplete, not as a clean success."
                     },
                     "interactive_sessions": {
-                        "what_this_is": "Issue #161's proof_session_* tool family (proof_session_start / proof_session_observe / proof_session_tactic_step / proof_session_branch / proof_session_select_node / proof_session_reconstruct / proof_session_promote_to_attempt / proof_session_close) lets you work a single obligation's goal state TACTIC-BY-TACTIC — Pantograph-style live proof-state interaction — instead of only submitting a complete Solve/SubmitModule and finding out afterward whether it checked. This sits ALONGSIDE episode_step, not on top of it: nothing in this family changes how Solve/SubmitModule/Decompose/GiveUp work.",
-                        "when_to_use_interactive": "Prefer proof_session_* when you want to explore a goal incrementally — try one tactic, see the resulting goal state, branch to try an alternative from an earlier point (proof_session_branch), and only commit to a full submission once you can see a closed (is_solved) node. This is especially useful for a goal you are not confident you can write correctly in one shot.",
+                        "what_this_is": "The single `proof_session` tool (issue #183, consolidating issue #161's former proof_session_* family) lets you work a single obligation's goal state TACTIC-BY-TACTIC — Pantograph-style live proof-state interaction — instead of only submitting a complete Solve/SubmitModule and finding out afterward whether it checked. It dispatches on an internally-tagged `action`, exactly like episode_step: {\"action\": {\"type\": \"start\" | \"observe\" | \"tactic_step\" | \"branch\" | \"select_node\" | \"reconstruct\" | \"promote_to_attempt\" | \"close\" | \"export\" | \"replay\", ...}}. This sits ALONGSIDE episode_step, not on top of it: nothing in this family changes how Solve/SubmitModule/Decompose/GiveUp work.",
+                        "when_to_use_interactive": "Prefer proof_session when you want to explore a goal incrementally — try one tactic ({\"action\": {\"type\": \"tactic_step\", ...}}), see the resulting goal state, branch to try an alternative from an earlier point ({\"action\": {\"type\": \"branch\", ...}}), and only commit to a full submission once you can see a closed (is_solved) node. This is especially useful for a goal you are not confident you can write correctly in one shot.",
                         "when_to_use_solve_or_submit_module": "Prefer episode_step's Solve/SubmitModule directly when you already have (or can write in one pass) a complete tactic script or module — it is fewer round trips and goes straight to real Lean kernel verification with no intermediate bookkeeping.",
-                        "trust_boundary_for_interactive_sessions": "EVERY proof_session_* response is SEARCH EVIDENCE, NEVER PROOF AUTHORITY — a node reporting is_solved:true is only the session's OWN internal claim (today's \"mock\" backend deterministically closes the first open goal on every nonempty tactic; it never asks a real elaborator whether the tactic actually discharges the goal). The ONLY way an interactive session can affect an obligation's status is: proof_session_reconstruct (turn a root-to-node path into a tactic script) followed by proof_session_promote_to_attempt, which resubmits that EXACT script through the existing attempt_claim + episode_step Solve path — the same real Lean kernel check every other Solve goes through. Do not report a goal as proved based on proof_session_tactic_step/observe/branch/select_node/reconstruct output alone.",
-                        "external_sessions_warning": "A Pantograph install you run yourself, a bare `lake env lean` REPL, or ANY other proof-state tool driven OUTSIDE these proof_session_* tools produces NO trace in this environment at all — proof_session_* only records steps you route through it, and there is no separate ingestion path for an externally-run session's history. If you explore a goal outside MCP, either replay the tactic decisions that mattered through proof_session_tactic_step/branch so they become real, queryable search evidence here, or skip the session machinery entirely and submit the final result straight through Solve/SubmitModule (which never requires an interactive session at all). An external session succeeding tells this environment nothing until its result is submitted through one of those two tracked paths.",
-                        "backend_availability": "Two `backend` values are recognized by proof_session_start. \"mock\" (issue #161, the default) is deterministic and always available, but has no real Lean elaborator behind it — every nonempty tactic just closes the first open goal, so its outcomes carry no elaboration evidence. \"pantograph\" (issue #166) is a RECOGNIZED value, not yet a USABLE one: it runs a real PATH/lake-manifest/toolchain compatibility probe against this environment and always fails closed today, because this prototype has no process-spawning/IPC implementation behind it — check environment_describe's pantograph_available/pantograph_reason flags for exactly why, in this environment, right now. Any other `backend` value is rejected outright."
+                        "trust_boundary_for_interactive_sessions": "EVERY proof_session response is SEARCH EVIDENCE, NEVER PROOF AUTHORITY — a node reporting is_solved:true is only the session's OWN internal claim (today's \"mock\" backend deterministically closes the first open goal on every nonempty tactic; it never asks a real elaborator whether the tactic actually discharges the goal). The ONLY way an interactive session can affect an obligation's status is: the reconstruct action (turn a root-to-node path into a tactic script) followed by the promote_to_attempt action, which resubmits that EXACT script through the existing attempt_claim + episode_step Solve path — the same real Lean kernel check every other Solve goes through. Do not report a goal as proved based on tactic_step/observe/branch/select_node/reconstruct output alone.",
+                        "external_sessions_warning": "A Pantograph install you run yourself, a bare `lake env lean` REPL, or ANY other proof-state tool driven OUTSIDE the proof_session tool produces NO trace in this environment at all — proof_session only records steps you route through it, and there is no separate ingestion path for an externally-run session's history. If you explore a goal outside MCP, either replay the tactic decisions that mattered through proof_session's tactic_step/branch actions so they become real, queryable search evidence here, or skip the session machinery entirely and submit the final result straight through Solve/SubmitModule (which never requires an interactive session at all). An external session succeeding tells this environment nothing until its result is submitted through one of those two tracked paths.",
+                        "backend_availability": "Two `backend` values are recognized by the start action. \"mock\" (issue #161, the default) is deterministic and always available, but has no real Lean elaborator behind it — every nonempty tactic just closes the first open goal, so its outcomes carry no elaboration evidence. \"pantograph\" (issue #166) is a RECOGNIZED value, not yet a USABLE one: it runs a real PATH/lake-manifest/toolchain compatibility probe against this environment and always fails closed today, because this prototype has no process-spawning/IPC implementation behind it — check environment_describe's pantograph_available/pantograph_reason flags for exactly why, in this environment, right now. Any other `backend` value is rejected outright."
                     },
                     "lookup_and_planning_tools": "Use lean_declaration_lookup, mathlib_search_declarations, mathlib_search_local_artifacts, proof_pattern_search, draft_create/draft_extract_moves, and formalization_plan_* tools rather than an external side channel for the same job during a tracked run — that keeps the reasoning trail inside the environment's own ledger, replayable and auditable later.",
                     "cost_boundary": "cost_micros (episode_step), model_call_reserve/model_call_settle, and the episode budget ledger are enforcement/accounting mechanisms for this environment's MCP-visible budget, not proof-soundness claims. episode_step.cost_micros is reserved before a step executes; model_call_reserve immediately reserves bounded episode budget; model_call_settle adjusts only the reserved-vs-actual delta or refunds a voided reservation. They are NOT the total cost of running you (the external host/model). Host-side reasoning cost (tokens spent thinking, editing, or calling other tools before or around an MCP call) is invisible to LLM-Driven Proof Search Environment entirely unless you report it through model_call_reserve/model_call_settle. Never present MCP-visible cost_micros as if it were the complete cost of a run.",
@@ -7688,7 +7881,7 @@ impl ServerHandler for ChatDbMcp {
                         "Do not treat a prior model's or paper's proof as verified — it is a candidate until THIS pinned verifier checks it via episode_step.",
                         "Do not submit a proof attempt that was actually checked outside this episode's tracked flow and present it as if it were tracked.",
                         "Do not present MCP-visible cost accounting as the total cost of the run.",
-                        "Do not report a goal as proved because a proof_session_tactic_step/observe/branch node shows is_solved:true — that is the interactive session's own internal claim, not a kernel verdict. Only proof_session_promote_to_attempt's resulting episode_step_result (or a direct episode_step Solve/SubmitModule) is evidence of a kernel verdict."
+                        "Do not report a goal as proved because a proof_session tactic_step/observe/branch node shows is_solved:true — that is the interactive session's own internal claim, not a kernel verdict. Only the promote_to_attempt action's resulting episode_step_result (or a direct episode_step Solve/SubmitModule) is evidence of a kernel verdict."
                     ]
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
@@ -7758,8 +7951,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 99,
-                        "total_tool_count": 99,
+                        "classified_tool_count": 90,
+                        "total_tool_count": 90,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -8656,105 +8849,15 @@ impl ServerHandler for ChatDbMcp {
                                 "required_run_mode": "any — but the trust assertion itself is a maintainer-level act; the audit row is what makes that accountable",
                                 "unresolved_design_question": "should raising trust additionally require a second, distinct approver (two-person rule)? Left open — single-approver-with-audit matches the rest of the attestation surface today"
                             },
-                            "proof_session_start": {
-                                "side_effect": "mutating — inserts interactive_proof_sessions + its root interactive_proof_nodes row; never touches episodes/episode_obligations/action_attempts",
-                                "trust_level": "search_evidence_only — issue #161/#159/#162's trust boundary: nothing this tool (or any other proof_session_* tool except proof_session_promote_to_attempt) writes can mark an obligation proved",
-                                "cost_surface": "none tracked — the mock backend is in-memory and synchronous; a future real backend (e.g. Pantograph) would need its own cost accounting, not yet designed",
-                                "benchmark_safety": "contamination_risk at the source, same category as episode_step's Solve proof_term: the session's goal/tactic content is untracked search content until reconstructed+promoted; issue #164 added the same redaction gate proof_export/trajectory_export already have to proof_export/trajectory_export/proof_session_export before any interactive trace leaves this environment",
-                                "replayability": "not yet replayable across process restarts — MockInteractiveGateway's live session state is in-memory only (Arc-shared for this server process's lifetime); the persisted interactive_proof_nodes/interactive_proof_steps rows are a durable audit trail but cannot resume live tactic-stepping after a restart with today's mock backend",
+                            "proof_session": {
+                                "side_effect": "mixed by action (issue #183: one tool consolidating the former ten proof_session_* tools; per-action semantics unchanged): observe/export and replay's trace_only/backend modes are read_only; start inserts interactive_proof_sessions + its root interactive_proof_nodes row; tactic_step/branch insert one interactive_proof_nodes row (on success) and one interactive_proof_steps row (always); select_node updates only interactive_proof_sessions.selected_final_node_id; reconstruct inserts one interactive_proof_reconstructed_scripts row; close updates session state/closed_at/close_reason only and deletes nothing; promote_to_attempt — and replay's final_proof mode, which calls the same internal path — routes into the REAL do_attempt_claim/do_episode_step methods episode_step's own arm calls, so every write episode_step can make (action_attempts, episodes, episode_obligations, episode_verified_lemmas/_modules) can happen there too",
+                                "trust_level": "mixed: every action is search_evidence_only (issue #161/#159/#162's trust boundary — nothing an interactive session records can mark an obligation proved; a node's is_solved is the session's OWN claim, and the mock backend never asks a real elaborator) EXCEPT promote_to_attempt / replay(final_proof), which are verifier_backed for the actual verdict — they resubmit through episode_step's own Solve path and the real Lean kernel decides — while the CHOICE of tactic_block stays untrusted_input, hash-checked against the reconstructed script's recorded proof_source_hash so a caller cannot claim interactive provenance for text that wasn't actually reconstructed from this session; select_node/close are mcp_generated bookkeeping, not evidence about the proof state",
+                                "cost_surface": "none tracked for the mock backend's session work (in-memory and synchronous; wall_time_ms is recorded per step; a future real backend would need its own cost accounting, not yet designed); verifier_side for promote_to_attempt / replay(final_proof), identical to episode_step's Solve path (this tool never calls the Lean gateway itself — do_episode_step does)",
+                                "benchmark_safety": "contamination_risk at the source for most actions — session goal/tactic content is the same category as episode_step's Solve proof_term, and reconstruct is THE SOURCE of the raw tactic_block text a caller could copy into a public export; enforcement belongs at export time: the export action's public_summary is safe_public_output (counts/categories only, never gated), while audit_archive/training_export are gated by allow_putnambench_proof_export on a benchmark-linked episode — the identical issue-#33 gate proof_export/trajectory_export enforce (issue #164)",
+                                "replayability": "the replay action IS this family's replay mechanism (trace_only/backend read persisted state deterministically given unchanged DB/live-gateway state; final_proof's result is replayable_with_hashes via the same action_attempts row episode_replay re-executes); live mock-backend session state is in-memory only and cannot resume tactic-stepping across a process restart — the persisted interactive_proof_* rows are a durable audit trail regardless",
                                 "source_code_impact": "no_source_change",
-                                "artifact_risk": "proof_body (goal/tactic text, same category as episode_step's Solve payload)",
-                                "required_run_mode": "any — enforcement belongs at export time (proof_export/trajectory_export/proof_session_export, issue #164), not session-start time"
-                            },
-                            "proof_session_observe": {
-                                "side_effect": "read_only",
-                                "trust_level": "search_evidence_only",
-                                "cost_surface": "none",
-                                "benchmark_safety": "contamination_risk — returns goal/tactic content already in the session; same export-gate note as proof_session_start",
-                                "replayability": "deterministic given current DB state",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "proof_body",
-                                "required_run_mode": "any"
-                            },
-                            "proof_session_tactic_step": {
-                                "side_effect": "mutating — inserts one interactive_proof_nodes row (on success) and one interactive_proof_steps row (always, success or failure), and moves interactive_proof_sessions.selected_final_node_id forward on success",
-                                "trust_level": "search_evidence_only — the mock backend's own doc comment is explicit that it never asks a real elaborator whether a tactic actually discharges a goal; a real (e.g. Pantograph) backend would still only be search evidence per the module-level trust boundary, not a kernel verdict",
-                                "cost_surface": "none tracked for the mock backend (synchronous, in-memory); wall_time_ms is recorded per step regardless",
-                                "benchmark_safety": "contamination_risk — tactic text is the same category of content episode_step's Solve proof_term is",
-                                "replayability": "replay_session (#159) exists at the InteractiveProofGateway level but is not yet exposed as its own MCP tool by #161 — deferred, see PR description",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "proof_body",
-                                "required_run_mode": "any"
-                            },
-                            "proof_session_branch": {
-                                "side_effect": "mutating — identical write shape to proof_session_tactic_step (it IS proof_session_tactic_step's shared core, apply_tactic_core, plus a caller-facing branch_name label)",
-                                "trust_level": "search_evidence_only",
-                                "cost_surface": "none tracked",
-                                "benchmark_safety": "contamination_risk — same as proof_session_tactic_step",
-                                "replayability": "same as proof_session_tactic_step",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "proof_body",
-                                "required_run_mode": "any"
-                            },
-                            "proof_session_select_node": {
-                                "side_effect": "mutating — updates interactive_proof_sessions.selected_final_node_id only; writes no node/step/diagnostic content",
-                                "trust_level": "mcp_generated — pure convenience-pointer bookkeeping, not evidence about the proof state itself (the pointed-to node's content was already recorded by whatever step created it)",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output by itself (a node id + which goals it points at, echoed back) — the echoed goals field carries the same contamination_risk category as proof_session_observe",
-                                "replayability": "deterministic given current DB state",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "proof_body (via the echoed goals field)",
-                                "required_run_mode": "any"
-                            },
-                            "proof_session_reconstruct": {
-                                "side_effect": "mutating — inserts one interactive_proof_reconstructed_scripts row (verified_attempt_id/verification_outcome always NULL at insert — see schema_v1.rs's doc comment on that table) and updates interactive_proof_sessions.reconstructed_script_hash",
-                                "trust_level": "search_evidence_only — reports_complete is the session's OWN is_solved claim, never a kernel verdict; the module doc for crate::lean::interactive::ReconstructedScript is explicit about this",
-                                "cost_surface": "none",
-                                "benchmark_safety": "contamination_risk (THE SOURCE of the raw tactic_block text a caller could copy straight into a public export) — this is exactly the kind of content proof_export's/trajectory_export's/proof_session_export's #33 redaction gates exist to keep out of public exports (issue #164 gave proof_session_export the identical gate)",
-                                "replayability": "deterministic given the same session/node state and the same (deterministic, mock) backend",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "proof_body",
-                                "required_run_mode": "any — enforcement belongs at export time"
-                            },
-                            "proof_session_promote_to_attempt": {
-                                "side_effect": "mutating — THE ONLY proof_session_* tool that can affect episode_obligations status, and only INDIRECTLY: it calls the exact same internal do_attempt_claim/do_episode_step methods episode_step's own MCP arm calls, so every write episode_step can make (action_attempts, episodes, episode_obligations, episode_verified_lemmas/_modules) can happen here too, via that real path — plus one interactive_proof_reconstructed_scripts UPDATE (verified_attempt_id/verification_outcome) after the fact",
-                                "trust_level": "verifier_backed for the actual proof verdict (it IS episode_step's Solve path, real Lean kernel decides), but the CHOICE of what tactic_block to submit is untrusted_input, exactly like episode_step's Solve proof_term — this tool adds one extra integrity check episode_step alone doesn't have: the submitted tactic_block must hash-match the named reconstructed_script_id's recorded proof_source_hash, so a caller cannot claim interactive provenance for text that wasn't actually reconstructed from this session",
-                                "cost_surface": "verifier_side, identical to episode_step's Solve path (this tool does not call the Lean gateway itself — do_episode_step does)",
-                                "benchmark_safety": "contamination_risk at the source, identical to episode_step's Solve action — same content, same gate requirement at export time",
-                                "replayability": "replayable_with_hashes via the SAME mechanism episode_step's own action_attempts row already gives (episode_replay re-executes typed actions); the interactive session's OWN branching history is separately, append-only recorded regardless of promotion outcome",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "proof_body",
-                                "required_run_mode": "any — enforcement belongs at export time, exactly like episode_step"
-                            },
-                            "proof_session_close": {
-                                "side_effect": "mutating — updates interactive_proof_sessions.state/closed_at/close_reason only; deletes nothing (every node/step stays queryable)",
-                                "trust_level": "mcp_generated — a status transition, not new evidence about the proof state",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic given current DB state",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "proof_session_replay": {
-                                "side_effect": "mode-dependent — trace_only and backend are read-only (no interactive_proof_* writes); final_proof is mutating via the EXACT SAME do_proof_session_reconstruct/do_proof_session_promote_to_attempt internal paths those tools themselves use (a fresh interactive_proof_reconstructed_scripts row, plus whatever action_attempts/episodes/episode_obligations writes a real Solve verification makes)",
-                                "trust_level": "trace_only and backend are search_evidence_only (a pure DB-consistency check and a live-backend re-run, neither touches the kernel); final_proof is verifier_backed — it IS the trust gate, the real Lean kernel decides, by reusing episode_step's own Solve path rather than a second verification path",
-                                "cost_surface": "none for trace_only/backend; identical to episode_step's Solve path for final_proof (this tool does not call the Lean gateway itself — do_episode_step does, via do_proof_session_promote_to_attempt)",
-                                "benchmark_safety": "contamination_risk — backend/final_proof can surface tactic/proof-body content (same category as proof_session_tactic_step/reconstruct); trace_only's report also echoes diagnostic categories/tactic hashes from stored steps",
-                                "replayability": "this tool IS the replay mechanism — trace_only/backend read persisted state deterministically given unchanged DB/live-gateway state; final_proof's result is replayable_with_hashes via the same action_attempts row episode_replay already re-executes",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "proof_body (goal/tactic/diagnostic content echoed in the report, or submitted for verification in final_proof mode)",
-                                "required_run_mode": "any — enforcement belongs at export time, exactly like the rest of the proof_session_* family"
-                            },
-                            "proof_session_export": {
-                                "side_effect": "read_only — renders persisted interactive_proof_sessions/_nodes/_steps/_reconstructed_scripts state; writes nothing",
-                                "trust_level": "search_evidence_only unless a rendered reconstruction's verified_attempt_id/verification_outcome show kernel_verified (verification_outcome == \"committed\") — never inferred from is_solved/reports_complete alone (issue #164's trust-boundary rule, identical to proof_export's interactive-session sections)",
-                                "cost_surface": "none",
-                                "benchmark_safety": "public_summary is safe_public_output (counts/categories only, never gated); audit_archive/training_export are contamination_risk (real tactic text for FAILED steps, and a promoted reconstruction's real verified proof text) — gated by allow_putnambench_proof_export exactly like proof_export/trajectory_export (issue #33/#164)",
-                                "replayability": "deterministic given current DB state",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "proof_body for audit_archive/training_export; none for public_summary",
-                                "required_run_mode": "any"
+                                "artifact_risk": "proof_body (goal/tactic/diagnostic content) for most actions; none for close and for the export action's public_summary format",
+                                "required_run_mode": "any — enforcement belongs at export time (proof_export/trajectory_export/the export action, issues #33/#164), not at session time"
                             }
                         }
                     }
@@ -9403,16 +9506,7 @@ impl ServerHandler for ChatDbMcp {
                 let res = serde_json::json!({ "status": "closed" });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
-            "proof_session_start" => self.do_proof_session_start(args_val).await,
-            "proof_session_observe" => self.do_proof_session_observe(args_val).await,
-            "proof_session_tactic_step" => self.do_proof_session_tactic_step(args_val).await,
-            "proof_session_branch" => self.do_proof_session_branch(args_val).await,
-            "proof_session_select_node" => self.do_proof_session_select_node(args_val).await,
-            "proof_session_reconstruct" => self.do_proof_session_reconstruct(args_val).await,
-            "proof_session_promote_to_attempt" => self.do_proof_session_promote_to_attempt(args_val).await,
-            "proof_session_close" => self.do_proof_session_close(args_val).await,
-            "proof_session_replay" => self.do_proof_session_replay(args_val).await,
-            "proof_session_export" => self.do_proof_session_export(args_val).await,
+            "proof_session" => self.do_proof_session(args_val).await,
             "model_call_reserve" => {
                 let args: ModelCallReserveArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -13845,8 +13939,11 @@ mod tests {
         // tools (issue #161: start/observe/tactic_step/branch/select_node/
         // reconstruct/promote_to_attempt/close) = 97, + proof_session_replay
         // (issue #163: trace_only/backend/final_proof replay modes) = 98,
-        // + proof_session_export (issue #164: closes out #161's deferred item).
-        assert_eq!(list_res.tools.len(), 99);
+        // + proof_session_export (issue #164: closes out #161's deferred item)
+        // = 99, - 9 (issue #183, epic #182's pilot: those ten flat
+        // proof_session_* tools consolidated into the ONE `proof_session`
+        // tool dispatching on an internally-tagged `action` enum) = 90.
+        assert_eq!(list_res.tools.len(), 90);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -21938,14 +22035,14 @@ mod tests {
         let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
 
         // --- start: requires valid episode/obligation linkage ---
-        let bad_start = peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let bad_start = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": Uuid::new_v4().to_string(), "expected_revision": revision,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_start.is_err(), "starting a session against an unrelated obligation_id must be rejected");
 
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
         assert_eq!(start["is_solved"], false, "{:?}", start);
@@ -21953,18 +22050,18 @@ mod tests {
         assert_eq!(start["goals"].as_array().unwrap().len(), 1, "{:?}", start);
 
         // --- observe: reflects the root node before any tactic ---
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "observe",
             "session_id": session_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed["selected_node_id"], root_node_id);
         assert_eq!(observed["is_solved"], false, "{:?}", observed);
         assert_eq!(observed["state"], "open");
         assert_eq!(observed["available_reconstructions"].as_array().unwrap().len(), 0);
 
         // --- tactic_step: success closes the only goal ---
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(applied["outcome"], "applied", "{:?}", applied);
         assert_eq!(applied["is_solved"], true, "{:?}", applied);
         assert!(applied["diagnostic"].is_null(), "{:?}", applied);
@@ -21972,18 +22069,18 @@ mod tests {
         assert_ne!(solved_node_id, root_node_id);
 
         // observe now reflects the new selected (solved) node.
-        let observed2 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+        let observed2 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "observe",
             "session_id": session_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed2["selected_node_id"], solved_node_id);
         assert_eq!(observed2["is_solved"], true, "{:?}", observed2);
 
         // --- tactic_step: failure on a node with no goals remaining produces
         // a STRUCTURED diagnostic, not a bare error string, and does not
         // move the selected node.
-        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "rfl",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(failed["outcome"], "failed", "{:?}", failed);
         assert!(failed["node_id"].is_null(), "{:?}", failed);
         assert!(failed["diagnostic"].is_object(), "failed tactic must carry a structured diagnostic, not a bare string: {:?}", failed);
@@ -21991,33 +22088,33 @@ mod tests {
         assert!(failed["step_id"].as_str().is_some(), "failed step must still carry a stable step_id for later export/replay: {:?}", failed);
 
         // Selected node is unchanged by the failed step.
-        let observed3 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+        let observed3 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "observe",
             "session_id": session_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed3["selected_node_id"], solved_node_id);
 
         // --- close: reason must be one of the three allowed values ---
-        let bad_close = peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+        let bad_close = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "close",
             "session_id": session_id, "reason": "nonsense",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_close.is_err());
 
-        let closed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+        let closed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "close",
             "session_id": session_id, "reason": "closed",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(closed["state"], "closed");
         assert_eq!(closed["close_reason"], "closed");
 
         // A closed session's trace stays visible via observe...
-        let observed_after_close = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+        let observed_after_close = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "observe",
             "session_id": session_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed_after_close["state"], "closed");
 
         // ...but no further tactic stepping is allowed.
-        let step_after_close = peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let step_after_close = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(step_after_close.is_err(), "a closed session must reject further tactic_step calls");
 
         // The obligation was never touched by any of this — interactive
@@ -22043,22 +22140,22 @@ mod tests {
         let peer = client.peer();
 
         let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let branch_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+        let branch_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "branch",
             "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "try-norm-num", "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(branch_a["outcome"], "applied", "{:?}", branch_a);
         assert_eq!(branch_a["branch_name"], "try-norm-num");
 
         // A second branch from the SAME parent must not delete or overwrite the first.
-        let branch_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+        let branch_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "branch",
             "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "try-decide", "tactic": "decide",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(branch_b["outcome"], "applied", "{:?}", branch_b);
         assert_ne!(branch_a["node_id"], branch_b["node_id"]);
 
@@ -22073,13 +22170,13 @@ mod tests {
         assert_eq!(sibling_count, 2, "both branches must survive as distinct sibling nodes");
 
         // select_node moves the convenience pointer to whichever branch you want to keep working.
-        let selected = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_select_node").with_arguments(serde_json::json!({
+        let selected = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "select_node",
             "session_id": session_id, "node_id": branch_b["node_id"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(selected["selected_node_id"], branch_b["node_id"]);
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "observe",
             "session_id": session_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed["selected_node_id"], branch_b["node_id"]);
     }
 
@@ -22103,21 +22200,21 @@ mod tests {
 
         let (episode_id, obligation_id, request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
 
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
         assert_eq!(applied["is_solved"], true);
 
-        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "reconstruct",
             "session_id": session_id, "selected_node_id": solved_node_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(reconstructed["reports_complete"], true, "{:?}", reconstructed);
         let script_id = reconstructed["reconstructed_script_id"].as_str().unwrap().to_string();
         let tactic_block = reconstructed["tactic_block"].as_str().unwrap().to_string();
@@ -22132,19 +22229,19 @@ mod tests {
         assert_eq!(obl_status_before, "open");
 
         // A tampered tactic_block (doesn't match the recorded proof_source_hash) must be rejected.
-        let tampered = peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+        let tampered = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "promote_to_attempt",
             "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": "sorry",
             "episode_id": episode_id, "action_request_id": request_id,
             "idempotency_key": "promote-tampered", "expected_revision": revision, "cost_micros": 100,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(tampered.is_err(), "a tactic_block that doesn't match the reconstructed script's hash must be rejected");
 
         // The real promotion: goes through attempt_claim + episode_step(Solve).
-        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "promote_to_attempt",
             "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
             "episode_id": episode_id, "action_request_id": request_id,
             "idempotency_key": "promote-1", "expected_revision": revision, "cost_micros": 100,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(promoted["verification_outcome"], "committed", "{:?}", promoted);
         // Capped at kernel_verified (not certified): setup_solvable_episode
         // uses unsafe_dev_attestation, which never reaches fidelity 'verified'.
@@ -22162,11 +22259,11 @@ mod tests {
         // A repeat promotion of the SAME reconstructed_script_id is refused
         // (it already has a verified_attempt_id) rather than silently
         // reclaiming/re-submitting.
-        let repeat = peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+        let repeat = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "promote_to_attempt",
             "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
             "episode_id": episode_id, "action_request_id": request_id,
             "idempotency_key": "promote-2", "expected_revision": revision, "cost_micros": 100,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(repeat.is_err(), "promoting an already-promoted reconstructed_script_id must be rejected");
     }
 
@@ -22193,27 +22290,27 @@ mod tests {
         let peer = client.peer();
 
         let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
         assert_eq!(applied["is_solved"], true);
 
         // A failed branch off the now-solved (goal-less) node.
-        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "rfl",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(failed["outcome"], "failed");
 
-        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "replay",
             "session_id": session_id, "mode": "trace_only",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         assert_eq!(replay["mode"], "trace_only", "{:?}", replay);
         assert_eq!(replay["passed"], true, "a healthy path plus one expected failed step must still pass trace_only replay: {:?}", replay);
@@ -22244,21 +22341,21 @@ mod tests {
         let peer = client.peer();
 
         let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
 
         // Replay is clean before corruption.
-        let clean_replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+        let clean_replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "replay",
             "session_id": session_id, "mode": "trace_only",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(clean_replay["passed"], true, "{:?}", clean_replay);
 
         // Directly corrupt the solved node's recorded proof_state_hash —
@@ -22272,9 +22369,9 @@ mod tests {
             assert_eq!(updated, 1);
         }
 
-        let corrupted_replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+        let corrupted_replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "replay",
             "session_id": session_id, "mode": "trace_only",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(corrupted_replay["passed"], false, "corrupted proof_state_hash must be detected: {:?}", corrupted_replay);
         let failures = corrupted_replay["failures"].as_array().unwrap();
         assert!(
@@ -22300,20 +22397,20 @@ mod tests {
         let peer = client.peer();
 
         let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
 
-        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "replay",
             "session_id": session_id, "mode": "backend", "selected_node_id": solved_node_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         assert_eq!(replay["mode"], "backend", "{:?}", replay);
         assert_eq!(replay["backend_mismatch"], false, "{:?}", replay);
@@ -22347,15 +22444,15 @@ mod tests {
         let peer = client.peer();
 
         let (episode_id, obligation_id, request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
         assert_eq!(applied["is_solved"], true);
 
@@ -22366,11 +22463,11 @@ mod tests {
         };
         assert_eq!(obl_status_before, "open");
 
-        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "replay",
             "session_id": session_id, "mode": "final_proof", "selected_node_id": solved_node_id,
             "episode_id": episode_id, "action_request_id": request_id,
             "idempotency_key": "replay-final-proof-1", "expected_revision": revision, "cost_micros": 100,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         assert_eq!(replay["mode"], "final_proof", "{:?}", replay);
         assert_eq!(replay["passed"], true, "{:?}", replay);
@@ -22402,14 +22499,14 @@ mod tests {
         let peer = client.peer();
 
         let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
 
-        let bad = peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+        let bad = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "replay",
             "session_id": session_id, "mode": "nonsense",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad.is_err(), "an unknown replay mode must be rejected");
     }
 
@@ -22459,32 +22556,32 @@ mod tests {
 
         // --- Session A: abandoned before any tactic is ever applied. ---
         let (episode_a, obligation_a, _req_a, rev_a) = setup_solvable_episode(&peer, &conn_arc).await;
-        let start_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_a, "obligation_id": obligation_a, "expected_revision": rev_a,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_a = start_a["session_id"].as_str().unwrap().to_string();
 
-        let closed_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+        let closed_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "close",
             "session_id": session_a, "reason": "abandoned",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(closed_a["close_reason"], "abandoned", "{:?}", closed_a);
         assert_eq!(closed_a["state"], "closed");
 
         // --- Session B: closed only after its goal is actually solved. ---
         let (episode_b, obligation_b, _req_b, rev_b) = setup_solvable_episode(&peer, &conn_arc).await;
-        let start_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_b, "obligation_id": obligation_b, "expected_revision": rev_b,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_b = start_b["session_id"].as_str().unwrap().to_string();
         let root_b = start_b["node_id"].as_str().unwrap().to_string();
-        let applied_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_b, "parent_node_id": root_b, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(applied_b["is_solved"], true);
 
-        let closed_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+        let closed_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "close",
             "session_id": session_b, "reason": "closed",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(closed_b["close_reason"], "closed", "{:?}", closed_b);
         assert_eq!(closed_b["state"], "closed");
 
@@ -22492,15 +22589,15 @@ mod tests {
         // close_reason — abandoning one never leaks into or overwrites the
         // other, and both are still observable via proof_session_observe
         // (closing never deletes anything).
-        let observed_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+        let observed_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "observe",
             "session_id": session_a,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed_a["close_reason"], "abandoned", "{:?}", observed_a);
         assert_eq!(observed_a["is_solved"], false, "session A was abandoned before solving anything: {:?}", observed_a);
 
-        let observed_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+        let observed_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "observe",
             "session_id": session_b,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed_b["close_reason"], "closed", "{:?}", observed_b);
         assert_eq!(observed_b["is_solved"], true, "{:?}", observed_b);
 
@@ -22541,16 +22638,16 @@ mod tests {
         // Two structurally-identical, but fully independent, sessions
         // (different episodes/obligations/node UUIDs throughout).
         let (episode_1, obligation_1, _req_1, rev_1) = setup_solvable_episode(&peer, &conn_arc).await;
-        let start_1 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start_1 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_1, "obligation_id": obligation_1, "expected_revision": rev_1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_1 = start_1["session_id"].as_str().unwrap().to_string();
         let root_1 = start_1["node_id"].as_str().unwrap().to_string();
 
         let (episode_2, obligation_2, _req_2, rev_2) = setup_solvable_episode(&peer, &conn_arc).await;
-        let start_2 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start_2 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_2, "obligation_id": obligation_2, "expected_revision": rev_2,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_2 = start_2["session_id"].as_str().unwrap().to_string();
         let root_2 = start_2["node_id"].as_str().unwrap().to_string();
 
@@ -22561,12 +22658,12 @@ mod tests {
         assert_eq!(start_1["proof_state_hash"]["full_state_hash"], start_2["proof_state_hash"]["full_state_hash"],
             "identical root statements must hash identically regardless of session identity: {:?} vs {:?}", start_1, start_2);
 
-        let applied_1 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied_1 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_1, "parent_node_id": root_1, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let applied_2 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let applied_2 = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_2, "parent_node_id": root_2, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // Same tactic, same resulting (empty) goal set, from two
         // independent sessions -> identical full_state_hash.
@@ -22579,12 +22676,12 @@ mod tests {
         // hash is a pure function of persisted content, not recomputed
         // freshly (and differently) on every read.
         let solved_node_1 = applied_1["node_id"].as_str().unwrap().to_string();
-        let observed_first = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+        let observed_first = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "observe",
             "session_id": session_1,
-        }).as_object().unwrap().clone())).await.unwrap());
-        let observed_second = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_observe").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let observed_second = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "observe",
             "session_id": session_1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed_first["selected_node_id"], solved_node_1);
         assert_eq!(observed_first["proof_state_hash"], observed_second["proof_state_hash"],
             "repeated reads of the same node must reproduce the identical stored hash: {:?} vs {:?}", observed_first, observed_second);
@@ -22624,30 +22721,30 @@ mod tests {
         let peer = client.peer();
 
         let (episode_id, obligation_id, _request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
         // Two successful siblings off root.
-        let branch_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+        let branch_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "branch",
             "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "branch-a", "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(branch_a["outcome"], "applied", "{:?}", branch_a);
         let branch_a_node = branch_a["node_id"].as_str().unwrap().to_string();
 
-        let branch_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+        let branch_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "branch",
             "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "branch-b", "tactic": "decide",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(branch_b["outcome"], "applied", "{:?}", branch_b);
         let branch_b_node = branch_b["node_id"].as_str().unwrap().to_string();
         assert_ne!(branch_a_node, branch_b_node);
 
         // A further branch attempt off branch_a's now-solved node fails.
-        let failed_branch = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+        let failed_branch = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "branch",
             "session_id": session_id, "parent_node_id": branch_a_node, "branch_name": "branch-a-followup", "tactic": "rfl",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(failed_branch["outcome"], "failed", "{:?}", failed_branch);
         assert!(failed_branch["node_id"].is_null());
         assert!(failed_branch["diagnostic"].is_object());
@@ -22679,9 +22776,9 @@ mod tests {
         assert_eq!(applied_step_count, 2, "both successful branch steps must remain alongside the failed one");
 
         // --- Independently queryable via proof_session_replay trace_only. ---
-        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "replay",
             "session_id": session_id, "mode": "trace_only",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(replay["passed"], true, "an expected failed branch alongside successful siblings is not a corruption: {:?}", replay);
         assert_eq!(replay["node_count"], 3, "{:?}", replay); // root + branch_a + branch_b
         assert_eq!(replay["step_count"], 3, "{:?}", replay); // 2 applied + 1 failed
@@ -22719,25 +22816,25 @@ mod tests {
         };
         assert_eq!(status_before_anything, "open");
 
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(applied["is_solved"], true, "{:?}", applied);
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
 
-        let _branch = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+        let _branch = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "branch",
             "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "alt", "tactic": "decide",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "reconstruct",
             "session_id": session_id, "selected_node_id": solved_node_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(reconstructed["reports_complete"], true, "{:?}", reconstructed);
         let script_id = reconstructed["reconstructed_script_id"].as_str().unwrap().to_string();
         let tactic_block = reconstructed["tactic_block"].as_str().unwrap().to_string();
@@ -22755,11 +22852,11 @@ mod tests {
 
         // Only promote_to_attempt (real attempt_claim + episode_step Solve,
         // real Lean kernel verification via MockGateway) can move it.
-        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "promote_to_attempt",
             "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
             "episode_id": episode_id, "action_request_id": request_id,
             "idempotency_key": "trust-boundary-promote-1", "expected_revision": revision, "cost_micros": 100,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(promoted["episode_step_result"]["accepted"], true, "{:?}", promoted);
 
         let status_after_promote: String = {
@@ -22797,48 +22894,48 @@ mod tests {
         let (episode_id, obligation_id, request_id, revision) = setup_solvable_episode(&peer, &conn_arc).await;
 
         // 2) proof_session_start.
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
         assert_eq!(start["is_solved"], false, "{:?}", start);
 
         // 3) proof_session_tactic_step: success.
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(applied["outcome"], "applied", "{:?}", applied);
         assert_eq!(applied["is_solved"], true, "{:?}", applied);
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
 
         // 4) proof_session_tactic_step: failure, on the now-solved (goal-less) node.
-        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "rfl",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(failed["outcome"], "failed", "{:?}", failed);
         assert!(failed["node_id"].is_null(), "{:?}", failed);
         assert!(failed["diagnostic"]["diagnostic"]["primary_message"].as_str().unwrap().len() > 0, "{:?}", failed);
 
         // 5) proof_session_branch: a genuine second named branch off root.
-        let branch = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+        let branch = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "branch",
             "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "vertical-slice-alt", "tactic": "decide",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(branch["outcome"], "applied", "{:?}", branch);
         assert_eq!(branch["branch_name"], "vertical-slice-alt");
         let branch_node_id = branch["node_id"].as_str().unwrap().to_string();
         assert_ne!(branch_node_id, solved_node_id, "the branch must be a genuinely distinct sibling node, not the earlier solved node");
 
         // 6) proof_session_select_node: move the working pointer onto the branch.
-        let selected = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_select_node").with_arguments(serde_json::json!({
+        let selected = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "select_node",
             "session_id": session_id, "node_id": branch_node_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(selected["selected_node_id"], branch_node_id, "{:?}", selected);
 
         // 7) proof_session_reconstruct: from the SELECTED branch node.
-        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "reconstruct",
             "session_id": session_id, "selected_node_id": branch_node_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(reconstructed["reports_complete"], true, "{:?}", reconstructed);
         let script_id = reconstructed["reconstructed_script_id"].as_str().unwrap().to_string();
         let tactic_block = reconstructed["tactic_block"].as_str().unwrap().to_string();
@@ -22846,9 +22943,9 @@ mod tests {
         let proof_source_hash_first = reconstructed["proof_source_hash"].as_str().unwrap().to_string();
 
         // Reconstructing the identical path again reproduces the identical hash.
-        let reconstructed_again = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+        let reconstructed_again = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "reconstruct",
             "session_id": session_id, "selected_node_id": branch_node_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(reconstructed_again["proof_source_hash"].as_str().unwrap(), proof_source_hash_first,
             "reconstructing the same path twice must hash identically");
 
@@ -22860,11 +22957,11 @@ mod tests {
         assert_eq!(status_before_promote, "open");
 
         // 8) proof_session_promote_to_attempt: the ONLY step that can prove anything.
-        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "promote_to_attempt",
             "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
             "episode_id": episode_id, "action_request_id": request_id,
             "idempotency_key": "vertical-slice-promote-1", "expected_revision": revision, "cost_micros": 100,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(promoted["verification_outcome"], "committed", "{:?}", promoted);
         assert_eq!(promoted["episode_step_result"]["outcome"], "kernel_verified", "{:?}", promoted);
         assert_eq!(promoted["episode_step_result"]["accepted"], true, "{:?}", promoted);
@@ -22876,18 +22973,18 @@ mod tests {
         assert_eq!(status_after_promote, "proved");
 
         // 9) proof_session_close.
-        let closed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+        let closed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "close",
             "session_id": session_id, "reason": "closed",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(closed["state"], "closed", "{:?}", closed);
         assert_eq!(closed["close_reason"], "closed");
 
         // Full trace — the successful main line, the failed offshoot, AND
         // the promoted branch — is all still intact and consistent after
         // close, confirmed independently via replay trace_only.
-        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "replay",
             "session_id": session_id, "mode": "trace_only",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(replay["passed"], true, "{:?}", replay);
         assert_eq!(replay["node_count"], 3, "{:?}", replay); // root + solved_node_id + branch_node_id
         assert_eq!(replay["step_count"], 3, "{:?}", replay); // applied + failed + branch-applied
@@ -22925,9 +23022,9 @@ mod tests {
 
         // The "failing interactive backend" premise is real: proof_session_start
         // itself is rejected cleanly (not a panic, not a hang) against this backend.
-        let session_attempt = peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let session_attempt = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": _obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(session_attempt.is_err(), "FallbackInteractiveGateway must cleanly refuse to start a session");
 
         // Whole-proof verification (attempt_claim + episode_step Solve) is
@@ -22974,10 +23071,10 @@ mod tests {
         // rejected the same way a typo'd/unknown backend string is (that
         // case is covered separately below). It still fails, but for a
         // different, more specific reason: environment unavailability.
-        let session_attempt = peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let session_attempt = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
             "backend": "pantograph",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         let err = session_attempt.expect_err("starting a pantograph session must fail cleanly (not a panic) in this Pantograph-less environment");
         let err_text = format!("{err:?}").to_lowercase();
         assert!(err_text.contains("pantograph"), "error should name the pantograph backend specifically: {err_text}");
@@ -22989,10 +23086,10 @@ mod tests {
         // An actually-unknown backend string is still rejected as
         // unsupported (unchanged behavior, additive-only diff): the new
         // "pantograph" acceptance did not loosen validation generally.
-        let bad_backend = peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let bad_backend = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
             "backend": "totally-not-a-real-backend",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_backend.is_err(), "an unrecognized backend value must still be rejected");
     }
 
@@ -23077,20 +23174,20 @@ mod tests {
         let (episode_id, obligation_id, _req, revision) =
             setup_solvable_episode_with_statement(&peer, &conn_arc, "164 + 1 = 165").await;
 
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "secret_applied_tactic_164",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
 
-        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "secret_failed_tactic_164",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(failed["outcome"], "failed", "{:?}", failed);
 
         let summary = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
@@ -23133,20 +23230,20 @@ mod tests {
         let (episode_id, obligation_id, _req, revision) =
             setup_solvable_episode_with_statement(&peer, &conn_arc, "164 + 2 = 166").await;
 
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "audit_applied_tactic_164",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
 
-        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "audit_failed_tactic_164",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let archive = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
             "episode_id": episode_id, "format": "audit_archive",
@@ -23181,9 +23278,9 @@ mod tests {
         let (episode_id, obligation_id, request_id, revision) =
             setup_solvable_episode_with_statement(&peer, &conn_arc, "164 + 3 = 167").await;
 
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
@@ -23193,20 +23290,20 @@ mod tests {
         // So: succeed on root first, THEN apply the negative-space failed
         // route on the now-goal-less solved node — matching the same
         // sequencing every other proof_session_* test in this file uses.
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "train_applied_tactic_164",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(applied["outcome"], "applied", "{:?}", applied);
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
 
-        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "train_failed_tactic_164",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(failed["outcome"], "failed", "{:?}", failed);
 
-        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "reconstruct",
             "session_id": session_id, "selected_node_id": solved_node_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let script_id = reconstructed["reconstructed_script_id"].as_str().unwrap().to_string();
         let tactic_block = reconstructed["tactic_block"].as_str().unwrap().to_string();
 
@@ -23232,11 +23329,11 @@ mod tests {
         assert_eq!(neg_records[0]["reward"], -1.0, "{:?}", neg_records[0]);
 
         // Promote.
-        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "promote_to_attempt",
             "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
             "episode_id": episode_id, "action_request_id": request_id,
             "idempotency_key": "issue164-train-promote-1", "expected_revision": revision, "cost_micros": 10,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(promoted["verification_outcome"], "committed", "{:?}", promoted);
 
         // AFTER promotion: now (and only now) reads as kernel_verified, with the real proof text.
@@ -23275,19 +23372,19 @@ mod tests {
         let (episode_id, obligation_id, _req, revision) =
             setup_solvable_episode_with_statement(&peer, &conn_arc, statement).await;
 
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "bench_applied_tactic_164",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
-        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "bench_secret_failed_tactic_164",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // proof_export audit_archive: denied without the flag, allowed with it.
         let denied = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
@@ -23322,17 +23419,17 @@ mod tests {
         assert!(!interactive_rows.is_empty(), "{:?}", traj_allowed);
 
         // proof_session_export: same gate, scoped to the one session.
-        let pse_denied = peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+        let pse_denied = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "export",
             "session_id": session_id, "format": "audit_archive",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(pse_denied.is_err(), "proof_session_export must gate a benchmark-linked session's audit_archive too");
-        let pse_allowed = peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+        let pse_allowed = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "export",
             "session_id": session_id, "format": "audit_archive", "allow_putnambench_proof_export": true,
-        }).as_object().unwrap().clone())).await.unwrap();
+        }}).as_object().unwrap().clone())).await.unwrap();
         assert!(pse_allowed.content[0].as_text().unwrap().text.contains("bench_secret_failed_tactic_164"));
-        let pse_summary = peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+        let pse_summary = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "export",
             "session_id": session_id, "format": "public_summary",
-        }).as_object().unwrap().clone())).await.unwrap();
+        }}).as_object().unwrap().clone())).await.unwrap();
         let pse_summary_text = pse_summary.content[0].as_text().unwrap().text.clone();
         assert!(!pse_summary_text.contains("bench_secret_failed_tactic_164"), "{pse_summary_text}");
     }
@@ -23351,14 +23448,14 @@ mod tests {
         let (episode_id, obligation_id, _req, revision) =
             setup_solvable_episode_with_statement(&peer, &conn_arc, "164 + 4 = 168").await;
 
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
-        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "traj_applied_tactic_164",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let traj = tool_json(&peer.call_tool(CallToolRequestParams::new("trajectory_export").with_arguments(serde_json::json!({
             "episode_id": episode_id,
@@ -23386,51 +23483,51 @@ mod tests {
         let (episode_id, obligation_id, request_id, revision) =
             setup_solvable_episode_with_statement(&peer, &conn_arc, "164 + 5 = 169").await;
 
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "pse_applied_tactic_164",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
 
         // Rejects a whole-episode-only format.
-        let bad_format = peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+        let bad_format = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "export",
             "session_id": session_id, "format": "markdown",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_format.is_err(), "proof_session_export must reject a whole-episode-only format like markdown");
 
         // Unknown session_id is rejected cleanly.
-        let unknown = peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+        let unknown = peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "export",
             "session_id": Uuid::new_v4().to_string(),
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(unknown.is_err());
 
         // Default format (public_summary) requires no flag and works.
-        let default_summary = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+        let default_summary = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "export",
             "session_id": session_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(default_summary["session_count"], 1, "{:?}", default_summary);
         assert_eq!(default_summary["sessions"][0]["kernel_verified"], false, "{:?}", default_summary);
 
-        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_reconstruct").with_arguments(serde_json::json!({
+        let reconstructed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "reconstruct",
             "session_id": session_id, "selected_node_id": solved_node_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let script_id = reconstructed["reconstructed_script_id"].as_str().unwrap().to_string();
         let tactic_block = reconstructed["tactic_block"].as_str().unwrap().to_string();
-        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_promote_to_attempt").with_arguments(serde_json::json!({
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "promote_to_attempt",
             "session_id": session_id, "reconstructed_script_id": script_id, "tactic_block": tactic_block,
             "episode_id": episode_id, "action_request_id": request_id,
             "idempotency_key": "issue164-pse-promote-1", "expected_revision": revision, "cost_micros": 10,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(promoted["verification_outcome"], "committed", "{:?}", promoted);
 
-        let training = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+        let training = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "export",
             "session_id": session_id, "format": "training_export",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let sess = &training["sessions"][0];
         assert_eq!(sess["kernel_verified"], true, "{:?}", sess);
         assert_eq!(sess["reconstructions"][0]["verified_proof_text"], tactic_block, "{:?}", sess);
@@ -23677,15 +23774,15 @@ mod tests {
 
         let (episode_id, obligation_id, _req, revision) =
             setup_solvable_episode_with_statement(&peer, &conn_arc, "165 + 1 = 166").await;
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let applied_labels: Vec<String> = applied["progress_labels"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
         for expected in ["progress_made", "goal_closed", "goal_count_reduced"] {
             assert!(applied_labels.contains(&expected.to_string()), "expected {expected} in {:?}", applied_labels);
@@ -23693,9 +23790,9 @@ mod tests {
         assert!(applied["failure_category"].is_null(), "{:?}", applied);
         let solved_node_id = applied["node_id"].as_str().unwrap().to_string();
 
-        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": solved_node_id, "tactic": "rfl",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(failed["progress_labels"], serde_json::json!(["tactic_failed"]), "{:?}", failed);
         assert_eq!(failed["failure_category"], "tactic_failure",
             "must reuse the SAME LeanDiagnosticCategory value MockInteractiveGateway::apply_tactic's 'no goals remaining' diagnostic already carries");
@@ -23717,30 +23814,30 @@ mod tests {
 
         let (episode_id, obligation_id, _req, revision) =
             setup_solvable_episode_with_statement(&peer, &conn_arc, "165 + 3 = 168").await;
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let branch_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+        let branch_a = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "branch",
             "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "a", "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let branch_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_branch").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let branch_b = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "branch",
             "session_id": session_id, "parent_node_id": root_node_id, "branch_name": "b", "tactic": "decide",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let branch_a_node = branch_a["node_id"].as_str().unwrap().to_string();
 
-        let _selected = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_select_node").with_arguments(serde_json::json!({
+        let _selected = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "select_node",
             "session_id": session_id, "node_id": branch_a_node,
-        }).as_object().unwrap().clone())).await.unwrap());
-        let _closed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_close").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let _closed = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "close",
             "session_id": session_id, "reason": "closed",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_replay").with_arguments(serde_json::json!({
+        let replay = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "replay",
             "session_id": session_id, "mode": "trace_only",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(replay["passed"], true, "{:?}", replay);
 
         let step_labels = replay["step_progress_labels"].as_array().unwrap();
@@ -23783,15 +23880,15 @@ mod tests {
 
         let (episode_id, obligation_id, _req, revision) =
             setup_solvable_episode_with_statement(&peer, &conn_arc, "165 + 2 = 167").await;
-        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_start").with_arguments(serde_json::json!({
+        let start = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "start",
             "episode_id": episode_id, "obligation_id": obligation_id, "expected_revision": revision,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let session_id = start["session_id"].as_str().unwrap().to_string();
         let root_node_id = start["node_id"].as_str().unwrap().to_string();
 
-        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_tactic_step").with_arguments(serde_json::json!({
+        let applied = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "tactic_step",
             "session_id": session_id, "parent_node_id": root_node_id, "tactic": "norm_num",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let applied_labels: Vec<String> = applied["progress_labels"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
         assert!(applied_labels.contains(&"goal_closed".to_string()), "{:?}", applied);
         assert!(applied.get("kernel_verified").is_none(),
@@ -23803,17 +23900,17 @@ mod tests {
         };
         assert_eq!(obl_status, "open", "a session that only accrued progress labels — never promoted — must never change obligation status");
 
-        let public_summary = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+        let public_summary = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "export",
             "session_id": session_id, "format": "public_summary",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(public_summary["sessions"][0]["kernel_verified"], false, "{:?}", public_summary);
         let label_counts = public_summary["sessions"][0]["progress_label_counts"].as_object().unwrap();
         assert!(label_counts.get("goal_closed").and_then(|v| v.as_i64()).unwrap_or(0) > 0,
             "the session DID accrue positive progress labels — this proves the kernel_verified=false assertion above isn't vacuous: {:?}", label_counts);
 
-        let training_export = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session_export").with_arguments(serde_json::json!({
+        let training_export = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_session").with_arguments(serde_json::json!({"action": {"type": "export",
             "session_id": session_id, "format": "training_export",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(training_export["sessions"][0]["kernel_verified"], false, "{:?}", training_export);
         let step0 = &training_export["sessions"][0]["steps"][0];
         assert!(step0["progress_labels"].as_array().unwrap().iter().any(|v| v == "goal_closed"), "{:?}", step0);
