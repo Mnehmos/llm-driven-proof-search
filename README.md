@@ -90,13 +90,7 @@ Antigravity, or a custom script — should call this first.
 | `draft_observe` | Read back a draft's content and any moves recorded against it |
 | `draft_extract_moves` | Record structured moves (construction, auxiliary_lemma, case_split, ...) the external agent identified in a draft. Metadata only |
 | `formalization_plan` | ONE tool for the whole Level 3 formalization-plan family, dispatching on an internally-tagged `action` (`create` / `observe` / `update` / `add_item` / `attach_lookup` / `promote_item_to_obligation` / `attach_librarian_result`) — exactly like `episode_step`'s typed `action`. Advisory scaffolding, never proof authority: `promote_item_to_obligation` links a plan item to an episode_obligation that **already exists** (created via a normal `Decompose` action) and never creates one; `attach_lookup` / `attach_librarian_result` attach `lean_declaration_lookup` / Mathlib-librarian search results to a plan item as hints, updating its Mathlib coverage status but never proof status |
-| `research_dossier_create` | Create a Level 4 research dossier, optionally linked to a problem version, an episode, or neither. Metadata only |
-| `research_dossier_observe` | Read a dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets |
-| `research_node_add` | Add a typed research node (`definition`, `proposition`, `lemma`, `theorem`, `remark`, `reference`, `open_gap`) with explicit trust status |
-| `external_reference_add` | Add an external reference and optionally one theorem claim. Citations are never kernel verification |
-| `assumption_boundary_add` | Add an unformalized or rejected unsafe assumption boundary |
-| `citation_review_add` | Record human review of an external theorem claim. Human review remains distinct from Lean verification |
-| `verification_layer_set` | Set an independent verification layer (`blocked`, `failed`, `cited`, `human_reviewed`, etc.) for a dossier target |
+| `research_dossier` | ONE tool for the whole Level 4 research-dossier family, dispatching on an internally-tagged `action` (`create` / `observe` / `node_add` / `external_reference_add` / `assumption_boundary_add` / `citation_review_add` / `verification_layer_set`) — exactly like `episode_step`'s typed `action`. Explicit trust-boundary metadata, never proof authority: `external_reference_add` records citations as **tracked assumptions**, never proof; `citation_review_add` records human review, which remains distinct from Lean verification; `verification_layer_set` is the **only path** to a `kernel_verified` layer and accepts that status only where kernel evidence already exists (e.g. a node whose `trust_status` is already `proved_in_episode`, backed by a verified lemma from **this dossier's own** episode/problem context) |
 | `candidate_construction_add` | Propose a candidate mathematical construction (`graph_family`, `counterexample`, `coloring`, etc.). Can exist before a dossier, node, Lean theorem, or episode. A research artifact, not a proof certificate |
 | `candidate_construction_observe` | Record one empirical check (`supports`/`refutes`/`inconclusive`) against a candidate construction. Never changes proof status |
 | `candidate_construction_update_status` | Update a candidate construction's status/trust_status/claimed_properties/known_failures. `kernel_verified_claim_linked` is rejected unless a real kernel-verified layer is already linked |
@@ -123,7 +117,7 @@ Antigravity, or a custom script — should call this first.
 | `paper_ingest_create` | Ingest a paper/manuscript/proof-sketch/exposition as a reviewable source document (issue #27), optionally linked to a dossier. LLM-Driven Proof Search Environment does no OCR/LLM extraction — this records the host's **untrusted** extraction. Ingestion is not proof |
 | `paper_ingest_extract_claims` | Append extracted nodes (main_theorem, definition, lemma, construction, reference, open_gap, …). Each node **requires** a non-empty `source_span` so it stays traceable to the source; also carries confidence/status labels. An extracted theorem is **not** statement-fidelity approval; a citation is **not** validation |
 | `paper_ingest_observe` | Read an ingested document with all extracted nodes and their trust labels. Read-only; nothing here is proof |
-| `paper_ingest_link_to_dossier` | Attach an ingested document (and its nodes) to a dossier, so it surfaces in `research_dossier_observe`'s ingestion bucket |
+| `paper_ingest_link_to_dossier` | Attach an ingested document (and its nodes) to a dossier, so it surfaces in `research_dossier` `observe`'s ingestion bucket |
 | `paper_ingest_link_node` | Promote/attach an extracted node to a real dossier artifact — `external_reference` / `external_theorem_claim` (sets `citation_status=citation_recorded`), `research_node` / `formalization_plan_item` (sets `formalization_status=formalization_target_linked`). Records provenance in the matching forward-link column and marks `review_status=linked_to_dossier_artifact`; the linked artifact keeps its own trust and the node **never** gains proof/kernel authority |
 | `paper_ingest_mark_review_status` | Update a document's ingest/trust status, or (with `node_id`) a node's review/formalization/citation status. `rejected_extraction` stays visible; no status confers proof/fidelity/validation |
 | `exposition_add` | Add a human-readable exposition section (problem_summary, construction_intuition, key_lemmas, unverified_bridges, …) linked to a problem/episode/obligation/module/lemma/dossier. `prose_status` (prose/reviewed_prose/formalized) marks epistemic weight — never proof |
@@ -254,8 +248,9 @@ makes that explicit:
 
 A candidate construction can attach to a dossier, a research node, and/or a
 verification layer, or exist attached to none of them. `falsified` and
-`rejected` constructions stay visible in `research_dossier_observe` rather
-than being deleted, since a documented dead end is itself research output.
+`rejected` constructions stay visible in `research_dossier`'s `observe` action
+rather than being deleted, since a documented dead end is itself research
+output.
 
 ### Exposition artifacts
 
@@ -312,8 +307,9 @@ construction_artifact, module_artifact, external_citation,
 asymptotic_extraction, exposition, full_dossier), with a `decision`,
 `confidence`, `expertise_tags`, `requested_changes`, and `risk_flags`.
 
-`expert_review_add` is a **pure insert**: unlike `citation_review_add` (which
-updates a citation's `claim_status`), an expert review mutates no other table.
+`expert_review_add` is a **pure insert**: unlike `research_dossier`'s
+`citation_review_add` action (which updates a citation's `claim_status`), an
+expert review mutates no other table.
 `reviewer_id` is free text, not an authenticated principal, and a
 `domain_expert` "approved" decision is human-attested — it never marks
 anything kernel-verified, never changes an episode outcome, `fidelity_status`,
@@ -350,9 +346,10 @@ is optional, so a search can exist before any dossier, candidate, episode, or
 Lean proof. `counterexamples`, `failed`, and `timed_out` searches stay visible
 (a documented dead end is research output). `cost_summary`/`runtime_metadata`
 describe the *external* search run and are isolated from LLM-Driven Proof Search Environment's own cost
-surfaces. `research_dossier_observe` surfaces empirical searches in their own
-bucket, separate from proofs, citations, assumptions, candidate constructions,
-expert reviews, semantic skeletons, exposition, and verification layers.
+surfaces. `research_dossier`'s `observe` action surfaces empirical searches in
+their own bucket, separate from proofs, citations, assumptions, candidate
+constructions, expert reviews, semantic skeletons, exposition, and verification
+layers.
 
 ### Paper/PDF ingestion (issue #27)
 
@@ -395,8 +392,8 @@ dossier-scoped kinds, belongs to the document's dossier), setting the node's
 derived `citation_status` / `formalization_status` and stamping the matching
 forward-link column — but the linked artifact keeps its own independent trust
 and the node still gains no proof/kernel authority.
-`research_dossier_observe` shows ingested documents and their nodes in their own
-bucket, separate from every proof-bearing bucket.
+`research_dossier`'s `observe` action shows ingested documents and their nodes
+in their own bucket, separate from every proof-bearing bucket.
 
 **Benchmark contamination policy:** upstream benchmarks like PutnamBench ask
 that completed formal proofs not be published without first coordinating with
