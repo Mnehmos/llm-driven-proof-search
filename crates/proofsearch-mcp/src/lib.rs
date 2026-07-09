@@ -1629,6 +1629,120 @@ pub struct VerificationLayerSetArgs {
     pub evidence_json: Option<String>,
 }
 
+/// Issue #185 (epic #182, 3rd consolidation after #183's `proof_session`
+/// pilot and #184's `formalization_plan`): the single `research_dossier`
+/// tool's internally-tagged action enum, mirroring
+/// `TypedAction`/`ProofSessionAction`/`FormalizationPlanAction`'s shape
+/// exactly (`#[serde(tag = "type", rename_all = "snake_case")]`). Each
+/// variant's fields are the corresponding pre-#185 flat `*Args` struct's
+/// fields verbatim — those structs remain (unchanged) as what the
+/// `do_research_dossier_*` handlers deserialize; this enum is only the
+/// MCP-layer dispatch shape. As with the earlier consolidations there are NO
+/// shared wrapper fields: `create` has no `dossier_id` (it mints one), so
+/// every field stays per-variant.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResearchDossierAction {
+    Create {
+        title: String,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        problem_version_id: Option<String>,
+        #[serde(default)]
+        episode_id: Option<String>,
+    },
+    Observe {
+        dossier_id: String,
+    },
+    NodeAdd {
+        dossier_id: String,
+        #[serde(default)]
+        section_id: Option<String>,
+        #[serde(default)]
+        section_title: Option<String>,
+        node_type: String,
+        title: String,
+        #[serde(default)]
+        statement: Option<String>,
+        #[serde(default)]
+        content: Option<String>,
+        #[serde(default)]
+        trust_status: Option<String>,
+        #[serde(default)]
+        linked_obligation_id: Option<String>,
+        #[serde(default)]
+        linked_verified_lemma_id: Option<String>,
+    },
+    ExternalReferenceAdd {
+        dossier_id: String,
+        title: String,
+        #[serde(default)]
+        authors: Option<String>,
+        #[serde(default)]
+        venue: Option<String>,
+        #[serde(default)]
+        year: Option<String>,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        doi: Option<String>,
+        #[serde(default)]
+        raw_citation: Option<String>,
+        #[serde(default)]
+        theorem_label: Option<String>,
+        #[serde(default)]
+        theorem_statement: Option<String>,
+        #[serde(default)]
+        claim_status: Option<String>,
+        #[serde(default)]
+        mathlib_name: Option<String>,
+        #[serde(default)]
+        proved_episode_id: Option<String>,
+        #[serde(default)]
+        proved_lemma_id: Option<String>,
+        #[serde(default)]
+        notes: Option<String>,
+    },
+    AssumptionBoundaryAdd {
+        dossier_id: String,
+        #[serde(default)]
+        node_id: Option<String>,
+        label: String,
+        statement: String,
+        assumption_status: String,
+        #[serde(default)]
+        rationale: Option<String>,
+    },
+    CitationReviewAdd {
+        dossier_id: String,
+        external_theorem_claim_id: String,
+        reviewer_id: String,
+        decision: String,
+        #[serde(default)]
+        notes: Option<String>,
+    },
+    VerificationLayerSet {
+        dossier_id: String,
+        target_kind: String,
+        target_id: String,
+        layer_kind: String,
+        status: String,
+        #[serde(default)]
+        summary: Option<String>,
+        #[serde(default)]
+        evidence_json: Option<String>,
+    },
+}
+
+/// Issue #185: args for the single consolidated `research_dossier` tool.
+/// The entire payload lives on the internally-tagged `action` — see
+/// `ResearchDossierAction`'s doc for why there are no shared wrapper fields.
+#[derive(JsonSchema, Deserialize)]
+pub struct ResearchDossierArgs {
+    pub action: ResearchDossierAction,
+}
+
 // -- Candidate construction artifacts (issue #8) ----------------------------
 //
 // Candidate constructions are proposed mathematical objects -- graph
@@ -8204,6 +8318,429 @@ impl ChatDbMcp {
         });
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
     }
+    // -----------------------------------------------------------------
+    // Issue #185 (epic #182): Level 4 research-dossier family. Explicit
+    // trust-boundary metadata only — dossiers, nodes, citations,
+    // assumptions, and verification layers can reference Lean-backed
+    // artifacts, but they never create proof authority and never write to
+    // episode outcome, obligations, canonical lemmas, budgets, fidelity
+    // reviews, or benchmark result tables. do_verification_layer_set is the
+    // only handler that can even record a kernel_verified layer, and only
+    // where kernel evidence already exists (guarded by
+    // enforce_kernel_verified_research_boundary; 'proved_in_episode' lineage
+    // on nodes/claims is guarded by ensure_proved_lemma_in_dossier_context
+    // — nothing here manufactures kernel evidence).
+    // -----------------------------------------------------------------
+
+    /// Issue #185 (epic #182): the single `research_dossier` tool's
+    /// dispatcher. Deserializes `ResearchDossierArgs`, matches on the
+    /// internally-tagged action, and routes to the per-action handlers below
+    /// UNCHANGED (each extracted verbatim from the former inline match arm of
+    /// the same name). Each arm re-serializes the variant back to JSON and
+    /// passes that through: the variant's field names are identical to the
+    /// old flat `*Args` shape by construction, and the extra internal
+    /// `"type"` tag is ignored by the handlers' serde derives. This
+    /// transitional double-serialization is deliberate — it keeps the seven
+    /// `do_*` handlers byte-identical (the epic's key risk-reducer) at
+    /// negligible cost.
+    async fn do_research_dossier(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ResearchDossierArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize research_dossier action: {}", e)))?;
+        match &args.action {
+            ResearchDossierAction::Create { .. } => self.do_research_dossier_create(inner).await,
+            ResearchDossierAction::Observe { .. } => self.do_research_dossier_observe(inner).await,
+            ResearchDossierAction::NodeAdd { .. } => self.do_research_node_add(inner).await,
+            ResearchDossierAction::ExternalReferenceAdd { .. } => self.do_external_reference_add(inner).await,
+            ResearchDossierAction::AssumptionBoundaryAdd { .. } => self.do_assumption_boundary_add(inner).await,
+            ResearchDossierAction::CitationReviewAdd { .. } => self.do_citation_review_add(inner).await,
+            ResearchDossierAction::VerificationLayerSet { .. } => self.do_verification_layer_set(inner).await,
+        }
+    }
+
+    async fn do_research_dossier_create(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ResearchDossierCreateArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if args.title.trim().is_empty() {
+            return Err(mcp_invalid_params("title must be non-empty"));
+        }
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        verify_dossier_links(&tx, &args.problem_version_id, &args.episode_id)?;
+
+        let dossier_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO research_dossiers (
+                id, title, description, problem_version_id, episode_id, status, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?6)",
+            (
+                &dossier_id,
+                args.title.trim(),
+                args.description.as_deref(),
+                args.problem_version_id.as_deref(),
+                args.episode_id.as_deref(),
+                &now,
+            ),
+        ).map_err(rs)?;
+        let observed = research_dossier_observe_json(&tx, &dossier_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&observed).unwrap())]))
+    }
+
+    async fn do_research_dossier_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ResearchDossierObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let conn = self.conn.lock().await;
+        let observed = research_dossier_observe_json(&conn, &args.dossier_id)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&observed).unwrap())]))
+    }
+
+    async fn do_research_node_add(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ResearchNodeAddArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("node_type", &args.node_type, RESEARCH_NODE_TYPES)?;
+        if args.title.trim().is_empty() {
+            return Err(mcp_invalid_params("title must be non-empty"));
+        }
+        let trust_status = args.trust_status.clone().unwrap_or_else(|| {
+            if args.node_type == "open_gap" { "open_gap".to_string() } else { "external_citation_unreviewed".to_string() }
+        });
+        validate_one_of("trust_status", &trust_status, RESEARCH_TRUST_STATUSES)?;
+        if trust_status == "proved_in_episode" && args.linked_verified_lemma_id.is_none() {
+            return Err(mcp_invalid_params("trust_status='proved_in_episode' requires linked_verified_lemma_id"));
+        }
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        require_row_exists(&tx, "research_dossiers", &args.dossier_id, "dossier_id")?;
+
+        let section_id = if let Some(section_id) = args.section_id.clone() {
+            let exists: Option<i64> = tx.query_row(
+                "SELECT 1 FROM research_sections WHERE id = ?1 AND dossier_id = ?2",
+                (&section_id, &args.dossier_id),
+                |row| row.get(0),
+            ).optional().map_err(rs)?;
+            if exists.is_none() {
+                return Err(mcp_invalid_params(format!("unknown section_id for dossier: {}", section_id)));
+            }
+            Some(section_id)
+        } else if let Some(section_title) = args.section_title.as_ref().filter(|s| !s.trim().is_empty()) {
+            let section_id = Uuid::new_v4().to_string();
+            let section_order = next_order(&tx, "research_sections", "section_order", &args.dossier_id)?;
+            tx.execute(
+                "INSERT INTO research_sections (id, dossier_id, section_order, title, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                (&section_id, &args.dossier_id, section_order, section_title.trim(), Utc::now().to_rfc3339()),
+            ).map_err(rs)?;
+            Some(section_id)
+        } else {
+            None
+        };
+
+        if let Some(obligation_id) = &args.linked_obligation_id {
+            require_row_exists(&tx, "episode_obligations", obligation_id, "linked_obligation_id")?;
+        }
+        if let Some(lemma_id) = &args.linked_verified_lemma_id {
+            require_row_exists(&tx, "episode_verified_lemmas", lemma_id, "linked_verified_lemma_id")?;
+            // Trust boundary (PR #55 review): a 'proved_in_episode' node
+            // must point at a lemma from this dossier's OWN proof context,
+            // never borrow unrelated kernel evidence.
+            if trust_status == "proved_in_episode" {
+                ensure_proved_lemma_in_dossier_context(&tx, &args.dossier_id, lemma_id, None)?;
+                // If an obligation is also linked, it must belong to the
+                // same episode the lemma was proved in.
+                if let Some(obligation_id) = &args.linked_obligation_id {
+                    let lemma_episode: String = tx.query_row(
+                        "SELECT episode_id FROM episode_verified_lemmas WHERE id = ?1", [lemma_id], |r| r.get(0),
+                    ).map_err(rs)?;
+                    let obl_episode: String = tx.query_row(
+                        "SELECT episode_id FROM episode_obligations WHERE id = ?1", [obligation_id], |r| r.get(0),
+                    ).map_err(rs)?;
+                    if obl_episode != lemma_episode {
+                        return Err(mcp_invalid_params("linked_obligation_id belongs to a different episode than the linked verified lemma"));
+                    }
+                }
+            }
+        }
+
+        let node_id = Uuid::new_v4().to_string();
+        let node_order = next_order(&tx, "research_nodes", "node_order", &args.dossier_id)?;
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO research_nodes (
+                id, dossier_id, section_id, node_order, node_type, title, statement, content,
+                trust_status, linked_obligation_id, linked_verified_lemma_id, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+            (
+                &node_id,
+                &args.dossier_id,
+                section_id.as_deref(),
+                node_order,
+                &args.node_type,
+                args.title.trim(),
+                args.statement.as_deref(),
+                args.content.as_deref(),
+                &trust_status,
+                args.linked_obligation_id.as_deref(),
+                args.linked_verified_lemma_id.as_deref(),
+                &now,
+            ),
+        ).map_err(rs)?;
+        let observed = research_dossier_observe_json(&tx, &args.dossier_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "node_id": node_id,
+            "dossier": observed,
+        })).unwrap())]))
+    }
+
+    async fn do_external_reference_add(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ExternalReferenceAddArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if args.title.trim().is_empty() {
+            return Err(mcp_invalid_params("title must be non-empty"));
+        }
+
+        let claim_status = args.claim_status.clone().unwrap_or_else(|| "external_citation_unreviewed".to_string());
+        if args.theorem_statement.is_some() || args.theorem_label.is_some() {
+            validate_one_of("claim_status", &claim_status, RESEARCH_TRUST_STATUSES)?;
+            if claim_status == "proved_in_episode" && args.proved_lemma_id.is_none() {
+                return Err(mcp_invalid_params("claim_status='proved_in_episode' requires proved_lemma_id"));
+            }
+            if claim_status == "imported_from_mathlib" && args.mathlib_name.is_none() {
+                return Err(mcp_invalid_params("claim_status='imported_from_mathlib' requires mathlib_name"));
+            }
+        }
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        require_row_exists(&tx, "research_dossiers", &args.dossier_id, "dossier_id")?;
+        if let Some(episode_id) = &args.proved_episode_id {
+            require_row_exists(&tx, "episodes", episode_id, "proved_episode_id")?;
+        }
+        if let Some(lemma_id) = &args.proved_lemma_id {
+            require_row_exists(&tx, "episode_verified_lemmas", lemma_id, "proved_lemma_id")?;
+            // Trust boundary (PR #55 review): a 'proved_in_episode' claim
+            // must point at a lemma from this dossier's OWN proof context,
+            // and a supplied proved_episode_id must match the lemma's
+            // actual episode — never borrow unrelated kernel evidence into
+            // trust_boundary.lean_verified.
+            if claim_status == "proved_in_episode" {
+                ensure_proved_lemma_in_dossier_context(&tx, &args.dossier_id, lemma_id, args.proved_episode_id.as_deref())?;
+            }
+        }
+
+        let reference_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO external_references (
+                id, dossier_id, title, authors, venue, year, url, doi, raw_citation, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            (
+                &reference_id,
+                &args.dossier_id,
+                args.title.trim(),
+                args.authors.as_deref(),
+                args.venue.as_deref(),
+                args.year.as_deref(),
+                args.url.as_deref(),
+                args.doi.as_deref(),
+                args.raw_citation.as_deref(),
+                &now,
+            ),
+        ).map_err(rs)?;
+
+        let mut claim_id = None;
+        if let Some(statement) = args.theorem_statement.as_ref().filter(|s| !s.trim().is_empty()) {
+            let id = Uuid::new_v4().to_string();
+            let label = args.theorem_label.clone().unwrap_or_else(|| args.title.clone());
+            tx.execute(
+                "INSERT INTO external_theorem_claims (
+                    id, dossier_id, reference_id, node_id, label, statement, claim_status,
+                    mathlib_name, proved_episode_id, proved_lemma_id, notes, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                (
+                    &id,
+                    &args.dossier_id,
+                    &reference_id,
+                    label.trim(),
+                    statement.trim(),
+                    &claim_status,
+                    args.mathlib_name.as_deref(),
+                    args.proved_episode_id.as_deref(),
+                    args.proved_lemma_id.as_deref(),
+                    args.notes.as_deref(),
+                    &now,
+                ),
+            ).map_err(rs)?;
+            claim_id = Some(id);
+        }
+        let observed = research_dossier_observe_json(&tx, &args.dossier_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "reference_id": reference_id,
+            "external_theorem_claim_id": claim_id,
+            "dossier": observed,
+        })).unwrap())]))
+    }
+
+    async fn do_assumption_boundary_add(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: AssumptionBoundaryAddArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("assumption_status", &args.assumption_status, ASSUMPTION_STATUSES)?;
+        if args.label.trim().is_empty() || args.statement.trim().is_empty() {
+            return Err(mcp_invalid_params("label and statement must be non-empty"));
+        }
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        require_row_exists(&tx, "research_dossiers", &args.dossier_id, "dossier_id")?;
+        if let Some(node_id) = &args.node_id {
+            ensure_target_belongs_to_dossier(&tx, &args.dossier_id, "node", node_id)?;
+        }
+
+        let assumption_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO assumption_boundaries (
+                id, dossier_id, node_id, label, statement, assumption_status, rationale, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            (
+                &assumption_id,
+                &args.dossier_id,
+                args.node_id.as_deref(),
+                args.label.trim(),
+                args.statement.trim(),
+                &args.assumption_status,
+                args.rationale.as_deref(),
+                &now,
+            ),
+        ).map_err(rs)?;
+        let observed = research_dossier_observe_json(&tx, &args.dossier_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "assumption_boundary_id": assumption_id,
+            "dossier": observed,
+        })).unwrap())]))
+    }
+
+    async fn do_citation_review_add(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: CitationReviewAddArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("decision", &args.decision, CITATION_REVIEW_DECISIONS)?;
+        if args.reviewer_id.trim().is_empty() {
+            return Err(mcp_invalid_params("reviewer_id must be non-empty"));
+        }
+        let review_status = match args.decision.as_str() {
+            "human_reviewed" => "external_citation_human_reviewed",
+            "rejected" => "rejected_unsafe_assumption",
+            "needs_formalization" => "external_citation_unreviewed",
+            _ => unreachable!(),
+        };
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        let claim_exists: Option<i64> = tx.query_row(
+            "SELECT 1 FROM external_theorem_claims WHERE id = ?1 AND dossier_id = ?2",
+            (&args.external_theorem_claim_id, &args.dossier_id),
+            |row| row.get(0),
+        ).optional().map_err(rs)?;
+        if claim_exists.is_none() {
+            return Err(mcp_invalid_params(format!("unknown external_theorem_claim_id for dossier: {}", args.external_theorem_claim_id)));
+        }
+
+        let review_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO citation_reviews (
+                id, dossier_id, external_theorem_claim_id, reviewer_id, decision, review_status, notes, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            (
+                &review_id,
+                &args.dossier_id,
+                &args.external_theorem_claim_id,
+                args.reviewer_id.trim(),
+                &args.decision,
+                review_status,
+                args.notes.as_deref(),
+                &now,
+            ),
+        ).map_err(rs)?;
+        tx.execute(
+            "UPDATE external_theorem_claims
+             SET claim_status = ?1, updated_at = ?2
+             WHERE id = ?3 AND dossier_id = ?4 AND claim_status IN ('external_citation_unreviewed', 'external_citation_human_reviewed', 'rejected_unsafe_assumption')",
+            (review_status, &now, &args.external_theorem_claim_id, &args.dossier_id),
+        ).map_err(rs)?;
+        let observed = research_dossier_observe_json(&tx, &args.dossier_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "citation_review_id": review_id,
+            "review_status": review_status,
+            "dossier": observed,
+        })).unwrap())]))
+    }
+
+    async fn do_verification_layer_set(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: VerificationLayerSetArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("target_kind", &args.target_kind, VERIFICATION_TARGET_KINDS)?;
+        validate_one_of("layer_kind", &args.layer_kind, VERIFICATION_LAYER_KINDS)?;
+        validate_one_of("status", &args.status, VERIFICATION_LAYER_STATUSES)?;
+        // Issue #12: a search/construction/packing-bound layer (the
+        // shape a finite or empirical asymptotic check takes) can never
+        // itself claim kernel_verified — only a formal_module /
+        // statement_fidelity layer backed by a real Lean pass may.
+        // Redundant with the DB CHECK by design (defense in depth + a
+        // precise, test-targetable message); it never relaxes the CHECK.
+        enforce_asymptotic_evidence_boundary(&args.layer_kind, &args.status)?;
+        let evidence_json = args.evidence_json.clone().unwrap_or_else(|| "{}".to_string());
+        serde_json::from_str::<serde_json::Value>(&evidence_json)
+            .map_err(|e| mcp_invalid_params(format!("evidence_json must be valid JSON: {}", e)))?;
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        require_row_exists(&tx, "research_dossiers", &args.dossier_id, "dossier_id")?;
+        ensure_target_belongs_to_dossier(&tx, &args.dossier_id, &args.target_kind, &args.target_id)?;
+        enforce_kernel_verified_research_boundary(&tx, &args.dossier_id, &args.target_kind, &args.target_id, &args.status)?;
+
+        let existing_id: Option<String> = tx.query_row(
+            "SELECT id FROM verification_layers
+             WHERE dossier_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND layer_kind = ?4",
+            (&args.dossier_id, &args.target_kind, &args.target_id, &args.layer_kind),
+            |row| row.get(0),
+        ).optional().map_err(rs)?;
+        let now = Utc::now().to_rfc3339();
+        let layer_id = existing_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        tx.execute(
+            "INSERT INTO verification_layers (
+                id, dossier_id, target_kind, target_id, layer_kind, status, summary, evidence_json, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+             ON CONFLICT(dossier_id, target_kind, target_id, layer_kind)
+             DO UPDATE SET status = excluded.status, summary = excluded.summary,
+                           evidence_json = excluded.evidence_json, updated_at = excluded.updated_at",
+            (
+                &layer_id,
+                &args.dossier_id,
+                &args.target_kind,
+                &args.target_id,
+                &args.layer_kind,
+                &args.status,
+                args.summary.as_deref(),
+                &evidence_json,
+                &now,
+            ),
+        ).map_err(rs)?;
+        let observed = research_dossier_observe_json(&tx, &args.dossier_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "verification_layer_id": layer_id,
+            "dossier": observed,
+        })).unwrap())]))
+    }
+
 }
 
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
@@ -8249,13 +8786,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<DraftObserveArgs>("draft_observe", "Read back a draft's content and any moves recorded against it"),
             make_tool::<DraftExtractMovesArgs>("draft_extract_moves", "Record structured moves (construction, auxiliary_lemma, case_split, induction, reduction, bijection, counterexample_search, asymptotic_step, external_citation, unknown) the external agent identified in a draft. Metadata only — moves are not obligations until explicitly promoted into a formalization plan item"),
             make_tool::<FormalizationPlanArgs>("formalization_plan", "Issue #184: ONE tool for the entire Level 3 formalization-plan family (issue #10) — create/inspect/maintain a formalization plan (required concepts, definitions, lemmas, modules and their Mathlib coverage status) for a problem. Advisory scaffolding, not a proof authority: nothing here can mark anything proved. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"problem_version_id\":\"..\",\"title\":\"..\"} (+ optional source_draft_id, seed_items_from_draft_moves [{\"draft_move_id\":\"..\",\"kind\":\"..\"}, ...], risk_flags — creates a plan, optionally seeded from selected moves of an existing draft; every seed move must belong to source_draft_id, not be already promoted, and the whole batch is validated before any row is written, so a bad move never leaves a partially-seeded plan behind; each seeded move is marked promoted) | {\"type\":\"observe\",\"plan_id\":\"..\"} (read-only: the plan and all its items with coverage/promotion status) | {\"type\":\"update\",\"plan_id\":\"..\"} (+ optional title, status \"draft\"|\"active\"|\"completed\"|\"abandoned\", risk_flags — partial in-place update: an omitted field keeps its current value) | {\"type\":\"add_item\",\"plan_id\":\"..\",\"kind\":\"concept\"|\"missing_definition\"|\"missing_lemma\"|\"planned_module\"|\"external_citation\",\"description\":\"..\"} (+ optional mathlib_candidate_names, asymptotic_role — appends one planning item) | {\"type\":\"attach_lookup\",\"plan_item_id\":\"..\",\"lookup_status\":\"..\"} (+ optional matched_name, diagnostics — attach a lean_declaration_lookup result to an OPEN plan item, mapping its status verbatim into the item's Mathlib coverage status found/not_found/partial/unknown. A hint attachment, not a re-check — nothing is re-validated or re-run, and it never changes proof status) | {\"type\":\"promote_item_to_obligation\",\"plan_item_id\":\"..\",\"episode_id\":\"..\",\"obligation_id\":\"..\"} (link an open plan item to an episode_obligation that ALREADY EXISTS — created through a normal Decompose action via episode_step and verified to belong to the given episode. Records the link only — this action never creates the obligation itself, so it can never bypass the episode's budget/CAS accounting; a DB-level UNIQUE index stops two plan items from claiming the same obligation) | {\"type\":\"attach_librarian_result\",\"plan_item_id\":\"..\",\"declaration_name\":\"..\",\"confidence\":\"exact_match\"|\"nearby_name\"|\"type_match\"|\"usage_example\"|\"unknown\"} (+ optional import_module, snippet — attach a mathlib_search_declarations/mathlib_search_local_artifacts result to an OPEN plan item: confidence is the CALLER's own assessment of its search hit, mapped into the same coverage vocabulary attach_lookup writes (exact_match→found, nearby_name/type_match/usage_example→partial, unknown→unknown); candidate declaration names ACCUMULATE deduped across attachments while the full latest result overwrites lookup_result_json, latest wins. A hint attachment, not a re-check — never changes proof status)"),
-            make_tool::<ResearchDossierCreateArgs>("research_dossier_create", "Create a Level 4 research dossier, optionally linked to a problem_version, an episode, or neither. Metadata only: never changes proof, fidelity, budget, or benchmark state"),
-            make_tool::<ResearchDossierObserveArgs>("research_dossier_observe", "Read a research dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets"),
-            make_tool::<ResearchNodeAddArgs>("research_node_add", "Add a typed research node (definition/proposition/lemma/theorem/remark/reference/open_gap) to a dossier. Trust status is explicit and never implies kernel verification unless linked to a real verified lemma"),
-            make_tool::<ExternalReferenceAddArgs>("external_reference_add", "Add an external reference, optionally with one theorem claim. External citations are self-reported metadata and never become kernel verification"),
-            make_tool::<AssumptionBoundaryAddArgs>("assumption_boundary_add", "Add an unformalized or rejected unsafe assumption boundary to a dossier. Assumptions are visible metadata, not proof authority"),
-            make_tool::<CitationReviewAddArgs>("citation_review_add", "Record a human citation review for an external theorem claim. Human review remains distinct from Lean kernel verification"),
-            make_tool::<VerificationLayerSetArgs>("verification_layer_set", "Set an independent verification layer for a dossier target. Blocked/failed layers do not fail the dossier; cited/reviewed/assumed artifacts cannot be mislabeled kernel_verified"),
+            make_tool::<ResearchDossierArgs>("research_dossier", "Issue #185: ONE tool for the entire Level 4 research-dossier family (issues #9/#11/#13) — research dossiers, nodes, citations, assumptions, and verification layers are explicit trust-boundary METADATA: they can reference Lean-backed artifacts, but they never create proof authority and never write to episode outcome, obligations, canonical lemmas, budgets, fidelity reviews, or benchmark result tables. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\"} (+ optional description, problem_version_id, episode_id — create a dossier optionally linked to a problem_version, an episode, both, or neither; metadata only: never changes proof, fidelity, budget, or benchmark state) | {\"type\":\"observe\",\"dossier_id\":\"..\"} (read-only: the dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets) | {\"type\":\"node_add\",\"dossier_id\":\"..\",\"node_type\":\"definition\"|\"proposition\"|\"lemma\"|\"theorem\"|\"remark\"|\"reference\"|\"open_gap\",\"title\":\"..\"} (+ optional section_id OR section_title, statement, content, trust_status, linked_obligation_id, linked_verified_lemma_id — add a typed research node. Trust status is explicit and never implies kernel verification unless linked to a real verified lemma: trust_status='proved_in_episode' REQUIRES linked_verified_lemma_id naming a verified lemma from THIS dossier's own episode/problem context — never borrowed kernel evidence from an unrelated episode; a node added here is metadata, never proof authority) | {\"type\":\"external_reference_add\",\"dossier_id\":\"..\",\"title\":\"..\"} (+ optional authors/venue/year/url/doi/raw_citation, and optionally ONE theorem claim via theorem_label/theorem_statement/claim_status/mathlib_name/proved_episode_id/proved_lemma_id/notes — records a citation as a TRACKED ASSUMPTION, never proof: external citations are self-reported metadata and never become kernel verification; claim_status='proved_in_episode' requires proved_lemma_id naming a verified lemma from THIS dossier's own context, with any proved_episode_id matching that lemma's actual episode, and 'imported_from_mathlib' requires mathlib_name) | {\"type\":\"assumption_boundary_add\",\"dossier_id\":\"..\",\"label\":\"..\",\"statement\":\"..\",\"assumption_status\":\"unformalized_assumption\"|\"rejected_unsafe_assumption\"} (+ optional node_id, rationale — add an unformalized or rejected unsafe assumption boundary. Assumptions are visible metadata, not proof authority) | {\"type\":\"citation_review_add\",\"dossier_id\":\"..\",\"external_theorem_claim_id\":\"..\",\"reviewer_id\":\"..\",\"decision\":\"human_reviewed\"|\"rejected\"|\"needs_formalization\"} (+ optional notes — record a human citation review for an external theorem claim. Human review remains distinct from Lean kernel verification and never upgrades a claim to a proved status) | {\"type\":\"verification_layer_set\",\"dossier_id\":\"..\",\"target_kind\":\"..\",\"target_id\":\"..\",\"layer_kind\":\"..\",\"status\":\"..\"} (+ optional summary, evidence_json — upsert an independent verification layer for a dossier target. Blocked/failed layers do not fail the dossier, and cited/reviewed/assumed artifacts cannot be mislabeled kernel_verified: this action is the ONLY PATH to a kernel_verified layer, and status='kernel_verified' is accepted only where kernel evidence already exists — e.g. a node whose trust_status is already proved_in_episode backed by a verified lemma from THIS dossier's own episode/problem context — it can never manufacture that evidence)"),
             make_tool::<CandidateConstructionAddArgs>("candidate_construction_add", "Propose a candidate mathematical construction (graph_family/point_configuration/coloring/field_tower/lattice/counterexample/asymptotic_family/algebraic_object/combinatorial_design/other) with motivated-discovery metadata: motivating_move, source_observation, intended_role, why_this_might_work/fail, next_check. Can exist before a dossier, node, Lean theorem, problem, or episode. A research artifact, not a proof certificate"),
             make_tool::<CandidateConstructionObserveArgs>("candidate_construction_observe", "Record one empirical check (supports/refutes/inconclusive) against a candidate construction, appended to its empirical_checks history. Never changes proof status, and 'supports' never implies proved"),
             make_tool::<CandidateConstructionUpdateStatusArgs>("candidate_construction_update_status", "Update a candidate construction's status, trust_status, claimed_properties, known_failures, and/or next_check. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified"),
@@ -8282,7 +8813,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<PaperIngestCreateArgs>("paper_ingest_create", "Ingest a paper/manuscript/proof_sketch/exposition as a reviewable source document (issue #27), optionally linked to a dossier. LLM-Driven Proof Search Environment does no OCR/LLM extraction — this records the host's UNTRUSTED extraction. Ingestion is not proof: no field can hold kernel evidence"),
             make_tool::<PaperIngestExtractClaimsArgs>("paper_ingest_extract_claims", "Append extracted nodes (abstract/main_theorem/definition/proposition/lemma/proof_step/construction/remark/appendix_fact/reference/open_gap) with source_span, confidence, and status labels to an ingested document. Each node is untrusted extraction — an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT accepted"),
             make_tool::<PaperIngestObserveArgs>("paper_ingest_observe", "Read an ingested document with all its extracted nodes and their trust labels. Read-only; nothing here is proof or kernel evidence"),
-            make_tool::<PaperIngestLinkToDossierArgs>("paper_ingest_link_to_dossier", "Attach an ingested document (and its extracted nodes) to a research dossier so they surface in research_dossier_observe's ingestion bucket, separate from proof authority"),
+            make_tool::<PaperIngestLinkToDossierArgs>("paper_ingest_link_to_dossier", "Attach an ingested document (and its extracted nodes) to a research dossier so they surface in research_dossier observe's ingestion bucket, separate from proof authority"),
             make_tool::<PaperIngestMarkReviewStatusArgs>("paper_ingest_mark_review_status", "Update an ingested document's ingest_status/extraction_trust_status, or (with node_id) a node's review_status/formalization_status/citation_status. rejected_extraction stays visible, never deleted. None of these statuses confers proof, kernel verification, statement fidelity, or citation validation"),
             make_tool::<PaperIngestLinkNodeArgs>("paper_ingest_link_node", "Promote/attach an extracted node to a real dossier artifact — target_kind external_reference / external_theorem_claim (sets citation_status=citation_recorded) / research_node / formalization_plan_item (sets formalization_status=formalization_target_linked). Records provenance and marks review_status=linked_to_dossier_artifact; the linked artifact keeps its own trust and the node NEVER gains proof/kernel authority"),
             make_tool::<ExpositionAddArgs>("exposition_add", "Add a human-readable mathematical exposition section (problem_summary/formalization_explanation/construction_intuition/key_lemmas/proof_strategy/verified_claim/unverified_bridges/reviewer_notes/next_formalization_targets) linked to a problem, episode, obligation, verified module, verified lemma, and/or dossier. prose_status (prose/reviewed_prose/formalized) marks epistemic weight — prose is never proof and never changes certification or training eligibility"),
@@ -8454,8 +8985,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 84,
-                        "total_tool_count": 84,
+                        "classified_tool_count": 78,
+                        "total_tool_count": 78,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -8661,74 +9192,14 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none — advisory scaffolding, explicitly not a proof authority; attach_* never change proof status, only planning metadata",
                                 "required_run_mode": "any"
                             },
-                            "research_dossier_create": {
-                                "side_effect": "mutating — inserts one research_dossiers row, optionally linked to a problem_version and/or episode after verify_dossier_links confirms both exist and (if both given) the episode actually belongs to that problem_version",
-                                "trust_level": "mcp_generated metadata container only — a dossier is a research bookkeeping record, never proof authority, and can exist before any problem_version or episode does",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
+                            "research_dossier": {
+                                "side_effect": "mixed by action (issue #185: one tool consolidating the former research_dossier_create / research_dossier_observe / research_node_add / external_reference_add / assumption_boundary_add / citation_review_add / verification_layer_set tools; per-action semantics unchanged): observe is read_only — joins research_dossiers with its sections/nodes/references/claims/assumptions/citation_reviews/verification_layers and buckets them by explicit trust_boundary status; every other action mutates DOSSIER TABLES ONLY — metadata, never proof authority: create inserts one research_dossiers row (after verify_dossier_links confirms a linked problem_version/episode exists and, if both are given, that the episode actually belongs to that problem_version); node_add inserts one research_nodes row (plus a research_sections row when section_title is given without section_id); external_reference_add inserts one external_references row and, if theorem_statement is given, one external_theorem_claims row; assumption_boundary_add inserts one assumption_boundaries row; citation_review_add inserts one citation_reviews row and updates the target external_theorem_claims.claim_status (only from an unreviewed/reviewed/rejected state, never overwriting a proved_in_episode or imported_from_mathlib claim); verification_layer_set upserts one verification_layers row keyed on (dossier_id, target_kind, target_id, layer_kind) — blocked/failed layers are recorded as-is and never cascade into failing the dossier or any other row. No action ever writes to episode outcome, obligations, canonical lemmas, budgets, fidelity reviews, or benchmark result tables",
+                                "trust_level": "mixed by action, transparently: observe is a read_only projection whose trust_boundary buckets derive directly from the underlying rows' own status columns, not re-inferred; create is an mcp_generated metadata container; node_add / external_reference_add / assumption_boundary_add are untrusted_input (self-reported research/citation/assumption text) with kernel-lineage claims constrained — a node's trust_status='proved_in_episode' and a claim's claim_status='proved_in_episode' each require a real episode_verified_lemmas row from THIS dossier's own episode/problem context (ensure_proved_lemma_in_dossier_context), never borrowed kernel evidence from an unrelated episode; citation_review_add is human-attested, not verifier_backed (reviewer_id is a free-text identifier, not an authenticated principal — a 'human_reviewed' decision means a person looked at the citation, not that Lean checked it); verification_layer_set is the trust-boundary-adjacent action: most statuses (informal/empirical/cited/human_reviewed/failed/blocked/rejected) are untrusted_input the caller self-reports, but it is THE ONLY PATH to a 'kernel_verified' layer and enforce_kernel_verified_research_boundary accepts that status only where kernel evidence already exists (a node already proved_in_episode, an external_theorem_claim already proved_in_episode with a linked lemma, an episode with a kernel_verified/certified outcome, or a problem_version with a real canonical_verified_lemmas row) — assumptions and whole dossiers can never be marked kernel_verified through this tool, and it can never manufacture kernel evidence",
+                                "cost_surface": "none for every action",
+                                "benchmark_safety": "safe_public_output — research/citation/assumption metadata, never this instance's own proof_term output",
+                                "replayability": "deterministic for every action",
                                 "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "research_dossier_observe": {
-                                "side_effect": "read_only — joins research_dossiers with its sections/nodes/references/claims/assumptions/citation_reviews/verification_layers and buckets them by explicit trust_boundary status",
-                                "trust_level": "read_only projection; the trust_boundary buckets it computes (lean_verified vs mathlib_imported vs externally_cited vs human_reviewed_citations vs unformalized/rejected assumptions vs open_gaps) are derived directly from the underlying rows' own status columns, not re-inferred",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "research_node_add": {
-                                "side_effect": "mutating — inserts one research_nodes row (and, if section_title is given with no section_id, a new research_sections row) into an existing dossier",
-                                "trust_level": "untrusted_input for statement/content text; trust_status is caller-declared but constrained by a DB CHECK — 'proved_in_episode' is rejected unless linked_verified_lemma_id names a real episode_verified_lemmas row, so a node can claim proof lineage only by pointing at kernel evidence that already exists",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output — narrative/definition text, not this instance's own proof_term output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none — a node's trust_status is visible metadata, never a proof status mutation",
-                                "required_run_mode": "any"
-                            },
-                            "external_reference_add": {
-                                "side_effect": "mutating — inserts one external_references row and, if theorem_statement is given, one external_theorem_claims row",
-                                "trust_level": "untrusted_input — self-reported citation metadata; claim_status='proved_in_episode' requires proved_lemma_id to name a real episode_verified_lemmas row and 'imported_from_mathlib' requires a mathlib_name, but the citation text itself (title/authors/venue/statement) is never independently checked by this tool",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "assumption_boundary_add": {
-                                "side_effect": "mutating — inserts one assumption_boundaries row, optionally attached to a research node already in the same dossier",
-                                "trust_level": "untrusted_input — an assumption boundary records that something is being assumed (or was rejected as an unsafe assumption), which is the opposite of a proof; it is never treated as evidence",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "citation_review_add": {
-                                "side_effect": "mutating — inserts one citation_reviews row and updates the target external_theorem_claims.claim_status (only from an unreviewed/reviewed/rejected state, never overwriting a proved_in_episode or imported_from_mathlib claim)",
-                                "trust_level": "human-attested, not verifier_backed — reviewer_id is a free-text identifier supplied by the caller, not an authenticated principal; a 'human_reviewed' decision means a person looked at the citation, not that Lean checked it",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "verification_layer_set": {
-                                "side_effect": "mutating — upserts one verification_layers row keyed on (dossier_id, target_kind, target_id, layer_kind); blocked/failed layers are recorded as-is and never cascade into failing the dossier or any other row",
-                                "trust_level": "mixed by design — most statuses (informal/empirical/cited/human_reviewed/failed/blocked/rejected) are untrusted_input the caller self-reports, but 'kernel_verified' is guarded by enforce_kernel_verified_research_boundary: it is accepted only for a node whose trust_status is already proved_in_episode, an external_theorem_claim already proved_in_episode with a linked lemma, an episode with a kernel_verified/certified outcome, or a problem_version with a real canonical_verified_lemmas row — assumptions and whole dossiers can never be marked kernel_verified through this tool",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none — this tool can attach kernel_verified only where kernel evidence already exists elsewhere; it cannot manufacture that evidence",
+                                "artifact_risk": "none — nodes/claims/citations/assumptions are visible metadata, never proof authority or a proof status mutation; verification_layer_set can attach kernel_verified only where kernel evidence already exists elsewhere, never create it",
                                 "required_run_mode": "any"
                             },
                             "candidate_construction_add": {
@@ -10530,381 +11001,7 @@ impl ServerHandler for ChatDbMcp {
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
             "formalization_plan" => self.do_formalization_plan(args_val).await,
-            "research_dossier_create" => {
-                let args: ResearchDossierCreateArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                if args.title.trim().is_empty() {
-                    return Err(mcp_invalid_params("title must be non-empty"));
-                }
-
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                verify_dossier_links(&tx, &args.problem_version_id, &args.episode_id)?;
-
-                let dossier_id = Uuid::new_v4().to_string();
-                let now = Utc::now().to_rfc3339();
-                tx.execute(
-                    "INSERT INTO research_dossiers (
-                        id, title, description, problem_version_id, episode_id, status, created_at, updated_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?6)",
-                    (
-                        &dossier_id,
-                        args.title.trim(),
-                        args.description.as_deref(),
-                        args.problem_version_id.as_deref(),
-                        args.episode_id.as_deref(),
-                        &now,
-                    ),
-                ).map_err(rs)?;
-                let observed = research_dossier_observe_json(&tx, &dossier_id)?;
-                tx.commit().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&observed).unwrap())]))
-            }
-            "research_dossier_observe" => {
-                let args: ResearchDossierObserveArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                let conn = self.conn.lock().await;
-                let observed = research_dossier_observe_json(&conn, &args.dossier_id)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&observed).unwrap())]))
-            }
-            "research_node_add" => {
-                let args: ResearchNodeAddArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                validate_one_of("node_type", &args.node_type, RESEARCH_NODE_TYPES)?;
-                if args.title.trim().is_empty() {
-                    return Err(mcp_invalid_params("title must be non-empty"));
-                }
-                let trust_status = args.trust_status.clone().unwrap_or_else(|| {
-                    if args.node_type == "open_gap" { "open_gap".to_string() } else { "external_citation_unreviewed".to_string() }
-                });
-                validate_one_of("trust_status", &trust_status, RESEARCH_TRUST_STATUSES)?;
-                if trust_status == "proved_in_episode" && args.linked_verified_lemma_id.is_none() {
-                    return Err(mcp_invalid_params("trust_status='proved_in_episode' requires linked_verified_lemma_id"));
-                }
-
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                require_row_exists(&tx, "research_dossiers", &args.dossier_id, "dossier_id")?;
-
-                let section_id = if let Some(section_id) = args.section_id.clone() {
-                    let exists: Option<i64> = tx.query_row(
-                        "SELECT 1 FROM research_sections WHERE id = ?1 AND dossier_id = ?2",
-                        (&section_id, &args.dossier_id),
-                        |row| row.get(0),
-                    ).optional().map_err(rs)?;
-                    if exists.is_none() {
-                        return Err(mcp_invalid_params(format!("unknown section_id for dossier: {}", section_id)));
-                    }
-                    Some(section_id)
-                } else if let Some(section_title) = args.section_title.as_ref().filter(|s| !s.trim().is_empty()) {
-                    let section_id = Uuid::new_v4().to_string();
-                    let section_order = next_order(&tx, "research_sections", "section_order", &args.dossier_id)?;
-                    tx.execute(
-                        "INSERT INTO research_sections (id, dossier_id, section_order, title, created_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
-                        (&section_id, &args.dossier_id, section_order, section_title.trim(), Utc::now().to_rfc3339()),
-                    ).map_err(rs)?;
-                    Some(section_id)
-                } else {
-                    None
-                };
-
-                if let Some(obligation_id) = &args.linked_obligation_id {
-                    require_row_exists(&tx, "episode_obligations", obligation_id, "linked_obligation_id")?;
-                }
-                if let Some(lemma_id) = &args.linked_verified_lemma_id {
-                    require_row_exists(&tx, "episode_verified_lemmas", lemma_id, "linked_verified_lemma_id")?;
-                    // Trust boundary (PR #55 review): a 'proved_in_episode' node
-                    // must point at a lemma from this dossier's OWN proof context,
-                    // never borrow unrelated kernel evidence.
-                    if trust_status == "proved_in_episode" {
-                        ensure_proved_lemma_in_dossier_context(&tx, &args.dossier_id, lemma_id, None)?;
-                        // If an obligation is also linked, it must belong to the
-                        // same episode the lemma was proved in.
-                        if let Some(obligation_id) = &args.linked_obligation_id {
-                            let lemma_episode: String = tx.query_row(
-                                "SELECT episode_id FROM episode_verified_lemmas WHERE id = ?1", [lemma_id], |r| r.get(0),
-                            ).map_err(rs)?;
-                            let obl_episode: String = tx.query_row(
-                                "SELECT episode_id FROM episode_obligations WHERE id = ?1", [obligation_id], |r| r.get(0),
-                            ).map_err(rs)?;
-                            if obl_episode != lemma_episode {
-                                return Err(mcp_invalid_params("linked_obligation_id belongs to a different episode than the linked verified lemma"));
-                            }
-                        }
-                    }
-                }
-
-                let node_id = Uuid::new_v4().to_string();
-                let node_order = next_order(&tx, "research_nodes", "node_order", &args.dossier_id)?;
-                let now = Utc::now().to_rfc3339();
-                tx.execute(
-                    "INSERT INTO research_nodes (
-                        id, dossier_id, section_id, node_order, node_type, title, statement, content,
-                        trust_status, linked_obligation_id, linked_verified_lemma_id, created_at, updated_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
-                    (
-                        &node_id,
-                        &args.dossier_id,
-                        section_id.as_deref(),
-                        node_order,
-                        &args.node_type,
-                        args.title.trim(),
-                        args.statement.as_deref(),
-                        args.content.as_deref(),
-                        &trust_status,
-                        args.linked_obligation_id.as_deref(),
-                        args.linked_verified_lemma_id.as_deref(),
-                        &now,
-                    ),
-                ).map_err(rs)?;
-                let observed = research_dossier_observe_json(&tx, &args.dossier_id)?;
-                tx.commit().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "node_id": node_id,
-                    "dossier": observed,
-                })).unwrap())]))
-            }
-            "external_reference_add" => {
-                let args: ExternalReferenceAddArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                if args.title.trim().is_empty() {
-                    return Err(mcp_invalid_params("title must be non-empty"));
-                }
-
-                let claim_status = args.claim_status.clone().unwrap_or_else(|| "external_citation_unreviewed".to_string());
-                if args.theorem_statement.is_some() || args.theorem_label.is_some() {
-                    validate_one_of("claim_status", &claim_status, RESEARCH_TRUST_STATUSES)?;
-                    if claim_status == "proved_in_episode" && args.proved_lemma_id.is_none() {
-                        return Err(mcp_invalid_params("claim_status='proved_in_episode' requires proved_lemma_id"));
-                    }
-                    if claim_status == "imported_from_mathlib" && args.mathlib_name.is_none() {
-                        return Err(mcp_invalid_params("claim_status='imported_from_mathlib' requires mathlib_name"));
-                    }
-                }
-
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                require_row_exists(&tx, "research_dossiers", &args.dossier_id, "dossier_id")?;
-                if let Some(episode_id) = &args.proved_episode_id {
-                    require_row_exists(&tx, "episodes", episode_id, "proved_episode_id")?;
-                }
-                if let Some(lemma_id) = &args.proved_lemma_id {
-                    require_row_exists(&tx, "episode_verified_lemmas", lemma_id, "proved_lemma_id")?;
-                    // Trust boundary (PR #55 review): a 'proved_in_episode' claim
-                    // must point at a lemma from this dossier's OWN proof context,
-                    // and a supplied proved_episode_id must match the lemma's
-                    // actual episode — never borrow unrelated kernel evidence into
-                    // trust_boundary.lean_verified.
-                    if claim_status == "proved_in_episode" {
-                        ensure_proved_lemma_in_dossier_context(&tx, &args.dossier_id, lemma_id, args.proved_episode_id.as_deref())?;
-                    }
-                }
-
-                let reference_id = Uuid::new_v4().to_string();
-                let now = Utc::now().to_rfc3339();
-                tx.execute(
-                    "INSERT INTO external_references (
-                        id, dossier_id, title, authors, venue, year, url, doi, raw_citation, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                    (
-                        &reference_id,
-                        &args.dossier_id,
-                        args.title.trim(),
-                        args.authors.as_deref(),
-                        args.venue.as_deref(),
-                        args.year.as_deref(),
-                        args.url.as_deref(),
-                        args.doi.as_deref(),
-                        args.raw_citation.as_deref(),
-                        &now,
-                    ),
-                ).map_err(rs)?;
-
-                let mut claim_id = None;
-                if let Some(statement) = args.theorem_statement.as_ref().filter(|s| !s.trim().is_empty()) {
-                    let id = Uuid::new_v4().to_string();
-                    let label = args.theorem_label.clone().unwrap_or_else(|| args.title.clone());
-                    tx.execute(
-                        "INSERT INTO external_theorem_claims (
-                            id, dossier_id, reference_id, node_id, label, statement, claim_status,
-                            mathlib_name, proved_episode_id, proved_lemma_id, notes, created_at, updated_at
-                        ) VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
-                        (
-                            &id,
-                            &args.dossier_id,
-                            &reference_id,
-                            label.trim(),
-                            statement.trim(),
-                            &claim_status,
-                            args.mathlib_name.as_deref(),
-                            args.proved_episode_id.as_deref(),
-                            args.proved_lemma_id.as_deref(),
-                            args.notes.as_deref(),
-                            &now,
-                        ),
-                    ).map_err(rs)?;
-                    claim_id = Some(id);
-                }
-                let observed = research_dossier_observe_json(&tx, &args.dossier_id)?;
-                tx.commit().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "reference_id": reference_id,
-                    "external_theorem_claim_id": claim_id,
-                    "dossier": observed,
-                })).unwrap())]))
-            }
-            "assumption_boundary_add" => {
-                let args: AssumptionBoundaryAddArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                validate_one_of("assumption_status", &args.assumption_status, ASSUMPTION_STATUSES)?;
-                if args.label.trim().is_empty() || args.statement.trim().is_empty() {
-                    return Err(mcp_invalid_params("label and statement must be non-empty"));
-                }
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                require_row_exists(&tx, "research_dossiers", &args.dossier_id, "dossier_id")?;
-                if let Some(node_id) = &args.node_id {
-                    ensure_target_belongs_to_dossier(&tx, &args.dossier_id, "node", node_id)?;
-                }
-
-                let assumption_id = Uuid::new_v4().to_string();
-                let now = Utc::now().to_rfc3339();
-                tx.execute(
-                    "INSERT INTO assumption_boundaries (
-                        id, dossier_id, node_id, label, statement, assumption_status, rationale, created_at, updated_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-                    (
-                        &assumption_id,
-                        &args.dossier_id,
-                        args.node_id.as_deref(),
-                        args.label.trim(),
-                        args.statement.trim(),
-                        &args.assumption_status,
-                        args.rationale.as_deref(),
-                        &now,
-                    ),
-                ).map_err(rs)?;
-                let observed = research_dossier_observe_json(&tx, &args.dossier_id)?;
-                tx.commit().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "assumption_boundary_id": assumption_id,
-                    "dossier": observed,
-                })).unwrap())]))
-            }
-            "citation_review_add" => {
-                let args: CitationReviewAddArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                validate_one_of("decision", &args.decision, CITATION_REVIEW_DECISIONS)?;
-                if args.reviewer_id.trim().is_empty() {
-                    return Err(mcp_invalid_params("reviewer_id must be non-empty"));
-                }
-                let review_status = match args.decision.as_str() {
-                    "human_reviewed" => "external_citation_human_reviewed",
-                    "rejected" => "rejected_unsafe_assumption",
-                    "needs_formalization" => "external_citation_unreviewed",
-                    _ => unreachable!(),
-                };
-
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                let claim_exists: Option<i64> = tx.query_row(
-                    "SELECT 1 FROM external_theorem_claims WHERE id = ?1 AND dossier_id = ?2",
-                    (&args.external_theorem_claim_id, &args.dossier_id),
-                    |row| row.get(0),
-                ).optional().map_err(rs)?;
-                if claim_exists.is_none() {
-                    return Err(mcp_invalid_params(format!("unknown external_theorem_claim_id for dossier: {}", args.external_theorem_claim_id)));
-                }
-
-                let review_id = Uuid::new_v4().to_string();
-                let now = Utc::now().to_rfc3339();
-                tx.execute(
-                    "INSERT INTO citation_reviews (
-                        id, dossier_id, external_theorem_claim_id, reviewer_id, decision, review_status, notes, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                    (
-                        &review_id,
-                        &args.dossier_id,
-                        &args.external_theorem_claim_id,
-                        args.reviewer_id.trim(),
-                        &args.decision,
-                        review_status,
-                        args.notes.as_deref(),
-                        &now,
-                    ),
-                ).map_err(rs)?;
-                tx.execute(
-                    "UPDATE external_theorem_claims
-                     SET claim_status = ?1, updated_at = ?2
-                     WHERE id = ?3 AND dossier_id = ?4 AND claim_status IN ('external_citation_unreviewed', 'external_citation_human_reviewed', 'rejected_unsafe_assumption')",
-                    (review_status, &now, &args.external_theorem_claim_id, &args.dossier_id),
-                ).map_err(rs)?;
-                let observed = research_dossier_observe_json(&tx, &args.dossier_id)?;
-                tx.commit().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "citation_review_id": review_id,
-                    "review_status": review_status,
-                    "dossier": observed,
-                })).unwrap())]))
-            }
-            "verification_layer_set" => {
-                let args: VerificationLayerSetArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                validate_one_of("target_kind", &args.target_kind, VERIFICATION_TARGET_KINDS)?;
-                validate_one_of("layer_kind", &args.layer_kind, VERIFICATION_LAYER_KINDS)?;
-                validate_one_of("status", &args.status, VERIFICATION_LAYER_STATUSES)?;
-                // Issue #12: a search/construction/packing-bound layer (the
-                // shape a finite or empirical asymptotic check takes) can never
-                // itself claim kernel_verified — only a formal_module /
-                // statement_fidelity layer backed by a real Lean pass may.
-                // Redundant with the DB CHECK by design (defense in depth + a
-                // precise, test-targetable message); it never relaxes the CHECK.
-                enforce_asymptotic_evidence_boundary(&args.layer_kind, &args.status)?;
-                let evidence_json = args.evidence_json.clone().unwrap_or_else(|| "{}".to_string());
-                serde_json::from_str::<serde_json::Value>(&evidence_json)
-                    .map_err(|e| mcp_invalid_params(format!("evidence_json must be valid JSON: {}", e)))?;
-
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                require_row_exists(&tx, "research_dossiers", &args.dossier_id, "dossier_id")?;
-                ensure_target_belongs_to_dossier(&tx, &args.dossier_id, &args.target_kind, &args.target_id)?;
-                enforce_kernel_verified_research_boundary(&tx, &args.dossier_id, &args.target_kind, &args.target_id, &args.status)?;
-
-                let existing_id: Option<String> = tx.query_row(
-                    "SELECT id FROM verification_layers
-                     WHERE dossier_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND layer_kind = ?4",
-                    (&args.dossier_id, &args.target_kind, &args.target_id, &args.layer_kind),
-                    |row| row.get(0),
-                ).optional().map_err(rs)?;
-                let now = Utc::now().to_rfc3339();
-                let layer_id = existing_id.unwrap_or_else(|| Uuid::new_v4().to_string());
-                tx.execute(
-                    "INSERT INTO verification_layers (
-                        id, dossier_id, target_kind, target_id, layer_kind, status, summary, evidence_json, created_at, updated_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
-                     ON CONFLICT(dossier_id, target_kind, target_id, layer_kind)
-                     DO UPDATE SET status = excluded.status, summary = excluded.summary,
-                                   evidence_json = excluded.evidence_json, updated_at = excluded.updated_at",
-                    (
-                        &layer_id,
-                        &args.dossier_id,
-                        &args.target_kind,
-                        &args.target_id,
-                        &args.layer_kind,
-                        &args.status,
-                        args.summary.as_deref(),
-                        &evidence_json,
-                        &now,
-                    ),
-                ).map_err(rs)?;
-                let observed = research_dossier_observe_json(&tx, &args.dossier_id)?;
-                tx.commit().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "verification_layer_id": layer_id,
-                    "dossier": observed,
-                })).unwrap())]))
-            }
+            "research_dossier" => self.do_research_dossier(args_val).await,
             "candidate_construction_add" => {
                 let args: CandidateConstructionAddArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -14010,8 +14107,12 @@ mod tests {
         // + proof_session_export (issue #164: closes out #161's deferred item)
         // = 99, - 9 (issue #183, epic #182's pilot: those ten flat
         // proof_session_* tools consolidated into the ONE `proof_session`
-        // tool dispatching on an internally-tagged `action` enum) = 90.
-        assert_eq!(list_res.tools.len(), 84);
+        // tool dispatching on an internally-tagged `action` enum) = 90,
+        // - 6 (issue #184: the seven flat formalization_plan_* tools
+        // consolidated into the ONE `formalization_plan` tool) = 84,
+        // - 6 (issue #185: the seven flat research-dossier-family tools
+        // consolidated into the ONE `research_dossier` tool) = 78.
+        assert_eq!(list_res.tools.len(), 78);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -16529,22 +16630,22 @@ mod tests {
 
         // A dossier attached to this episode with several INDEPENDENT layers:
         // one formal_module actually kernel_verified, the rest still open.
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Layered dossier", "problem_version_id": pv_id, "episode_id": episode_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
-        tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id, "target_kind": "episode", "target_id": episode_id,
             "layer_kind": "formal_module", "status": "kernel_verified", "summary": "Root theorem compiled.",
-        }).as_object().unwrap().clone())).await.unwrap());
-        tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id, "target_kind": "dossier", "target_id": dossier_id,
             "layer_kind": "construction_search", "status": "blocked", "summary": "Need a sharper construction.",
-        }).as_object().unwrap().clone())).await.unwrap());
-        tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id, "target_kind": "dossier", "target_id": dossier_id,
             "layer_kind": "packing_or_size_bound", "status": "empirical", "summary": "Bound only checked numerically.",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let md_res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
             "episode_id": episode_id, "format": "markdown",
@@ -16578,19 +16679,19 @@ mod tests {
     async fn test_unit_distance_five_named_verification_layers_fixture() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Unit-distance verification layers",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
 
         // Field tower and norm-one are both arithmetic_construction, so they hang
         // off distinct node targets (UNIQUE(dossier, target, layer_kind)).
-        let node_ft = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+        let node_ft = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "node_add",
             "dossier_id": dossier_id, "node_type": "lemma", "title": "Field tower", "trust_status": "unformalized_assumption",
-        }).as_object().unwrap().clone())).await.unwrap())["node_id"].as_str().unwrap().to_string();
-        let node_n1 = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap())["node_id"].as_str().unwrap().to_string();
+        let node_n1 = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "node_add",
             "dossier_id": dossier_id, "node_type": "lemma", "title": "Norm-one elements", "trust_status": "unformalized_assumption",
-        }).as_object().unwrap().clone())).await.unwrap())["node_id"].as_str().unwrap().to_string();
+        }}).as_object().unwrap().clone())).await.unwrap())["node_id"].as_str().unwrap().to_string();
 
         let layers = [
             ("node", node_ft.as_str(), "arithmetic_construction", "informal", "Field tower F_k of degree 2^k."),
@@ -16601,9 +16702,9 @@ mod tests {
         ];
         let mut observed = serde_json::Value::Null;
         for (tk, tid, lk, st, summary) in layers {
-            observed = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
                 "dossier_id": dossier_id, "target_kind": tk, "target_id": tid, "layer_kind": lk, "status": st, "summary": summary,
-            }).as_object().unwrap().clone())).await.unwrap())["dossier"].clone();
+            }}).as_object().unwrap().clone())).await.unwrap())["dossier"].clone();
         }
         let layer_arr = observed["verification_layers"].as_array().unwrap();
         assert_eq!(layer_arr.len(), 5, "all five named layers must be present: {:?}", layer_arr);
@@ -16631,30 +16732,30 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        let standalone = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let standalone = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Early-stage argument map",
             "description": "No formal problem exists yet",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert!(standalone["dossier_id"].as_str().is_some_and(|s| !s.is_empty()), "{:?}", standalone);
         assert!(standalone["problem_version_id"].is_null(), "{:?}", standalone);
         assert!(standalone["episode_id"].is_null(), "{:?}", standalone);
 
         let pv_id = create_problem(&peer, "True").await;
-        let linked_problem = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let linked_problem = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Problem-linked dossier",
             "problem_version_id": pv_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(linked_problem["problem_version_id"], pv_id);
 
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
             "problem_version_id": pv_id,
         }).as_object().unwrap().clone())).await.unwrap());
         let episode_id = ep["episode_id"].as_str().unwrap().to_string();
-        let linked_episode = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let linked_episode = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Episode-linked dossier",
             "problem_version_id": pv_id,
             "episode_id": episode_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(linked_episode["problem_version_id"], pv_id);
         assert_eq!(linked_episode["episode_id"], episode_id);
     }
@@ -16664,79 +16765,79 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Trust boundary dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
 
-        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "node_add",
             "dossier_id": dossier_id,
             "section_title": "Main argument",
             "node_type": "open_gap",
             "title": "Packing gap",
             "statement": "Need a packing bound",
             "trust_status": "open_gap",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let node_id = node["node_id"].as_str().unwrap().to_string();
         assert_eq!(node["dossier"]["sections"].as_array().unwrap().len(), 1);
 
-        let reference = tool_json(&peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+        let reference = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "external_reference_add",
             "dossier_id": dossier_id,
             "title": "Classical bound",
             "authors": "A. Author",
             "theorem_label": "Theorem 2",
             "theorem_statement": "Every admissible object satisfies the cited bound",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let claim_id = reference["external_theorem_claim_id"].as_str().unwrap().to_string();
         let before_review = &reference["dossier"]["trust_boundary"];
         assert_eq!(before_review["externally_cited"].as_array().unwrap().len(), 1, "{:?}", before_review);
         assert!(before_review["lean_verified"]["external_theorem_claims"].as_array().unwrap().is_empty(), "{:?}", before_review);
 
-        let reviewed = tool_json(&peer.call_tool(CallToolRequestParams::new("citation_review_add").with_arguments(serde_json::json!({
+        let reviewed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "citation_review_add",
             "dossier_id": dossier_id,
             "external_theorem_claim_id": claim_id,
             "reviewer_id": "human-reviewer-1",
             "decision": "human_reviewed",
             "notes": "Citation text matches the claim, but this is not a Lean proof.",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let after_review = &reviewed["dossier"]["trust_boundary"];
         assert_eq!(after_review["human_reviewed_citations"].as_array().unwrap().len(), 1, "{:?}", after_review);
         assert!(after_review["lean_verified"]["external_theorem_claims"].as_array().unwrap().is_empty(), "{:?}", after_review);
 
-        tool_json(&peer.call_tool(CallToolRequestParams::new("assumption_boundary_add").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "assumption_boundary_add",
             "dossier_id": dossier_id,
             "node_id": node_id,
             "label": "Assumption A",
             "statement": "The reduction preserves extremality",
             "assumption_status": "unformalized_assumption",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let rejected = tool_json(&peer.call_tool(CallToolRequestParams::new("assumption_boundary_add").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let rejected = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "assumption_boundary_add",
             "dossier_id": dossier_id,
             "label": "Unsafe shortcut",
             "statement": "Assume the desired conclusion",
             "assumption_status": "rejected_unsafe_assumption",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let boundary = &rejected["dossier"]["trust_boundary"];
         assert_eq!(boundary["unformalized_assumptions"].as_array().unwrap().len(), 1, "{:?}", boundary);
         assert_eq!(boundary["rejected_assumptions"].as_array().unwrap().len(), 1, "{:?}", boundary);
         assert_eq!(boundary["open_gaps"].as_array().unwrap().len(), 1, "{:?}", boundary);
 
-        tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id,
             "target_kind": "dossier",
             "target_id": dossier_id,
             "layer_kind": "construction_search",
             "status": "blocked",
             "summary": "Need a sharper construction before formalization.",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let failed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id,
             "target_kind": "node",
             "target_id": node_id,
             "layer_kind": "packing_or_size_bound",
             "status": "failed",
             "evidence_json": "{\"attempt\":\"bound too weak\"}",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(failed["dossier"]["status"], "draft", "blocked/failed layers must not fail the dossier itself: {:?}", failed);
         let layer_statuses: Vec<&str> = failed["dossier"]["verification_layers"].as_array().unwrap()
             .iter()
@@ -16745,13 +16846,13 @@ mod tests {
         assert!(layer_statuses.contains(&"blocked"), "{:?}", layer_statuses);
         assert!(layer_statuses.contains(&"failed"), "{:?}", layer_statuses);
 
-        let denied = peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        let denied = peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id,
             "target_kind": "external_theorem_claim",
             "target_id": claim_id,
             "layer_kind": "external_review",
             "status": "kernel_verified",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(denied.is_err(), "human-reviewed external citations must not be mislabeled kernel_verified");
     }
 
@@ -16788,22 +16889,22 @@ mod tests {
             ).unwrap()
         };
 
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Mathlib versus local proof",
             "problem_version_id": pv_id,
             "episode_id": episode_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
 
-        tool_json(&peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "external_reference_add",
             "dossier_id": dossier_id,
             "title": "Mathlib imported fact",
             "theorem_label": "Nat.zero_eq",
             "theorem_statement": "0 = 0",
             "claim_status": "imported_from_mathlib",
             "mathlib_name": "Nat.zero_eq",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "external_reference_add",
             "dossier_id": dossier_id,
             "title": "Locally proved fact",
             "theorem_label": "root",
@@ -16811,7 +16912,7 @@ mod tests {
             "claim_status": "proved_in_episode",
             "proved_episode_id": episode_id,
             "proved_lemma_id": proved_lemma_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let boundary = &observed["dossier"]["trust_boundary"];
         assert_eq!(boundary["mathlib_imported"].as_array().unwrap().len(), 1, "{:?}", boundary);
@@ -16859,39 +16960,39 @@ mod tests {
         let (_pv_b, ep_b, lemma_b) = lemma_for(peer.clone(), conn_arc.clone(), "proof-B").await;
 
         // Dossier bound to A.
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Dossier for problem A", "problem_version_id": pv_a, "episode_id": ep_a,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
 
         // NODE: borrowing B's lemma is rejected; A's own lemma is accepted.
-        let node_borrow = peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+        let node_borrow = peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "node_add",
             "dossier_id": dossier_id, "node_type": "theorem", "title": "borrowed", "trust_status": "proved_in_episode",
             "linked_verified_lemma_id": lemma_b,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(node_borrow.is_err(), "a node must not claim proved_in_episode with a lemma from an unrelated episode");
-        let node_ok = peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+        let node_ok = peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "node_add",
             "dossier_id": dossier_id, "node_type": "theorem", "title": "own", "trust_status": "proved_in_episode",
             "linked_verified_lemma_id": lemma_a,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(node_ok.is_ok(), "a node backed by the dossier's OWN episode lemma must be accepted: {:?}", node_ok.err());
 
         // CLAIM: borrowing B's lemma is rejected; A's own lemma is accepted;
         // a proved_episode_id that mismatches the lemma's episode is rejected.
-        let claim_borrow = peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+        let claim_borrow = peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "external_reference_add",
             "dossier_id": dossier_id, "title": "borrowed claim", "theorem_label": "b", "theorem_statement": "True",
             "claim_status": "proved_in_episode", "proved_lemma_id": lemma_b,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(claim_borrow.is_err(), "a claim must not borrow an unrelated episode's lemma");
-        let claim_mismatch = peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+        let claim_mismatch = peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "external_reference_add",
             "dossier_id": dossier_id, "title": "mismatch", "theorem_label": "m", "theorem_statement": "True",
             "claim_status": "proved_in_episode", "proved_lemma_id": lemma_a, "proved_episode_id": ep_b,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(claim_mismatch.is_err(), "proved_episode_id must match the lemma's actual episode");
-        let claim_ok = peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+        let claim_ok = peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "external_reference_add",
             "dossier_id": dossier_id, "title": "own claim", "theorem_label": "a", "theorem_statement": "True",
             "claim_status": "proved_in_episode", "proved_lemma_id": lemma_a, "proved_episode_id": ep_a,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(claim_ok.is_ok(), "a claim backed by the dossier's OWN episode lemma must be accepted: {:?}", claim_ok.err());
     }
 
@@ -16942,9 +17043,9 @@ mod tests {
         assert!(bad_move.is_err(), "an unknown motivating_move must be rejected");
 
         // A candidate construction can link to a dossier at creation time.
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Candidate construction dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
         let attached = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
             "dossier_id": dossier_id,
@@ -16966,12 +17067,12 @@ mod tests {
 
         // A candidate construction can link to a research node; a standalone construction with
         // no prior dossier adopts the node's dossier rather than staying orphaned.
-        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "node_add",
             "dossier_id": dossier_id,
             "node_type": "open_gap",
             "title": "Need a sharper packing bound",
             "trust_status": "open_gap",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let node_id = node["node_id"].as_str().unwrap().to_string();
 
         let linked_node = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_link_node").with_arguments(serde_json::json!({
@@ -16982,14 +17083,14 @@ mod tests {
         assert_eq!(linked_node["candidate_construction"]["dossier_id"], dossier_id, "linking to a node with no prior dossier must adopt the node's dossier: {:?}", linked_node);
 
         // A candidate construction can link to a verification layer.
-        let layer_result = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        let layer_result = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id,
             "target_kind": "dossier",
             "target_id": dossier_id,
             "layer_kind": "construction_search",
             "status": "empirical",
             "summary": "Brute-force search over small parameter ranges",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let layer_id = layer_result["verification_layer_id"].as_str().unwrap().to_string();
 
         let linked_layer = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_link_verification_layer").with_arguments(serde_json::json!({
@@ -17032,41 +17133,41 @@ mod tests {
             ).unwrap()
         };
 
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Candidate construction trust boundary dossier",
             "problem_version_id": pv_id,
             "episode_id": episode_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
 
-        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "node_add",
             "dossier_id": dossier_id,
             "node_type": "theorem",
             "title": "root theorem",
             "trust_status": "proved_in_episode",
             "linked_verified_lemma_id": proved_lemma_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let node_id = node["node_id"].as_str().unwrap().to_string();
 
         // A real kernel_verified verification layer, backed by the proved_in_episode node.
-        let kernel_layer = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        let kernel_layer = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id,
             "target_kind": "node",
             "target_id": node_id,
             "layer_kind": "formal_module",
             "status": "kernel_verified",
             "summary": "Matches the kernel-verified root lemma",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let kernel_layer_id = kernel_layer["verification_layer_id"].as_str().unwrap().to_string();
 
         // A non-kernel-verified layer, for the negative cases below.
-        let blocked_layer = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        let blocked_layer = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id,
             "target_kind": "dossier",
             "target_id": dossier_id,
             "layer_kind": "construction_search",
             "status": "blocked",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let blocked_layer_id = blocked_layer["verification_layer_id"].as_str().unwrap().to_string();
 
         let candidate = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
@@ -17173,11 +17274,11 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         let episode_id = ep["episode_id"].as_str().unwrap().to_string();
 
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Motivated discovery dossier",
             "problem_version_id": pv_id,
             "episode_id": episode_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
 
         let created = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
@@ -17205,9 +17306,9 @@ mod tests {
 
         // The dossier bucket keeps candidate constructions SEPARATE from proof/citation/
         // assumption/verification-layer/open-gap state, and carries the motivated-discovery fields.
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "observe",
             "dossier_id": dossier_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let bucket = observed["candidate_constructions"].as_array().unwrap();
         assert_eq!(bucket.len(), 1, "{:?}", observed);
         let entry = &bucket[0];
@@ -17260,18 +17361,18 @@ mod tests {
         assert_eq!(es["has_kernel_evidence"], false, "{:?}", es);
 
         // Can link to a dossier at creation time.
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Empirical lab dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
         let cc = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
             "dossier_id": dossier_id, "construction_type": "graph_family", "informal_description": "family F(n)", "created_by": "r",
         }).as_object().unwrap().clone())).await.unwrap());
         let cc_id = cc["candidate_construction_id"].as_str().unwrap().to_string();
-        let layer = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        let layer = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id, "target_kind": "dossier", "target_id": dossier_id,
             "layer_kind": "construction_search", "status": "empirical",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let layer_id = layer["verification_layer_id"].as_str().unwrap().to_string();
 
         let attached = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_add").with_arguments(serde_json::json!({
@@ -17310,9 +17411,9 @@ mod tests {
         let client = connected_client(handler).await;
         let peer = client.peer();
 
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Empirical guardrail dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
         // An asymptotic candidate construction — finite evidence must never certify it.
         let cc = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
@@ -17368,9 +17469,9 @@ mod tests {
 
         // Dossier observe: all searches remain visible in the empirical bucket, and nothing
         // in the whole dossier ever became kernel evidence via empirical work.
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "observe",
             "dossier_id": dossier_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let bucket = observed["empirical_searches"].as_array().unwrap();
         assert_eq!(bucket.len(), 4, "all searches (incl. timed_out + counterexample) stay visible: {:?}", bucket);
         assert!(bucket.iter().all(|s| s["has_kernel_evidence"] == false && s["is_proof"] == false));
@@ -17392,9 +17493,9 @@ mod tests {
     async fn test_empirical_search_counterexample_cannot_be_erased_via_update_status() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Counterexample preservation dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
         let search = tool_json(&peer.call_tool(CallToolRequestParams::new("empirical_search_add").with_arguments(serde_json::json!({
             "dossier_id": dossier_id, "search_type": "counterexample_search",
@@ -17425,9 +17526,9 @@ mod tests {
         assert_eq!(updated["empirical_search"]["counterexample_found"], true, "{:?}", updated);
 
         // ...and it must still be visible via research_dossier_observe.
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "observe",
             "dossier_id": dossier_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let bucket = observed["empirical_searches"].as_array().unwrap();
         assert_eq!(bucket.len(), 1, "{:?}", bucket);
         assert_eq!(bucket[0]["counterexamples"].as_array().unwrap().len(), 1, "counterexample must remain visible in the dossier: {:?}", bucket);
@@ -17474,9 +17575,9 @@ mod tests {
         assert_eq!(nodes[0]["source_span"], "p.1 Thm 1");
 
         // Link to a dossier; it surfaces in its own bucket, separate from proof/citation/etc.
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Unit-distance research workspace",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
         let linked = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_link_to_dossier").with_arguments(serde_json::json!({
             "document_id": document_id, "dossier_id": dossier_id,
@@ -17502,9 +17603,9 @@ mod tests {
         let client = connected_client(handler).await;
         let peer = client.peer();
 
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Ingestion review dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
         let doc = tool_json(&peer.call_tool(CallToolRequestParams::new("paper_ingest_create").with_arguments(serde_json::json!({
             "dossier_id": dossier_id, "title": "Draft manuscript", "source_kind": "manuscript", "created_by": "bot",
@@ -17568,9 +17669,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Link-promotion dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
 
         // Blank source_span is rejected at extraction time (a node must be traceable).
@@ -17598,14 +17699,14 @@ mod tests {
         assert_eq!(node_ids.len(), 4);
 
         // Build the four real targets, all in the same dossier where applicable.
-        let ext = tool_json(&peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+        let ext = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "external_reference_add",
             "dossier_id": dossier_id, "title": "Szemerédi–Trotter", "theorem_statement": "Incidence bound.",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let reference_id = ext["reference_id"].as_str().unwrap().to_string();
         let claim_id = ext["external_theorem_claim_id"].as_str().unwrap().to_string();
-        let rnode = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+        let rnode = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "node_add",
             "dossier_id": dossier_id, "node_type": "lemma", "title": "Research lemma", "trust_status": "unformalized_assumption",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let research_node_id = rnode["node_id"].as_str().unwrap().to_string();
         let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
             "source_problem_text": "x", "root_formal_statement": "x", "unsafe_dev_attestation": true,
@@ -17663,12 +17764,12 @@ mod tests {
             "document_id": document_id, "node_id": node_ids[0], "target_kind": "made_up", "target_id": reference_id,
         }).as_object().unwrap().clone())).await;
         assert!(bad_kind.is_err(), "unknown target_kind must be rejected");
-        let other = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let other = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Other dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let other_ref = tool_json(&peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let other_ref = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "external_reference_add",
             "dossier_id": other["dossier_id"], "title": "Foreign ref",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let cross = peer.call_tool(CallToolRequestParams::new("paper_ingest_link_node").with_arguments(serde_json::json!({
             "document_id": document_id, "node_id": node_ids[0], "target_kind": "external_reference", "target_id": other_ref["reference_id"],
         }).as_object().unwrap().clone())).await;
@@ -17774,9 +17875,9 @@ mod tests {
         let client = connected_client(handler).await;
         let peer = client.peer();
 
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Challenge dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
 
         // (1) A dossier can define a challenge.
@@ -17884,9 +17985,9 @@ mod tests {
         assert!(observed["challenge"]["policy"].as_str().is_some_and(|p| p.contains("never confers training eligibility")), "{:?}", observed["challenge"]["policy"]);
 
         // Dossier observe surfaces challenges + distilled artifacts in their own buckets.
-        let dobs = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+        let dobs = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "observe",
             "dossier_id": dossier_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(dobs["challenges"].as_array().unwrap().len(), 1, "{:?}", dobs["challenges"]);
         assert_eq!(dobs["challenges"][0]["accepted_submission_count"], 1, "{:?}", dobs["challenges"]);
         assert_eq!(dobs["distilled_strategy_artifacts"].as_array().unwrap().len(), 1, "{:?}", dobs["distilled_strategy_artifacts"]);
@@ -17907,9 +18008,9 @@ mod tests {
     async fn test_challenge_substrate_rejects_invalid_statuses_and_cross_dossier_links() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Boundary dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
         let challenge = tool_json(&peer.call_tool(CallToolRequestParams::new("challenge_create").with_arguments(serde_json::json!({
             "dossier_id": dossier_id, "title": "C", "created_by": "h",
@@ -17951,9 +18052,9 @@ mod tests {
         assert!(bad_distill.is_err(), "distilled trust_status must never be a proof value");
 
         // A submission cannot be linked to an artifact in a DIFFERENT dossier.
-        let other = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let other = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Other",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let other_cc = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
             "dossier_id": other["dossier_id"], "construction_type": "point_configuration", "informal_description": "foreign", "created_by": "h",
         }).as_object().unwrap().clone())).await.unwrap());
@@ -17970,9 +18071,9 @@ mod tests {
         let peer = client.peer();
 
         // An exposition artifact can exist attached only to a dossier (no episode/proof needed).
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Exposition dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
 
         // prose (default), reviewed_prose, and formalized are all distinct epistemic labels — none is proof.
@@ -18010,9 +18111,9 @@ mod tests {
 
         // Dossier observe surfaces exposition in its OWN bucket, separate from nodes/citations/
         // assumptions/verification-layers/candidate-constructions and from the trust_boundary buckets.
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "observe",
             "dossier_id": dossier_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let bucket = observed["exposition_artifacts"].as_array().unwrap();
         assert_eq!(bucket.len(), 2, "{:?}", observed);
         assert!(bucket.iter().all(|e| e["is_proof"] == false), "{:?}", bucket);
@@ -18241,9 +18342,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Skeleton dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
 
         let added = tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton_add").with_arguments(serde_json::json!({
@@ -18256,9 +18357,9 @@ mod tests {
         let bucket = added["dossier"]["semantic_skeletons"].as_array().unwrap();
         assert_eq!(bucket.len(), 1, "{:?}", added["dossier"]);
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "observe",
             "dossier_id": dossier_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed["semantic_skeletons"].as_array().unwrap().len(), 1, "{:?}", observed);
         // A skeleton is a structured reading — it must NOT appear in the lean_verified bucket.
         assert!(observed["trust_boundary"]["lean_verified"]["nodes"].as_array().unwrap().is_empty(), "{:?}", observed["trust_boundary"]);
@@ -18271,13 +18372,13 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Expert review dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
-        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "node_add",
             "dossier_id": dossier_id, "node_type": "theorem", "title": "Main statement", "trust_status": "open_gap",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let node_id = node["node_id"].as_str().unwrap().to_string();
         let cc = tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
             "dossier_id": dossier_id, "construction_type": "graph_family", "informal_description": "family", "created_by": "r",
@@ -18334,23 +18435,23 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Human-attested review dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
-        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "node_add",
             "dossier_id": dossier_id, "node_type": "theorem", "title": "T", "trust_status": "open_gap",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let node_id = node["node_id"].as_str().unwrap().to_string();
         // An external citation, plus a human citation review and an assumption, so we can prove
         // the three review-style buckets stay distinct.
-        let refr = tool_json(&peer.call_tool(CallToolRequestParams::new("external_reference_add").with_arguments(serde_json::json!({
+        let refr = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "external_reference_add",
             "dossier_id": dossier_id, "title": "Cited work", "theorem_label": "Thm 1", "theorem_statement": "S",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let claim_id = refr["external_theorem_claim_id"].as_str().unwrap().to_string();
-        tool_json(&peer.call_tool(CallToolRequestParams::new("assumption_boundary_add").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "assumption_boundary_add",
             "dossier_id": dossier_id, "label": "A", "statement": "assume X", "assumption_status": "unformalized_assumption",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // A domain_expert "approved" review on the node must NOT kernel-verify it.
         tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review_add").with_arguments(serde_json::json!({
@@ -18364,9 +18465,9 @@ mod tests {
             "review_target_kind": "external_citation", "review_target_id": claim_id, "decision": "rejected",
         }).as_object().unwrap().clone())).await.unwrap());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "observe",
             "dossier_id": dossier_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         // The node is still an open gap, absent from lean_verified.
         assert_eq!(observed["nodes"][0]["trust_status"], "open_gap", "expert approval must not change node trust_status: {:?}", observed["nodes"]);
         assert!(observed["trust_boundary"]["lean_verified"]["nodes"].as_array().unwrap().is_empty(), "{:?}", observed["trust_boundary"]);
@@ -19953,30 +20054,30 @@ mod tests {
     async fn test_reject_finite_brute_force_as_asymptotic_evidence() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Asymptotic goal dossier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
-        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_node_add").with_arguments(serde_json::json!({
+        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "node_add",
             "dossier_id": dossier_id, "node_type": "theorem", "title": "Growth lower bound", "trust_status": "open_gap",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let node_id = node["node_id"].as_str().unwrap().to_string();
 
         // An empirical asymptotic_extraction layer is allowed but is NOT kernel evidence.
-        let empirical = tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        let empirical = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id, "target_kind": "node", "target_id": node_id,
             "layer_kind": "asymptotic_extraction", "status": "empirical",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let layer_id = empirical["verification_layer_id"].as_str().unwrap().to_string();
         let layers = empirical["dossier"]["verification_layers"].as_array().unwrap();
         assert!(layers.iter().any(|l| l["status"] == "empirical" && l["layer_kind"] == "asymptotic_extraction"), "{layers:?}");
 
         // A construction_search / packing bound layer must NOT be allowed to claim kernel_verified.
         for lk in ["construction_search", "packing_or_size_bound", "asymptotic_extraction"] {
-            let bad = peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+            let bad = peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
                 "dossier_id": dossier_id, "target_kind": "node", "target_id": node_id,
                 "layer_kind": lk, "status": "kernel_verified",
-            }).as_object().unwrap().clone())).await;
+            }}).as_object().unwrap().clone())).await;
             assert!(bad.is_err(), "a {lk} layer must not be allowed to claim kernel_verified for an asymptotic goal");
         }
 
@@ -20027,21 +20128,21 @@ mod tests {
         assert!(bad_role.is_err());
 
         // Dossier: the asymptotic construction + layers are their own labeled rows.
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "Unit-distance ladder dossier", "problem_version_id": pv_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
         tool_json(&peer.call_tool(CallToolRequestParams::new("candidate_construction_add").with_arguments(serde_json::json!({
             "dossier_id": dossier_id, "construction_type": "asymptotic_family", "intended_role": "lower_bound_construction",
             "informal_description": "grid-like point configuration forcing many unit distances", "created_by": "r",
         }).as_object().unwrap().clone())).await.unwrap());
-        tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id, "target_kind": "dossier", "target_id": dossier_id,
             "layer_kind": "packing_or_size_bound", "status": "empirical",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_observe").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "observe",
             "dossier_id": dossier_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let ccs = observed["candidate_constructions"].as_array().unwrap();
         assert_eq!(ccs.len(), 1);
         assert_eq!(ccs[0]["construction_type"], "asymptotic_family");
@@ -21684,14 +21785,14 @@ mod tests {
 
         // Issue #13: the dataset export must also carry the dossier's per-layer
         // verification status. Attach a dossier with one (non-verified) layer.
-        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier_create").with_arguments(serde_json::json!({
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
             "title": "training export layers", "problem_version_id": pv_id, "episode_id": episode_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
-        tool_json(&peer.call_tool(CallToolRequestParams::new("verification_layer_set").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "verification_layer_set",
             "dossier_id": dossier_id, "target_kind": "dossier", "target_id": dossier_id,
             "layer_kind": "construction_search", "status": "blocked", "summary": "needs a sharper construction",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let res = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
             "episode_id": episode_id, "format": "training_export", "allow_putnambench_proof_export": true,
