@@ -150,16 +150,7 @@ Antigravity, or a custom script — should call this first.
 | `benchmark_run_create` | Create a run against a suite. `lean_version`/`mathlib_commit` are read from the server's OWN detected Lean environment, never accepted from the client |
 | `benchmark_result_record` | Record (or upsert, for pass@k) one problem's result within a run. If `episode_id` is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as the benchmark problem (issue #36) |
 | `benchmark_run_observe` | Read back a run, its results, and aggregate metrics — `solved_rate` (solved at all) vs `pass_at_1_rate` (genuine first-attempt success) are reported separately |
-| `proof_session_start` | Start a live, tactic-by-tactic interactive proof-state session for one existing episode obligation (`mock` or `pantograph` backend). Returns `session_id` + root node. See [Interactive Proof Sessions](#interactive-proof-sessions) |
-| `proof_session_observe` | Read back a session's currently selected node — goals, local context, hashes, branch summary. Read-only |
-| `proof_session_tactic_step` | Apply one tactic to a node. Records a new node on success or a structured diagnostic on failure — always evidence, never proof authority |
-| `proof_session_branch` | Like `proof_session_tactic_step`, explicitly starting a named branch. Prior branches are never deleted or overwritten |
-| `proof_session_select_node` | Move a session's "selected node" pointer. Convenience state only — never applies a tactic or verifies anything |
-| `proof_session_reconstruct` | Reconstruct a Lean tactic script from a session's root-to-node path. `reports_complete` is the session's own claim, still not a verified proof |
-| `proof_session_promote_to_attempt` | The only `proof_session_*` tool that can change an obligation's status — resubmits a reconstructed script through the real `attempt_claim` + `episode_step(Solve)` kernel-verification path |
-| `proof_session_close` | Mark a session `closed` / `abandoned` / `superseded`. The full trace, including failed tactics, stays visible afterward |
-| `proof_session_replay` | Replay a session from persisted DB state: `trace_only` (consistency check), `backend` (re-run against a fresh backend session), or `final_proof` (the trust gate — resubmits through real kernel verification) |
-| `proof_session_export` | Export one interactive session as `public_summary`, `audit_archive`, or `training_export` (includes negative-space failed tactic routes). Same benchmark-export gating as `proof_export`/`trajectory_export` |
+| `proof_session` | ONE tool for the whole interactive (tactic-by-tactic) proof-session family, dispatching on an internally-tagged `action` (`start` / `observe` / `tactic_step` / `branch` / `select_node` / `reconstruct` / `promote_to_attempt` / `close` / `export` / `replay`) — exactly like `episode_step`'s typed `action`. Search evidence only, except the `promote_to_attempt` action (and `replay` mode `final_proof`), which resubmits a reconstructed script through the real `attempt_claim` + `episode_step(Solve)` kernel-verification path. See [Interactive Proof Sessions](#interactive-proof-sessions) |
 
 ## Budget Accounting
 
@@ -508,11 +499,15 @@ this represents and what's still missing, see [`docs/roadmap.md`](docs/roadmap.m
 ## Interactive Proof Sessions
 
 Alongside the whole-proof-attempt actions above (`Solve`, `SubmitModule`,
-`Decompose` — all submitted through `episode_step`), the `proof_session_*`
-tool family (issue #161, part of the interactive-proof-session epic #158)
-lets a client work **one** obligation's goal state tactic-by-tactic —
-Pantograph-style live proof-state interaction — instead of only submitting a
-complete proof and finding out afterward whether it checked.
+`Decompose` — all submitted through `episode_step`), the single
+`proof_session` tool (issue #161's family, consolidated into one
+internally-tagged-action tool by issue #183; part of the
+interactive-proof-session epic #158) lets a client work **one** obligation's
+goal state tactic-by-tactic — Pantograph-style live proof-state interaction —
+instead of only submitting a complete proof and finding out afterward whether
+it checked. Every call has the shape
+`proof_session {"action": {"type": "<variant>", ...}}`, exactly like
+`episode_step`'s typed `action`.
 
 ### How this differs from `Solve` / `SubmitModule` / `Decompose`
 
@@ -523,71 +518,71 @@ complete proof and finding out afterward whether it checked.
 - **`Decompose`** splits the current obligation into child sub-lemma
   obligations — still a real, budget-accounted `episode_step` action with no
   session state involved.
-- **`proof_session_*`** tools sit *beside* `episode_step`, not on top of it:
-  they let you explore a goal state one tactic at a time, branch to try
+- **`proof_session`** sits *beside* `episode_step`, not on top of it: its
+  actions let you explore a goal state one tactic at a time, branch to try
   alternatives from an earlier point, and see whether a path closes
   (`is_solved: true`) before committing to a `Solve`/`SubmitModule`
   submission. Nothing in this family changes how `Solve` / `SubmitModule` /
   `Decompose` / `GiveUp` behave, and — with one deliberate exception below —
-  no `proof_session_*` call can change an obligation's status.
+  no `proof_session` action can change an obligation's status.
 
-### What each tool does
+### What each action does
 
-| Tool | What it does | Category |
+| Action (`{"action": {"type": ...}}`) | What it does | Category |
 |---|---|---|
-| `proof_session_start` | Starts a new session against one existing episode obligation, backed by an `InteractiveProofGateway` backend (`mock` or `pantograph`). Returns a `session_id` and the root proof-state node. | Starts a session, records initial evidence |
-| `proof_session_observe` | Reads back the session's currently selected node — goals, local context, proof-state hashes, branch summary. | Read-only, records nothing new |
-| `proof_session_tactic_step` | Applies one tactic to a node. Success records a new child node as evidence and moves the session's selected node forward; failure records a structured diagnostic — also evidence, never discarded, a first-class negative example. | Records evidence, advances working state |
-| `proof_session_branch` | Same mechanics as `proof_session_tactic_step`, framed explicitly as starting a *named* branch from any existing node. Prior branches from the same parent are never deleted or overwritten. | Records evidence, advances working state |
-| `proof_session_select_node` | Moves the session's "selected node" convenience pointer to any existing node in its tree (e.g. to switch which branch you're working). Applies no tactic and records no new evidence. | Working state only |
-| `proof_session_reconstruct` | Builds a Lean tactic script from the root-to-selected-node path and returns it verbatim (raw tactic text for a successful step is *not* durably stored server-side otherwise). `reports_complete` reflects the session's *own* `is_solved` claim — still not a verified proof. | Reconstructs a proof, still search evidence |
-| `proof_session_promote_to_attempt` | **The only tool in this family that can change an obligation's status.** Takes a reconstructed script and resubmits it through the exact same `attempt_claim` + `episode_step(Solve)` path a normal whole-proof submission uses — a real, from-scratch Lean kernel check. | Final verification |
-| `proof_session_close` | Marks a session `closed` / `abandoned` / `superseded`. The session's full trace (every node/step, including failed tactics) stays visible and queryable afterward — closing never deletes anything. | Session lifecycle only |
-| `proof_session_replay` | Replays a session from *persisted DB state* in one of three modes: `trace_only` (pure DB-consistency check, no kernel call), `backend` (re-runs the tactic path against a fresh backend session and compares outcomes/hashes), `final_proof` (resubmits through the real verification path). | `trace_only`/`backend`: evidence check only. `final_proof`: final verification |
-| `proof_session_export` | Exports one session's trace as `public_summary` (aggregate counts only, no tactic/goal text), `audit_archive` (full trace, hashes, reconstructed-script linkage), or `training_export` (per-step records including negative-space failed routes). | Read-only export of already-recorded evidence |
+| `start` | Starts a new session against one existing episode obligation, backed by an `InteractiveProofGateway` backend (`mock` or `pantograph`). Returns a `session_id` and the root proof-state node. | Starts a session, records initial evidence |
+| `observe` | Reads back the session's currently selected node — goals, local context, proof-state hashes, branch summary. | Read-only, records nothing new |
+| `tactic_step` | Applies one tactic to a node. Success records a new child node as evidence and moves the session's selected node forward; failure records a structured diagnostic — also evidence, never discarded, a first-class negative example. | Records evidence, advances working state |
+| `branch` | Same mechanics as `tactic_step`, framed explicitly as starting a *named* branch from any existing node. Prior branches from the same parent are never deleted or overwritten. | Records evidence, advances working state |
+| `select_node` | Moves the session's "selected node" convenience pointer to any existing node in its tree (e.g. to switch which branch you're working). Applies no tactic and records no new evidence. | Working state only |
+| `reconstruct` | Builds a Lean tactic script from the root-to-selected-node path and returns it verbatim (raw tactic text for a successful step is *not* durably stored server-side otherwise). `reports_complete` reflects the session's *own* `is_solved` claim — still not a verified proof. | Reconstructs a proof, still search evidence |
+| `promote_to_attempt` | **The only action in this family that can change an obligation's status.** Takes a reconstructed script and resubmits it through the exact same `attempt_claim` + `episode_step(Solve)` path a normal whole-proof submission uses — a real, from-scratch Lean kernel check. | Final verification |
+| `close` | Marks a session `closed` / `abandoned` / `superseded`. The session's full trace (every node/step, including failed tactics) stays visible and queryable afterward — closing never deletes anything. | Session lifecycle only |
+| `replay` | Replays a session from *persisted DB state* in one of three modes: `trace_only` (pure DB-consistency check, no kernel call), `backend` (re-runs the tactic path against a fresh backend session and compares outcomes/hashes), `final_proof` (resubmits through the real verification path). | `trace_only`/`backend`: evidence check only. `final_proof`: final verification |
+| `export` | Exports one session's trace as `public_summary` (aggregate counts only, no tactic/goal text), `audit_archive` (full trace, hashes, reconstructed-script linkage), or `training_export` (per-step records including negative-space failed routes). | Read-only export of already-recorded evidence |
 
 ### The loop
 
 ```
-proof_session_start
+proof_session {"action": {"type": "start", ...}}
     │  (root node)
     ▼
-proof_session_tactic_step / proof_session_branch / proof_session_select_node   ← repeat, explore, branch
+proof_session {"action": {"type": "tactic_step" / "branch" / "select_node", ...}}   ← repeat, explore, branch
     │  (some node reports is_solved: true)
     ▼
-proof_session_reconstruct                        ← builds a tactic script from root → selected node
+proof_session {"action": {"type": "reconstruct", ...}}          ← builds a tactic script from root → selected node
     │
     ▼
-proof_session_promote_to_attempt                 ← the ONLY step that can change obligation status:
-                                                      attempt_claim + episode_step(Solve) through the
-                                                      real Lean kernel, exactly like a direct Solve call
+proof_session {"action": {"type": "promote_to_attempt", ...}}   ← the ONLY step that can change obligation status:
+                                                                     attempt_claim + episode_step(Solve) through the
+                                                                     real Lean kernel, exactly like a direct Solve call
 ```
 
-`proof_session_replay(mode="final_proof")` is an alternate route to the same
-trust gate for a closed or historical session — it reconstructs and resubmits
-through the same internal `attempt_claim` + `episode_step(Solve)` logic, not a
-second, parallel verification path.
+The `replay` action with `mode="final_proof"` is an alternate route to the
+same trust gate for a closed or historical session — it reconstructs and
+resubmits through the same internal `attempt_claim` + `episode_step(Solve)`
+logic, not a second, parallel verification path.
 
 ### The trust boundary
 
-**Every `proof_session_*` result — a session's state, a tactic-application
+**Every `proof_session` result — a session's state, a tactic-application
 outcome, a reconstructed script, a replay result — is search evidence, never
 proof authority.** A node reporting `is_solved: true` is only the session's
 own internal claim; the deterministic `mock` backend (the only backend that
 actually steps tactics today) closes the first open goal on every
 syntactically nonempty tactic string, without ever asking a real elaborator
 whether that tactic discharges the goal. The only way an interactive session
-can change an obligation's status is `proof_session_reconstruct` followed by
-`proof_session_promote_to_attempt` (or `proof_session_replay(mode=
-"final_proof")`) — both route through the exact same `attempt_claim` +
-`episode_step(Solve)` internal path, the real Lean kernel, that every direct
-`Solve` submission already uses. If a future backend's own elaborator ever
-disagrees with the kernel, the kernel wins, always.
+can change an obligation's status is the `reconstruct` action followed by
+`promote_to_attempt` (or `replay` with `mode="final_proof"`) — both route
+through the exact same `attempt_claim` + `episode_step(Solve)` internal path,
+the real Lean kernel, that every direct `Solve` submission already uses. If a
+future backend's own elaborator ever disagrees with the kernel, the kernel
+wins, always.
 
 Do not report a goal as proved, or an obligation as closer to done, based on
-`proof_session_tactic_step` / `observe` / `branch` / `select_node` /
-`reconstruct` output alone — only a `promote_to_attempt` (or
-`replay(mode="final_proof")`) result backed by a real kernel verdict counts.
+`tactic_step` / `observe` / `branch` / `select_node` / `reconstruct` output
+alone — only a `promote_to_attempt` (or `replay` `mode="final_proof"`) result
+backed by a real kernel verdict counts.
 
 ### Backend choices
 
