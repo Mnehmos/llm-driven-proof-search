@@ -1420,7 +1420,7 @@ pub struct DraftExtractMovesArgs {
     pub moves: Vec<DraftMoveInput>,
 }
 
-#[derive(JsonSchema, Deserialize)]
+#[derive(Debug, Clone, JsonSchema, Serialize, Deserialize)]
 pub enum PlanItemKind {
     #[serde(rename = "concept")] Concept,
     #[serde(rename = "missing_definition")] MissingDefinition,
@@ -1429,7 +1429,7 @@ pub enum PlanItemKind {
     #[serde(rename = "external_citation")] ExternalCitation,
 }
 
-#[derive(JsonSchema, Deserialize)]
+#[derive(Debug, Clone, JsonSchema, Serialize, Deserialize)]
 pub struct SeedPlanItemFromMove {
     pub draft_move_id: String,
     /// What kind of plan item this move becomes — the client decides this,
@@ -1458,7 +1458,7 @@ pub struct FormalizationPlanObserveArgs {
     pub plan_id: String,
 }
 
-#[derive(JsonSchema, Deserialize)]
+#[derive(Debug, Clone, JsonSchema, Serialize, Deserialize)]
 pub enum PlanStatus {
     #[serde(rename = "draft")] Draft,
     #[serde(rename = "active")] Active,
@@ -2244,7 +2244,7 @@ pub struct MathlibSearchLocalArtifactsArgs {
     pub limit: Option<i64>,
 }
 
-#[derive(JsonSchema, Deserialize)]
+#[derive(Debug, Clone, JsonSchema, Serialize, Deserialize)]
 pub enum LibrarianConfidence {
     /// The suggested name matches exactly.
     #[serde(rename = "exact_match")] ExactMatch,
@@ -2268,6 +2268,98 @@ pub struct FormalizationPlanAttachLibrarianResultArgs {
     pub import_module: Option<String>,
     #[serde(default)]
     pub snippet: Option<String>,
+}
+
+/// Issue #184 (epic #182, 2nd consolidation after #183's `proof_session`
+/// pilot): the single `formalization_plan` tool's internally-tagged action
+/// enum, mirroring `TypedAction`/`ProofSessionAction`'s shape exactly
+/// (`#[serde(tag = "type", rename_all = "snake_case")]`). Each variant's
+/// fields are the corresponding pre-#184 flat `FormalizationPlan*Args`
+/// struct's fields verbatim — those structs remain (unchanged) as what the
+/// `do_formalization_plan_*` handlers deserialize; this enum is only the
+/// MCP-layer dispatch shape. As with `ProofSessionAction`, there are NO
+/// shared wrapper fields: `create` has no `plan_id` (it mints one), and the
+/// attach/promote variants key on `plan_item_id` rather than `plan_id`, so
+/// every field stays per-variant.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FormalizationPlanAction {
+    Create {
+        problem_version_id: String,
+        title: String,
+        #[serde(default)]
+        source_draft_id: Option<String>,
+        /// Draft moves (each must belong to source_draft_id) to seed as the
+        /// plan's initial items. Each selected move is marked promoted.
+        #[serde(default)]
+        seed_items_from_draft_moves: Vec<SeedPlanItemFromMove>,
+        #[serde(default)]
+        risk_flags: Vec<String>,
+    },
+    Observe {
+        plan_id: String,
+    },
+    Update {
+        plan_id: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        status: Option<PlanStatus>,
+        #[serde(default)]
+        risk_flags: Option<Vec<String>>,
+    },
+    AddItem {
+        plan_id: String,
+        kind: PlanItemKind,
+        description: String,
+        #[serde(default)]
+        mathlib_candidate_names: Vec<String>,
+        /// Issue #12: optional growth-rate role labeling this step distinctly from
+        /// a finite sanity check — growth_lower_bound / growth_upper_bound /
+        /// infinite_family_extraction / sufficiently_large_threshold /
+        /// limit_comparison.
+        #[serde(default)]
+        asymptotic_role: Option<String>,
+    },
+    AttachLookup {
+        plan_item_id: String,
+        /// Mirrored verbatim from a lean_declaration_lookup result's `status`
+        /// field (e.g. "available", "not_available_under_current_manifest",
+        /// "not_in_current_import_scope", "unknown_declaration",
+        /// "environment_error"). This attaches that result as a hint; it is not
+        /// re-validated or re-run here.
+        lookup_status: String,
+        #[serde(default)]
+        matched_name: Option<String>,
+        #[serde(default)]
+        diagnostics: Option<String>,
+    },
+    PromoteItemToObligation {
+        plan_item_id: String,
+        episode_id: String,
+        /// Must already exist (created through a normal Decompose action via
+        /// episode_step) and belong to episode_id. This tool only records the
+        /// link — it never creates the obligation itself.
+        obligation_id: String,
+    },
+    AttachLibrarianResult {
+        plan_item_id: String,
+        declaration_name: String,
+        confidence: LibrarianConfidence,
+        #[serde(default)]
+        import_module: Option<String>,
+        #[serde(default)]
+        snippet: Option<String>,
+    },
+}
+
+/// Issue #184: args for the single consolidated `formalization_plan` tool.
+/// The entire payload lives on the internally-tagged `action` — see
+/// `FormalizationPlanAction`'s doc for why there are no shared wrapper
+/// fields.
+#[derive(JsonSchema, Deserialize)]
+pub struct FormalizationPlanArgs {
+    pub action: FormalizationPlanAction,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -7695,6 +7787,423 @@ impl ChatDbMcp {
             "passed": promote_json["episode_step_result"]["accepted"].as_bool().unwrap_or(false),
         }))
     }
+    // -----------------------------------------------------------------
+    // Issue #184 (epic #182): Level 3 formalization-plan family. Advisory
+    // planning scaffolding only — nothing here is proof authority, and
+    // do_formalization_plan_promote_item_to_obligation is the only handler
+    // that even touches episode_obligations (it records a link to an
+    // obligation that ALREADY exists; it never creates one).
+    // -----------------------------------------------------------------
+
+    /// Issue #184 (epic #182): the single `formalization_plan` tool's
+    /// dispatcher. Deserializes `FormalizationPlanArgs`, matches on the
+    /// internally-tagged action, and routes to the per-action handlers below
+    /// UNCHANGED (each extracted verbatim from the former inline match arm of
+    /// the same name). Each arm re-serializes the variant back to JSON and
+    /// passes that through: the variant's field names are identical to the
+    /// old flat `FormalizationPlan*Args` shape by construction, and the extra
+    /// internal `"type"` tag is ignored by the handlers' serde derives. This
+    /// transitional double-serialization is deliberate — it keeps the seven
+    /// `do_formalization_plan_*` handlers byte-identical (the epic's key
+    /// risk-reducer) at negligible cost.
+    async fn do_formalization_plan(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: FormalizationPlanArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize formalization_plan action: {}", e)))?;
+        match &args.action {
+            FormalizationPlanAction::Create { .. } => self.do_formalization_plan_create(inner).await,
+            FormalizationPlanAction::Observe { .. } => self.do_formalization_plan_observe(inner).await,
+            FormalizationPlanAction::Update { .. } => self.do_formalization_plan_update(inner).await,
+            FormalizationPlanAction::AddItem { .. } => self.do_formalization_plan_add_item(inner).await,
+            FormalizationPlanAction::AttachLookup { .. } => self.do_formalization_plan_attach_lookup(inner).await,
+            FormalizationPlanAction::PromoteItemToObligation { .. } => self.do_formalization_plan_promote_item_to_obligation(inner).await,
+            FormalizationPlanAction::AttachLibrarianResult { .. } => self.do_formalization_plan_attach_librarian_result(inner).await,
+        }
+    }
+
+    async fn do_formalization_plan_create(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: FormalizationPlanCreateArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let mut conn = self.conn.lock().await;
+        let pv_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM problem_versions WHERE id = ?1", [&args.problem_version_id], |row| row.get(0),
+        ).map_err(rs)?;
+        if pv_exists == 0 {
+            return Err(mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id)));
+        }
+        if let Some(draft_id) = &args.source_draft_id {
+            let draft_pv_id: Option<String> = conn.query_row(
+                "SELECT problem_version_id FROM drafts WHERE id = ?1", [draft_id], |row| row.get(0),
+            ).optional().map_err(rs)?;
+            let Some(draft_pv_id) = draft_pv_id else {
+                return Err(mcp_invalid_params(format!("unknown source_draft_id: {}", draft_id)));
+            };
+            if draft_pv_id != args.problem_version_id {
+                return Err(mcp_invalid_params(format!("source_draft_id {} belongs to a different problem_version", draft_id)));
+            }
+        }
+        // Self-review finding: the same draft_move_id appearing twice in
+        // one call would pass per-move validation (each check sees the
+        // not-yet-committed state) and then get promoted into TWO
+        // separate plan items, silently orphaning the first — reject the
+        // whole batch up front instead.
+        {
+            let mut seen = std::collections::HashSet::new();
+            for seed in &args.seed_items_from_draft_moves {
+                if !seen.insert(&seed.draft_move_id) {
+                    return Err(mcp_invalid_params(format!("draft_move_id {} appears more than once in seed_items_from_draft_moves", seed.draft_move_id)));
+                }
+            }
+        }
+        // Every seed move validated BEFORE any row is written, so a bad
+        // move in the batch never leaves a partially-seeded plan behind.
+        for seed in &args.seed_items_from_draft_moves {
+            let owner: Option<(String, Option<String>)> = conn.query_row(
+                "SELECT draft_id, promoted_plan_item_id FROM draft_moves WHERE id = ?1",
+                [&seed.draft_move_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).optional().map_err(rs)?;
+            let Some((owning_draft_id, already_promoted)) = owner else {
+                return Err(mcp_invalid_params(format!("unknown draft_move_id: {}", seed.draft_move_id)));
+            };
+            if Some(&owning_draft_id) != args.source_draft_id.as_ref() {
+                return Err(mcp_invalid_params(format!("draft_move {} does not belong to source_draft_id", seed.draft_move_id)));
+            }
+            if already_promoted.is_some() {
+                return Err(mcp_invalid_params(format!("draft_move {} was already promoted into a plan item", seed.draft_move_id)));
+            }
+        }
+
+        let tx = conn.transaction().map_err(rs)?;
+        let plan_id = Uuid::new_v4().to_string();
+        let risk_flags_json = serde_json::to_string(&args.risk_flags).unwrap();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO formalization_plans (id, problem_version_id, source_draft_id, title, status, risk_flags_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6, ?6)",
+            (&plan_id, &args.problem_version_id, &args.source_draft_id, &args.title, &risk_flags_json, &now),
+        ).map_err(rs)?;
+
+        let mut created_item_ids = Vec::new();
+        for (i, seed) in args.seed_items_from_draft_moves.iter().enumerate() {
+            let description: String = tx.query_row(
+                "SELECT description FROM draft_moves WHERE id = ?1", [&seed.draft_move_id], |row| row.get(0),
+            ).map_err(rs)?;
+            let item_id = Uuid::new_v4().to_string();
+            let kind_str = plan_item_kind_str(&seed.kind);
+            tx.execute(
+                "INSERT INTO formalization_plan_items (
+                    id, plan_id, item_order, kind, description, mathlib_coverage_status,
+                    mathlib_candidate_names_json, lookup_result_json, promoted_obligation_id, status, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, 'unknown', '[]', NULL, NULL, 'open', ?6)",
+                (&item_id, &plan_id, i as i64, kind_str, &description, &now),
+            ).map_err(rs)?;
+            tx.execute(
+                "UPDATE draft_moves SET promoted_plan_item_id = ?1 WHERE id = ?2",
+                (&item_id, &seed.draft_move_id),
+            ).map_err(rs)?;
+            created_item_ids.push(item_id);
+        }
+        tx.commit().map_err(rs)?;
+
+        let res = serde_json::json!({
+            "plan_id": plan_id,
+            "status": "draft",
+            "seeded_item_ids": created_item_ids,
+            "created_at": now,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_formalization_plan_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: FormalizationPlanObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let plan: Option<(String, Option<String>, String, String, String, String, String)> = conn.query_row(
+            "SELECT problem_version_id, source_draft_id, title, status, risk_flags_json, created_at, updated_at
+             FROM formalization_plans WHERE id = ?1",
+            [&args.plan_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+        ).optional().map_err(rs)?;
+        let Some((pv_id, source_draft_id, title, status, risk_flags_json, created_at, updated_at)) = plan else {
+            return Err(mcp_invalid_params(format!("unknown plan_id: {}", args.plan_id)));
+        };
+
+        let mut stmt = conn.prepare(
+            "SELECT id, item_order, kind, description, mathlib_coverage_status, mathlib_candidate_names_json,
+                    lookup_result_json, promoted_obligation_id, status
+             FROM formalization_plan_items WHERE plan_id = ?1 ORDER BY item_order ASC"
+        ).map_err(rs)?;
+        let items: Vec<serde_json::Value> = stmt.query_map([&args.plan_id], |row| {
+            let lookup_result_json: Option<String> = row.get(6)?;
+            Ok(serde_json::json!({
+                "plan_item_id": row.get::<_, String>(0)?,
+                "item_order": row.get::<_, i64>(1)?,
+                "kind": row.get::<_, String>(2)?,
+                "description": row.get::<_, String>(3)?,
+                "mathlib_coverage_status": row.get::<_, String>(4)?,
+                "mathlib_candidate_names": serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(5)?).unwrap_or(serde_json::Value::Array(vec![])),
+                "lookup_result": lookup_result_json.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+                "promoted_obligation_id": row.get::<_, Option<String>>(7)?,
+                "status": row.get::<_, String>(8)?,
+            }))
+        }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+
+        let res = serde_json::json!({
+            "plan_id": args.plan_id,
+            "problem_version_id": pv_id,
+            "source_draft_id": source_draft_id,
+            "title": title,
+            "status": status,
+            "risk_flags": serde_json::from_str::<serde_json::Value>(&risk_flags_json).unwrap_or(serde_json::Value::Array(vec![])),
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "items": items,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_formalization_plan_update(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: FormalizationPlanUpdateArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let current: Option<(String, String, String)> = conn.query_row(
+            "SELECT title, status, risk_flags_json FROM formalization_plans WHERE id = ?1",
+            [&args.plan_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional().map_err(rs)?;
+        let Some((cur_title, cur_status, cur_risk_flags_json)) = current else {
+            return Err(mcp_invalid_params(format!("unknown plan_id: {}", args.plan_id)));
+        };
+
+        let new_title = args.title.unwrap_or(cur_title);
+        let new_status = match args.status {
+            Some(PlanStatus::Draft) => "draft".to_string(),
+            Some(PlanStatus::Active) => "active".to_string(),
+            Some(PlanStatus::Completed) => "completed".to_string(),
+            Some(PlanStatus::Abandoned) => "abandoned".to_string(),
+            None => cur_status,
+        };
+        let new_risk_flags_json = match args.risk_flags {
+            Some(flags) => serde_json::to_string(&flags).unwrap(),
+            None => cur_risk_flags_json,
+        };
+        let now = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "UPDATE formalization_plans SET title = ?1, status = ?2, risk_flags_json = ?3, updated_at = ?4 WHERE id = ?5",
+            (&new_title, &new_status, &new_risk_flags_json, &now, &args.plan_id),
+        ).map_err(rs)?;
+
+        let res = serde_json::json!({
+            "plan_id": args.plan_id,
+            "title": new_title,
+            "status": new_status,
+            "updated_at": now,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_formalization_plan_add_item(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: FormalizationPlanAddItemArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let plan_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM formalization_plans WHERE id = ?1", [&args.plan_id], |row| row.get(0),
+        ).map_err(rs)?;
+        if plan_exists == 0 {
+            return Err(mcp_invalid_params(format!("unknown plan_id: {}", args.plan_id)));
+        }
+
+        if let Some(role) = &args.asymptotic_role {
+            validate_one_of("asymptotic_role", role, &["growth_lower_bound", "growth_upper_bound", "infinite_family_extraction", "sufficiently_large_threshold", "limit_comparison"])?;
+        }
+
+        let next_order: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(item_order), -1) + 1 FROM formalization_plan_items WHERE plan_id = ?1", [&args.plan_id], |row| row.get(0),
+        ).map_err(rs)?;
+        let kind_str = plan_item_kind_str(&args.kind);
+        let candidate_names_json = serde_json::to_string(&args.mathlib_candidate_names).unwrap();
+        let item_id = Uuid::new_v4().to_string();
+        let created_at = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO formalization_plan_items (
+                id, plan_id, item_order, kind, description, mathlib_coverage_status,
+                mathlib_candidate_names_json, lookup_result_json, promoted_obligation_id, asymptotic_role, status, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'unknown', ?6, NULL, NULL, ?7, 'open', ?8)",
+            (&item_id, &args.plan_id, next_order, kind_str, &args.description, &candidate_names_json, &args.asymptotic_role, &created_at),
+        ).map_err(rs)?;
+
+        let res = serde_json::json!({
+            "plan_item_id": item_id,
+            "item_order": next_order,
+            "kind": kind_str,
+            "asymptotic_role": args.asymptotic_role,
+            "created_at": created_at,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_formalization_plan_attach_lookup(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: FormalizationPlanAttachLookupArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let item_status: Option<String> = conn.query_row(
+            "SELECT status FROM formalization_plan_items WHERE id = ?1", [&args.plan_item_id], |row| row.get(0),
+        ).optional().map_err(rs)?;
+        let Some(item_status) = item_status else {
+            return Err(mcp_invalid_params(format!("unknown plan_item_id: {}", args.plan_item_id)));
+        };
+        if item_status != "open" {
+            return Err(mcp_invalid_params(format!("plan_item {} is not open (status={}) — cannot attach a lookup to a promoted/dropped item", args.plan_item_id, item_status)));
+        }
+
+        // Mirrors lean_declaration_lookup's status vocabulary: a hint
+        // mapping, not a re-check — the raw status/diagnostics are
+        // stored verbatim too, in lookup_result_json.
+        let coverage_status = match args.lookup_status.as_str() {
+            "available" => "found",
+            "unknown_declaration" => "not_found",
+            "not_available_under_current_manifest" | "not_in_current_import_scope" => "partial",
+            _ => "unknown",
+        };
+        let lookup_result_json = serde_json::json!({
+            "lookup_status": args.lookup_status,
+            "matched_name": args.matched_name,
+            "diagnostics": args.diagnostics,
+        }).to_string();
+
+        conn.execute(
+            "UPDATE formalization_plan_items SET mathlib_coverage_status = ?1, lookup_result_json = ?2 WHERE id = ?3",
+            (coverage_status, &lookup_result_json, &args.plan_item_id),
+        ).map_err(rs)?;
+
+        let res = serde_json::json!({
+            "plan_item_id": args.plan_item_id,
+            "mathlib_coverage_status": coverage_status,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_formalization_plan_promote_item_to_obligation(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: FormalizationPlanPromoteItemToObligationArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let item_status: Option<String> = conn.query_row(
+            "SELECT status FROM formalization_plan_items WHERE id = ?1", [&args.plan_item_id], |row| row.get(0),
+        ).optional().map_err(rs)?;
+        let Some(item_status) = item_status else {
+            return Err(mcp_invalid_params(format!("unknown plan_item_id: {}", args.plan_item_id)));
+        };
+        if item_status != "open" {
+            return Err(mcp_invalid_params(format!("plan_item {} is not open (status={}) — already promoted or dropped", args.plan_item_id, item_status)));
+        }
+        // The obligation must be real (created through a normal
+        // Decompose action via episode_step) and belong to the given
+        // episode — this tool only records the link, never creates it.
+        let obligation_episode: Option<String> = conn.query_row(
+            "SELECT episode_id FROM episode_obligations WHERE id = ?1", [&args.obligation_id], |row| row.get(0),
+        ).optional().map_err(rs)?;
+        let Some(obligation_episode) = obligation_episode else {
+            return Err(mcp_invalid_params(format!("unknown obligation_id: {}", args.obligation_id)));
+        };
+        if obligation_episode != args.episode_id {
+            return Err(mcp_invalid_params(format!("obligation {} does not belong to episode {}", args.obligation_id, args.episode_id)));
+        }
+
+        // Self-review finding: a partial UNIQUE index on
+        // promoted_obligation_id (schema_v1.rs) stops two plan items
+        // from both claiming the same real obligation — enforced at
+        // the DB layer, not just by this handler's own logic.
+        conn.execute(
+            "UPDATE formalization_plan_items SET status = 'promoted', promoted_obligation_id = ?1 WHERE id = ?2",
+            (&args.obligation_id, &args.plan_item_id),
+        ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
+            mcp_invalid_params(format!("obligation_id {} is already linked to a different plan item", args.obligation_id))
+        } else {
+            rs(e)
+        })?;
+
+        let res = serde_json::json!({
+            "plan_item_id": args.plan_item_id,
+            "obligation_id": args.obligation_id,
+            "status": "promoted",
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_formalization_plan_attach_librarian_result(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: FormalizationPlanAttachLibrarianResultArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let row: Option<(String, String)> = conn.query_row(
+            "SELECT status, mathlib_candidate_names_json FROM formalization_plan_items WHERE id = ?1",
+            [&args.plan_item_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional().map_err(rs)?;
+        let Some((item_status, candidate_names_json)) = row else {
+            return Err(mcp_invalid_params(format!("unknown plan_item_id: {}", args.plan_item_id)));
+        };
+        if item_status != "open" {
+            return Err(mcp_invalid_params(format!("plan_item {} is not open (status={}) — cannot attach a librarian result to a promoted/dropped item", args.plan_item_id, item_status)));
+        }
+
+        let confidence_str = match args.confidence {
+            LibrarianConfidence::ExactMatch => "exact_match",
+            LibrarianConfidence::NearbyName => "nearby_name",
+            LibrarianConfidence::TypeMatch => "type_match",
+            LibrarianConfidence::UsageExample => "usage_example",
+            LibrarianConfidence::Unknown => "unknown",
+        };
+        // Same vocabulary formalization_plan_attach_lookup writes into
+        // mathlib_coverage_status, so a plan item's coverage reads
+        // consistently regardless of which tool populated it.
+        let coverage_status = match args.confidence {
+            LibrarianConfidence::ExactMatch => "found",
+            LibrarianConfidence::NearbyName | LibrarianConfidence::TypeMatch | LibrarianConfidence::UsageExample => "partial",
+            LibrarianConfidence::Unknown => "unknown",
+        };
+
+        // Accumulate candidate names across multiple attached results
+        // (deduped) rather than overwriting — a plan item can
+        // reasonably collect several librarian suggestions before one
+        // is chosen. The full latest result (confidence/import/snippet)
+        // still overwrites lookup_result_json — see the doc comment on
+        // formalization_plan_attach_lookup for the same "latest wins"
+        // convention on that field.
+        let mut candidate_names: Vec<String> = serde_json::from_str(&candidate_names_json).unwrap_or_default();
+        if !candidate_names.contains(&args.declaration_name) {
+            candidate_names.push(args.declaration_name.clone());
+        }
+        let candidate_names_json = serde_json::to_string(&candidate_names).unwrap();
+        let lookup_result_json = serde_json::json!({
+            "source": "librarian",
+            "declaration_name": args.declaration_name,
+            "confidence": confidence_str,
+            "import_module": args.import_module,
+            "snippet": args.snippet,
+        }).to_string();
+
+        conn.execute(
+            "UPDATE formalization_plan_items SET mathlib_coverage_status = ?1, mathlib_candidate_names_json = ?2, lookup_result_json = ?3 WHERE id = ?4",
+            (coverage_status, &candidate_names_json, &lookup_result_json, &args.plan_item_id),
+        ).map_err(rs)?;
+
+        let res = serde_json::json!({
+            "plan_item_id": args.plan_item_id,
+            "mathlib_coverage_status": coverage_status,
+            "mathlib_candidate_names": candidate_names,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
 }
 
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
@@ -7739,12 +8248,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<DraftCreateArgs>("draft_create", "Register an informal Draft artifact (issue #23) — untrusted planning/reasoning content preserved before formalization begins. A draft can never mark anything proved"),
             make_tool::<DraftObserveArgs>("draft_observe", "Read back a draft's content and any moves recorded against it"),
             make_tool::<DraftExtractMovesArgs>("draft_extract_moves", "Record structured moves (construction, auxiliary_lemma, case_split, induction, reduction, bijection, counterexample_search, asymptotic_step, external_citation, unknown) the external agent identified in a draft. Metadata only — moves are not obligations until explicitly promoted into a formalization plan item"),
-            make_tool::<FormalizationPlanCreateArgs>("formalization_plan_create", "Create a formalization plan (issue #10) for a problem, optionally seeded from selected moves of an existing draft. Tracks required concepts/definitions/lemmas/modules and their Mathlib coverage status — advisory scaffolding, not a proof authority"),
-            make_tool::<FormalizationPlanObserveArgs>("formalization_plan_observe", "Read back a formalization plan and all its items"),
-            make_tool::<FormalizationPlanUpdateArgs>("formalization_plan_update", "Update a formalization plan's title, status, or risk flags"),
-            make_tool::<FormalizationPlanAddItemArgs>("formalization_plan_add_item", "Add a planning item (concept, missing_definition, missing_lemma, planned_module, or external_citation) to an existing formalization plan"),
-            make_tool::<FormalizationPlanAttachLookupArgs>("formalization_plan_attach_lookup", "Attach a lean_declaration_lookup result to a plan item, updating its Mathlib coverage status (found/not_found/partial/unknown). A hint attachment, not a re-check — never changes proof status"),
-            make_tool::<FormalizationPlanPromoteItemToObligationArgs>("formalization_plan_promote_item_to_obligation", "Link a plan item to an episode_obligation that ALREADY EXISTS (created through a normal Decompose action via episode_step). Records the link only — this tool never creates the obligation itself, so it can never bypass the episode's budget/CAS accounting"),
+            make_tool::<FormalizationPlanArgs>("formalization_plan", "Issue #184: ONE tool for the entire Level 3 formalization-plan family (issue #10) — create/inspect/maintain a formalization plan (required concepts, definitions, lemmas, modules and their Mathlib coverage status) for a problem. Advisory scaffolding, not a proof authority: nothing here can mark anything proved. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"problem_version_id\":\"..\",\"title\":\"..\"} (+ optional source_draft_id, seed_items_from_draft_moves [{\"draft_move_id\":\"..\",\"kind\":\"..\"}, ...], risk_flags — creates a plan, optionally seeded from selected moves of an existing draft; every seed move must belong to source_draft_id, not be already promoted, and the whole batch is validated before any row is written, so a bad move never leaves a partially-seeded plan behind; each seeded move is marked promoted) | {\"type\":\"observe\",\"plan_id\":\"..\"} (read-only: the plan and all its items with coverage/promotion status) | {\"type\":\"update\",\"plan_id\":\"..\"} (+ optional title, status \"draft\"|\"active\"|\"completed\"|\"abandoned\", risk_flags — partial in-place update: an omitted field keeps its current value) | {\"type\":\"add_item\",\"plan_id\":\"..\",\"kind\":\"concept\"|\"missing_definition\"|\"missing_lemma\"|\"planned_module\"|\"external_citation\",\"description\":\"..\"} (+ optional mathlib_candidate_names, asymptotic_role — appends one planning item) | {\"type\":\"attach_lookup\",\"plan_item_id\":\"..\",\"lookup_status\":\"..\"} (+ optional matched_name, diagnostics — attach a lean_declaration_lookup result to an OPEN plan item, mapping its status verbatim into the item's Mathlib coverage status found/not_found/partial/unknown. A hint attachment, not a re-check — nothing is re-validated or re-run, and it never changes proof status) | {\"type\":\"promote_item_to_obligation\",\"plan_item_id\":\"..\",\"episode_id\":\"..\",\"obligation_id\":\"..\"} (link an open plan item to an episode_obligation that ALREADY EXISTS — created through a normal Decompose action via episode_step and verified to belong to the given episode. Records the link only — this action never creates the obligation itself, so it can never bypass the episode's budget/CAS accounting; a DB-level UNIQUE index stops two plan items from claiming the same obligation) | {\"type\":\"attach_librarian_result\",\"plan_item_id\":\"..\",\"declaration_name\":\"..\",\"confidence\":\"exact_match\"|\"nearby_name\"|\"type_match\"|\"usage_example\"|\"unknown\"} (+ optional import_module, snippet — attach a mathlib_search_declarations/mathlib_search_local_artifacts result to an OPEN plan item: confidence is the CALLER's own assessment of its search hit, mapped into the same coverage vocabulary attach_lookup writes (exact_match→found, nearby_name/type_match/usage_example→partial, unknown→unknown); candidate declaration names ACCUMULATE deduped across attachments while the full latest result overwrites lookup_result_json, latest wins. A hint attachment, not a re-check — never changes proof status)"),
             make_tool::<ResearchDossierCreateArgs>("research_dossier_create", "Create a Level 4 research dossier, optionally linked to a problem_version, an episode, or neither. Metadata only: never changes proof, fidelity, budget, or benchmark state"),
             make_tool::<ResearchDossierObserveArgs>("research_dossier_observe", "Read a research dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets"),
             make_tool::<ResearchNodeAddArgs>("research_node_add", "Add a typed research node (definition/proposition/lemma/theorem/remark/reference/open_gap) to a dossier. Trust status is explicit and never implies kernel verification unless linked to a real verified lemma"),
@@ -7789,7 +8293,6 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ExpertReviewObserveArgs>("expert_review_observe", "Read expert-review ledger entries, filtered by dossier, polymorphic target (kind+id together), and/or reviewer role. Revoked reviews are omitted unless include_revoked=true. Read-only"),
             make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
             make_tool::<MathlibSearchLocalArtifactsArgs>("mathlib_search_local_artifacts", "Search THIS LLM-Driven Proof Search Environment instance's own previously-verified theorem/def names for a substring match — a local usage_example precedent, not a Mathlib-library result"),
-            make_tool::<FormalizationPlanAttachLibrarianResultArgs>("formalization_plan_attach_librarian_result", "Attach a mathlib_search_declarations/mathlib_search_local_artifacts result to a formalization plan item, updating its Mathlib coverage status. A hint attachment, not a re-check — never changes proof status"),
             make_tool::<RunEnvelopeCreateArgs>("run_envelope_create", "Create a run envelope (issues #34/#38): who/what produced a set of episodes — host, model, mode (development/evaluation/benchmark/private_audit/public_report), and host-side cost accounting LLM-Driven Proof Search Environment itself cannot observe. Purely descriptive metadata; never affects proof status"),
             make_tool::<RunEnvelopeUpdateArgs>("run_envelope_update", "Update a run envelope's host-side cost fields or notes after the fact. Append-only under the hood (issue #46): a cost correction appends an immutable observation, so the prior value stays queryable via run_envelope_observe"),
             make_tool::<RunEnvelopeCostObservationAddArgs>("run_envelope_cost_observation_add", "Append an auditable, append-only host-side cost observation to a run envelope (issue #46). Never overwrites a prior observation — the previous value stays queryable; sets the envelope's current selected cost figure while preserving the full supersedes chain"),
@@ -7873,7 +8376,7 @@ impl ServerHandler for ChatDbMcp {
                         "external_sessions_warning": "A Pantograph install you run yourself, a bare `lake env lean` REPL, or ANY other proof-state tool driven OUTSIDE the proof_session tool produces NO trace in this environment at all — proof_session only records steps you route through it, and there is no separate ingestion path for an externally-run session's history. If you explore a goal outside MCP, either replay the tactic decisions that mattered through proof_session's tactic_step/branch actions so they become real, queryable search evidence here, or skip the session machinery entirely and submit the final result straight through Solve/SubmitModule (which never requires an interactive session at all). An external session succeeding tells this environment nothing until its result is submitted through one of those two tracked paths.",
                         "backend_availability": "Two `backend` values are recognized by the start action. \"mock\" (issue #161, the default) is deterministic and always available, but has no real Lean elaborator behind it — every nonempty tactic just closes the first open goal, so its outcomes carry no elaboration evidence. \"pantograph\" (issue #166) is a RECOGNIZED value, not yet a USABLE one: it runs a real PATH/lake-manifest/toolchain compatibility probe against this environment and always fails closed today, because this prototype has no process-spawning/IPC implementation behind it — check environment_describe's pantograph_available/pantograph_reason flags for exactly why, in this environment, right now. Any other `backend` value is rejected outright."
                     },
-                    "lookup_and_planning_tools": "Use lean_declaration_lookup, mathlib_search_declarations, mathlib_search_local_artifacts, proof_pattern_search, draft_create/draft_extract_moves, and formalization_plan_* tools rather than an external side channel for the same job during a tracked run — that keeps the reasoning trail inside the environment's own ledger, replayable and auditable later.",
+                    "lookup_and_planning_tools": "Use lean_declaration_lookup, mathlib_search_declarations, mathlib_search_local_artifacts, proof_pattern_search, draft_create/draft_extract_moves, and the formalization_plan tool (one tool since issue #184, dispatching on an internally-tagged action: {\"action\": {\"type\": \"create\" | \"observe\" | \"update\" | \"add_item\" | \"attach_lookup\" | \"promote_item_to_obligation\" | \"attach_librarian_result\", ...}}) rather than an external side channel for the same job during a tracked run — that keeps the reasoning trail inside the environment's own ledger, replayable and auditable later.",
                     "cost_boundary": "cost_micros (episode_step), model_call_reserve/model_call_settle, and the episode budget ledger are enforcement/accounting mechanisms for this environment's MCP-visible budget, not proof-soundness claims. episode_step.cost_micros is reserved before a step executes; model_call_reserve immediately reserves bounded episode budget; model_call_settle adjusts only the reserved-vs-actual delta or refunds a voided reservation. They are NOT the total cost of running you (the external host/model). Host-side reasoning cost (tokens spent thinking, editing, or calling other tools before or around an MCP call) is invisible to LLM-Driven Proof Search Environment entirely unless you report it through model_call_reserve/model_call_settle. Never present MCP-visible cost_micros as if it were the complete cost of a run.",
                     "benchmark_mode": "Development/exploratory use and a frozen benchmark run (e.g. PutnamBench) are different modes with different rules. In benchmark mode: every candidate attempt must flow through episode_step (see proof_attempts above) so the run counts as valid evidence, not just a trophy case; and public reports of benchmark results follow a redaction policy — a public summary must not contain completed proof source by default, only aggregate status/hashes/replay information. Check the benchmark documentation (docs/benchmarks/) for the exact export mode to use before publishing any benchmark result.",
                     "forbidden_or_discouraged": [
@@ -7951,8 +8454,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 90,
-                        "total_tool_count": 90,
+                        "classified_tool_count": 84,
+                        "total_tool_count": 84,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -8148,74 +8651,14 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
                             },
-                            "formalization_plan_create": {
-                                "side_effect": "mutating — inserts a formalization_plans row and, when seeding from draft moves, formalization_plan_items rows plus UPDATEs on draft_moves.promoted_plan_item_id, all in one transaction (validates every seed move before writing any row, so a bad move in the batch never leaves a partially-seeded plan behind)",
-                                "trust_level": "untrusted_input — a plan is advisory scaffolding the caller proposes; nothing here is proof-checked",
-                                "cost_surface": "none",
+                            "formalization_plan": {
+                                "side_effect": "mixed by action (issue #184: one tool consolidating the former seven formalization_plan_* tools; per-action semantics unchanged): observe is read_only; create inserts a formalization_plans row and, when seeding from draft moves, formalization_plan_items rows plus UPDATEs on draft_moves.promoted_plan_item_id, all in one transaction (validates every seed move before writing any row, so a bad move in the batch never leaves a partially-seeded plan behind); update overwrites a plan's title/status/risk_flags_json IN PLACE (partial update: an omitted field keeps its current value rather than being cleared); add_item inserts a formalization_plan_items row; attach_lookup and attach_librarian_result update one item's mathlib_coverage_status/lookup_result_json (attach_librarian_result additionally accumulates mathlib_candidate_names_json deduped, not overwritten), both rejecting a non-'open' item (already promoted/dropped) rather than silently overwriting settled state; promote_item_to_obligation sets one item's status/promoted_obligation_id — the ONLY action that even touches obligation linkage, and it links to an obligation that ALREADY exists (a partial UNIQUE index on promoted_obligation_id in schema_v1.rs stops two plan items from claiming the same real obligation, enforced at the DB layer rather than only the handler's logic)",
+                                "trust_level": "mixed: create/update/add_item are untrusted_input — a plan is advisory scaffolding the caller proposes, status transitions (draft/active/completed/abandoned) are caller-asserted, and observe is that same untrusted input read back with no verification layer; attach_lookup is an mcp_generated hint attachment, not a re-check — it records what lean_declaration_lookup already reported without re-verifying anything; attach_librarian_result's confidence tier (exact_match/nearby_name/type_match/usage_example/unknown) is untrusted_input (the caller's own assessment of ITS search result) though the underlying search is over LLM-Driven Proof Search Environment's own real data (mathlib_search_declarations/mathlib_search_local_artifacts); promote_item_to_obligation is verifier_backed linkage, not creation: it independently confirms the obligation_id already exists in episode_obligations AND belongs to the given episode_id before recording the link — it never creates the obligation itself, so it can never bypass the episode's real budget/CAS accounting",
+                                "cost_surface": "none for every action (attach_lookup/attach_librarian_result: none directly — the real cost was already paid by the lean_declaration_lookup/librarian-search call being attached)",
                                 "benchmark_safety": "safe_public_output — planning metadata, not a proof artifact",
-                                "replayability": "deterministic",
+                                "replayability": "deterministic for every action EXCEPT update, which is NOT replayable in the audit sense — like run_envelope_update, it overwrites in place with no history of prior title/status/risk_flags values",
                                 "source_code_impact": "no_source_change",
-                                "artifact_risk": "none — advisory scaffolding, explicitly not a proof authority",
-                                "required_run_mode": "any"
-                            },
-                            "formalization_plan_observe": {
-                                "side_effect": "read_only",
-                                "trust_level": "untrusted_input pass-through — reads back exactly what was asserted at creation/update, no verification layer",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "formalization_plan_update": {
-                                "side_effect": "mutating — overwrites a plan's title/status/risk_flags_json IN PLACE (partial update: an omitted field keeps its current value rather than being cleared)",
-                                "trust_level": "untrusted_input — status transitions (draft/active/completed/abandoned) are caller-asserted, not derived from any verified state",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "NOT replayable in the audit sense — like run_envelope_update, this overwrites in place with no history of prior title/status/risk_flags values",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "formalization_plan_add_item": {
-                                "side_effect": "mutating — inserts a formalization_plan_items row",
-                                "trust_level": "untrusted_input",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "formalization_plan_attach_lookup": {
-                                "side_effect": "mutating — updates one item's mathlib_coverage_status/lookup_result_json; rejects a non-'open' item (already promoted/dropped) rather than silently overwriting settled state",
-                                "trust_level": "mcp_generated hint attachment, not a re-check — this tool records what lean_declaration_lookup already reported, it doesn't re-verify anything itself",
-                                "cost_surface": "none directly (the real cost was already paid by the lean_declaration_lookup call being attached)",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none — never changes proof status, only planning metadata",
-                                "required_run_mode": "any"
-                            },
-                            "formalization_plan_promote_item_to_obligation": {
-                                "side_effect": "mutating — sets one item's status/promoted_obligation_id; a partial UNIQUE index on promoted_obligation_id (schema_v1.rs) stops two plan items from claiming the same real obligation, enforced at the DB layer rather than only this handler's logic",
-                                "trust_level": "verifier_backed linkage, not creation: the tool independently confirms the obligation_id already exists in episode_obligations AND belongs to the given episode_id before recording the link — it never creates the obligation itself, so it can never bypass the episode's real budget/CAS accounting",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "formalization_plan_attach_librarian_result": {
-                                "side_effect": "mutating — updates mathlib_coverage_status/mathlib_candidate_names_json (accumulated/deduped, not overwritten)/lookup_result_json (latest wins) on one item",
-                                "trust_level": "untrusted_input for confidence tier itself (exact_match/nearby_name/type_match/usage_example/unknown is the caller's own assessment of ITS search result), but the underlying search is over LLM-Driven Proof Search Environment's own real data (mathlib_search_declarations/mathlib_search_local_artifacts), not fabricated from nothing",
-                                "cost_surface": "none directly",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
+                                "artifact_risk": "none — advisory scaffolding, explicitly not a proof authority; attach_* never change proof status, only planning metadata",
                                 "required_run_mode": "any"
                             },
                             "research_dossier_create": {
@@ -10086,317 +10529,7 @@ impl ServerHandler for ChatDbMcp {
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
-            "formalization_plan_create" => {
-                let args: FormalizationPlanCreateArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let mut conn = self.conn.lock().await;
-                let pv_exists: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM problem_versions WHERE id = ?1", [&args.problem_version_id], |row| row.get(0),
-                ).map_err(rs)?;
-                if pv_exists == 0 {
-                    return Err(mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id)));
-                }
-                if let Some(draft_id) = &args.source_draft_id {
-                    let draft_pv_id: Option<String> = conn.query_row(
-                        "SELECT problem_version_id FROM drafts WHERE id = ?1", [draft_id], |row| row.get(0),
-                    ).optional().map_err(rs)?;
-                    let Some(draft_pv_id) = draft_pv_id else {
-                        return Err(mcp_invalid_params(format!("unknown source_draft_id: {}", draft_id)));
-                    };
-                    if draft_pv_id != args.problem_version_id {
-                        return Err(mcp_invalid_params(format!("source_draft_id {} belongs to a different problem_version", draft_id)));
-                    }
-                }
-                // Self-review finding: the same draft_move_id appearing twice in
-                // one call would pass per-move validation (each check sees the
-                // not-yet-committed state) and then get promoted into TWO
-                // separate plan items, silently orphaning the first — reject the
-                // whole batch up front instead.
-                {
-                    let mut seen = std::collections::HashSet::new();
-                    for seed in &args.seed_items_from_draft_moves {
-                        if !seen.insert(&seed.draft_move_id) {
-                            return Err(mcp_invalid_params(format!("draft_move_id {} appears more than once in seed_items_from_draft_moves", seed.draft_move_id)));
-                        }
-                    }
-                }
-                // Every seed move validated BEFORE any row is written, so a bad
-                // move in the batch never leaves a partially-seeded plan behind.
-                for seed in &args.seed_items_from_draft_moves {
-                    let owner: Option<(String, Option<String>)> = conn.query_row(
-                        "SELECT draft_id, promoted_plan_item_id FROM draft_moves WHERE id = ?1",
-                        [&seed.draft_move_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    ).optional().map_err(rs)?;
-                    let Some((owning_draft_id, already_promoted)) = owner else {
-                        return Err(mcp_invalid_params(format!("unknown draft_move_id: {}", seed.draft_move_id)));
-                    };
-                    if Some(&owning_draft_id) != args.source_draft_id.as_ref() {
-                        return Err(mcp_invalid_params(format!("draft_move {} does not belong to source_draft_id", seed.draft_move_id)));
-                    }
-                    if already_promoted.is_some() {
-                        return Err(mcp_invalid_params(format!("draft_move {} was already promoted into a plan item", seed.draft_move_id)));
-                    }
-                }
-
-                let tx = conn.transaction().map_err(rs)?;
-                let plan_id = Uuid::new_v4().to_string();
-                let risk_flags_json = serde_json::to_string(&args.risk_flags).unwrap();
-                let now = Utc::now().to_rfc3339();
-                tx.execute(
-                    "INSERT INTO formalization_plans (id, problem_version_id, source_draft_id, title, status, risk_flags_json, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6, ?6)",
-                    (&plan_id, &args.problem_version_id, &args.source_draft_id, &args.title, &risk_flags_json, &now),
-                ).map_err(rs)?;
-
-                let mut created_item_ids = Vec::new();
-                for (i, seed) in args.seed_items_from_draft_moves.iter().enumerate() {
-                    let description: String = tx.query_row(
-                        "SELECT description FROM draft_moves WHERE id = ?1", [&seed.draft_move_id], |row| row.get(0),
-                    ).map_err(rs)?;
-                    let item_id = Uuid::new_v4().to_string();
-                    let kind_str = plan_item_kind_str(&seed.kind);
-                    tx.execute(
-                        "INSERT INTO formalization_plan_items (
-                            id, plan_id, item_order, kind, description, mathlib_coverage_status,
-                            mathlib_candidate_names_json, lookup_result_json, promoted_obligation_id, status, created_at
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, 'unknown', '[]', NULL, NULL, 'open', ?6)",
-                        (&item_id, &plan_id, i as i64, kind_str, &description, &now),
-                    ).map_err(rs)?;
-                    tx.execute(
-                        "UPDATE draft_moves SET promoted_plan_item_id = ?1 WHERE id = ?2",
-                        (&item_id, &seed.draft_move_id),
-                    ).map_err(rs)?;
-                    created_item_ids.push(item_id);
-                }
-                tx.commit().map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "plan_id": plan_id,
-                    "status": "draft",
-                    "seeded_item_ids": created_item_ids,
-                    "created_at": now,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "formalization_plan_observe" => {
-                let args: FormalizationPlanObserveArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let conn = self.conn.lock().await;
-                let plan: Option<(String, Option<String>, String, String, String, String, String)> = conn.query_row(
-                    "SELECT problem_version_id, source_draft_id, title, status, risk_flags_json, created_at, updated_at
-                     FROM formalization_plans WHERE id = ?1",
-                    [&args.plan_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
-                ).optional().map_err(rs)?;
-                let Some((pv_id, source_draft_id, title, status, risk_flags_json, created_at, updated_at)) = plan else {
-                    return Err(mcp_invalid_params(format!("unknown plan_id: {}", args.plan_id)));
-                };
-
-                let mut stmt = conn.prepare(
-                    "SELECT id, item_order, kind, description, mathlib_coverage_status, mathlib_candidate_names_json,
-                            lookup_result_json, promoted_obligation_id, status
-                     FROM formalization_plan_items WHERE plan_id = ?1 ORDER BY item_order ASC"
-                ).map_err(rs)?;
-                let items: Vec<serde_json::Value> = stmt.query_map([&args.plan_id], |row| {
-                    let lookup_result_json: Option<String> = row.get(6)?;
-                    Ok(serde_json::json!({
-                        "plan_item_id": row.get::<_, String>(0)?,
-                        "item_order": row.get::<_, i64>(1)?,
-                        "kind": row.get::<_, String>(2)?,
-                        "description": row.get::<_, String>(3)?,
-                        "mathlib_coverage_status": row.get::<_, String>(4)?,
-                        "mathlib_candidate_names": serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(5)?).unwrap_or(serde_json::Value::Array(vec![])),
-                        "lookup_result": lookup_result_json.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
-                        "promoted_obligation_id": row.get::<_, Option<String>>(7)?,
-                        "status": row.get::<_, String>(8)?,
-                    }))
-                }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "plan_id": args.plan_id,
-                    "problem_version_id": pv_id,
-                    "source_draft_id": source_draft_id,
-                    "title": title,
-                    "status": status,
-                    "risk_flags": serde_json::from_str::<serde_json::Value>(&risk_flags_json).unwrap_or(serde_json::Value::Array(vec![])),
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                    "items": items,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "formalization_plan_update" => {
-                let args: FormalizationPlanUpdateArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let conn = self.conn.lock().await;
-                let current: Option<(String, String, String)> = conn.query_row(
-                    "SELECT title, status, risk_flags_json FROM formalization_plans WHERE id = ?1",
-                    [&args.plan_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                ).optional().map_err(rs)?;
-                let Some((cur_title, cur_status, cur_risk_flags_json)) = current else {
-                    return Err(mcp_invalid_params(format!("unknown plan_id: {}", args.plan_id)));
-                };
-
-                let new_title = args.title.unwrap_or(cur_title);
-                let new_status = match args.status {
-                    Some(PlanStatus::Draft) => "draft".to_string(),
-                    Some(PlanStatus::Active) => "active".to_string(),
-                    Some(PlanStatus::Completed) => "completed".to_string(),
-                    Some(PlanStatus::Abandoned) => "abandoned".to_string(),
-                    None => cur_status,
-                };
-                let new_risk_flags_json = match args.risk_flags {
-                    Some(flags) => serde_json::to_string(&flags).unwrap(),
-                    None => cur_risk_flags_json,
-                };
-                let now = Utc::now().to_rfc3339();
-
-                conn.execute(
-                    "UPDATE formalization_plans SET title = ?1, status = ?2, risk_flags_json = ?3, updated_at = ?4 WHERE id = ?5",
-                    (&new_title, &new_status, &new_risk_flags_json, &now, &args.plan_id),
-                ).map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "plan_id": args.plan_id,
-                    "title": new_title,
-                    "status": new_status,
-                    "updated_at": now,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "formalization_plan_add_item" => {
-                let args: FormalizationPlanAddItemArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let conn = self.conn.lock().await;
-                let plan_exists: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM formalization_plans WHERE id = ?1", [&args.plan_id], |row| row.get(0),
-                ).map_err(rs)?;
-                if plan_exists == 0 {
-                    return Err(mcp_invalid_params(format!("unknown plan_id: {}", args.plan_id)));
-                }
-
-                if let Some(role) = &args.asymptotic_role {
-                    validate_one_of("asymptotic_role", role, &["growth_lower_bound", "growth_upper_bound", "infinite_family_extraction", "sufficiently_large_threshold", "limit_comparison"])?;
-                }
-
-                let next_order: i64 = conn.query_row(
-                    "SELECT COALESCE(MAX(item_order), -1) + 1 FROM formalization_plan_items WHERE plan_id = ?1", [&args.plan_id], |row| row.get(0),
-                ).map_err(rs)?;
-                let kind_str = plan_item_kind_str(&args.kind);
-                let candidate_names_json = serde_json::to_string(&args.mathlib_candidate_names).unwrap();
-                let item_id = Uuid::new_v4().to_string();
-                let created_at = Utc::now().to_rfc3339();
-                conn.execute(
-                    "INSERT INTO formalization_plan_items (
-                        id, plan_id, item_order, kind, description, mathlib_coverage_status,
-                        mathlib_candidate_names_json, lookup_result_json, promoted_obligation_id, asymptotic_role, status, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, 'unknown', ?6, NULL, NULL, ?7, 'open', ?8)",
-                    (&item_id, &args.plan_id, next_order, kind_str, &args.description, &candidate_names_json, &args.asymptotic_role, &created_at),
-                ).map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "plan_item_id": item_id,
-                    "item_order": next_order,
-                    "kind": kind_str,
-                    "asymptotic_role": args.asymptotic_role,
-                    "created_at": created_at,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "formalization_plan_attach_lookup" => {
-                let args: FormalizationPlanAttachLookupArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let conn = self.conn.lock().await;
-                let item_status: Option<String> = conn.query_row(
-                    "SELECT status FROM formalization_plan_items WHERE id = ?1", [&args.plan_item_id], |row| row.get(0),
-                ).optional().map_err(rs)?;
-                let Some(item_status) = item_status else {
-                    return Err(mcp_invalid_params(format!("unknown plan_item_id: {}", args.plan_item_id)));
-                };
-                if item_status != "open" {
-                    return Err(mcp_invalid_params(format!("plan_item {} is not open (status={}) — cannot attach a lookup to a promoted/dropped item", args.plan_item_id, item_status)));
-                }
-
-                // Mirrors lean_declaration_lookup's status vocabulary: a hint
-                // mapping, not a re-check — the raw status/diagnostics are
-                // stored verbatim too, in lookup_result_json.
-                let coverage_status = match args.lookup_status.as_str() {
-                    "available" => "found",
-                    "unknown_declaration" => "not_found",
-                    "not_available_under_current_manifest" | "not_in_current_import_scope" => "partial",
-                    _ => "unknown",
-                };
-                let lookup_result_json = serde_json::json!({
-                    "lookup_status": args.lookup_status,
-                    "matched_name": args.matched_name,
-                    "diagnostics": args.diagnostics,
-                }).to_string();
-
-                conn.execute(
-                    "UPDATE formalization_plan_items SET mathlib_coverage_status = ?1, lookup_result_json = ?2 WHERE id = ?3",
-                    (coverage_status, &lookup_result_json, &args.plan_item_id),
-                ).map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "plan_item_id": args.plan_item_id,
-                    "mathlib_coverage_status": coverage_status,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "formalization_plan_promote_item_to_obligation" => {
-                let args: FormalizationPlanPromoteItemToObligationArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let conn = self.conn.lock().await;
-                let item_status: Option<String> = conn.query_row(
-                    "SELECT status FROM formalization_plan_items WHERE id = ?1", [&args.plan_item_id], |row| row.get(0),
-                ).optional().map_err(rs)?;
-                let Some(item_status) = item_status else {
-                    return Err(mcp_invalid_params(format!("unknown plan_item_id: {}", args.plan_item_id)));
-                };
-                if item_status != "open" {
-                    return Err(mcp_invalid_params(format!("plan_item {} is not open (status={}) — already promoted or dropped", args.plan_item_id, item_status)));
-                }
-                // The obligation must be real (created through a normal
-                // Decompose action via episode_step) and belong to the given
-                // episode — this tool only records the link, never creates it.
-                let obligation_episode: Option<String> = conn.query_row(
-                    "SELECT episode_id FROM episode_obligations WHERE id = ?1", [&args.obligation_id], |row| row.get(0),
-                ).optional().map_err(rs)?;
-                let Some(obligation_episode) = obligation_episode else {
-                    return Err(mcp_invalid_params(format!("unknown obligation_id: {}", args.obligation_id)));
-                };
-                if obligation_episode != args.episode_id {
-                    return Err(mcp_invalid_params(format!("obligation {} does not belong to episode {}", args.obligation_id, args.episode_id)));
-                }
-
-                // Self-review finding: a partial UNIQUE index on
-                // promoted_obligation_id (schema_v1.rs) stops two plan items
-                // from both claiming the same real obligation — enforced at
-                // the DB layer, not just by this handler's own logic.
-                conn.execute(
-                    "UPDATE formalization_plan_items SET status = 'promoted', promoted_obligation_id = ?1 WHERE id = ?2",
-                    (&args.obligation_id, &args.plan_item_id),
-                ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
-                    mcp_invalid_params(format!("obligation_id {} is already linked to a different plan item", args.obligation_id))
-                } else {
-                    rs(e)
-                })?;
-
-                let res = serde_json::json!({
-                    "plan_item_id": args.plan_item_id,
-                    "obligation_id": args.obligation_id,
-                    "status": "promoted",
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
+            "formalization_plan" => self.do_formalization_plan(args_val).await,
             "research_dossier_create" => {
                 let args: ResearchDossierCreateArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -12362,71 +12495,6 @@ impl ServerHandler for ChatDbMcp {
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
-            "formalization_plan_attach_librarian_result" => {
-                let args: FormalizationPlanAttachLibrarianResultArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let conn = self.conn.lock().await;
-                let row: Option<(String, String)> = conn.query_row(
-                    "SELECT status, mathlib_candidate_names_json FROM formalization_plan_items WHERE id = ?1",
-                    [&args.plan_item_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                ).optional().map_err(rs)?;
-                let Some((item_status, candidate_names_json)) = row else {
-                    return Err(mcp_invalid_params(format!("unknown plan_item_id: {}", args.plan_item_id)));
-                };
-                if item_status != "open" {
-                    return Err(mcp_invalid_params(format!("plan_item {} is not open (status={}) — cannot attach a librarian result to a promoted/dropped item", args.plan_item_id, item_status)));
-                }
-
-                let confidence_str = match args.confidence {
-                    LibrarianConfidence::ExactMatch => "exact_match",
-                    LibrarianConfidence::NearbyName => "nearby_name",
-                    LibrarianConfidence::TypeMatch => "type_match",
-                    LibrarianConfidence::UsageExample => "usage_example",
-                    LibrarianConfidence::Unknown => "unknown",
-                };
-                // Same vocabulary formalization_plan_attach_lookup writes into
-                // mathlib_coverage_status, so a plan item's coverage reads
-                // consistently regardless of which tool populated it.
-                let coverage_status = match args.confidence {
-                    LibrarianConfidence::ExactMatch => "found",
-                    LibrarianConfidence::NearbyName | LibrarianConfidence::TypeMatch | LibrarianConfidence::UsageExample => "partial",
-                    LibrarianConfidence::Unknown => "unknown",
-                };
-
-                // Accumulate candidate names across multiple attached results
-                // (deduped) rather than overwriting — a plan item can
-                // reasonably collect several librarian suggestions before one
-                // is chosen. The full latest result (confidence/import/snippet)
-                // still overwrites lookup_result_json — see the doc comment on
-                // formalization_plan_attach_lookup for the same "latest wins"
-                // convention on that field.
-                let mut candidate_names: Vec<String> = serde_json::from_str(&candidate_names_json).unwrap_or_default();
-                if !candidate_names.contains(&args.declaration_name) {
-                    candidate_names.push(args.declaration_name.clone());
-                }
-                let candidate_names_json = serde_json::to_string(&candidate_names).unwrap();
-                let lookup_result_json = serde_json::json!({
-                    "source": "librarian",
-                    "declaration_name": args.declaration_name,
-                    "confidence": confidence_str,
-                    "import_module": args.import_module,
-                    "snippet": args.snippet,
-                }).to_string();
-
-                conn.execute(
-                    "UPDATE formalization_plan_items SET mathlib_coverage_status = ?1, mathlib_candidate_names_json = ?2, lookup_result_json = ?3 WHERE id = ?4",
-                    (coverage_status, &candidate_names_json, &lookup_result_json, &args.plan_item_id),
-                ).map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "plan_item_id": args.plan_item_id,
-                    "mathlib_coverage_status": coverage_status,
-                    "mathlib_candidate_names": candidate_names,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
             "run_envelope_create" => {
                 let args: RunEnvelopeCreateArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -13943,7 +14011,7 @@ mod tests {
         // = 99, - 9 (issue #183, epic #182's pilot: those ten flat
         // proof_session_* tools consolidated into the ONE `proof_session`
         // tool dispatching on an internally-tagged `action` enum) = 90.
-        assert_eq!(list_res.tools.len(), 90);
+        assert_eq!(list_res.tools.len(), 84);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -17542,12 +17610,12 @@ mod tests {
         let pv = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
             "source_problem_text": "x", "root_formal_statement": "x", "unsafe_dev_attestation": true,
         }).as_object().unwrap().clone())).await.unwrap());
-        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv["problem_version_id"], "title": "Plan",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let plan_item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let plan_item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
             "plan_id": plan["plan_id"], "kind": "missing_lemma", "description": "Formalize the lemma.",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let plan_item_id = plan_item["plan_item_id"].as_str().unwrap().to_string();
 
         // Link each node and assert the derived status + provenance column.
@@ -18462,20 +18530,20 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         let move_ids: Vec<String> = extracted["created_move_ids"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
 
-        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "Plan A", "source_draft_id": draft_id,
             "seed_items_from_draft_moves": [
                 {"draft_move_id": move_ids[0], "kind": "missing_lemma"},
                 {"draft_move_id": move_ids[1], "kind": "external_citation"},
             ],
             "risk_flags": ["relies on an uncited external bound"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let plan_id = plan["plan_id"].as_str().unwrap().to_string();
         assert_eq!(plan["seeded_item_ids"].as_array().unwrap().len(), 2);
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "observe",
             "plan_id": plan_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed["title"], "Plan A");
         assert_eq!(observed["status"], "draft");
         let items = observed["items"].as_array().unwrap();
@@ -18514,23 +18582,23 @@ mod tests {
         let move_id = extracted["created_move_ids"][0].as_str().unwrap().to_string();
 
         // Wrong draft: move belongs to draft_a, not draft_b.
-        let bad = peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let bad = peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "P", "source_draft_id": draft_b_id,
             "seed_items_from_draft_moves": [{"draft_move_id": move_id, "kind": "concept"}],
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad.is_err(), "seeding from a move that belongs to a different draft must be rejected");
 
         // Correct draft, first promotion succeeds.
-        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "P", "source_draft_id": draft_a_id,
             "seed_items_from_draft_moves": [{"draft_move_id": move_id, "kind": "concept"}],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // Second promotion of the SAME move must be rejected.
-        let dup = peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let dup = peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "P2", "source_draft_id": draft_a_id,
             "seed_items_from_draft_moves": [{"draft_move_id": move_id, "kind": "concept"}],
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(dup.is_err(), "a move already promoted into a plan item must not be promotable again");
     }
 
@@ -18552,13 +18620,13 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         let move_id = extracted["created_move_ids"][0].as_str().unwrap().to_string();
 
-        let res = peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let res = peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "P", "source_draft_id": draft_id,
             "seed_items_from_draft_moves": [
                 {"draft_move_id": move_id, "kind": "concept"},
                 {"draft_move_id": move_id, "kind": "missing_lemma"},
             ],
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(res.is_err(), "the same draft_move_id twice in one batch must be rejected, not silently create two items from one move");
     }
 
@@ -18591,9 +18659,9 @@ mod tests {
         let draft_b_id = draft_b["draft_id"].as_str().unwrap().to_string();
 
         // draft_b belongs to problem B, not problem A.
-        let bad_plan = peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let bad_plan = peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_a, "title": "P", "source_draft_id": draft_b_id,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_plan.is_err(), "a plan's problem_version_id must match its source_draft_id's own problem_version_id");
     }
 
@@ -18634,25 +18702,25 @@ mod tests {
             [&episode_id], |row| row.get(0),
         ).unwrap() };
 
-        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "Plan",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let plan_id = plan["plan_id"].as_str().unwrap().to_string();
-        let item1 = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+        let item1 = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
             "plan_id": plan_id, "kind": "missing_lemma", "description": "item 1",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let item2 = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let item2 = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
             "plan_id": plan_id, "kind": "missing_lemma", "description": "item 2",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_promote_item_to_obligation").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "promote_item_to_obligation",
             "plan_item_id": item1["plan_item_id"], "episode_id": episode_id, "obligation_id": obligation_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // A second, DIFFERENT plan item claiming the SAME obligation must be rejected.
-        let dup = peer.call_tool(CallToolRequestParams::new("formalization_plan_promote_item_to_obligation").with_arguments(serde_json::json!({
+        let dup = peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "promote_item_to_obligation",
             "plan_item_id": item2["plan_item_id"], "episode_id": episode_id, "obligation_id": obligation_id,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(dup.is_err(), "two plan items must not both be allowed to claim the same real obligation");
     }
 
@@ -18661,26 +18729,26 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let pv_id = create_problem(&peer, "True").await;
-        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "Plan B",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let plan_id = plan["plan_id"].as_str().unwrap().to_string();
 
-        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
             "plan_id": plan_id, "kind": "missing_definition", "description": "need padicValNat",
             "mathlib_candidate_names": ["padicValNat"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let item_id = item["plan_item_id"].as_str().unwrap().to_string();
 
-        let updated = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_update").with_arguments(serde_json::json!({
+        let updated = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "update",
             "plan_id": plan_id, "status": "active", "risk_flags": ["needs a fresh construction"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(updated["status"], "active");
         assert_eq!(updated["title"], "Plan B", "omitted title must be left unchanged, not cleared");
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "observe",
             "plan_id": plan_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed["status"], "active");
         assert_eq!(observed["risk_flags"][0], "needs a fresh construction");
         assert_eq!(observed["items"][0]["plan_item_id"], item_id);
@@ -18692,9 +18760,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let pv_id = create_problem(&peer, "True").await;
-        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "Plan C",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let plan_id = plan["plan_id"].as_str().unwrap().to_string();
 
         let cases = [
@@ -18705,14 +18773,14 @@ mod tests {
             ("environment_error", "unknown"),
         ];
         for (lookup_status, expected_coverage) in cases {
-            let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+            let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
                 "plan_id": plan_id, "kind": "missing_lemma", "description": format!("case for {lookup_status}"),
-            }).as_object().unwrap().clone())).await.unwrap());
+            }}).as_object().unwrap().clone())).await.unwrap());
             let item_id = item["plan_item_id"].as_str().unwrap().to_string();
 
-            let attached = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_attach_lookup").with_arguments(serde_json::json!({
+            let attached = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "attach_lookup",
                 "plan_item_id": item_id, "lookup_status": lookup_status, "matched_name": "Nat.foo",
-            }).as_object().unwrap().clone())).await.unwrap());
+            }}).as_object().unwrap().clone())).await.unwrap());
             assert_eq!(attached["mathlib_coverage_status"], expected_coverage, "lookup_status {lookup_status}");
         }
     }
@@ -18756,35 +18824,35 @@ mod tests {
             [&episode_id], |row| row.get(0),
         ).unwrap() };
 
-        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "Plan D",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let plan_id = plan["plan_id"].as_str().unwrap().to_string();
-        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
             "plan_id": plan_id, "kind": "missing_lemma", "description": "a helper lemma",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let item_id = item["plan_item_id"].as_str().unwrap().to_string();
 
         // Wrong episode_id must be rejected.
-        let bad = peer.call_tool(CallToolRequestParams::new("formalization_plan_promote_item_to_obligation").with_arguments(serde_json::json!({
+        let bad = peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "promote_item_to_obligation",
             "plan_item_id": item_id, "episode_id": "not-a-real-episode", "obligation_id": obligation_id,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad.is_err());
 
-        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_promote_item_to_obligation").with_arguments(serde_json::json!({
+        let promoted = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "promote_item_to_obligation",
             "plan_item_id": item_id, "episode_id": episode_id, "obligation_id": obligation_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(promoted["status"], "promoted");
 
         // Re-promoting the same (now-promoted) item must be rejected.
-        let dup = peer.call_tool(CallToolRequestParams::new("formalization_plan_promote_item_to_obligation").with_arguments(serde_json::json!({
+        let dup = peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "promote_item_to_obligation",
             "plan_item_id": item_id, "episode_id": episode_id, "obligation_id": obligation_id,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(dup.is_err(), "an already-promoted item must not be promotable again");
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "observe",
             "plan_id": plan_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed["items"][0]["status"], "promoted");
         assert_eq!(observed["items"][0]["promoted_obligation_id"], obligation_id);
     }
@@ -18812,9 +18880,9 @@ mod tests {
         tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
             "problem_version_id": pv_id, "episode_id": episode_id, "content": "informal sketch here", "author": "model-x",
         }).as_object().unwrap().clone())).await.unwrap());
-        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "Plan E",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let md1 = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
             "episode_id": episode_id,
@@ -19078,31 +19146,31 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let pv_id = create_problem(&peer, "True").await;
-        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "Plan F",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let plan_id = plan["plan_id"].as_str().unwrap().to_string();
-        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
             "plan_id": plan_id, "kind": "missing_lemma", "description": "need a sum-of-squares identity",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let item_id = item["plan_item_id"].as_str().unwrap().to_string();
 
-        let attached1 = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_attach_librarian_result").with_arguments(serde_json::json!({
+        let attached1 = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "attach_librarian_result",
             "plan_item_id": item_id, "declaration_name": "Finset.sum_sq_le_sq_mul_sq", "confidence": "nearby_name",
             "import_module": "Mathlib.Analysis.MeanInequalities",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(attached1["mathlib_coverage_status"], "partial");
         assert_eq!(attached1["mathlib_candidate_names"].as_array().unwrap().len(), 1);
 
-        let attached2 = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_attach_librarian_result").with_arguments(serde_json::json!({
+        let attached2 = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "attach_librarian_result",
             "plan_item_id": item_id, "declaration_name": "Finset.sq_sum_le_card_mul_sum_sq", "confidence": "exact_match",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(attached2["mathlib_coverage_status"], "found", "a later exact_match must update coverage_status");
         assert_eq!(attached2["mathlib_candidate_names"].as_array().unwrap().len(), 2, "candidates must accumulate, not overwrite");
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "observe",
             "plan_id": plan_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let observed_item = &observed["items"][0];
         assert_eq!(observed_item["mathlib_coverage_status"], "found");
         assert_eq!(observed_item["lookup_result"]["source"], "librarian");
@@ -19143,20 +19211,20 @@ mod tests {
             [&episode_id], |row| row.get(0),
         ).unwrap() };
 
-        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "Plan G",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
             "plan_id": plan["plan_id"], "kind": "missing_lemma", "description": "a helper lemma",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let item_id = item["plan_item_id"].as_str().unwrap().to_string();
-        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_promote_item_to_obligation").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "promote_item_to_obligation",
             "plan_item_id": item_id, "episode_id": episode_id, "obligation_id": obligation_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let res = peer.call_tool(CallToolRequestParams::new("formalization_plan_attach_librarian_result").with_arguments(serde_json::json!({
+        let res = peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "attach_librarian_result",
             "plan_item_id": item_id, "declaration_name": "whatever", "confidence": "exact_match",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(res.is_err(), "attaching a librarian result to an already-promoted item must be rejected");
     }
 
@@ -19179,12 +19247,12 @@ mod tests {
             "problem_version_id": pv_id, "max_steps": 5,
         }).as_object().unwrap().clone())).await.unwrap());
         let _episode_id = ep["episode_id"].as_str().unwrap().to_string(); // exists only so the snapshot below has a non-empty episodes table row
-        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "Plan H",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let item = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
             "plan_id": plan["plan_id"], "kind": "missing_lemma", "description": "x",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let item_id = item["plan_item_id"].as_str().unwrap().to_string();
 
         let snapshot = |conn: &Connection| -> (String, String) {
@@ -19204,9 +19272,9 @@ mod tests {
         tool_json(&peer.call_tool(CallToolRequestParams::new("mathlib_search_local_artifacts").with_arguments(serde_json::json!({
             "query": "root",
         }).as_object().unwrap().clone())).await.unwrap());
-        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_attach_librarian_result").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "attach_librarian_result",
             "plan_item_id": item_id, "declaration_name": "Nat.add_comm", "confidence": "exact_match",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let after = { let c = conn_arc.lock().await; snapshot(&c) };
         assert_eq!(before, after, "no librarian tool call may change episodes or episode_obligations in any way");
@@ -19932,30 +20000,30 @@ mod tests {
         let peer = client.peer();
         let pv_id = create_problem(&peer, "∀ n : ℕ, True").await;
 
-        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_create").with_arguments(serde_json::json!({
+        let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "Unit-distance asymptotic ladder",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let plan_id = plan["plan_id"].as_str().unwrap().to_string();
 
         // A growth-rate step labeled with an asymptotic_role, and a plain finite step.
-        let growth = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+        let growth = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
             "plan_id": plan_id, "kind": "planned_module", "description": "edge lower bound c*n^(1+delta)",
             "asymptotic_role": "growth_lower_bound",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(growth["asymptotic_role"], "growth_lower_bound");
-        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
             "plan_id": plan_id, "kind": "missing_lemma", "description": "infinite-family extraction",
             "asymptotic_role": "infinite_family_extraction",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         // A finite sanity step carries no asymptotic_role.
-        let finite = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+        let finite = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
             "plan_id": plan_id, "kind": "concept", "description": "check small cases n<=6",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert!(finite["asymptotic_role"].is_null(), "a finite sanity step must not be labeled with a growth-rate role");
         // Bad role rejected.
-        let bad_role = peer.call_tool(CallToolRequestParams::new("formalization_plan_add_item").with_arguments(serde_json::json!({
+        let bad_role = peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "add_item",
             "plan_id": plan_id, "kind": "concept", "description": "x", "asymptotic_role": "made_up",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_role.is_err());
 
         // Dossier: the asymptotic construction + layers are their own labeled rows.

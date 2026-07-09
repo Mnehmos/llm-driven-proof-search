@@ -89,12 +89,7 @@ Antigravity, or a custom script — should call this first.
 | `draft_create` | Register an informal Draft artifact — untrusted planning/reasoning content. A draft can never mark anything proved |
 | `draft_observe` | Read back a draft's content and any moves recorded against it |
 | `draft_extract_moves` | Record structured moves (construction, auxiliary_lemma, case_split, ...) the external agent identified in a draft. Metadata only |
-| `formalization_plan_create` | Create a formalization plan for a problem, optionally seeded from selected moves of an existing draft |
-| `formalization_plan_observe` | Read back a formalization plan and all its items |
-| `formalization_plan_update` | Update a plan's title, status, or risk flags |
-| `formalization_plan_add_item` | Add a planning item (concept, missing_definition, missing_lemma, planned_module, or external_citation) to a plan |
-| `formalization_plan_attach_lookup` | Attach a `lean_declaration_lookup` result to a plan item, updating its Mathlib coverage status |
-| `formalization_plan_promote_item_to_obligation` | Link a plan item to an episode_obligation that already exists (created via a normal `Decompose` action). Never creates the obligation itself |
+| `formalization_plan` | ONE tool for the whole Level 3 formalization-plan family, dispatching on an internally-tagged `action` (`create` / `observe` / `update` / `add_item` / `attach_lookup` / `promote_item_to_obligation` / `attach_librarian_result`) — exactly like `episode_step`'s typed `action`. Advisory scaffolding, never proof authority: `promote_item_to_obligation` links a plan item to an episode_obligation that **already exists** (created via a normal `Decompose` action) and never creates one; `attach_lookup` / `attach_librarian_result` attach `lean_declaration_lookup` / Mathlib-librarian search results to a plan item as hints, updating its Mathlib coverage status but never proof status |
 | `research_dossier_create` | Create a Level 4 research dossier, optionally linked to a problem version, an episode, or neither. Metadata only |
 | `research_dossier_observe` | Read a dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets |
 | `research_node_add` | Add a typed research node (`definition`, `proposition`, `lemma`, `theorem`, `remark`, `reference`, `open_gap`) with explicit trust status |
@@ -139,7 +134,6 @@ Antigravity, or a custom script — should call this first.
 | `expert_review_observe` | Read review-ledger entries filtered by dossier, target (kind+id), and/or reviewer role. Read-only |
 | `mathlib_search_declarations` | Search the real pinned Mathlib source tree for declaration names containing a substring (beyond exact-name lookup). Advisory only |
 | `mathlib_search_local_artifacts` | Search this instance's own previously-verified theorem/def names for a substring match |
-| `formalization_plan_attach_librarian_result` | Attach a Mathlib librarian result to a formalization plan item, updating its coverage status |
 | `run_envelope_create` | Create a run envelope: host/model/mode (development/evaluation/benchmark/private_audit/public_report) and host-side cost accounting LLM-Driven Proof Search Environment cannot itself observe |
 | `run_envelope_update` | Update a run envelope's host-side cost fields or notes after the fact. Append-only (issue #46): a cost correction appends an auditable observation, so the prior value stays queryable |
 | `run_envelope_cost_observation_add` | Append an auditable, append-only host-side cost observation to a run envelope; prior observations stay queryable via `run_envelope_observe` |
@@ -620,18 +614,22 @@ reasoning as a **Draft** (`draft_create`) and record the moves it identifies
 within it (`draft_extract_moves` — construction, auxiliary_lemma, case_split,
 induction, reduction, bijection, counterexample_search, asymptotic_step,
 external_citation, unknown). Selected moves can seed a **formalization
-plan** (`formalization_plan_create`), which tracks planned concepts,
-definitions, lemmas, and modules together with their Mathlib coverage status
-(`formalization_plan_attach_lookup`, using `lean_declaration_lookup`
-results).
+plan** — since issue #184 the whole plan family is the single
+`formalization_plan` tool, dispatching on an internally-tagged action
+(`formalization_plan {"action": {"type": "create", ...}}`, exactly like
+`episode_step`) — which tracks planned concepts, definitions, lemmas, and
+modules together with their Mathlib coverage status (the `attach_lookup`
+action, using `lean_declaration_lookup` results, or the
+`attach_librarian_result` action, using `mathlib_search_declarations` /
+`mathlib_search_local_artifacts` results).
 
 Both are strictly advisory, mirroring the trust boundary everywhere else in
 this environment: a Draft or a plan item can never mark anything proved.
 Real obligations are still created only through `Decompose`, via the normal
-budget-accounted `episode_step` flow —
-`formalization_plan_promote_item_to_obligation` only records a metadata
-*link* to an obligation that already exists that way; it never creates one
-itself. See `docs/roadmap.md`'s Level 3 section for the full design.
+budget-accounted `episode_step` flow — the `promote_item_to_obligation`
+action only records a metadata *link* to an obligation that already exists
+that way; it never creates one itself. See `docs/roadmap.md`'s Level 3
+section for the full design.
 
 ## Proof soundness vs. statement fidelity
 
