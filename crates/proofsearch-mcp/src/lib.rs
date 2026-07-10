@@ -635,9 +635,8 @@ pub struct BenchmarkSuiteSetTrustArgs {
 /// `observe`/`set_trust` key on an existing suite_id/name. The wider
 /// `benchmark_*` family is deliberately split into three consolidated tools
 /// by epic #182 — `benchmark_problem_register`/`benchmark_problem_observe`
-/// (future `benchmark_problem`) and `benchmark_run_create`/
-/// `benchmark_result_record`/`benchmark_run_observe` (future `benchmark_run`)
-/// are NOT folded in here.
+/// (future `benchmark_problem`) and the `benchmark_run` tool (issue #194:
+/// create/result_record/observe) are NOT folded in here.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BenchmarkSuiteAction {
@@ -703,7 +702,7 @@ pub struct BenchmarkSuiteArgs {
     pub action: BenchmarkSuiteAction,
 }
 
-#[derive(JsonSchema, Deserialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema, Deserialize)]
 pub enum BenchmarkSolveMode {
     #[serde(rename = "solve_only")] SolveOnly,
     #[serde(rename = "submit_module_allowed")] SubmitModuleAllowed,
@@ -729,7 +728,7 @@ pub struct BenchmarkRunCreateArgs {
     pub lean_timeout_ms: Option<i64>,
 }
 
-#[derive(JsonSchema, Deserialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema, Deserialize)]
 pub enum BenchmarkResultStatus {
     #[serde(rename = "kernel_verified")] KernelVerified,
     #[serde(rename = "certified")] Certified,
@@ -868,6 +867,137 @@ pub const GAP_CATEGORY_VOCABULARY: &[&str] = &[
 #[derive(JsonSchema, Deserialize)]
 pub struct BenchmarkRunObserveArgs {
     pub run_id: String,
+}
+
+/// Issue #194 (epic #182, 12th consolidation after #183's `proof_session`
+/// pilot through #193's `benchmark_suite`): the single `benchmark_run`
+/// tool's internally-tagged action enum, mirroring the established
+/// `episode_step` pattern (`#[serde(tag = "type", rename_all =
+/// "snake_case")]`). Each variant's fields are the corresponding pre-#194
+/// flat `Benchmark{RunCreate,ResultRecord,RunObserve}Args` struct's fields
+/// verbatim — those structs remain (unchanged) as what the
+/// `do_benchmark_run_create`/`do_benchmark_result_record`/
+/// `do_benchmark_run_observe` handlers deserialize; this enum is only the
+/// MCP-layer dispatch shape. `result_record`'s trust boundary (issue #36's
+/// episode-backing requirement, issue #38's fidelity-basis policy and its
+/// mode-enforcement exception for trusted_canonical_source suites) is
+/// UNCHANGED by this consolidation — only how the call routes into the same
+/// underlying policy functions (`enforce_dev_attestation_mode_policy`,
+/// `trusted_canonical_hash_exemption_applies`) changed. The wider
+/// `benchmark_*` family is deliberately split into three consolidated tools
+/// by epic #182 — `benchmark_suite` (issue #193) and
+/// `benchmark_problem_register`/`benchmark_problem_observe` (future
+/// `benchmark_problem`) are separate tools, not folded in here.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BenchmarkRunAction {
+    Create {
+        suite_id: String,
+        /// Required (issue #34): "a benchmark run should not start unless a
+        /// run envelope exists." Call run_envelope_create first.
+        run_envelope_id: String,
+        #[serde(default)]
+        proofsearch_commit: Option<String>,
+        solve_mode: BenchmarkSolveMode,
+        #[serde(default)]
+        allowed_tools: Vec<String>,
+        attempt_budget: i64,
+        #[serde(default)]
+        wall_clock_budget_ms: Option<i64>,
+        #[serde(default)]
+        lean_timeout_ms: Option<i64>,
+    },
+    ResultRecord {
+        run_id: String,
+        benchmark_problem_id: String,
+        #[serde(default)]
+        problem_version_id: Option<String>,
+        /// When given, cross-checked against that episode's ACTUAL recorded
+        /// outcome (issue #36) — a result claiming "kernel_verified"/"certified"
+        /// must match the referenced episode's real outcome exactly, and any
+        /// referenced episode must have actually concluded (outcome set). A
+        /// benchmark result cannot claim an outcome the ledger doesn't back.
+        #[serde(default)]
+        episode_id: Option<String>,
+        status: BenchmarkResultStatus,
+        #[serde(default)]
+        outcome: Option<String>,
+        #[serde(default)]
+        pass_at: Option<i64>,
+        /// Required (no default) — a benchmark result without a reported attempt
+        /// count is exactly the kind of unmeasured claim this schema exists to
+        /// prevent.
+        attempts_used: i64,
+        #[serde(default)]
+        time_to_first_success_ms: Option<i64>,
+        #[serde(default)]
+        cost_micros: Option<i64>,
+        #[serde(default)]
+        final_diagnostic_category: Option<String>,
+        #[serde(default)]
+        proof_artifact_hash: Option<String>,
+        #[serde(default)]
+        trajectory_export_hash: Option<String>,
+        #[serde(default)]
+        replay_status: Option<String>,
+        /// Silences the mode-enforcement rejection for an unsafe_dev_attestation
+        /// ("attested") problem claim when this run's envelope mode is
+        /// `private_audit` — but does NOT by itself make such a claim succeed
+        /// for an UNTRUSTED suite: the separate, pre-existing fidelity-basis
+        /// policy still independently rejects an "attested" (not "verified")
+        /// problem's kernel_verified/certified claim against an untrusted suite
+        /// regardless of this flag, in every mode including private_audit — an
+        /// adversarial review of this exact flag caught that its original doc
+        /// comment overclaimed here. In practice this flag only changes which of
+        /// the two rejection messages you see for an untrusted suite; it has a
+        /// real effect only for a TRUSTED suite in private_audit mode (where the
+        /// fidelity-basis policy already accepts the claim via
+        /// canonical_statement_hash_match regardless of mode, so this flag's
+        /// mode-enforcement check is the only thing that could otherwise block
+        /// it). Making this flag genuinely bypass the fidelity-basis rejection
+        /// for an untrusted suite would need a real design decision (e.g. a
+        /// fifth benchmark_fidelity_basis value for an explicitly-supervised
+        /// private-audit override) — left undecided rather than guessed at.
+        #[serde(default)]
+        allow_dev_attested: bool,
+        /// Issue #76: structured formalization-gap categories for a failed/
+        /// gave-up result — additive reporting metadata that never affects proof
+        /// soundness, certification, training eligibility, or score. Each entry
+        /// must be one of the fixed vocabulary slugs (see GAP_CATEGORY_VOCABULARY
+        /// in environment_describe / the rejection message): e.g. "math_unknown",
+        /// "library_missing", "statement_elaboration_gap",
+        /// "geometry_case_analysis_missing", "coefficient_uniqueness_missing".
+        /// Distinguishes "the model failed to find the math" from "Lean lacks the
+        /// bridge lemmas" so benchmark reports read as an infrastructure roadmap
+        /// rather than a flat failure count.
+        #[serde(default)]
+        gap_categories: Option<Vec<String>>,
+        /// Issue #92: fully qualified kit lemma names the attempt actually used
+        /// (e.g. "LeanChecker.GeometryAngleKit.three_ray_angle_decomposition").
+        /// Client-reported planning metadata — never proof authority. Which kits
+        /// were IMPORTED is not taken from the client at all: it is derived
+        /// server-side from the problem_version's import manifest at observe
+        /// time.
+        #[serde(default)]
+        kit_lemmas_used: Option<Vec<String>>,
+        /// Issue #92: for a failed/gave-up result, the specific kit route step
+        /// that was missing (free text, ideally matching a registry entry's
+        /// remaining_route_steps — e.g. "FiniteConvexityKit: extreme-point
+        /// counting trichotomy"). Lets aggregate reports read as a kit roadmap.
+        #[serde(default)]
+        missing_route_step: Option<String>,
+    },
+    Observe {
+        run_id: String,
+    },
+}
+
+/// Issue #194: args for the single consolidated `benchmark_run` tool. The
+/// entire payload lives on the internally-tagged `action` — see
+/// `BenchmarkRunAction`'s doc for why the original flat structs remain.
+#[derive(JsonSchema, Deserialize)]
+pub struct BenchmarkRunArgs {
+    pub action: BenchmarkRunAction,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -11197,6 +11327,792 @@ impl ChatDbMcp {
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
     }
 
+    async fn do_benchmark_run(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: BenchmarkRunArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize benchmark_run action: {}", e)))?;
+        match &args.action {
+            BenchmarkRunAction::Create { .. } => self.do_benchmark_run_create(inner).await,
+            BenchmarkRunAction::ResultRecord { .. } => self.do_benchmark_result_record(inner).await,
+            BenchmarkRunAction::Observe { .. } => self.do_benchmark_run_observe(inner).await,
+        }
+    }
+
+    async fn do_benchmark_run_create(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: BenchmarkRunCreateArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if args.attempt_budget <= 0 {
+            return Err(mcp_invalid_params("attempt_budget must be positive"));
+        }
+
+        let conn = self.conn.lock().await;
+        let suite_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM benchmark_suites WHERE id = ?1", [&args.suite_id], |row| row.get(0),
+        ).map_err(rs)?;
+        if suite_exists == 0 {
+            return Err(mcp_invalid_params(format!("unknown suite_id: {}", args.suite_id)));
+        }
+        // Issue #34's required behavior: "A benchmark run should not
+        // start unless a run envelope exists." Without one, a run's
+        // host/model identity and cost accounting have no home at
+        // all — required in the wire schema itself (run_envelope_id
+        // is a plain String, not Option<String>), not just checked
+        // here, so a client's own JSON schema tooling surfaces this
+        // before the call is even made.
+        //
+        // Issue #42: a measured benchmark run must target a
+        // BENCHMARK-mode envelope (a development/evaluation/
+        // private_audit/public_report envelope is rejected), and when
+        // that envelope declares a benchmark_suite_name it must equal
+        // the suite this run targets. This keeps dev/exploratory
+        // envelopes and cross-suite mislabeling out of measured runs.
+        let envelope: Option<(String, Option<String>)> = conn.query_row(
+            "SELECT mode, benchmark_suite_name FROM run_envelopes WHERE id = ?1",
+            [&args.run_envelope_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional().map_err(rs)?;
+        let Some((envelope_mode, envelope_suite_name)) = envelope else {
+            return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
+        };
+        if envelope_mode != "benchmark" {
+            return Err(mcp_invalid_params(format!(
+                "benchmark_run_create requires a benchmark-mode run envelope; run_envelope {} has mode '{}'",
+                args.run_envelope_id, envelope_mode
+            )));
+        }
+        if let Some(env_suite) = envelope_suite_name.as_deref() {
+            let suite_name: String = conn.query_row(
+                "SELECT name FROM benchmark_suites WHERE id = ?1", [&args.suite_id], |row| row.get(0),
+            ).map_err(rs)?;
+            if env_suite != suite_name {
+                return Err(mcp_invalid_params(format!(
+                    "run envelope's benchmark_suite_name '{}' does not match this run's suite '{}'",
+                    env_suite, suite_name
+                )));
+            }
+        }
+
+        let solve_mode_str = match args.solve_mode {
+            BenchmarkSolveMode::SolveOnly => "solve_only",
+            BenchmarkSolveMode::SubmitModuleAllowed => "submit_module_allowed",
+            BenchmarkSolveMode::SubmitModulePlusDraftPlanning => "submit_module_plus_draft_planning",
+            BenchmarkSolveMode::SubmitModulePlusLibrarian => "submit_module_plus_librarian",
+        };
+        // lean_version/mathlib_commit are read from the server's OWN
+        // detected environment, never accepted from the client — the
+        // only trustworthy record of what actually checked any
+        // resulting proofs (a client-supplied value could silently
+        // misrepresent the toolchain a result was really verified
+        // against).
+        let (lean_version, mathlib_commit) = match &self.lean_environment {
+            Some(env) => (Some(env.descriptor.clone()), Some(env.mathlib_rev.clone())),
+            None => (None, None),
+        };
+        let allowed_tools_json = serde_json::to_string(&args.allowed_tools).unwrap();
+        let run_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO benchmark_runs (
+                id, suite_id, run_envelope_id, proofsearch_commit, lean_version, mathlib_commit,
+                solve_mode, allowed_tools_json, attempt_budget, wall_clock_budget_ms, lean_timeout_ms, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            (&run_id, &args.suite_id, &args.run_envelope_id, &args.proofsearch_commit, &lean_version, &mathlib_commit,
+             solve_mode_str, &allowed_tools_json, args.attempt_budget, &args.wall_clock_budget_ms, &args.lean_timeout_ms, &now),
+        ).map_err(rs)?;
+
+        let res = serde_json::json!({
+            "run_id": run_id,
+            "solve_mode": solve_mode_str,
+            "lean_version": lean_version,
+            "mathlib_commit": mathlib_commit,
+            "created_at": now,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_benchmark_result_record(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: BenchmarkResultRecordArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let run_row: Option<(String, Option<String>)> = conn.query_row(
+            "SELECT suite_id, run_envelope_id FROM benchmark_runs WHERE id = ?1", [&args.run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional().map_err(rs)?;
+        let Some((run_suite_id, run_envelope_id)) = run_row else {
+            return Err(mcp_invalid_params(format!("unknown run_id: {}", args.run_id)));
+        };
+        // Issue #38's mode-enforcement policy needs the run's own
+        // envelope mode. run_envelope_id has been required since
+        // issue #34's fix (v0.3.13), so this is always Some in
+        // practice, but query defensively rather than assume.
+        let run_envelope_mode: Option<String> = match &run_envelope_id {
+            Some(env_id) => conn.query_row(
+                "SELECT mode FROM run_envelopes WHERE id = ?1", [env_id], |row| row.get(0),
+            ).optional().map_err(rs)?,
+            None => None,
+        };
+        // COALESCE to prover_ready_statement_hash when present: a
+        // benchmark suite's own faithful catalog text
+        // (root_formal_statement) is not always the same string a
+        // runner actually submits to problem_create/SubmitModule
+        // (e.g. PutnamBench's named-binder declaration syntax vs.
+        // the Pi-type form LLM-Driven Proof Search Environment's model requires) — comparing the
+        // wrong hash would reject every legitimate result for such a
+        // suite. See migrate_add_prover_ready_statement_columns.
+        let problem_row: Option<(String, String)> = conn.query_row(
+            "SELECT suite_id, COALESCE(prover_ready_statement_hash, root_statement_hash) FROM benchmark_problems WHERE id = ?1",
+            [&args.benchmark_problem_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional().map_err(rs)?;
+        let Some((problem_suite_id, problem_root_hash)) = problem_row else {
+            return Err(mcp_invalid_params(format!("unknown benchmark_problem_id: {}", args.benchmark_problem_id)));
+        };
+        if problem_suite_id != run_suite_id {
+            return Err(mcp_invalid_params(format!(
+                "benchmark_problem_id {} belongs to a different suite than run_id {}", args.benchmark_problem_id, args.run_id
+            )));
+        }
+
+        let status_str = match args.status {
+            BenchmarkResultStatus::KernelVerified => "kernel_verified",
+            BenchmarkResultStatus::Certified => "certified",
+            BenchmarkResultStatus::Failed => "failed",
+            BenchmarkResultStatus::Timeout => "timeout",
+            BenchmarkResultStatus::InfraError => "infra_error",
+            BenchmarkResultStatus::FormalizationGap => "formalization_gap",
+            BenchmarkResultStatus::Skipped => "skipped",
+        };
+
+        // Issue #36's core invariant, enforced concretely: "a proof
+        // attempt that bypasses the ledger is not part of LLM-Driven Proof Search Environment
+        // evidence." A claimed kernel_verified/certified status
+        // MUST reference the episode that actually reached it — the
+        // checks below (statement-match, outcome-match) only ran
+        // when episode_id happened to be given; a caller claiming
+        // kernel_verified/certified with NO episode_id at all
+        // skipped every check entirely and was accepted with zero
+        // backing evidence. Any other status (failed/timeout/
+        // infra_error/formalization_gap/skipped) legitimately has
+        // no episode to reference — those are unaffected.
+        if matches!(status_str, "kernel_verified" | "certified") && args.episode_id.is_none() {
+            return Err(mcp_invalid_params(format!(
+                "status {:?} claims a verified proof but no episode_id was given — a kernel_verified/certified result must reference the episode that actually reached that outcome through the tracked episode_step path (issue #36: a proof attempt that bypasses the ledger is not part of LLM-Driven Proof Search Environment evidence)",
+                status_str
+            )));
+        }
+        // Issue #38's fidelity-basis policy: what evidence, if any,
+        // backs a kernel_verified/certified claim's STATEMENT
+        // fidelity — deliberately distinct from
+        // problem_versions.fidelity_status (whether the formal
+        // statement faithfully represents the INFORMAL problem). A
+        // trusted, externally-curated suite's own canonical
+        // statement-hash match is accepted on its own (PutnamBench:
+        // the hash-match against the suite's own catalog text IS the
+        // fidelity guarantee); an untrusted/custom suite requires a
+        // real independent review (fidelity_status='verified')
+        // instead — the hash-match check above only proves the
+        // episode proved *some* problem_version with this exact
+        // statement, not that anyone ever vouched the statement
+        // itself is a faithful formalization.
+        let benchmark_fidelity_basis: Option<&str> = if let Some(episode_id) = &args.episode_id {
+            let episode_row: Option<(String, Option<String>)> = conn.query_row(
+                "SELECT problem_version_id, outcome FROM episodes WHERE id = ?1", [episode_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).optional().map_err(rs)?;
+            let Some((episode_pv_id, episode_outcome)) = episode_row else {
+                return Err(mcp_invalid_params(format!("unknown episode_id: {}", episode_id)));
+            };
+            let Some(episode_outcome) = episode_outcome else {
+                return Err(mcp_invalid_params(format!(
+                    "episode {} has not concluded yet (outcome is not set) — cannot record a benchmark result against an in-progress episode", episode_id
+                )));
+            };
+            // An episode reaching e.g. kernel_verified only proves *something*
+            // was verified — not that it was THIS benchmark problem's statement.
+            // Compare root_statement_hash (server-computed on both sides) rather
+            // than trusting the caller's episode/problem pairing.
+            if let Some(declared_pv) = &args.problem_version_id {
+                if *declared_pv != episode_pv_id {
+                    return Err(mcp_invalid_params(format!(
+                        "problem_version_id {} does not match episode {}'s actual problem_version_id {}",
+                        declared_pv, episode_id, episode_pv_id
+                    )));
+                }
+            }
+            let (episode_pv_hash, problem_fidelity_status): (String, String) = conn.query_row(
+                "SELECT root_statement_hash, fidelity_status FROM problem_versions WHERE id = ?1", [&episode_pv_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).map_err(rs)?;
+            if episode_pv_hash != problem_root_hash {
+                return Err(mcp_invalid_params(format!(
+                    "episode {} proved a different statement (problem_version {}) than benchmark_problem_id {} — root_statement_hash mismatch",
+                    episode_id, episode_pv_id, args.benchmark_problem_id
+                )));
+            }
+            if status_str == "kernel_verified" && episode_outcome != "kernel_verified" {
+                return Err(mcp_invalid_params(format!(
+                    "status 'kernel_verified' claimed, but episode {} actually reached outcome '{}'", episode_id, episode_outcome
+                )));
+            }
+            if status_str == "certified" && episode_outcome != "certified" {
+                return Err(mcp_invalid_params(format!(
+                    "status 'certified' claimed, but episode {} actually reached outcome '{}'", episode_id, episode_outcome
+                )));
+            }
+            if matches!(status_str, "kernel_verified" | "certified") {
+                let suite_trusted: bool = conn.query_row(
+                    "SELECT trusted_canonical_source FROM benchmark_suites WHERE id = ?1", [&run_suite_id], |row| row.get(0),
+                ).map_err(rs)?;
+                // Issue #38's mode-enforcement policy, with the
+                // trusted-canonical-hash exemption formalized as its
+                // own named, documented policy function (not an
+                // inline, accidental PutnamBench-shaped special
+                // case) — see trusted_canonical_hash_exemption_applies's
+                // own doc comment for the exact rule and why it exists.
+                if !trusted_canonical_hash_exemption_applies(suite_trusted) {
+                    if let Some(mode) = &run_envelope_mode {
+                        enforce_dev_attestation_mode_policy(&problem_fidelity_status, mode, args.allow_dev_attested)?;
+                    }
+                }
+                if suite_trusted {
+                    Some("canonical_statement_hash_match")
+                } else if problem_fidelity_status == "verified" {
+                    Some("problem_fidelity_verified")
+                } else {
+                    return Err(mcp_invalid_params(format!(
+                        "status {:?} claims a verified proof, and the statement hash matches benchmark_problem_id {}, but suite {} is not trusted_canonical_source AND problem_version {} has not been independently fidelity-reviewed (fidelity_status={:?}) — a benchmark result claiming kernel_verified/certified needs either a trusted suite's canonical statement match or a real problem_submit_fidelity_review (issue #38's fidelity-basis policy)",
+                        status_str, args.benchmark_problem_id, run_suite_id, episode_pv_id, problem_fidelity_status
+                    )));
+                }
+            } else {
+                // An episode_id was given, but for a non-proof-claiming
+                // status (failed/timeout/infra_error/formalization_gap/
+                // skipped) -- no proof claim, so no fidelity basis to report.
+                Some("none")
+            }
+        } else {
+            // No episode_id -> no proof claim -> no fidelity basis to report.
+            Some("none")
+        };
+
+        // Issue #76: validate the structured gap taxonomy — a closed
+        // vocabulary, so aggregate reports can group failures. Never
+        // proof authority: it does not touch status/outcome/score.
+        let gap_categories_json: Option<String> = match &args.gap_categories {
+            None => None,
+            Some(cats) if cats.is_empty() => None,
+            Some(cats) => {
+                for c in cats {
+                    if !GAP_CATEGORY_VOCABULARY.contains(&c.as_str()) {
+                        return Err(mcp_invalid_params(format!(
+                            "gap_categories entry {:?} is not in the fixed vocabulary {:?} — use final_diagnostic_category for free text",
+                            c, GAP_CATEGORY_VOCABULARY
+                        )));
+                    }
+                }
+                Some(serde_json::to_string(cats).unwrap())
+            }
+        };
+
+        // Issue #92: kit-aware reporting metadata. kit_lemmas_used /
+        // missing_route_step are stored as given (reporting only,
+        // never proof authority); which kits were IMPORTED is derived
+        // server-side from the problem_version's manifest, not taken
+        // from the client.
+        let kit_lemmas_used_json: Option<String> = match &args.kit_lemmas_used {
+            None => None,
+            Some(l) if l.is_empty() => None,
+            Some(l) => Some(serde_json::to_string(l).unwrap()),
+        };
+        let kits_imported: Vec<String> = match &args.problem_version_id {
+            Some(pv_id) => conn.query_row(
+                "SELECT import_manifest_json FROM problem_versions WHERE id = ?1", [pv_id],
+                |row| row.get::<_, String>(0),
+            ).optional().map_err(rs)?
+                .map(|j| kits_in_manifest(&j))
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+
+        let existing_id: Option<String> = conn.query_row(
+            "SELECT id FROM benchmark_results WHERE run_id = ?1 AND benchmark_problem_id = ?2",
+            (&args.run_id, &args.benchmark_problem_id),
+            |row| row.get(0),
+        ).optional().map_err(rs)?;
+        let now = Utc::now().to_rfc3339();
+        let result_id = existing_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+        if let Some(existing_id) = &existing_id {
+            conn.execute(
+                "UPDATE benchmark_results SET
+                    problem_version_id = ?1, episode_id = ?2, status = ?3, outcome = ?4, pass_at = ?5,
+                    attempts_used = ?6, time_to_first_success_ms = ?7, cost_micros = ?8,
+                    final_diagnostic_category = ?9, proof_artifact_hash = ?10, trajectory_export_hash = ?11,
+                    replay_status = ?12, benchmark_fidelity_basis = ?13, gap_categories_json = ?14,
+                    kit_lemmas_used_json = ?15, missing_route_step = ?16, updated_at = ?17
+                 WHERE id = ?18",
+                rusqlite::params![&args.problem_version_id, &args.episode_id, status_str, &args.outcome, &args.pass_at,
+                 args.attempts_used, &args.time_to_first_success_ms, &args.cost_micros,
+                 &args.final_diagnostic_category, &args.proof_artifact_hash, &args.trajectory_export_hash,
+                 &args.replay_status, &benchmark_fidelity_basis, &gap_categories_json,
+                 &kit_lemmas_used_json, &args.missing_route_step, &now, existing_id],
+            ).map_err(rs)?;
+        } else {
+            conn.execute(
+                "INSERT INTO benchmark_results (
+                    id, run_id, benchmark_problem_id, problem_version_id, episode_id, status, outcome,
+                    pass_at, attempts_used, time_to_first_success_ms, cost_micros, final_diagnostic_category,
+                    proof_artifact_hash, trajectory_export_hash, replay_status, benchmark_fidelity_basis,
+                    gap_categories_json, kit_lemmas_used_json, missing_route_step, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20)",
+                rusqlite::params![&result_id, &args.run_id, &args.benchmark_problem_id, &args.problem_version_id, &args.episode_id,
+                 status_str, &args.outcome, &args.pass_at, args.attempts_used, &args.time_to_first_success_ms,
+                 &args.cost_micros, &args.final_diagnostic_category, &args.proof_artifact_hash,
+                 &args.trajectory_export_hash, &args.replay_status, &benchmark_fidelity_basis, &gap_categories_json,
+                 &kit_lemmas_used_json, &args.missing_route_step, &now],
+            ).map_err(rs)?;
+        }
+
+        let res = serde_json::json!({
+            "result_id": result_id,
+            "run_id": args.run_id,
+            "benchmark_problem_id": args.benchmark_problem_id,
+            "benchmark_fidelity_basis": benchmark_fidelity_basis,
+            "status": status_str,
+            "gap_categories": args.gap_categories,
+            "kits_imported": kits_imported,
+            "kit_lemmas_used": args.kit_lemmas_used,
+            "missing_route_step": args.missing_route_step,
+            "updated": existing_id.is_some(),
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_benchmark_run_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: BenchmarkRunObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let run_row: Option<(String, Option<String>, Option<String>, Option<String>, Option<String>, String, String, i64, Option<i64>, Option<i64>, String)> = conn.query_row(
+            "SELECT suite_id, run_envelope_id, proofsearch_commit, lean_version, mathlib_commit, solve_mode,
+                    allowed_tools_json, attempt_budget, wall_clock_budget_ms, lean_timeout_ms, created_at
+             FROM benchmark_runs WHERE id = ?1",
+            [&args.run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?)),
+        ).optional().map_err(rs)?;
+        let Some((suite_id, run_envelope_id, proofsearch_commit, lean_version, mathlib_commit, solve_mode, allowed_tools_json, attempt_budget, wall_clock_budget_ms, lean_timeout_ms, created_at)) = run_row else {
+            return Err(mcp_invalid_params(format!("unknown run_id: {}", args.run_id)));
+        };
+
+        let mut rstmt = conn.prepare(
+            "SELECT r.benchmark_problem_id, p.theorem_name, r.status, r.outcome, r.pass_at, r.attempts_used,
+                    r.time_to_first_success_ms, r.cost_micros, r.final_diagnostic_category, r.replay_status,
+                    r.benchmark_fidelity_basis, r.episode_id, e.outcome, r.gap_categories_json,
+                    r.kit_lemmas_used_json, r.missing_route_step, pv.import_manifest_json, p.upstream_problem_id
+             FROM benchmark_results r JOIN benchmark_problems p ON p.id = r.benchmark_problem_id
+             LEFT JOIN episodes e ON e.id = r.episode_id
+             LEFT JOIN problem_versions pv ON pv.id = r.problem_version_id
+             WHERE r.run_id = ?1 ORDER BY p.upstream_problem_id ASC"
+        ).map_err(rs)?;
+        let rows: Vec<(serde_json::Value, Option<String>)> = rstmt.query_map([&args.run_id], |row| {
+            // Issue #50: the historical result status is never rewritten;
+            // surface it alongside the referenced episode's LIVE outcome
+            // and a derived stale_result flag so a retroactive
+            // kernel_verified -> certified promotion is visible without
+            // mutating benchmark_results.
+            let stored_status: String = row.get(2)?;
+            let current_episode_outcome: Option<String> = row.get(12)?;
+            let stale_result = benchmark_result_is_stale(&stored_status, current_episode_outcome.as_deref());
+            // Issue #76: structured gap taxonomy, when recorded.
+            let gap_categories: serde_json::Value = row.get::<_, Option<String>>(13)?
+                .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
+                .unwrap_or(serde_json::Value::Null);
+            // Issue #92: kit-aware reporting — lemmas the client
+            // reported using, the missing route step for failures,
+            // and the kits actually IMPORTED (server-derived from the
+            // linked problem_version's manifest, never client-claimed).
+            let kit_lemmas_used: serde_json::Value = row.get::<_, Option<String>>(14)?
+                .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
+                .unwrap_or(serde_json::Value::Null);
+            let kits_imported: Vec<String> = row.get::<_, Option<String>>(16)?
+                .map(|j| kits_in_manifest(&j))
+                .unwrap_or_default();
+            Ok((serde_json::json!({
+                "benchmark_problem_id": row.get::<_, String>(0)?,
+                "theorem_name": row.get::<_, String>(1)?,
+                "upstream_problem_id": row.get::<_, String>(17)?,
+                "status": stored_status.clone(),                 // unchanged, back-compat
+                "stored_result_status": stored_status,           // #50 explicit vocabulary
+                "current_episode_outcome": current_episode_outcome,
+                "stale_result": stale_result,
+                "outcome": row.get::<_, Option<String>>(3)?,
+                "pass_at": row.get::<_, Option<i64>>(4)?,
+                "attempts_used": row.get::<_, i64>(5)?,
+                "time_to_first_success_ms": row.get::<_, Option<i64>>(6)?,
+                "cost_micros": row.get::<_, Option<i64>>(7)?,
+                "final_diagnostic_category": row.get::<_, Option<String>>(8)?,
+                "replay_status": row.get::<_, Option<String>>(9)?,
+                "benchmark_fidelity_basis": row.get::<_, Option<String>>(10)?,
+                "gap_categories": gap_categories,
+                "kits_imported": kits_imported,
+                "kit_lemmas_used": kit_lemmas_used,
+                "missing_route_step": row.get::<_, Option<String>>(15)?,
+            }), row.get::<_, Option<String>>(11)?))
+        }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+        let results: Vec<serde_json::Value> = rows.iter().map(|(v, _)| v.clone()).collect();
+
+        // Issue #69: group by trust basis so aggregates never collapse
+        // distinct trust bases into one solved/certified bucket; issue
+        // #76: count gap categories so failures read as an
+        // infrastructure roadmap, not a flat failure count.
+        let mut results_by_trust_basis: std::collections::BTreeMap<String, std::collections::BTreeMap<String, i64>> = Default::default();
+        let mut gap_category_counts: std::collections::BTreeMap<String, i64> = Default::default();
+        for (v, _) in &rows {
+            let basis = v["benchmark_fidelity_basis"].as_str().unwrap_or("none").to_string();
+            let status = v["stored_result_status"].as_str().unwrap_or("unknown").to_string();
+            *results_by_trust_basis.entry(basis).or_default().entry(status).or_insert(0) += 1;
+            if let Some(cats) = v["gap_categories"].as_array() {
+                for c in cats {
+                    if let Some(c) = c.as_str() {
+                        *gap_category_counts.entry(c.to_string()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        // Issue #92: kit-aware aggregation. Failures group by the
+        // missing kit route step (roadmap view), and the acceptance
+        // matrix crosses the embedded kit registry's benchmark
+        // targets with this run's actual outcomes — which problems
+        // are blocked on which kit issue, and which kit routes are
+        // already vindicated. Reporting only: none of this touches
+        // status, score, or proof authority.
+        let mut failures_by_missing_route_step: std::collections::BTreeMap<String, i64> = Default::default();
+        let mut kits_imported_by_problem: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+        for (v, _) in &rows {
+            let status = v["stored_result_status"].as_str().unwrap_or("unknown");
+            if !matches!(status, "kernel_verified" | "certified") {
+                if let Some(step) = v["missing_route_step"].as_str() {
+                    *failures_by_missing_route_step.entry(step.to_string()).or_insert(0) += 1;
+                }
+            }
+            if let (Some(up), Some(kits)) = (v["upstream_problem_id"].as_str(), v["kits_imported"].as_array()) {
+                if !kits.is_empty() {
+                    kits_imported_by_problem.insert(
+                        up.to_string(),
+                        kits.iter().filter_map(|k| k.as_str().map(String::from)).collect(),
+                    );
+                }
+            }
+        }
+        let registry = embedded_kit_registry();
+        let mut kit_acceptance_matrix: Vec<serde_json::Value> = Vec::new();
+        if let Some(kits) = registry["kits"].as_array() {
+            for kit in kits {
+                let kit_name = kit["kit_name"].as_str().unwrap_or("?");
+                let kit_status = kit["status"].as_str().unwrap_or("?");
+                for t in kit["known_acceptance_targets"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+                    let upstream = t["upstream_problem_id"].as_str().unwrap_or("?");
+                    let run_result_status = rows.iter()
+                        .find(|(v, _)| v["upstream_problem_id"].as_str() == Some(upstream))
+                        .map(|(v, _)| v["stored_result_status"].as_str().unwrap_or("unknown").to_string());
+                    kit_acceptance_matrix.push(serde_json::json!({
+                        "kit_name": kit_name,
+                        "kit_status": kit_status,
+                        "benchmark": t["benchmark"],
+                        "upstream_problem_id": upstream,
+                        "registry_target_status": t["status"],
+                        "tracking_issue": t["tracking_issue"],
+                        "result_status_in_this_run": run_result_status,
+                    }));
+                }
+            }
+        }
+
+        // Issue #38's cost policy (redesigned after real product
+        // direction): verifier_wall_time_ms/verifier_cpu_time_ms sum
+        // the real Lean invocation timing persisted on
+        // action_attempts.lean_result_json (see
+        // step.rs::attempt_finalize) across every attempt on every
+        // episode this run's results reference. Each is tracked with
+        // its own "found any data" flag since LeanModuleVerificationResult
+        // (the SubmitModule path) has no cpu-time field at all — an
+        // attempt can contribute wall time without contributing cpu
+        // time. mcp_action_count is a real, always-available count
+        // (0 is a genuine count, not a stand-in for "unmeasured").
+        let mut verifier_wall_time_ms_total: i64 = 0;
+        let mut verifier_wall_time_found = false;
+        let mut verifier_cpu_time_ms_total: i64 = 0;
+        let mut verifier_cpu_time_found = false;
+        let mut mcp_action_count: i64 = 0;
+        for episode_id in rows.iter().filter_map(|(_, ep)| ep.as_ref()) {
+            let mut jstmt = conn.prepare(
+                "SELECT lean_result_json FROM action_attempts WHERE episode_id = ?1"
+            ).map_err(rs)?;
+            let jsons: Vec<Option<String>> = jstmt.query_map([episode_id], |row| row.get(0))
+                .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+            mcp_action_count += jsons.len() as i64;
+            for j in jsons.iter().flatten() {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(j) {
+                    if let Some(wall_ms) = parsed.get("wall_time_ms").and_then(|v| v.as_i64()) {
+                        verifier_wall_time_ms_total += wall_ms;
+                        verifier_wall_time_found = true;
+                    }
+                    if let Some(cpu_ms) = parsed.get("lean_cpu_time_ms").and_then(|v| v.as_i64()) {
+                        verifier_cpu_time_ms_total += cpu_ms;
+                        verifier_cpu_time_found = true;
+                    }
+                }
+            }
+        }
+        let verifier_wall_time_ms: Option<i64> = if verifier_wall_time_found { Some(verifier_wall_time_ms_total) } else { None };
+        let verifier_cpu_time_ms: Option<i64> = if verifier_cpu_time_found { Some(verifier_cpu_time_ms_total) } else { None };
+
+        // model_call_reported_cost_micros: real per-attempt cost data
+        // already stored in model_call_leases (issue #34's audit
+        // finding), but ALWAYS self-reported by the runner/host, never
+        // independently measured by LLM-Driven Proof Search Environment — so it is bucketed at
+        // "attested" confidence, never merged into an exact total.
+        let mut model_call_cost_total: i64 = 0;
+        let mut model_call_cost_found = false;
+        for episode_id in rows.iter().filter_map(|(_, ep)| ep.as_ref()) {
+            let mut mstmt = conn.prepare(
+                "SELECT actual_cost_micros FROM model_call_leases WHERE episode_id = ?1 AND status = 'settled' AND actual_cost_micros IS NOT NULL"
+            ).map_err(rs)?;
+            let amounts: Vec<i64> = mstmt.query_map([episode_id], |row| row.get(0))
+                .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+            for a in amounts {
+                model_call_cost_total += a;
+                model_call_cost_found = true;
+            }
+        }
+        let model_call_reported_cost_micros: Option<i64> = if model_call_cost_found { Some(model_call_cost_total) } else { None };
+        let model_call_cost_confidence: Option<&str> = if model_call_cost_found { Some("attested") } else { None };
+
+        // storage_bytes_written: real byte length (Rust String::len(),
+        // never SQLite's character-counting LENGTH()) of the
+        // lean_result_json actually persisted per attempt (see
+        // step.rs::attempt_finalize), summed across every attempt on
+        // every episode this run's results reference — the same
+        // per-episode iteration pattern as verifier_wall_time_ms above.
+        let mut storage_bytes_total: i64 = 0;
+        let mut storage_bytes_found = false;
+        for episode_id in rows.iter().filter_map(|(_, ep)| ep.as_ref()) {
+            let mut bstmt = conn.prepare(
+                "SELECT lean_result_bytes FROM action_attempts WHERE episode_id = ?1 AND lean_result_bytes IS NOT NULL"
+            ).map_err(rs)?;
+            let amounts: Vec<i64> = bstmt.query_map([episode_id], |row| row.get(0))
+                .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+            for b in amounts {
+                storage_bytes_total += b;
+                storage_bytes_found = true;
+            }
+        }
+        let storage_bytes_written: Option<i64> = if storage_bytes_found { Some(storage_bytes_total) } else { None };
+
+        // Issue #38's MCP-side/storage-export observability:
+        // mcp_call_metrics (populated generically for every tool call
+        // in call_tool's wrapper) is correlated to this run three
+        // ways at once — by episode_id (any of this run's episodes),
+        // by run_id (a call that referenced this benchmark run
+        // directly, e.g. benchmark_result_record/benchmark_run_observe
+        // itself), or by run_envelope_id (a call tied to this run's
+        // own envelope, e.g. model_call_reserve/settle). A call
+        // matching more than one of these criteria is only counted
+        // once (DISTINCT id via UNION, not summed per-criterion).
+        // storage_export_bytes/storage_export_wall_time_ms further
+        // restrict to proof_export/trajectory_export specifically —
+        // the actual "export" surface.
+        let episode_ids: Vec<&String> = rows.iter().filter_map(|(_, ep)| ep.as_ref()).collect();
+        let episode_placeholders = if episode_ids.is_empty() { "''".to_string() } else {
+            episode_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",")
+        };
+        let correlation_sql = format!(
+            "episode_id IN ({episode_placeholders}) OR run_id = ? OR run_envelope_id = ?"
+        );
+        let mut mcp_params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        for eid in &episode_ids { mcp_params.push(*eid as &dyn rusqlite::ToSql); }
+        mcp_params.push(&args.run_id as &dyn rusqlite::ToSql);
+        let run_envelope_id_param: &dyn rusqlite::ToSql = &run_envelope_id;
+        mcp_params.push(run_envelope_id_param);
+
+        let mut mcp_time_stmt = conn.prepare(
+            &format!("SELECT wall_time_ms FROM mcp_call_metrics WHERE {correlation_sql}")
+        ).map_err(rs)?;
+        let mcp_wall_times: Vec<i64> = mcp_time_stmt.query_map(mcp_params.as_slice(), |row| row.get(0))
+            .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+        let mcp_handler_wall_time_ms: Option<i64> = if mcp_wall_times.is_empty() { None } else { Some(mcp_wall_times.iter().sum()) };
+
+        let mut export_stmt = conn.prepare(
+            &format!("SELECT wall_time_ms, response_bytes FROM mcp_call_metrics WHERE tool_name IN ('proof_export', 'trajectory_export') AND ({correlation_sql})")
+        ).map_err(rs)?;
+        let export_rows: Vec<(i64, Option<i64>)> = export_stmt.query_map(mcp_params.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+        let storage_export_wall_time_ms: Option<i64> = if export_rows.is_empty() { None } else { Some(export_rows.iter().map(|(w, _)| w).sum()) };
+        let storage_export_bytes: Option<i64> = {
+            let found: Vec<i64> = export_rows.iter().filter_map(|(_, b)| *b).collect();
+            if found.is_empty() { None } else { Some(found.iter().sum()) }
+        };
+
+        let is_solved = |r: &serde_json::Value| matches!(r["status"].as_str(), Some("kernel_verified") | Some("certified"));
+        let solved = results.iter().filter(|r| is_solved(r)).count();
+        let total = results.len();
+        let total_attempts: i64 = results.iter().filter_map(|r| r["attempts_used"].as_i64()).sum();
+        // pass@1: solved AND the first attempt was the one that succeeded.
+        // `pass_at` (attempt index of first success) is the authoritative
+        // signal when the caller supplies it; fall back to attempts_used == 1
+        // when it's absent, since attempts_used is a required field. Distinct
+        // from `solved_count`/overall solve rate, which counts a problem solved
+        // within the run's attempt_budget regardless of how many tries it took.
+        let solved_on_first_attempt = results.iter().filter(|r| {
+            is_solved(r) && match r["pass_at"].as_i64() {
+                Some(p) => p == 1,
+                None => r["attempts_used"].as_i64() == Some(1),
+            }
+        }).count();
+        let metrics = serde_json::json!({
+            "problems_attempted": total,
+            "solved_count": solved,
+            "solved_rate": if total > 0 { solved as f64 / total as f64 } else { 0.0 },
+            "pass_at_1_rate": if total > 0 { solved_on_first_attempt as f64 / total as f64 } else { 0.0 },
+            "kernel_verified_count": results.iter().filter(|r| r["status"] == "kernel_verified").count(),
+            "certified_count": results.iter().filter(|r| r["status"] == "certified").count(),
+            "average_attempts_per_result": if total > 0 { total_attempts as f64 / total as f64 } else { 0.0 },
+            "aggregate_basis": "stored_result_status — solved_count/solved_rate/pass_at_1_rate/kernel_verified_count/certified_count are computed from the benchmark_results.status recorded at result time, NOT the (possibly newer) current_episode_outcome; per-row stale_result flags where the underlying episode has since advanced (issue #50)",
+            // Issue #69: never collapse distinct trust bases into one
+            // solved bucket — a canonical_statement_hash_match proof
+            // and a problem_fidelity_verified proof are different
+            // claims and are reported separately.
+            "results_by_trust_basis": results_by_trust_basis,
+            // Issue #76: failures grouped by structured gap category —
+            // an infrastructure/formalization roadmap, distinct from
+            // model-capacity failure (math_unknown). Additive
+            // metadata; never affects any score above.
+            "gap_category_counts": gap_category_counts,
+            // Issue #92: kit-aware roadmap view. Failures grouped by
+            // the specific missing kit route step; which kits each
+            // problem's manifest actually imported (server-derived);
+            // and the registry-vs-run acceptance matrix showing which
+            // benchmark problems are blocked by which kit issue.
+            // Reporting only — never proof authority or score.
+            "failures_by_missing_route_step": failures_by_missing_route_step,
+            "kits_imported_by_problem": kits_imported_by_problem,
+            "kit_acceptance_matrix": kit_acceptance_matrix,
+        });
+
+        // Issue #38's cost policy, redesigned per explicit product
+        // direction: metrics first (time/count/bytes are real,
+        // reported honestly), monetary cost fields (*_cost_micros)
+        // ONLY populated when real money data exists, and a
+        // three-tier monetary rollup that never merges a
+        // self-reported (attested) or estimated figure into an
+        // "exact total" claim.
+        let (host_side_cost_micros, host_cost_confidence, cost_observation_id): (Option<i64>, Option<String>, Option<String>) = match &run_envelope_id {
+            Some(env_id) => conn.query_row(
+                "SELECT host_side_cost_micros, host_cost_confidence, current_cost_observation_id FROM run_envelopes WHERE id = ?1",
+                [env_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).optional().map_err(rs)?.unwrap_or((None, None, None)),
+            None => (None, None, None),
+        };
+
+        // Bucket every known monetary figure by its own confidence
+        // tier. "unknown"-confidence host cost is deliberately
+        // excluded from every bucket (its reliability is explicitly
+        // unvouched-for) but still surfaced verbatim in
+        // host_side_cost_micros for transparency.
+        let mut known_exact_cost_micros: Option<i64> = None;
+        let mut reported_attested_cost_micros: Option<i64> = None;
+        let mut estimated_cost_micros: Option<i64> = None;
+        if let Some(amount) = host_side_cost_micros {
+            match host_cost_confidence.as_deref() {
+                Some("exact_provider_receipt") | Some("exact_local_meter") => {
+                    known_exact_cost_micros = Some(known_exact_cost_micros.unwrap_or(0) + amount);
+                }
+                Some("estimated") => {
+                    estimated_cost_micros = Some(estimated_cost_micros.unwrap_or(0) + amount);
+                }
+                Some("attested") => {
+                    reported_attested_cost_micros = Some(reported_attested_cost_micros.unwrap_or(0) + amount);
+                }
+                _ => {} // "unknown" or unset: real number, unvouched reliability — not bucketed.
+            }
+        }
+        if let Some(amount) = model_call_reported_cost_micros {
+            // model_call_reported_cost_micros is always "attested" tier today
+            // (no mechanism yet to attach a provider receipt to a lease).
+            reported_attested_cost_micros = Some(reported_attested_cost_micros.unwrap_or(0) + amount);
+        }
+
+        // mcp_side_cost_micros/storage_export_cost_micros have no meter
+        // or rate card yet — always null, never fabricated as zero.
+        // Their absence alone is enough to keep unknown_cost_present
+        // true until real instrumentation lands for them.
+        let mcp_side_cost_micros: Option<i64> = None;
+        let storage_export_cost_micros: Option<i64> = None;
+        let unknown_cost_present = mcp_side_cost_micros.is_none()
+            || storage_export_cost_micros.is_none()
+            || matches!(host_cost_confidence.as_deref(), None | Some("unknown"));
+
+        // total_cost_known requires EVERY material cost surface to be
+        // exact — currently unreachable in practice, since mcp_side/
+        // storage_export costs have no instrumentation at all yet;
+        // that's the honest, correct state until they do.
+        // reported_total_not_exact: some real monetary signal exists
+        // (exact, attested, or estimated) but the report can't yet
+        // vouch for a complete exact total.
+        // total_cost_incomplete: no monetary signal at all.
+        let cost_completeness = if !unknown_cost_present && estimated_cost_micros.is_none() && reported_attested_cost_micros.is_none() && known_exact_cost_micros.is_some() {
+            "total_cost_known"
+        } else if known_exact_cost_micros.is_some() || reported_attested_cost_micros.is_some() || estimated_cost_micros.is_some() {
+            "reported_total_not_exact"
+        } else {
+            "total_cost_incomplete"
+        };
+
+        let cost_summary = serde_json::json!({
+            "host_side_cost_micros": host_side_cost_micros,
+            "host_cost_confidence": host_cost_confidence,
+            "cost_observation_id": cost_observation_id,
+            "model_call_reported_cost_micros": model_call_reported_cost_micros,
+            "model_call_cost_confidence": model_call_cost_confidence,
+            "verifier_wall_time_ms": verifier_wall_time_ms,
+            "verifier_cpu_time_ms": verifier_cpu_time_ms,
+            "mcp_action_count": mcp_action_count,
+            "mcp_handler_wall_time_ms": mcp_handler_wall_time_ms,
+            "mcp_side_cost_micros": mcp_side_cost_micros,
+            "storage_bytes_written": storage_bytes_written,
+            "storage_export_bytes": storage_export_bytes,
+            "storage_export_wall_time_ms": storage_export_wall_time_ms,
+            "storage_export_cost_micros": storage_export_cost_micros,
+            "known_exact_cost_micros": known_exact_cost_micros,
+            "reported_attested_cost_micros": reported_attested_cost_micros,
+            "estimated_cost_micros": estimated_cost_micros,
+            "unknown_cost_present": unknown_cost_present,
+            "cost_completeness": cost_completeness,
+            "not_yet_instrumented": "mcp_side_cost_micros/storage_export_cost_micros are not yet instrumented — never reported as zero; there is no pricing/rate-card decision yet for either surface. mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms are now real, measured metrics (v0.3.23) — null only when this run genuinely has no correlated mcp_call_metrics/action_attempts rows yet, never fabricated as zero. model_call_reported_cost_micros is real per-attempt data from model_call_leases but always self-reported (attested), never independently measured by LLM-Driven Proof Search Environment.",
+        });
+
+        let res = serde_json::json!({
+            "run_id": args.run_id,
+            "suite_id": suite_id,
+            "run_envelope_id": run_envelope_id,
+            "proofsearch_commit": proofsearch_commit,
+            "lean_version": lean_version,
+            "mathlib_commit": mathlib_commit,
+            "solve_mode": solve_mode,
+            "allowed_tools": serde_json::from_str::<serde_json::Value>(&allowed_tools_json).unwrap_or(serde_json::Value::Array(vec![])),
+            "attempt_budget": attempt_budget,
+            "wall_clock_budget_ms": wall_clock_budget_ms,
+            "lean_timeout_ms": lean_timeout_ms,
+            "created_at": created_at,
+            "results": results,
+            "metrics": metrics,
+            "cost_summary": cost_summary,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
 }
 
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
@@ -11259,12 +12175,10 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
             make_tool::<MathlibSearchLocalArtifactsArgs>("mathlib_search_local_artifacts", "Search THIS LLM-Driven Proof Search Environment instance's own previously-verified theorem/def names for a substring match — a local usage_example precedent, not a Mathlib-library result"),
             make_tool::<RunEnvelopeArgs>("run_envelope", "Issue #190: ONE tool for the entire run-envelope family (issues #34/#38/#46) — create, correct, and read back who/what produced a set of episodes: host, model, mode (development/evaluation/benchmark/private_audit/public_report), and host-side cost accounting LLM-Driven Proof Search Environment itself cannot observe. Purely descriptive metadata; NO action ever affects proof status. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"mode\":\"development\"|\"evaluation\"|\"benchmark\"|\"private_audit\"|\"public_report\"} (+ optional host_name, host_model, benchmark_suite_name, host_side_cost_micros, host_cost_confidence, notes — creates the envelope and, issue #46, an origin cost observation so the append-only history has a defined head from creation) | {\"type\":\"update\",\"run_envelope_id\":\"..\"} (+ optional host_side_cost_micros, host_cost_confidence, notes — update a run envelope's host-side cost fields or notes after the fact; APPEND-ONLY under the hood (issue #46): a cost correction appends an immutable observation rather than overwriting, so the prior value stays queryable via the observe action's cost_observations) | {\"type\":\"cost_observation_add\",\"run_envelope_id\":\"..\"} (+ optional host_side_cost_micros, host_cost_confidence, source, notes — append an auditable, append-only host-side cost observation (issue #46); never overwrites a prior observation — the previous value stays queryable; sets the envelope's current selected cost figure while preserving the full supersedes chain) | {\"type\":\"attach_episode\",\"run_envelope_id\":\"..\",\"episode_id\":\"..\"} (+ optional allow_dev_attested — tag an existing episode with a run envelope, metadata only, never changes the episode's outcome/state; mode-enforcement policy: unconditionally rejects attaching an 'attested'/unsafe_dev_attestation episode to a benchmark/evaluation/public_report-mode envelope with no override, 'development' is always allowed, and 'private_audit' requires allow_dev_attested=true) | {\"type\":\"observe\",\"run_envelope_id\":\"..\"} (read back a run envelope, every episode tagged with it, and its full append-only host-side cost observation history)"),
-            make_tool::<BenchmarkSuiteArgs>("benchmark_suite", "Issue #193: ONE tool for the benchmark-suite lifecycle (issues #29/#30/#65) — register a benchmark suite (e.g. PutnamBench), read it back with its append-only trust-review history and (by default) every registered problem, and change its trusted_canonical_source flag after creation. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"name\":\"..\"} (+ optional upstream_url, upstream_commit, language (defaults \"Lean4\"), trusted_canonical_source — manual/structured registration, not automated parsing; rejects a duplicate name rather than silently creating a second suite with the same identity. trusted_canonical_source is an honest, self-declared trust assertion: assert true ONLY for a suite you can vouch is a real, externally-curated benchmark corpus whose own registered root_formal_statement is itself sufficient fidelity evidence — a statement-hash match against such a suite is accepted by benchmark_result_record as fidelity basis for a kernel_verified/certified claim WITHOUT requiring a separate problem_submit_fidelity_review. LLM-Driven Proof Search Environment never independently verifies this claim; defaults to false so an arbitrary custom suite can never silently gain this treatment) | {\"type\":\"observe\"} (+ suite_id OR name, optional include_problems defaulting true — read back the suite row (upstream provenance, trusted_canonical_source), its append-only trust-review history, and every registered problem's full row (root_formal_statement, prover_ready_statement + hashes, import manifest, goal class). The sanctioned way for a host to read registered benchmark content; no database side channel needed) | {\"type\":\"set_trust\",\"suite_id\":\"..\",\"trusted_canonical_source\":true|false,\"approver_id\":\"..\"} (+ optional notes — the admin path for changing a suite's trusted_canonical_source flag after creation, forcing per-problem fidelity reviews when an importer forgot the flag. approver_id must be non-empty — trust changes are audited. Same honesty contract as create: assert true ONLY for a real, externally-curated corpus, and raising trust to true REQUIRES non-empty notes recording WHY this suite qualifies. Every REAL change (previous value != new value) is recorded append-only in benchmark_suite_trust_reviews (approver, previous → new value, notes) alongside the update; a same-value call is a recorded-as-unchanged no-op — no audit row, no update, trust_review_id null in the response. Never affects proof status of existing results — only the fidelity basis future benchmark_result_record calls can claim). The wider benchmark_* family is deliberately split into three consolidated tools by epic #182 — `benchmark_problem_register`/`benchmark_problem_observe` and `benchmark_run_create`/`benchmark_result_record`/`benchmark_run_observe` are separate tools, not part of this consolidation"),
+            make_tool::<BenchmarkSuiteArgs>("benchmark_suite", "Issue #193: ONE tool for the benchmark-suite lifecycle (issues #29/#30/#65) — register a benchmark suite (e.g. PutnamBench), read it back with its append-only trust-review history and (by default) every registered problem, and change its trusted_canonical_source flag after creation. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"name\":\"..\"} (+ optional upstream_url, upstream_commit, language (defaults \"Lean4\"), trusted_canonical_source — manual/structured registration, not automated parsing; rejects a duplicate name rather than silently creating a second suite with the same identity. trusted_canonical_source is an honest, self-declared trust assertion: assert true ONLY for a suite you can vouch is a real, externally-curated benchmark corpus whose own registered root_formal_statement is itself sufficient fidelity evidence — a statement-hash match against such a suite is accepted by benchmark_result_record as fidelity basis for a kernel_verified/certified claim WITHOUT requiring a separate problem_submit_fidelity_review. LLM-Driven Proof Search Environment never independently verifies this claim; defaults to false so an arbitrary custom suite can never silently gain this treatment) | {\"type\":\"observe\"} (+ suite_id OR name, optional include_problems defaulting true — read back the suite row (upstream provenance, trusted_canonical_source), its append-only trust-review history, and every registered problem's full row (root_formal_statement, prover_ready_statement + hashes, import manifest, goal class). The sanctioned way for a host to read registered benchmark content; no database side channel needed) | {\"type\":\"set_trust\",\"suite_id\":\"..\",\"trusted_canonical_source\":true|false,\"approver_id\":\"..\"} (+ optional notes — the admin path for changing a suite's trusted_canonical_source flag after creation, forcing per-problem fidelity reviews when an importer forgot the flag. approver_id must be non-empty — trust changes are audited. Same honesty contract as create: assert true ONLY for a real, externally-curated corpus, and raising trust to true REQUIRES non-empty notes recording WHY this suite qualifies. Every REAL change (previous value != new value) is recorded append-only in benchmark_suite_trust_reviews (approver, previous → new value, notes) alongside the update; a same-value call is a recorded-as-unchanged no-op — no audit row, no update, trust_review_id null in the response. Never affects proof status of existing results — only the fidelity basis future benchmark_result_record calls can claim). The wider benchmark_* family is deliberately split into three consolidated tools by epic #182 — `benchmark_problem_register`/`benchmark_problem_observe` (future `benchmark_problem`) and the `benchmark_run` tool (issue #194: create/result_record/observe) are separate tools, not part of this consolidation"),
             make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise. import_manifest entries may be Lean module paths AND `open [scoped] <Namespace> ...` directives (issue #62) — capture the upstream file's own open context here so registered statements that rely on scoped notation (ℤ[X], ∠, π) elaborate faithfully at proving time"),
             make_tool::<BenchmarkProblemObserveArgs>("benchmark_problem_observe", "Read back one registered benchmark problem (issue #65) by benchmark_problem_id, or by (suite_id, upstream_problem_id). Returns the full row: root_formal_statement, server-derived prover_ready_statement (the exact bytes problem_create/SubmitModule must receive), both hashes, import manifest (module paths + open directives), goal class, and status"),
-            make_tool::<BenchmarkRunCreateArgs>("benchmark_run_create", "Create a benchmark run against a suite. Requires an existing run_envelope_id (call run_envelope_create first — a run should not start unassociated with host/mode/cost tracking). lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results"),
-            make_tool::<BenchmarkResultRecordArgs>("benchmark_result_record", "Record (or update) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem. For failed/gave-up results, optionally attach structured gap_categories (issue #76: math_unknown / library_missing / statement_elaboration_gap / statement_elaborates_but_bridge_missing / tactic_timeout / tactic_transport_hazard / geometry_case_analysis_missing / coefficient_uniqueness_missing / area_coordinate_scaffold_missing / convexity_extreme_point_missing / export_trust_policy_gap / benchmark_admin_gap) — reporting metadata that never affects proof authority or score, so failures read as an infrastructure roadmap instead of a flat failure count. Issue #92 adds kit-aware reporting: kit_lemmas_used (fully qualified kit lemma names the attempt used) and missing_route_step (which kit route step blocked a failure) — while kits_imported is derived SERVER-SIDE from the linked problem_version's import manifest, never client-claimed"),
-            make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. Issue #92: per-result kit fields (kits_imported server-derived from the manifest, kit_lemmas_used, missing_route_step) plus metrics.failures_by_missing_route_step, metrics.kits_imported_by_problem, and metrics.kit_acceptance_matrix (embedded kit registry targets crossed with this run's outcomes — which problems are blocked by which kit issue). solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric. cost_summary separates real metrics (verifier_wall_time_ms/verifier_cpu_time_ms/mcp_action_count/mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms — all real, measured data, null only when genuinely no correlated activity exists yet) from monetary cost (*_cost_micros fields, null unless real money data or a rate card exists — mcp_side_cost_micros/storage_export_cost_micros stay null with no pricing profile decided for either surface). cost_completeness is 'total_cost_known' only when every material cost surface is exact (currently unreachable: mcp_side/storage_export have real metrics but no pricing), 'reported_total_not_exact' when some real monetary signal exists (exact/attested/estimated) but not a complete exact total, else 'total_cost_incomplete'"),
+            make_tool::<BenchmarkRunArgs>("benchmark_run", "Issue #194: ONE tool for the entire benchmark-run family (issue #182's benchmark_run_create/benchmark_result_record/benchmark_run_observe consolidation) — create a benchmark run against a suite, record (or update) a problem's result within it, and read back a run with its results and aggregate metrics. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"suite_id\":\"..\",\"run_envelope_id\":\"..\",\"solve_mode\":\"solve_only\"|\"submit_module_allowed\"|\"submit_module_plus_draft_planning\"|\"submit_module_plus_librarian\",\"attempt_budget\":N} (+ optional proofsearch_commit, allowed_tools, wall_clock_budget_ms, lean_timeout_ms — creates a benchmark run. Requires an existing run_envelope_id (call run_envelope_create first — a run should not start unassociated with host/mode/cost tracking). lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results) | {\"type\":\"result_record\",\"run_id\":\"..\",\"benchmark_problem_id\":\"..\",\"status\":\"kernel_verified\"|\"certified\"|\"failed\"|\"timeout\"|\"infra_error\"|\"formalization_gap\"|\"skipped\",\"attempts_used\":N} (+ optional problem_version_id, episode_id, outcome, pass_at, time_to_first_success_ms, cost_micros, final_diagnostic_category, proof_artifact_hash, trajectory_export_hash, replay_status, allow_dev_attested, gap_categories, kit_lemmas_used, missing_route_step — records (or updates) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem, and a kernel_verified/certified claim is rejected outright without an episode_id at all. Issue #38's fidelity-basis policy: a kernel_verified/certified claim additionally requires EITHER the suite be trusted_canonical_source=true (a real, externally-curated corpus like PutnamBench, whose own canonical statement-hash match is accepted as sufficient fidelity evidence — basis='canonical_statement_hash_match') OR the backing problem_version's fidelity_status be independently 'verified' (basis='problem_fidelity_verified') — an arbitrary untrusted/custom suite backed only by an unsafe_dev_attestation ('attested') problem is not sufficient. Mode-enforcement exception: this fidelity-basis check is skipped for a trusted_canonical_source suite (trusted_canonical_hash_exemption_applies), avoiding a contradiction with that flag's own purpose; otherwise an 'attested' problem's kernel_verified/certified claim is rejected in benchmark/evaluation/public_report run-envelope modes, and requires allow_dev_attested=true in private_audit mode (enforce_dev_attestation_mode_policy). For failed/gave-up results, optionally attach structured gap_categories (issue #76: math_unknown / library_missing / statement_elaboration_gap / statement_elaborates_but_bridge_missing / tactic_timeout / tactic_transport_hazard / geometry_case_analysis_missing / coefficient_uniqueness_missing / area_coordinate_scaffold_missing / convexity_extreme_point_missing / export_trust_policy_gap / benchmark_admin_gap) — reporting metadata that never affects proof authority or score, so failures read as an infrastructure roadmap instead of a flat failure count. Issue #92 adds kit-aware reporting: kit_lemmas_used (fully qualified kit lemma names the attempt used) and missing_route_step (which kit route step blocked a failure) — while kits_imported is derived SERVER-SIDE from the linked problem_version's import manifest, never client-claimed) | {\"type\":\"observe\",\"run_id\":\"..\"} (read back a run, every result recorded against it, and aggregate pass/attempt metrics. Issue #92: per-result kit fields (kits_imported server-derived from the manifest, kit_lemmas_used, missing_route_step) plus metrics.failures_by_missing_route_step, metrics.kits_imported_by_problem, and metrics.kit_acceptance_matrix (embedded kit registry targets crossed with this run's outcomes — which problems are blocked by which kit issue). solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric. cost_summary separates real metrics (verifier_wall_time_ms/verifier_cpu_time_ms/mcp_action_count/mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms — all real, measured data, null only when genuinely no correlated activity exists yet) from monetary cost (*_cost_micros fields, null unless real money data or a rate card exists — mcp_side_cost_micros/storage_export_cost_micros stay null with no pricing profile decided for either surface). cost_completeness is 'total_cost_known' only when every material cost surface is exact (currently unreachable: mcp_side/storage_export have real metrics but no pricing), 'reported_total_not_exact' when some real monetary signal exists (exact/attested/estimated) but not a complete exact total, else 'total_cost_incomplete')"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -11413,8 +12327,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 50,
-                        "total_tool_count": 50,
+                        "classified_tool_count": 48,
+                        "total_tool_count": 48,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -11456,38 +12370,17 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "diagnostic_only",
                                 "required_run_mode": "any"
                             },
-                            "benchmark_result_record": {
-                                "side_effect": "mutating — upserts benchmark_results, now including benchmark_fidelity_basis (v0.3.21)",
-                                "trust_level": "verifier_backed cross-check, not bare client assertion: since issue #36, a kernel_verified/certified claim is rejected outright without a real episode_id, and since issue #30 the episode's actual recorded outcome and root_statement_hash (via COALESCE(prover_ready_statement_hash, root_statement_hash)) must both match what's claimed. Since v0.3.21 (issue #38's fidelity-basis policy, resolving the design question this entry used to record), a kernel_verified/certified claim is ALSO rejected outright unless EITHER the suite is trusted_canonical_source=true (a real, externally-curated corpus like PutnamBench, whose own canonical statement-hash match is accepted as sufficient fidelity evidence — basis='canonical_statement_hash_match') OR the backing problem_version's fidelity_status is independently 'verified' (basis='problem_fidelity_verified'). An arbitrary untrusted/custom suite backed only by an unsafe_dev_attestation ('attested') problem is no longer sufficient",
-                                "cost_surface": "none directly",
-                                "benchmark_safety": "safe_public_output — records status/metrics/attempts_used/benchmark_fidelity_basis, never a proof body",
-                                "replayability": "replayable_with_hashes via the referenced episode_id",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "aggregate_metric",
-                                "required_run_mode": "benchmark",
-                                "note": "benchmark_fidelity_basis is deliberately distinct from problem_versions.fidelity_status: the latter asks whether the formal statement faithfully represents the INFORMAL source problem (independent human/reviewer judgment); the former asks what evidence backs THIS benchmark claim specifically, which for a trusted suite can be satisfied by hash-matching alone without ever requiring that separate review. Public/report-facing consumers should describe basis='canonical_statement_hash_match' as e.g. 'matched the suite's own canonical formal statement', never as 'statement-fidelity certified by LLM-Driven Proof Search Environment' — LLM-Driven Proof Search Environment performed a hash comparison, not an independent fidelity review, in that case. Since v0.3.22 (mode-enforcement policy), an UNTRUSTED suite's kernel_verified/certified claim backed by an 'attested' problem is rejected with the specific 'attested/dev-bypass problems are not valid for benchmark/evaluation/public_report runs' message when the run's envelope mode is benchmark/evaluation/public_report — checked before the fidelity-basis logic, though for an untrusted suite the fidelity-basis check would reject it in EVERY mode anyway, so this mostly changes rejection wording, not outcome, in this specific handler (the real new restriction lives in run_envelope_attach_episode). Deliberately SKIPPED when the suite is trusted_canonical_source, to avoid contradicting that flag's own purpose and breaking putnam_runner.rs's real, already-shipped workflow (mode='benchmark' + unsafe_dev_attestation import, with no per-problem review step) — a real conflict found and resolved this way, not guessed at silently."
-                            },
-                            "benchmark_run_observe": {
-                                "side_effect": "read_only — aggregates existing benchmark_results/action_attempts rows, writes nothing",
-                                "trust_level": "verifier_backed — every number reported is derived from already-recorded, already-cross-checked state, not recomputed trust",
-                                "cost_surface": "mcp_side (the query/aggregation work itself, unmeasured) while its OUTPUT surfaces host_side/verifier_side cost data for other surfaces",
-                                "benchmark_safety": "safe_public_output — per-problem status and aggregate metrics, never proof bodies; this is a materially different exposure than proof_export/trajectory_export precisely because it never touches payload_json/proof content",
-                                "replayability": "deterministic given the same DB state",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "aggregate_metric",
-                                "required_run_mode": "any (meaningful mainly in benchmark mode, but nothing depends on the caller's declared mode)",
-                                "report_semantics": "per result it surfaces stored_result_status (the status recorded at result time) vs current_episode_outcome (the referenced episode's live outcome) and a stale_result flag; the historical benchmark_results.status is never mutated, and aggregate metrics stay computed from stored_result_status (issue #50)"
-                            },
-                            "benchmark_run_create": {
-                                "side_effect": "mutating — inserts a benchmark_runs row",
-                                "trust_level": "mcp_generated for lean_version/mathlib_commit specifically — read from the SERVER's own detected toolchain, never accepted from the client, so a run can't misreport what verifier it actually used",
-                                "cost_surface": "none directly",
-                                "benchmark_safety": "safe_public_output — creates a container, no proof content",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "benchmark",
-                                "note": "since issue #34's first bounded slice (v0.3.13), run_envelope_id is REQUIRED, not optional — a benchmark run cannot exist unassociated with host/mode/cost tracking. Since issue #42 the run's run_envelope must itself be mode='benchmark' (a development/evaluation/private_audit/public_report envelope is rejected), and when that envelope declares a benchmark_suite_name it must equal the suite this run targets"
+                            "benchmark_run": {
+                                "side_effect": "mixed by action (issue #194: one tool consolidating the former benchmark_run_create / benchmark_result_record / benchmark_run_observe tools; per-action semantics unchanged): create is mutating — inserts a benchmark_runs row; result_record is mutating — upserts benchmark_results, including benchmark_fidelity_basis (v0.3.21); observe is read_only — aggregates existing benchmark_results/action_attempts rows, writes nothing",
+                                "trust_level": "mixed by action. create: mcp_generated for lean_version/mathlib_commit specifically — read from the SERVER's own detected toolchain, never accepted from the client, so a run can't misreport what verifier it actually used. result_record: verifier_backed cross-check, not bare client assertion — THE MOST TRUST-CRITICAL ACTION IN THIS TOOL: since issue #36, a kernel_verified/certified claim is rejected outright without a real episode_id, and since issue #30 the episode's actual recorded outcome and root_statement_hash (via COALESCE(prover_ready_statement_hash, root_statement_hash)) must both match what's claimed. Since v0.3.21 (issue #38's fidelity-basis policy), a kernel_verified/certified claim is ALSO rejected outright unless EITHER the suite is trusted_canonical_source=true (a real, externally-curated corpus like PutnamBench, whose own canonical statement-hash match is accepted as sufficient fidelity evidence — basis='canonical_statement_hash_match') OR the backing problem_version's fidelity_status is independently 'verified' (basis='problem_fidelity_verified'). An arbitrary untrusted/custom suite backed only by an unsafe_dev_attestation ('attested') problem is not sufficient. observe: verifier_backed — every number reported is derived from already-recorded, already-cross-checked state, not recomputed trust",
+                                "cost_surface": "none directly for create/result_record; observe is mcp_side (the query/aggregation work itself, unmeasured) while its OUTPUT surfaces host_side/verifier_side cost data for other surfaces",
+                                "benchmark_safety": "safe_public_output for every action — create creates a container with no proof content; result_record records status/metrics/attempts_used/benchmark_fidelity_basis, never a proof body; observe surfaces per-problem status and aggregate metrics, never proof bodies (a materially different exposure than proof_export/trajectory_export precisely because it never touches payload_json/proof content)",
+                                "replayability": "create: deterministic. result_record: replayable_with_hashes via the referenced episode_id. observe: deterministic given the same DB state",
+                                "source_code_impact": "no_source_change for every action",
+                                "artifact_risk": "none for create; aggregate_metric for result_record/observe",
+                                "required_run_mode": "create/result_record: benchmark. observe: any (meaningful mainly in benchmark mode, but nothing depends on the caller's declared mode)",
+                                "note": "create: since issue #34's first bounded slice (v0.3.13), run_envelope_id is REQUIRED, not optional — a benchmark run cannot exist unassociated with host/mode/cost tracking. Since issue #42 the run's run_envelope must itself be mode='benchmark' (a development/evaluation/private_audit/public_report envelope is rejected), and when that envelope declares a benchmark_suite_name it must equal the suite this run targets. result_record: benchmark_fidelity_basis is deliberately distinct from problem_versions.fidelity_status: the latter asks whether the formal statement faithfully represents the INFORMAL source problem (independent human/reviewer judgment); the former asks what evidence backs THIS benchmark claim specifically, which for a trusted suite can be satisfied by hash-matching alone without ever requiring that separate review. Public/report-facing consumers should describe basis='canonical_statement_hash_match' as e.g. 'matched the suite's own canonical formal statement', never as 'statement-fidelity certified by LLM-Driven Proof Search Environment' — LLM-Driven Proof Search Environment performed a hash comparison, not an independent fidelity review, in that case. Since v0.3.22 (mode-enforcement policy), an UNTRUSTED suite's kernel_verified/certified claim backed by an 'attested' problem is rejected with the specific 'attested/dev-bypass problems are not valid for benchmark/evaluation/public_report runs' message when the run's envelope mode is benchmark/evaluation/public_report — checked before the fidelity-basis logic, though for an untrusted suite the fidelity-basis check would reject it in EVERY mode anyway, so this mostly changes rejection wording, not outcome, in this specific handler (the real new restriction lives in run_envelope_attach_episode). Deliberately SKIPPED when the suite is trusted_canonical_source, to avoid contradicting that flag's own purpose and breaking putnam_runner.rs's real, already-shipped workflow (mode='benchmark' + unsafe_dev_attestation import, with no per-problem review step) — a real conflict found and resolved this way, not guessed at silently. This trust boundary is UNCHANGED by the issue #194 consolidation — only the call shape (action-enum dispatch) changed, never the underlying policy functions (enforce_dev_attestation_mode_policy, trusted_canonical_hash_exemption_applies) or their behavior.",
+                                "report_semantics": "observe: per result it surfaces stored_result_status (the status recorded at result time) vs current_episode_outcome (the referenced episode's live outcome) and a stale_result flag; the historical benchmark_results.status is never mutated, and aggregate metrics stay computed from stored_result_status (issue #50)"
                             },
                             "problem_create": {
                                 "side_effect": "mutating — inserts a problem_versions row",
@@ -13694,777 +14587,7 @@ impl ServerHandler for ChatDbMcp {
                 };
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&problem).unwrap())]))
             }
-            "benchmark_run_create" => {
-                let args: BenchmarkRunCreateArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                if args.attempt_budget <= 0 {
-                    return Err(mcp_invalid_params("attempt_budget must be positive"));
-                }
-
-                let conn = self.conn.lock().await;
-                let suite_exists: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM benchmark_suites WHERE id = ?1", [&args.suite_id], |row| row.get(0),
-                ).map_err(rs)?;
-                if suite_exists == 0 {
-                    return Err(mcp_invalid_params(format!("unknown suite_id: {}", args.suite_id)));
-                }
-                // Issue #34's required behavior: "A benchmark run should not
-                // start unless a run envelope exists." Without one, a run's
-                // host/model identity and cost accounting have no home at
-                // all — required in the wire schema itself (run_envelope_id
-                // is a plain String, not Option<String>), not just checked
-                // here, so a client's own JSON schema tooling surfaces this
-                // before the call is even made.
-                //
-                // Issue #42: a measured benchmark run must target a
-                // BENCHMARK-mode envelope (a development/evaluation/
-                // private_audit/public_report envelope is rejected), and when
-                // that envelope declares a benchmark_suite_name it must equal
-                // the suite this run targets. This keeps dev/exploratory
-                // envelopes and cross-suite mislabeling out of measured runs.
-                let envelope: Option<(String, Option<String>)> = conn.query_row(
-                    "SELECT mode, benchmark_suite_name FROM run_envelopes WHERE id = ?1",
-                    [&args.run_envelope_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                ).optional().map_err(rs)?;
-                let Some((envelope_mode, envelope_suite_name)) = envelope else {
-                    return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
-                };
-                if envelope_mode != "benchmark" {
-                    return Err(mcp_invalid_params(format!(
-                        "benchmark_run_create requires a benchmark-mode run envelope; run_envelope {} has mode '{}'",
-                        args.run_envelope_id, envelope_mode
-                    )));
-                }
-                if let Some(env_suite) = envelope_suite_name.as_deref() {
-                    let suite_name: String = conn.query_row(
-                        "SELECT name FROM benchmark_suites WHERE id = ?1", [&args.suite_id], |row| row.get(0),
-                    ).map_err(rs)?;
-                    if env_suite != suite_name {
-                        return Err(mcp_invalid_params(format!(
-                            "run envelope's benchmark_suite_name '{}' does not match this run's suite '{}'",
-                            env_suite, suite_name
-                        )));
-                    }
-                }
-
-                let solve_mode_str = match args.solve_mode {
-                    BenchmarkSolveMode::SolveOnly => "solve_only",
-                    BenchmarkSolveMode::SubmitModuleAllowed => "submit_module_allowed",
-                    BenchmarkSolveMode::SubmitModulePlusDraftPlanning => "submit_module_plus_draft_planning",
-                    BenchmarkSolveMode::SubmitModulePlusLibrarian => "submit_module_plus_librarian",
-                };
-                // lean_version/mathlib_commit are read from the server's OWN
-                // detected environment, never accepted from the client — the
-                // only trustworthy record of what actually checked any
-                // resulting proofs (a client-supplied value could silently
-                // misrepresent the toolchain a result was really verified
-                // against).
-                let (lean_version, mathlib_commit) = match &self.lean_environment {
-                    Some(env) => (Some(env.descriptor.clone()), Some(env.mathlib_rev.clone())),
-                    None => (None, None),
-                };
-                let allowed_tools_json = serde_json::to_string(&args.allowed_tools).unwrap();
-                let run_id = Uuid::new_v4().to_string();
-                let now = Utc::now().to_rfc3339();
-                conn.execute(
-                    "INSERT INTO benchmark_runs (
-                        id, suite_id, run_envelope_id, proofsearch_commit, lean_version, mathlib_commit,
-                        solve_mode, allowed_tools_json, attempt_budget, wall_clock_budget_ms, lean_timeout_ms, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                    (&run_id, &args.suite_id, &args.run_envelope_id, &args.proofsearch_commit, &lean_version, &mathlib_commit,
-                     solve_mode_str, &allowed_tools_json, args.attempt_budget, &args.wall_clock_budget_ms, &args.lean_timeout_ms, &now),
-                ).map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "run_id": run_id,
-                    "solve_mode": solve_mode_str,
-                    "lean_version": lean_version,
-                    "mathlib_commit": mathlib_commit,
-                    "created_at": now,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "benchmark_result_record" => {
-                let args: BenchmarkResultRecordArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let conn = self.conn.lock().await;
-                let run_row: Option<(String, Option<String>)> = conn.query_row(
-                    "SELECT suite_id, run_envelope_id FROM benchmark_runs WHERE id = ?1", [&args.run_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                ).optional().map_err(rs)?;
-                let Some((run_suite_id, run_envelope_id)) = run_row else {
-                    return Err(mcp_invalid_params(format!("unknown run_id: {}", args.run_id)));
-                };
-                // Issue #38's mode-enforcement policy needs the run's own
-                // envelope mode. run_envelope_id has been required since
-                // issue #34's fix (v0.3.13), so this is always Some in
-                // practice, but query defensively rather than assume.
-                let run_envelope_mode: Option<String> = match &run_envelope_id {
-                    Some(env_id) => conn.query_row(
-                        "SELECT mode FROM run_envelopes WHERE id = ?1", [env_id], |row| row.get(0),
-                    ).optional().map_err(rs)?,
-                    None => None,
-                };
-                // COALESCE to prover_ready_statement_hash when present: a
-                // benchmark suite's own faithful catalog text
-                // (root_formal_statement) is not always the same string a
-                // runner actually submits to problem_create/SubmitModule
-                // (e.g. PutnamBench's named-binder declaration syntax vs.
-                // the Pi-type form LLM-Driven Proof Search Environment's model requires) — comparing the
-                // wrong hash would reject every legitimate result for such a
-                // suite. See migrate_add_prover_ready_statement_columns.
-                let problem_row: Option<(String, String)> = conn.query_row(
-                    "SELECT suite_id, COALESCE(prover_ready_statement_hash, root_statement_hash) FROM benchmark_problems WHERE id = ?1",
-                    [&args.benchmark_problem_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                ).optional().map_err(rs)?;
-                let Some((problem_suite_id, problem_root_hash)) = problem_row else {
-                    return Err(mcp_invalid_params(format!("unknown benchmark_problem_id: {}", args.benchmark_problem_id)));
-                };
-                if problem_suite_id != run_suite_id {
-                    return Err(mcp_invalid_params(format!(
-                        "benchmark_problem_id {} belongs to a different suite than run_id {}", args.benchmark_problem_id, args.run_id
-                    )));
-                }
-
-                let status_str = match args.status {
-                    BenchmarkResultStatus::KernelVerified => "kernel_verified",
-                    BenchmarkResultStatus::Certified => "certified",
-                    BenchmarkResultStatus::Failed => "failed",
-                    BenchmarkResultStatus::Timeout => "timeout",
-                    BenchmarkResultStatus::InfraError => "infra_error",
-                    BenchmarkResultStatus::FormalizationGap => "formalization_gap",
-                    BenchmarkResultStatus::Skipped => "skipped",
-                };
-
-                // Issue #36's core invariant, enforced concretely: "a proof
-                // attempt that bypasses the ledger is not part of LLM-Driven Proof Search Environment
-                // evidence." A claimed kernel_verified/certified status
-                // MUST reference the episode that actually reached it — the
-                // checks below (statement-match, outcome-match) only ran
-                // when episode_id happened to be given; a caller claiming
-                // kernel_verified/certified with NO episode_id at all
-                // skipped every check entirely and was accepted with zero
-                // backing evidence. Any other status (failed/timeout/
-                // infra_error/formalization_gap/skipped) legitimately has
-                // no episode to reference — those are unaffected.
-                if matches!(status_str, "kernel_verified" | "certified") && args.episode_id.is_none() {
-                    return Err(mcp_invalid_params(format!(
-                        "status {:?} claims a verified proof but no episode_id was given — a kernel_verified/certified result must reference the episode that actually reached that outcome through the tracked episode_step path (issue #36: a proof attempt that bypasses the ledger is not part of LLM-Driven Proof Search Environment evidence)",
-                        status_str
-                    )));
-                }
-                // Issue #38's fidelity-basis policy: what evidence, if any,
-                // backs a kernel_verified/certified claim's STATEMENT
-                // fidelity — deliberately distinct from
-                // problem_versions.fidelity_status (whether the formal
-                // statement faithfully represents the INFORMAL problem). A
-                // trusted, externally-curated suite's own canonical
-                // statement-hash match is accepted on its own (PutnamBench:
-                // the hash-match against the suite's own catalog text IS the
-                // fidelity guarantee); an untrusted/custom suite requires a
-                // real independent review (fidelity_status='verified')
-                // instead — the hash-match check above only proves the
-                // episode proved *some* problem_version with this exact
-                // statement, not that anyone ever vouched the statement
-                // itself is a faithful formalization.
-                let benchmark_fidelity_basis: Option<&str> = if let Some(episode_id) = &args.episode_id {
-                    let episode_row: Option<(String, Option<String>)> = conn.query_row(
-                        "SELECT problem_version_id, outcome FROM episodes WHERE id = ?1", [episode_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    ).optional().map_err(rs)?;
-                    let Some((episode_pv_id, episode_outcome)) = episode_row else {
-                        return Err(mcp_invalid_params(format!("unknown episode_id: {}", episode_id)));
-                    };
-                    let Some(episode_outcome) = episode_outcome else {
-                        return Err(mcp_invalid_params(format!(
-                            "episode {} has not concluded yet (outcome is not set) — cannot record a benchmark result against an in-progress episode", episode_id
-                        )));
-                    };
-                    // An episode reaching e.g. kernel_verified only proves *something*
-                    // was verified — not that it was THIS benchmark problem's statement.
-                    // Compare root_statement_hash (server-computed on both sides) rather
-                    // than trusting the caller's episode/problem pairing.
-                    if let Some(declared_pv) = &args.problem_version_id {
-                        if *declared_pv != episode_pv_id {
-                            return Err(mcp_invalid_params(format!(
-                                "problem_version_id {} does not match episode {}'s actual problem_version_id {}",
-                                declared_pv, episode_id, episode_pv_id
-                            )));
-                        }
-                    }
-                    let (episode_pv_hash, problem_fidelity_status): (String, String) = conn.query_row(
-                        "SELECT root_statement_hash, fidelity_status FROM problem_versions WHERE id = ?1", [&episode_pv_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    ).map_err(rs)?;
-                    if episode_pv_hash != problem_root_hash {
-                        return Err(mcp_invalid_params(format!(
-                            "episode {} proved a different statement (problem_version {}) than benchmark_problem_id {} — root_statement_hash mismatch",
-                            episode_id, episode_pv_id, args.benchmark_problem_id
-                        )));
-                    }
-                    if status_str == "kernel_verified" && episode_outcome != "kernel_verified" {
-                        return Err(mcp_invalid_params(format!(
-                            "status 'kernel_verified' claimed, but episode {} actually reached outcome '{}'", episode_id, episode_outcome
-                        )));
-                    }
-                    if status_str == "certified" && episode_outcome != "certified" {
-                        return Err(mcp_invalid_params(format!(
-                            "status 'certified' claimed, but episode {} actually reached outcome '{}'", episode_id, episode_outcome
-                        )));
-                    }
-                    if matches!(status_str, "kernel_verified" | "certified") {
-                        let suite_trusted: bool = conn.query_row(
-                            "SELECT trusted_canonical_source FROM benchmark_suites WHERE id = ?1", [&run_suite_id], |row| row.get(0),
-                        ).map_err(rs)?;
-                        // Issue #38's mode-enforcement policy, with the
-                        // trusted-canonical-hash exemption formalized as its
-                        // own named, documented policy function (not an
-                        // inline, accidental PutnamBench-shaped special
-                        // case) — see trusted_canonical_hash_exemption_applies's
-                        // own doc comment for the exact rule and why it exists.
-                        if !trusted_canonical_hash_exemption_applies(suite_trusted) {
-                            if let Some(mode) = &run_envelope_mode {
-                                enforce_dev_attestation_mode_policy(&problem_fidelity_status, mode, args.allow_dev_attested)?;
-                            }
-                        }
-                        if suite_trusted {
-                            Some("canonical_statement_hash_match")
-                        } else if problem_fidelity_status == "verified" {
-                            Some("problem_fidelity_verified")
-                        } else {
-                            return Err(mcp_invalid_params(format!(
-                                "status {:?} claims a verified proof, and the statement hash matches benchmark_problem_id {}, but suite {} is not trusted_canonical_source AND problem_version {} has not been independently fidelity-reviewed (fidelity_status={:?}) — a benchmark result claiming kernel_verified/certified needs either a trusted suite's canonical statement match or a real problem_submit_fidelity_review (issue #38's fidelity-basis policy)",
-                                status_str, args.benchmark_problem_id, run_suite_id, episode_pv_id, problem_fidelity_status
-                            )));
-                        }
-                    } else {
-                        // An episode_id was given, but for a non-proof-claiming
-                        // status (failed/timeout/infra_error/formalization_gap/
-                        // skipped) -- no proof claim, so no fidelity basis to report.
-                        Some("none")
-                    }
-                } else {
-                    // No episode_id -> no proof claim -> no fidelity basis to report.
-                    Some("none")
-                };
-
-                // Issue #76: validate the structured gap taxonomy — a closed
-                // vocabulary, so aggregate reports can group failures. Never
-                // proof authority: it does not touch status/outcome/score.
-                let gap_categories_json: Option<String> = match &args.gap_categories {
-                    None => None,
-                    Some(cats) if cats.is_empty() => None,
-                    Some(cats) => {
-                        for c in cats {
-                            if !GAP_CATEGORY_VOCABULARY.contains(&c.as_str()) {
-                                return Err(mcp_invalid_params(format!(
-                                    "gap_categories entry {:?} is not in the fixed vocabulary {:?} — use final_diagnostic_category for free text",
-                                    c, GAP_CATEGORY_VOCABULARY
-                                )));
-                            }
-                        }
-                        Some(serde_json::to_string(cats).unwrap())
-                    }
-                };
-
-                // Issue #92: kit-aware reporting metadata. kit_lemmas_used /
-                // missing_route_step are stored as given (reporting only,
-                // never proof authority); which kits were IMPORTED is derived
-                // server-side from the problem_version's manifest, not taken
-                // from the client.
-                let kit_lemmas_used_json: Option<String> = match &args.kit_lemmas_used {
-                    None => None,
-                    Some(l) if l.is_empty() => None,
-                    Some(l) => Some(serde_json::to_string(l).unwrap()),
-                };
-                let kits_imported: Vec<String> = match &args.problem_version_id {
-                    Some(pv_id) => conn.query_row(
-                        "SELECT import_manifest_json FROM problem_versions WHERE id = ?1", [pv_id],
-                        |row| row.get::<_, String>(0),
-                    ).optional().map_err(rs)?
-                        .map(|j| kits_in_manifest(&j))
-                        .unwrap_or_default(),
-                    None => Vec::new(),
-                };
-
-                let existing_id: Option<String> = conn.query_row(
-                    "SELECT id FROM benchmark_results WHERE run_id = ?1 AND benchmark_problem_id = ?2",
-                    (&args.run_id, &args.benchmark_problem_id),
-                    |row| row.get(0),
-                ).optional().map_err(rs)?;
-                let now = Utc::now().to_rfc3339();
-                let result_id = existing_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-                if let Some(existing_id) = &existing_id {
-                    conn.execute(
-                        "UPDATE benchmark_results SET
-                            problem_version_id = ?1, episode_id = ?2, status = ?3, outcome = ?4, pass_at = ?5,
-                            attempts_used = ?6, time_to_first_success_ms = ?7, cost_micros = ?8,
-                            final_diagnostic_category = ?9, proof_artifact_hash = ?10, trajectory_export_hash = ?11,
-                            replay_status = ?12, benchmark_fidelity_basis = ?13, gap_categories_json = ?14,
-                            kit_lemmas_used_json = ?15, missing_route_step = ?16, updated_at = ?17
-                         WHERE id = ?18",
-                        rusqlite::params![&args.problem_version_id, &args.episode_id, status_str, &args.outcome, &args.pass_at,
-                         args.attempts_used, &args.time_to_first_success_ms, &args.cost_micros,
-                         &args.final_diagnostic_category, &args.proof_artifact_hash, &args.trajectory_export_hash,
-                         &args.replay_status, &benchmark_fidelity_basis, &gap_categories_json,
-                         &kit_lemmas_used_json, &args.missing_route_step, &now, existing_id],
-                    ).map_err(rs)?;
-                } else {
-                    conn.execute(
-                        "INSERT INTO benchmark_results (
-                            id, run_id, benchmark_problem_id, problem_version_id, episode_id, status, outcome,
-                            pass_at, attempts_used, time_to_first_success_ms, cost_micros, final_diagnostic_category,
-                            proof_artifact_hash, trajectory_export_hash, replay_status, benchmark_fidelity_basis,
-                            gap_categories_json, kit_lemmas_used_json, missing_route_step, created_at, updated_at
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20)",
-                        rusqlite::params![&result_id, &args.run_id, &args.benchmark_problem_id, &args.problem_version_id, &args.episode_id,
-                         status_str, &args.outcome, &args.pass_at, args.attempts_used, &args.time_to_first_success_ms,
-                         &args.cost_micros, &args.final_diagnostic_category, &args.proof_artifact_hash,
-                         &args.trajectory_export_hash, &args.replay_status, &benchmark_fidelity_basis, &gap_categories_json,
-                         &kit_lemmas_used_json, &args.missing_route_step, &now],
-                    ).map_err(rs)?;
-                }
-
-                let res = serde_json::json!({
-                    "result_id": result_id,
-                    "run_id": args.run_id,
-                    "benchmark_problem_id": args.benchmark_problem_id,
-                    "benchmark_fidelity_basis": benchmark_fidelity_basis,
-                    "status": status_str,
-                    "gap_categories": args.gap_categories,
-                    "kits_imported": kits_imported,
-                    "kit_lemmas_used": args.kit_lemmas_used,
-                    "missing_route_step": args.missing_route_step,
-                    "updated": existing_id.is_some(),
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "benchmark_run_observe" => {
-                let args: BenchmarkRunObserveArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let conn = self.conn.lock().await;
-                let run_row: Option<(String, Option<String>, Option<String>, Option<String>, Option<String>, String, String, i64, Option<i64>, Option<i64>, String)> = conn.query_row(
-                    "SELECT suite_id, run_envelope_id, proofsearch_commit, lean_version, mathlib_commit, solve_mode,
-                            allowed_tools_json, attempt_budget, wall_clock_budget_ms, lean_timeout_ms, created_at
-                     FROM benchmark_runs WHERE id = ?1",
-                    [&args.run_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?)),
-                ).optional().map_err(rs)?;
-                let Some((suite_id, run_envelope_id, proofsearch_commit, lean_version, mathlib_commit, solve_mode, allowed_tools_json, attempt_budget, wall_clock_budget_ms, lean_timeout_ms, created_at)) = run_row else {
-                    return Err(mcp_invalid_params(format!("unknown run_id: {}", args.run_id)));
-                };
-
-                let mut rstmt = conn.prepare(
-                    "SELECT r.benchmark_problem_id, p.theorem_name, r.status, r.outcome, r.pass_at, r.attempts_used,
-                            r.time_to_first_success_ms, r.cost_micros, r.final_diagnostic_category, r.replay_status,
-                            r.benchmark_fidelity_basis, r.episode_id, e.outcome, r.gap_categories_json,
-                            r.kit_lemmas_used_json, r.missing_route_step, pv.import_manifest_json, p.upstream_problem_id
-                     FROM benchmark_results r JOIN benchmark_problems p ON p.id = r.benchmark_problem_id
-                     LEFT JOIN episodes e ON e.id = r.episode_id
-                     LEFT JOIN problem_versions pv ON pv.id = r.problem_version_id
-                     WHERE r.run_id = ?1 ORDER BY p.upstream_problem_id ASC"
-                ).map_err(rs)?;
-                let rows: Vec<(serde_json::Value, Option<String>)> = rstmt.query_map([&args.run_id], |row| {
-                    // Issue #50: the historical result status is never rewritten;
-                    // surface it alongside the referenced episode's LIVE outcome
-                    // and a derived stale_result flag so a retroactive
-                    // kernel_verified -> certified promotion is visible without
-                    // mutating benchmark_results.
-                    let stored_status: String = row.get(2)?;
-                    let current_episode_outcome: Option<String> = row.get(12)?;
-                    let stale_result = benchmark_result_is_stale(&stored_status, current_episode_outcome.as_deref());
-                    // Issue #76: structured gap taxonomy, when recorded.
-                    let gap_categories: serde_json::Value = row.get::<_, Option<String>>(13)?
-                        .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
-                        .unwrap_or(serde_json::Value::Null);
-                    // Issue #92: kit-aware reporting — lemmas the client
-                    // reported using, the missing route step for failures,
-                    // and the kits actually IMPORTED (server-derived from the
-                    // linked problem_version's manifest, never client-claimed).
-                    let kit_lemmas_used: serde_json::Value = row.get::<_, Option<String>>(14)?
-                        .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
-                        .unwrap_or(serde_json::Value::Null);
-                    let kits_imported: Vec<String> = row.get::<_, Option<String>>(16)?
-                        .map(|j| kits_in_manifest(&j))
-                        .unwrap_or_default();
-                    Ok((serde_json::json!({
-                        "benchmark_problem_id": row.get::<_, String>(0)?,
-                        "theorem_name": row.get::<_, String>(1)?,
-                        "upstream_problem_id": row.get::<_, String>(17)?,
-                        "status": stored_status.clone(),                 // unchanged, back-compat
-                        "stored_result_status": stored_status,           // #50 explicit vocabulary
-                        "current_episode_outcome": current_episode_outcome,
-                        "stale_result": stale_result,
-                        "outcome": row.get::<_, Option<String>>(3)?,
-                        "pass_at": row.get::<_, Option<i64>>(4)?,
-                        "attempts_used": row.get::<_, i64>(5)?,
-                        "time_to_first_success_ms": row.get::<_, Option<i64>>(6)?,
-                        "cost_micros": row.get::<_, Option<i64>>(7)?,
-                        "final_diagnostic_category": row.get::<_, Option<String>>(8)?,
-                        "replay_status": row.get::<_, Option<String>>(9)?,
-                        "benchmark_fidelity_basis": row.get::<_, Option<String>>(10)?,
-                        "gap_categories": gap_categories,
-                        "kits_imported": kits_imported,
-                        "kit_lemmas_used": kit_lemmas_used,
-                        "missing_route_step": row.get::<_, Option<String>>(15)?,
-                    }), row.get::<_, Option<String>>(11)?))
-                }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
-                let results: Vec<serde_json::Value> = rows.iter().map(|(v, _)| v.clone()).collect();
-
-                // Issue #69: group by trust basis so aggregates never collapse
-                // distinct trust bases into one solved/certified bucket; issue
-                // #76: count gap categories so failures read as an
-                // infrastructure roadmap, not a flat failure count.
-                let mut results_by_trust_basis: std::collections::BTreeMap<String, std::collections::BTreeMap<String, i64>> = Default::default();
-                let mut gap_category_counts: std::collections::BTreeMap<String, i64> = Default::default();
-                for (v, _) in &rows {
-                    let basis = v["benchmark_fidelity_basis"].as_str().unwrap_or("none").to_string();
-                    let status = v["stored_result_status"].as_str().unwrap_or("unknown").to_string();
-                    *results_by_trust_basis.entry(basis).or_default().entry(status).or_insert(0) += 1;
-                    if let Some(cats) = v["gap_categories"].as_array() {
-                        for c in cats {
-                            if let Some(c) = c.as_str() {
-                                *gap_category_counts.entry(c.to_string()).or_insert(0) += 1;
-                            }
-                        }
-                    }
-                }
-
-                // Issue #92: kit-aware aggregation. Failures group by the
-                // missing kit route step (roadmap view), and the acceptance
-                // matrix crosses the embedded kit registry's benchmark
-                // targets with this run's actual outcomes — which problems
-                // are blocked on which kit issue, and which kit routes are
-                // already vindicated. Reporting only: none of this touches
-                // status, score, or proof authority.
-                let mut failures_by_missing_route_step: std::collections::BTreeMap<String, i64> = Default::default();
-                let mut kits_imported_by_problem: std::collections::BTreeMap<String, Vec<String>> = Default::default();
-                for (v, _) in &rows {
-                    let status = v["stored_result_status"].as_str().unwrap_or("unknown");
-                    if !matches!(status, "kernel_verified" | "certified") {
-                        if let Some(step) = v["missing_route_step"].as_str() {
-                            *failures_by_missing_route_step.entry(step.to_string()).or_insert(0) += 1;
-                        }
-                    }
-                    if let (Some(up), Some(kits)) = (v["upstream_problem_id"].as_str(), v["kits_imported"].as_array()) {
-                        if !kits.is_empty() {
-                            kits_imported_by_problem.insert(
-                                up.to_string(),
-                                kits.iter().filter_map(|k| k.as_str().map(String::from)).collect(),
-                            );
-                        }
-                    }
-                }
-                let registry = embedded_kit_registry();
-                let mut kit_acceptance_matrix: Vec<serde_json::Value> = Vec::new();
-                if let Some(kits) = registry["kits"].as_array() {
-                    for kit in kits {
-                        let kit_name = kit["kit_name"].as_str().unwrap_or("?");
-                        let kit_status = kit["status"].as_str().unwrap_or("?");
-                        for t in kit["known_acceptance_targets"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
-                            let upstream = t["upstream_problem_id"].as_str().unwrap_or("?");
-                            let run_result_status = rows.iter()
-                                .find(|(v, _)| v["upstream_problem_id"].as_str() == Some(upstream))
-                                .map(|(v, _)| v["stored_result_status"].as_str().unwrap_or("unknown").to_string());
-                            kit_acceptance_matrix.push(serde_json::json!({
-                                "kit_name": kit_name,
-                                "kit_status": kit_status,
-                                "benchmark": t["benchmark"],
-                                "upstream_problem_id": upstream,
-                                "registry_target_status": t["status"],
-                                "tracking_issue": t["tracking_issue"],
-                                "result_status_in_this_run": run_result_status,
-                            }));
-                        }
-                    }
-                }
-
-                // Issue #38's cost policy (redesigned after real product
-                // direction): verifier_wall_time_ms/verifier_cpu_time_ms sum
-                // the real Lean invocation timing persisted on
-                // action_attempts.lean_result_json (see
-                // step.rs::attempt_finalize) across every attempt on every
-                // episode this run's results reference. Each is tracked with
-                // its own "found any data" flag since LeanModuleVerificationResult
-                // (the SubmitModule path) has no cpu-time field at all — an
-                // attempt can contribute wall time without contributing cpu
-                // time. mcp_action_count is a real, always-available count
-                // (0 is a genuine count, not a stand-in for "unmeasured").
-                let mut verifier_wall_time_ms_total: i64 = 0;
-                let mut verifier_wall_time_found = false;
-                let mut verifier_cpu_time_ms_total: i64 = 0;
-                let mut verifier_cpu_time_found = false;
-                let mut mcp_action_count: i64 = 0;
-                for episode_id in rows.iter().filter_map(|(_, ep)| ep.as_ref()) {
-                    let mut jstmt = conn.prepare(
-                        "SELECT lean_result_json FROM action_attempts WHERE episode_id = ?1"
-                    ).map_err(rs)?;
-                    let jsons: Vec<Option<String>> = jstmt.query_map([episode_id], |row| row.get(0))
-                        .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
-                    mcp_action_count += jsons.len() as i64;
-                    for j in jsons.iter().flatten() {
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(j) {
-                            if let Some(wall_ms) = parsed.get("wall_time_ms").and_then(|v| v.as_i64()) {
-                                verifier_wall_time_ms_total += wall_ms;
-                                verifier_wall_time_found = true;
-                            }
-                            if let Some(cpu_ms) = parsed.get("lean_cpu_time_ms").and_then(|v| v.as_i64()) {
-                                verifier_cpu_time_ms_total += cpu_ms;
-                                verifier_cpu_time_found = true;
-                            }
-                        }
-                    }
-                }
-                let verifier_wall_time_ms: Option<i64> = if verifier_wall_time_found { Some(verifier_wall_time_ms_total) } else { None };
-                let verifier_cpu_time_ms: Option<i64> = if verifier_cpu_time_found { Some(verifier_cpu_time_ms_total) } else { None };
-
-                // model_call_reported_cost_micros: real per-attempt cost data
-                // already stored in model_call_leases (issue #34's audit
-                // finding), but ALWAYS self-reported by the runner/host, never
-                // independently measured by LLM-Driven Proof Search Environment — so it is bucketed at
-                // "attested" confidence, never merged into an exact total.
-                let mut model_call_cost_total: i64 = 0;
-                let mut model_call_cost_found = false;
-                for episode_id in rows.iter().filter_map(|(_, ep)| ep.as_ref()) {
-                    let mut mstmt = conn.prepare(
-                        "SELECT actual_cost_micros FROM model_call_leases WHERE episode_id = ?1 AND status = 'settled' AND actual_cost_micros IS NOT NULL"
-                    ).map_err(rs)?;
-                    let amounts: Vec<i64> = mstmt.query_map([episode_id], |row| row.get(0))
-                        .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
-                    for a in amounts {
-                        model_call_cost_total += a;
-                        model_call_cost_found = true;
-                    }
-                }
-                let model_call_reported_cost_micros: Option<i64> = if model_call_cost_found { Some(model_call_cost_total) } else { None };
-                let model_call_cost_confidence: Option<&str> = if model_call_cost_found { Some("attested") } else { None };
-
-                // storage_bytes_written: real byte length (Rust String::len(),
-                // never SQLite's character-counting LENGTH()) of the
-                // lean_result_json actually persisted per attempt (see
-                // step.rs::attempt_finalize), summed across every attempt on
-                // every episode this run's results reference — the same
-                // per-episode iteration pattern as verifier_wall_time_ms above.
-                let mut storage_bytes_total: i64 = 0;
-                let mut storage_bytes_found = false;
-                for episode_id in rows.iter().filter_map(|(_, ep)| ep.as_ref()) {
-                    let mut bstmt = conn.prepare(
-                        "SELECT lean_result_bytes FROM action_attempts WHERE episode_id = ?1 AND lean_result_bytes IS NOT NULL"
-                    ).map_err(rs)?;
-                    let amounts: Vec<i64> = bstmt.query_map([episode_id], |row| row.get(0))
-                        .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
-                    for b in amounts {
-                        storage_bytes_total += b;
-                        storage_bytes_found = true;
-                    }
-                }
-                let storage_bytes_written: Option<i64> = if storage_bytes_found { Some(storage_bytes_total) } else { None };
-
-                // Issue #38's MCP-side/storage-export observability:
-                // mcp_call_metrics (populated generically for every tool call
-                // in call_tool's wrapper) is correlated to this run three
-                // ways at once — by episode_id (any of this run's episodes),
-                // by run_id (a call that referenced this benchmark run
-                // directly, e.g. benchmark_result_record/benchmark_run_observe
-                // itself), or by run_envelope_id (a call tied to this run's
-                // own envelope, e.g. model_call_reserve/settle). A call
-                // matching more than one of these criteria is only counted
-                // once (DISTINCT id via UNION, not summed per-criterion).
-                // storage_export_bytes/storage_export_wall_time_ms further
-                // restrict to proof_export/trajectory_export specifically —
-                // the actual "export" surface.
-                let episode_ids: Vec<&String> = rows.iter().filter_map(|(_, ep)| ep.as_ref()).collect();
-                let episode_placeholders = if episode_ids.is_empty() { "''".to_string() } else {
-                    episode_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",")
-                };
-                let correlation_sql = format!(
-                    "episode_id IN ({episode_placeholders}) OR run_id = ? OR run_envelope_id = ?"
-                );
-                let mut mcp_params: Vec<&dyn rusqlite::ToSql> = Vec::new();
-                for eid in &episode_ids { mcp_params.push(*eid as &dyn rusqlite::ToSql); }
-                mcp_params.push(&args.run_id as &dyn rusqlite::ToSql);
-                let run_envelope_id_param: &dyn rusqlite::ToSql = &run_envelope_id;
-                mcp_params.push(run_envelope_id_param);
-
-                let mut mcp_time_stmt = conn.prepare(
-                    &format!("SELECT wall_time_ms FROM mcp_call_metrics WHERE {correlation_sql}")
-                ).map_err(rs)?;
-                let mcp_wall_times: Vec<i64> = mcp_time_stmt.query_map(mcp_params.as_slice(), |row| row.get(0))
-                    .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
-                let mcp_handler_wall_time_ms: Option<i64> = if mcp_wall_times.is_empty() { None } else { Some(mcp_wall_times.iter().sum()) };
-
-                let mut export_stmt = conn.prepare(
-                    &format!("SELECT wall_time_ms, response_bytes FROM mcp_call_metrics WHERE tool_name IN ('proof_export', 'trajectory_export') AND ({correlation_sql})")
-                ).map_err(rs)?;
-                let export_rows: Vec<(i64, Option<i64>)> = export_stmt.query_map(mcp_params.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))
-                    .map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
-                let storage_export_wall_time_ms: Option<i64> = if export_rows.is_empty() { None } else { Some(export_rows.iter().map(|(w, _)| w).sum()) };
-                let storage_export_bytes: Option<i64> = {
-                    let found: Vec<i64> = export_rows.iter().filter_map(|(_, b)| *b).collect();
-                    if found.is_empty() { None } else { Some(found.iter().sum()) }
-                };
-
-                let is_solved = |r: &serde_json::Value| matches!(r["status"].as_str(), Some("kernel_verified") | Some("certified"));
-                let solved = results.iter().filter(|r| is_solved(r)).count();
-                let total = results.len();
-                let total_attempts: i64 = results.iter().filter_map(|r| r["attempts_used"].as_i64()).sum();
-                // pass@1: solved AND the first attempt was the one that succeeded.
-                // `pass_at` (attempt index of first success) is the authoritative
-                // signal when the caller supplies it; fall back to attempts_used == 1
-                // when it's absent, since attempts_used is a required field. Distinct
-                // from `solved_count`/overall solve rate, which counts a problem solved
-                // within the run's attempt_budget regardless of how many tries it took.
-                let solved_on_first_attempt = results.iter().filter(|r| {
-                    is_solved(r) && match r["pass_at"].as_i64() {
-                        Some(p) => p == 1,
-                        None => r["attempts_used"].as_i64() == Some(1),
-                    }
-                }).count();
-                let metrics = serde_json::json!({
-                    "problems_attempted": total,
-                    "solved_count": solved,
-                    "solved_rate": if total > 0 { solved as f64 / total as f64 } else { 0.0 },
-                    "pass_at_1_rate": if total > 0 { solved_on_first_attempt as f64 / total as f64 } else { 0.0 },
-                    "kernel_verified_count": results.iter().filter(|r| r["status"] == "kernel_verified").count(),
-                    "certified_count": results.iter().filter(|r| r["status"] == "certified").count(),
-                    "average_attempts_per_result": if total > 0 { total_attempts as f64 / total as f64 } else { 0.0 },
-                    "aggregate_basis": "stored_result_status — solved_count/solved_rate/pass_at_1_rate/kernel_verified_count/certified_count are computed from the benchmark_results.status recorded at result time, NOT the (possibly newer) current_episode_outcome; per-row stale_result flags where the underlying episode has since advanced (issue #50)",
-                    // Issue #69: never collapse distinct trust bases into one
-                    // solved bucket — a canonical_statement_hash_match proof
-                    // and a problem_fidelity_verified proof are different
-                    // claims and are reported separately.
-                    "results_by_trust_basis": results_by_trust_basis,
-                    // Issue #76: failures grouped by structured gap category —
-                    // an infrastructure/formalization roadmap, distinct from
-                    // model-capacity failure (math_unknown). Additive
-                    // metadata; never affects any score above.
-                    "gap_category_counts": gap_category_counts,
-                    // Issue #92: kit-aware roadmap view. Failures grouped by
-                    // the specific missing kit route step; which kits each
-                    // problem's manifest actually imported (server-derived);
-                    // and the registry-vs-run acceptance matrix showing which
-                    // benchmark problems are blocked by which kit issue.
-                    // Reporting only — never proof authority or score.
-                    "failures_by_missing_route_step": failures_by_missing_route_step,
-                    "kits_imported_by_problem": kits_imported_by_problem,
-                    "kit_acceptance_matrix": kit_acceptance_matrix,
-                });
-
-                // Issue #38's cost policy, redesigned per explicit product
-                // direction: metrics first (time/count/bytes are real,
-                // reported honestly), monetary cost fields (*_cost_micros)
-                // ONLY populated when real money data exists, and a
-                // three-tier monetary rollup that never merges a
-                // self-reported (attested) or estimated figure into an
-                // "exact total" claim.
-                let (host_side_cost_micros, host_cost_confidence, cost_observation_id): (Option<i64>, Option<String>, Option<String>) = match &run_envelope_id {
-                    Some(env_id) => conn.query_row(
-                        "SELECT host_side_cost_micros, host_cost_confidence, current_cost_observation_id FROM run_envelopes WHERE id = ?1",
-                        [env_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                    ).optional().map_err(rs)?.unwrap_or((None, None, None)),
-                    None => (None, None, None),
-                };
-
-                // Bucket every known monetary figure by its own confidence
-                // tier. "unknown"-confidence host cost is deliberately
-                // excluded from every bucket (its reliability is explicitly
-                // unvouched-for) but still surfaced verbatim in
-                // host_side_cost_micros for transparency.
-                let mut known_exact_cost_micros: Option<i64> = None;
-                let mut reported_attested_cost_micros: Option<i64> = None;
-                let mut estimated_cost_micros: Option<i64> = None;
-                if let Some(amount) = host_side_cost_micros {
-                    match host_cost_confidence.as_deref() {
-                        Some("exact_provider_receipt") | Some("exact_local_meter") => {
-                            known_exact_cost_micros = Some(known_exact_cost_micros.unwrap_or(0) + amount);
-                        }
-                        Some("estimated") => {
-                            estimated_cost_micros = Some(estimated_cost_micros.unwrap_or(0) + amount);
-                        }
-                        Some("attested") => {
-                            reported_attested_cost_micros = Some(reported_attested_cost_micros.unwrap_or(0) + amount);
-                        }
-                        _ => {} // "unknown" or unset: real number, unvouched reliability — not bucketed.
-                    }
-                }
-                if let Some(amount) = model_call_reported_cost_micros {
-                    // model_call_reported_cost_micros is always "attested" tier today
-                    // (no mechanism yet to attach a provider receipt to a lease).
-                    reported_attested_cost_micros = Some(reported_attested_cost_micros.unwrap_or(0) + amount);
-                }
-
-                // mcp_side_cost_micros/storage_export_cost_micros have no meter
-                // or rate card yet — always null, never fabricated as zero.
-                // Their absence alone is enough to keep unknown_cost_present
-                // true until real instrumentation lands for them.
-                let mcp_side_cost_micros: Option<i64> = None;
-                let storage_export_cost_micros: Option<i64> = None;
-                let unknown_cost_present = mcp_side_cost_micros.is_none()
-                    || storage_export_cost_micros.is_none()
-                    || matches!(host_cost_confidence.as_deref(), None | Some("unknown"));
-
-                // total_cost_known requires EVERY material cost surface to be
-                // exact — currently unreachable in practice, since mcp_side/
-                // storage_export costs have no instrumentation at all yet;
-                // that's the honest, correct state until they do.
-                // reported_total_not_exact: some real monetary signal exists
-                // (exact, attested, or estimated) but the report can't yet
-                // vouch for a complete exact total.
-                // total_cost_incomplete: no monetary signal at all.
-                let cost_completeness = if !unknown_cost_present && estimated_cost_micros.is_none() && reported_attested_cost_micros.is_none() && known_exact_cost_micros.is_some() {
-                    "total_cost_known"
-                } else if known_exact_cost_micros.is_some() || reported_attested_cost_micros.is_some() || estimated_cost_micros.is_some() {
-                    "reported_total_not_exact"
-                } else {
-                    "total_cost_incomplete"
-                };
-
-                let cost_summary = serde_json::json!({
-                    "host_side_cost_micros": host_side_cost_micros,
-                    "host_cost_confidence": host_cost_confidence,
-                    "cost_observation_id": cost_observation_id,
-                    "model_call_reported_cost_micros": model_call_reported_cost_micros,
-                    "model_call_cost_confidence": model_call_cost_confidence,
-                    "verifier_wall_time_ms": verifier_wall_time_ms,
-                    "verifier_cpu_time_ms": verifier_cpu_time_ms,
-                    "mcp_action_count": mcp_action_count,
-                    "mcp_handler_wall_time_ms": mcp_handler_wall_time_ms,
-                    "mcp_side_cost_micros": mcp_side_cost_micros,
-                    "storage_bytes_written": storage_bytes_written,
-                    "storage_export_bytes": storage_export_bytes,
-                    "storage_export_wall_time_ms": storage_export_wall_time_ms,
-                    "storage_export_cost_micros": storage_export_cost_micros,
-                    "known_exact_cost_micros": known_exact_cost_micros,
-                    "reported_attested_cost_micros": reported_attested_cost_micros,
-                    "estimated_cost_micros": estimated_cost_micros,
-                    "unknown_cost_present": unknown_cost_present,
-                    "cost_completeness": cost_completeness,
-                    "not_yet_instrumented": "mcp_side_cost_micros/storage_export_cost_micros are not yet instrumented — never reported as zero; there is no pricing/rate-card decision yet for either surface. mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms are now real, measured metrics (v0.3.23) — null only when this run genuinely has no correlated mcp_call_metrics/action_attempts rows yet, never fabricated as zero. model_call_reported_cost_micros is real per-attempt data from model_call_leases but always self-reported (attested), never independently measured by LLM-Driven Proof Search Environment.",
-                });
-
-                let res = serde_json::json!({
-                    "run_id": args.run_id,
-                    "suite_id": suite_id,
-                    "run_envelope_id": run_envelope_id,
-                    "proofsearch_commit": proofsearch_commit,
-                    "lean_version": lean_version,
-                    "mathlib_commit": mathlib_commit,
-                    "solve_mode": solve_mode,
-                    "allowed_tools": serde_json::from_str::<serde_json::Value>(&allowed_tools_json).unwrap_or(serde_json::Value::Array(vec![])),
-                    "attempt_budget": attempt_budget,
-                    "wall_clock_budget_ms": wall_clock_budget_ms,
-                    "lean_timeout_ms": lean_timeout_ms,
-                    "created_at": created_at,
-                    "results": results,
-                    "metrics": metrics,
-                    "cost_summary": cost_summary,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
+            "benchmark_run" => self.do_benchmark_run(args_val).await,
             _ => Err(McpError::new(ErrorCode::METHOD_NOT_FOUND, format!("Method not found: {}", request.name), None)),
             }
         }.await;
@@ -14726,7 +14849,11 @@ mod tests {
         // benchmark_problem_observe/benchmark_run_create/benchmark_result_record/
         // benchmark_run_observe are separate future consolidations, and stay
         // standalone here) = 50.
-        assert_eq!(list_res.tools.len(), 50);
+        // - 2 (issue #194: the three flat benchmark_run_create/
+        // benchmark_result_record/benchmark_run_observe tools consolidated into
+        // the ONE `benchmark_run` tool; benchmark_problem_register/
+        // benchmark_problem_observe stay standalone) = 48.
+        assert_eq!(list_res.tools.len(), 48);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -20108,28 +20235,28 @@ mod tests {
         let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "benchmark_suite_name": "GapTaxonomySuite",
         }}).as_object().unwrap().clone())).await.unwrap());
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": envelope["run_envelope_id"].as_str().unwrap(),
             "solve_mode": "submit_module_allowed", "attempt_budget": 2,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run_id = run["run_id"].as_str().unwrap().to_string();
 
         // Unknown category is rejected with the vocabulary in the message.
-        let err = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let err = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run_id, "benchmark_problem_id": problem_id, "status": "failed", "attempts_used": 1,
             "gap_categories": ["not_a_real_category"],
-        }).as_object().unwrap().clone())).await.expect_err("unknown gap category must be rejected");
+        }}).as_object().unwrap().clone())).await.expect_err("unknown gap category must be rejected");
         assert!(format!("{err:?}").contains("math_unknown"), "rejection must list the vocabulary: {err:?}");
 
         // Valid categories are stored and echoed — with issue #92's kit
         // reporting metadata alongside.
-        let recorded = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let recorded = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run_id, "benchmark_problem_id": problem_id, "status": "failed", "attempts_used": 2,
             "gap_categories": ["geometry_case_analysis_missing", "tactic_timeout"],
             "final_diagnostic_category": "free text detail",
             "kit_lemmas_used": ["LeanChecker.GeometryAngleKit.base_angle_eq_pi_sub_apex_div_two"],
             "missing_route_step": "GeometryAngleKit: oriented three-ray decomposition",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(recorded["gap_categories"].as_array().unwrap().len(), 2);
         assert_eq!(recorded["kit_lemmas_used"].as_array().unwrap().len(), 1);
         assert_eq!(recorded["missing_route_step"], "GeometryAngleKit: oriented three-ray decomposition");
@@ -20138,9 +20265,9 @@ mod tests {
         assert_eq!(recorded["kits_imported"].as_array().unwrap().len(), 0);
 
         // Observation surfaces the categories, the counts, and trust grouping.
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "run_id": run_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let result = &observed["results"].as_array().unwrap()[0];
         assert_eq!(result["gap_categories"].as_array().unwrap().len(), 2, "{result}");
         // Issue #92: per-result kit fields and run-level kit aggregation.
@@ -20865,9 +20992,9 @@ mod tests {
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1",
             "root_formal_statement": "theorem p1 (n : ℕ) : n = n := sorry",
         }).as_object().unwrap().clone())).await.unwrap());
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // The episode is created against the PROVER-READY text (what a real
         // runner submits), NOT root_formal_statement.
@@ -20887,10 +21014,10 @@ mod tests {
             "action": {"type": "solve", "proof_term": "rfl"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
 
-        let result = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let result = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(result.is_ok(), "an episode proving the PROVER-READY form must be accepted even though it doesn't hash-match root_formal_statement: {:?}", result.err());
     }
 
@@ -20921,9 +21048,9 @@ mod tests {
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
 
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(run["lean_version"], "leanprover/lean4:v4.32.0-rc1 + mathlib@360da6fa66c1273b76b6b2d8c5666fd5ac2e3b56");
         assert_eq!(run["mathlib_commit"], "360da6fa66c1273b76b6b2d8c5666fd5ac2e3b56");
     }
@@ -20937,23 +21064,23 @@ mod tests {
         let suite_id = create_suite(&peer, "PutnamBench").await;
 
         // Omitted entirely: rejected (the field is required in the wire schema).
-        let missing = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let missing = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(missing.is_err(), "run_envelope_id must be required, not optional");
 
         // A nonexistent run_envelope_id: also rejected.
-        let bogus = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let bogus = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": "00000000-0000-0000-0000-000000000000",
             "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bogus.is_err(), "a nonexistent run_envelope_id must be rejected");
 
         // A real run_envelope_id: accepted.
         let run_envelope_id = create_run_envelope(&peer).await;
-        let ok = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let ok = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(ok.is_ok(), "a real run_envelope_id must be accepted: {:?}", ok.err());
     }
 
@@ -20969,9 +21096,9 @@ mod tests {
             let env = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
                 "mode": mode, "host_name": "test-host",
             }}).as_object().unwrap().clone())).await.unwrap());
-            let res = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+            let res = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
                 "suite_id": suite_id, "run_envelope_id": env["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
-            }).as_object().unwrap().clone())).await;
+            }}).as_object().unwrap().clone())).await;
             assert!(res.is_err(), "benchmark_run_create must reject a {mode:?}-mode envelope");
             assert!(format!("{:?}", res.unwrap_err()).contains("benchmark-mode run envelope"), "mode={mode:?}");
         }
@@ -20979,9 +21106,9 @@ mod tests {
         let ok_env = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host",
         }}).as_object().unwrap().clone())).await.unwrap());
-        let ok = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let ok = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": ok_env["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(ok.is_ok(), "benchmark-mode envelope must be accepted: {:?}", ok.err());
     }
 
@@ -20995,18 +21122,18 @@ mod tests {
         let wrong = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host", "benchmark_suite_name": "MiniF2F",
         }}).as_object().unwrap().clone())).await.unwrap());
-        let bad = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let bad = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": wrong["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad.is_err(), "mismatched benchmark_suite_name must be rejected");
         assert!(format!("{:?}", bad.unwrap_err()).contains("does not match"));
 
         let right = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host", "benchmark_suite_name": "PutnamBench",
         }}).as_object().unwrap().clone())).await.unwrap());
-        let good = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let good = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": right["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(good.is_ok(), "matching benchmark_suite_name must be accepted: {:?}", good.err());
     }
 
@@ -21028,12 +21155,12 @@ mod tests {
         let unknown_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host",
         }}).as_object().unwrap().clone())).await.unwrap());
-        let run_unknown = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run_unknown = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": unknown_envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
-        let observed_unknown = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let observed_unknown = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "run_id": run_unknown["run_id"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed_unknown["cost_summary"]["cost_completeness"], "total_cost_incomplete",
             "no monetary signal at all (no host cost, no model-call cost) must report incomplete, not a made-up middle state");
         assert!(observed_unknown["cost_summary"]["mcp_side_cost_micros"].is_null(),
@@ -21050,12 +21177,12 @@ mod tests {
         let estimated_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host", "host_side_cost_micros": 100, "host_cost_confidence": "estimated",
         }}).as_object().unwrap().clone())).await.unwrap());
-        let run_estimated = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run_estimated = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": estimated_envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
-        let observed_estimated = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let observed_estimated = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "run_id": run_estimated["run_id"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed_estimated["cost_summary"]["cost_completeness"], "reported_total_not_exact",
             "an estimate is real signal, not nothing, but is not the same reliability tier as a real receipt/meter reading");
         assert_eq!(observed_estimated["cost_summary"]["estimated_cost_micros"], 100);
@@ -21071,12 +21198,12 @@ mod tests {
         let exact_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host", "host_side_cost_micros": 100, "host_cost_confidence": "exact_local_meter",
         }}).as_object().unwrap().clone())).await.unwrap());
-        let run_exact = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run_exact = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": exact_envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
-        let observed_exact = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let observed_exact = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "run_id": run_exact["run_id"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed_exact["cost_summary"]["known_exact_cost_micros"], 100);
         assert_eq!(observed_exact["cost_summary"]["host_side_cost_micros"], 100);
         assert_eq!(observed_exact["cost_summary"]["cost_completeness"], "reported_total_not_exact",
@@ -21101,9 +21228,9 @@ mod tests {
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
         let run_envelope_id = create_run_envelope(&peer).await;
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // A real episode with TWO real verification attempts (one failed
         // kernel_fail, one successful) — both must contribute their
@@ -21134,14 +21261,14 @@ mod tests {
             "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
 
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 2,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "run_id": run["run_id"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         // MockGateway reports wall_time_ms=1 and lean_cpu_time_ms=1 per
         // verification call; 2 real attempts on this episode -> both sums
         // must be 2, not null, not 0 by coincidence. mcp_action_count is a
@@ -21173,9 +21300,9 @@ mod tests {
             "suite_id": suite_id, "upstream_problem_id": "mcp1", "theorem_name": "mcp1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
         let run_envelope_id = create_run_envelope(&peer).await;
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let pv_id = create_problem(&peer, "True").await;
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
@@ -21199,14 +21326,14 @@ mod tests {
             "episode_id": episode_id, "format": "public_summary",
         }).as_object().unwrap().clone())).await.unwrap());
 
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "run_id": run["run_id"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let cs = &observed["cost_summary"];
 
         assert!(cs["mcp_handler_wall_time_ms"].as_i64().unwrap_or(-1) >= 0,
@@ -21241,13 +21368,13 @@ mod tests {
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
         let run_envelope_id = create_run_envelope(&peer).await;
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "run_id": run["run_id"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let cs = &observed["cost_summary"];
         assert!(cs["storage_bytes_written"].is_null(), "no episodes -> no persisted bytes -> null, not 0: {cs:?}");
         assert!(cs["storage_export_bytes"].is_null(), "no export calls -> null, not 0: {cs:?}");
@@ -21324,9 +21451,9 @@ mod tests {
         let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host", "host_side_cost_micros": 500, "host_cost_confidence": "exact_local_meter",
         }}).as_object().unwrap().clone())).await.unwrap());
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let pv_id = create_problem(&peer, "True").await;
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
@@ -21353,14 +21480,14 @@ mod tests {
             "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
             "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "run_id": run["run_id"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let cs = &observed["cost_summary"];
         assert_eq!(cs["model_call_reported_cost_micros"], 250, "must sum settled actual_cost_micros, not reserved_cost_micros: {cs:?}");
         assert_eq!(cs["model_call_cost_confidence"], "attested");
@@ -21391,9 +21518,9 @@ mod tests {
             "suite_id": suite_id, "upstream_problem_id": "unsettled1", "theorem_name": "unsettled1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
         let run_envelope_id = create_run_envelope(&peer).await;
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let pv_id = create_problem(&peer, "True").await;
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
@@ -21422,14 +21549,14 @@ mod tests {
         tool_json(&peer.call_tool(CallToolRequestParams::new("episode_close").with_arguments(serde_json::json!({
             "episode_id": episode_id, "reason": "test",
         }).as_object().unwrap().clone())).await.unwrap());
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "failed", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "run_id": run["run_id"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         // Sanity check that this test actually visits the episode at all
         // (mcp_action_count > 0 proves the aggregation loop ran against a
         // real linked episode, not an empty/unreferenced one).
@@ -21455,9 +21582,9 @@ mod tests {
             "suite_id": suite_id, "upstream_problem_id": "voided1", "theorem_name": "voided1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
         let run_envelope_id = create_run_envelope(&peer).await;
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let pv_id = create_problem(&peer, "True").await;
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
@@ -21494,14 +21621,14 @@ mod tests {
             "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
             "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "run_id": run["run_id"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let cs = &observed["cost_summary"];
         // Only the settled 250 counts; the voided 900-reserved lease is excluded.
         assert_eq!(cs["model_call_reported_cost_micros"], 250,
@@ -21518,9 +21645,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let res = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let res = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 0,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(res.is_err());
     }
 
@@ -21533,14 +21660,14 @@ mod tests {
         let problem_b = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
             "suite_id": suite_b, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
-        let run_a = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run_a = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_a, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let res = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let res = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run_a["run_id"], "benchmark_problem_id": problem_b["benchmark_problem_id"],
             "status": "failed", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(res.is_err(), "a result must not reference a problem from a different suite than its run");
     }
 
@@ -21560,16 +21687,16 @@ mod tests {
         let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // No episode_id at all: both verified statuses must be rejected outright.
         for status in ["kernel_verified", "certified"] {
-            let res = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            let res = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
                 "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
                 "status": status, "attempts_used": 1,
-            }).as_object().unwrap().clone())).await;
+            }}).as_object().unwrap().clone())).await;
             assert!(res.is_err(), "claiming {} with no episode_id must be rejected — it has zero backing evidence: {:?}", status, res);
         }
 
@@ -21577,10 +21704,10 @@ mod tests {
         // must still be accepted (this is not a blanket "episode_id always
         // required" rule, only for statuses that claim verification).
         for status in ["failed", "timeout", "infra_error", "formalization_gap", "skipped"] {
-            let res = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+            let res = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
                 "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
                 "status": status, "attempts_used": 1,
-            }).as_object().unwrap().clone())).await;
+            }}).as_object().unwrap().clone())).await;
             assert!(res.is_ok(), "status {} with no episode_id must still be accepted: {:?}", status, res.err());
         }
     }
@@ -21597,9 +21724,9 @@ mod tests {
         let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // An episode that has NOT concluded (no Solve/GiveUp yet).
         let pv_id = create_problem(&peer, "True").await;
@@ -21608,10 +21735,10 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         let episode_id = ep["episode_id"].as_str().unwrap().to_string();
 
-        let unconcluded = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let unconcluded = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(unconcluded.is_err(), "a result must not reference an episode that hasn't concluded");
 
         // Conclude the episode with GiveUp (outcome = gave_up), then claim
@@ -21627,17 +21754,17 @@ mod tests {
             "action": {"type": "give_up"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
 
-        let mismatched = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let mismatched = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(mismatched.is_err(), "claiming kernel_verified for an episode that actually gave up must be rejected");
 
         // The honest status (failed) for the same episode succeeds.
-        let honest = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let honest = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "failed", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(honest["status"], "failed");
         assert_eq!(honest["benchmark_fidelity_basis"], "none",
             "a non-kernel_verified/certified status makes no proof claim, so it must report benchmark_fidelity_basis='none', not fabricate one");
@@ -21666,9 +21793,9 @@ mod tests {
         let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
             "suite_id": suite_id, "upstream_problem_id": "u1", "theorem_name": "u1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // create_problem uses unsafe_dev_attestation -> fidelity_status='attested', never 'verified'.
         let pv_id = create_problem(&peer, "True").await;
@@ -21687,10 +21814,10 @@ mod tests {
             "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
 
-        let rejected = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let rejected = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(rejected.is_err(),
             "an untrusted suite + an unreviewed (attested) problem must not be sufficient fidelity evidence for a kernel_verified claim");
 
@@ -21730,10 +21857,10 @@ mod tests {
             "expected_revision": req2["episode_revision"], "claim_token": claim2["claim_token"],
             "action": {"type": "solve", "proof_term": "norm_num"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
-        let accepted = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let accepted = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem2["benchmark_problem_id"],
             "episode_id": episode2_id, "status": "certified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(accepted["benchmark_fidelity_basis"], "problem_fidelity_verified",
             "an untrusted suite backed by a REAL independent review must be accepted with the problem_fidelity_verified basis, not canonical_statement_hash_match: {accepted:?}");
     }
@@ -21760,9 +21887,9 @@ mod tests {
         let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host",
         }}).as_object().unwrap().clone())).await.unwrap());
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let pv_id = create_problem(&peer, "True").await; // unsafe_dev_attestation -> fidelity_status='attested'
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
@@ -21780,10 +21907,10 @@ mod tests {
             "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
 
-        let rejected = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let rejected = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         let err_text = format!("{:?}", rejected.unwrap_err());
         assert!(err_text.contains("attested/dev-bypass problems are not valid for benchmark/evaluation/public_report runs"),
             "must report the exact specified boring rejection message, not a different one: {err_text}");
@@ -21857,9 +21984,9 @@ mod tests {
         let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
             "suite_id": suite_id, "upstream_problem_id": "t1", "theorem_name": "t1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // create_problem -> unsafe_dev_attestation -> fidelity_status='attested', deliberately NOT 'verified'.
         let pv_id = create_problem(&peer, "True").await;
@@ -21878,10 +22005,10 @@ mod tests {
             "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
 
-        let accepted = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let accepted = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(accepted["benchmark_fidelity_basis"], "canonical_statement_hash_match",
             "a trusted suite's own hash match must be sufficient fidelity evidence without an independent review: {accepted:?}");
     }
@@ -21900,9 +22027,9 @@ mod tests {
             "suite_id": suite_id, "upstream_problem_id": "hard1", "theorem_name": "hard1",
             "root_formal_statement": "putnam_1988_a1_real_statement",
         }).as_object().unwrap().clone())).await.unwrap());
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // Drive a genuinely kernel_verified episode, but for a TRIVIAL, UNRELATED statement.
         let trivial_pv_id = create_problem(&peer, "True").await;
@@ -21925,10 +22052,10 @@ mod tests {
         // Attempting to claim this UNRELATED, genuinely-verified episode as evidence
         // for the hard benchmark problem must be rejected — the episode proved a
         // different statement than benchmark_problem_id claims.
-        let res = peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let res = peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run["run_id"], "benchmark_problem_id": hard_problem["benchmark_problem_id"],
             "episode_id": episode_id, "status": "kernel_verified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(res.is_err(), "an episode that verified a different statement must not back a result for this benchmark problem");
     }
 
@@ -21943,15 +22070,15 @@ mod tests {
         let p2 = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
             "suite_id": suite_id, "upstream_problem_id": "p2", "theorem_name": "p2", "root_formal_statement": "1 + 1 = 2",
         }).as_object().unwrap().clone())).await.unwrap());
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run_id = run["run_id"].as_str().unwrap().to_string();
 
         // First attempt for p1: failed, attempts_used=1.
-        let first = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let first = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run_id, "benchmark_problem_id": p1["benchmark_problem_id"], "status": "failed", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(first["updated"], false);
         // Second attempt for the SAME problem: upserts to kernel_verified,
         // attempts_used=2 — backed by a real episode that actually proved
@@ -21972,19 +22099,19 @@ mod tests {
             "expected_revision": p1_req["episode_revision"], "claim_token": p1_claim["claim_token"],
             "action": {"type": "solve", "proof_term": "trivial"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
-        let second = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        let second = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run_id, "benchmark_problem_id": p1["benchmark_problem_id"], "episode_id": p1_episode_id,
             "status": "kernel_verified", "attempts_used": 2,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(second["updated"], true);
         // p2: skipped.
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run_id, "benchmark_problem_id": p2["benchmark_problem_id"], "status": "skipped", "attempts_used": 0,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "run_id": run_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let results = observed["results"].as_array().unwrap();
         assert_eq!(results.len(), 2, "upserting the same problem twice must not create a duplicate result row: {:?}", results);
         assert_eq!(observed["metrics"]["problems_attempted"], 2);
@@ -22012,9 +22139,9 @@ mod tests {
             }).as_object().unwrap().clone())).await.unwrap());
             problem_ids.push(p["benchmark_problem_id"].as_str().unwrap().to_string());
         }
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run_id = run["run_id"].as_str().unwrap().to_string();
 
         // Each "solved" claim below (issue #36) must reference a real
@@ -22041,27 +22168,27 @@ mod tests {
 
         // p1: solved, but attempts_used=2 and no explicit pass_at -- NOT pass@1.
         let p1_episode = solved_episode_for(&peer, "stmt_p1", "pass1-p1").await;
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run_id, "benchmark_problem_id": problem_ids[0], "episode_id": p1_episode, "status": "kernel_verified", "attempts_used": 2,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         // p2: solved, attempts_used=1, no explicit pass_at -- fallback counts as pass@1.
         let p2_episode = solved_episode_for(&peer, "stmt_p2", "pass1-p2").await;
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run_id, "benchmark_problem_id": problem_ids[1], "episode_id": p2_episode, "status": "kernel_verified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         // p3: solved, attempts_used=3 but explicit pass_at=1 (authoritative) -- pass@1.
         let p3_episode = solved_episode_for(&peer, "stmt_p3", "pass1-p3").await;
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run_id, "benchmark_problem_id": problem_ids[2], "episode_id": p3_episode, "status": "kernel_verified", "attempts_used": 3, "pass_at": 1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         // p4: not solved at all.
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run_id, "benchmark_problem_id": problem_ids[3], "status": "failed", "attempts_used": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "run_id": run_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed["metrics"]["problems_attempted"], 4);
         assert_eq!(observed["metrics"]["solved_count"], 3);
         assert_eq!(observed["metrics"]["solved_rate"], 0.75);
@@ -22082,9 +22209,9 @@ mod tests {
         let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "1 + 1 = 2",
         }).as_object().unwrap().clone())).await.unwrap());
-        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
+        let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run_id = run["run_id"].as_str().unwrap().to_string();
         // Attested problem so proving lands on kernel_verified, not certified.
         let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
@@ -22104,13 +22231,13 @@ mod tests {
             "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
             "action": {"type": "solve", "proof_term": "norm_num"}, "cost_micros": 1,
         }).as_object().unwrap().clone())).await.unwrap());
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_result_record").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "result_record", 
             "run_id": run_id, "benchmark_problem_id": problem["benchmark_problem_id"], "episode_id": episode_id,
             "status": "kernel_verified", "attempts_used": 1,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // Before promotion: not stale, current outcome == stored.
-        let before = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({"run_id": run_id}).as_object().unwrap().clone())).await.unwrap());
+        let before = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", "run_id": run_id}}).as_object().unwrap().clone())).await.unwrap());
         let r0 = &before["results"][0];
         assert_eq!(r0["stored_result_status"], "kernel_verified");
         assert_eq!(r0["current_episode_outcome"], "kernel_verified");
@@ -22125,7 +22252,7 @@ mod tests {
         assert_eq!(review["fidelity_status"], "verified");
 
         // After: stored status preserved, current outcome advanced, stale=true.
-        let after = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_observe").with_arguments(serde_json::json!({"run_id": run_id}).as_object().unwrap().clone())).await.unwrap());
+        let after = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "observe", "run_id": run_id}}).as_object().unwrap().clone())).await.unwrap());
         let r1 = &after["results"][0];
         assert_eq!(r1["stored_result_status"], "kernel_verified", "historical result status must NOT be silently rewritten");
         assert_eq!(r1["status"], "kernel_verified", "back-compat status mirror unchanged");
