@@ -623,6 +623,86 @@ pub struct BenchmarkSuiteSetTrustArgs {
     pub notes: Option<String>,
 }
 
+/// Issue #193 (epic #182, 11th consolidation after #183's `proof_session`
+/// pilot through #192's `proof_pattern`): the single `benchmark_suite`
+/// tool's internally-tagged action enum, mirroring the established
+/// `episode_step` pattern (`#[serde(tag = "type", rename_all =
+/// "snake_case")]`). Each variant's fields are the corresponding pre-#193
+/// flat `BenchmarkSuite*Args` struct's fields verbatim — those structs
+/// remain (unchanged) as what the `do_benchmark_suite_*` handlers
+/// deserialize; this enum is only the MCP-layer dispatch shape. There are
+/// no shared wrapper fields: `create` mints a new suite_id while
+/// `observe`/`set_trust` key on an existing suite_id/name. The wider
+/// `benchmark_*` family is deliberately split into three consolidated tools
+/// by epic #182 — `benchmark_problem_register`/`benchmark_problem_observe`
+/// (future `benchmark_problem`) and `benchmark_run_create`/
+/// `benchmark_result_record`/`benchmark_run_observe` (future `benchmark_run`)
+/// are NOT folded in here.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BenchmarkSuiteAction {
+    Create {
+        name: String,
+        #[serde(default)]
+        upstream_url: Option<String>,
+        #[serde(default)]
+        upstream_commit: Option<String>,
+        #[serde(default = "default_benchmark_language")]
+        language: String,
+        /// An honest, self-declared trust assertion (issue #38's fidelity-basis
+        /// policy): set true ONLY for a suite you can vouch is a real,
+        /// externally-curated benchmark corpus (e.g. PutnamBench) whose own
+        /// registered root_formal_statement is itself sufficient fidelity
+        /// evidence — a statement-hash match against such a suite is accepted
+        /// by benchmark_result_record as fidelity basis for a kernel_verified/
+        /// certified claim WITHOUT requiring a separate problem_submit_fidelity_review.
+        /// LLM-Driven Proof Search Environment never independently verifies this claim, exactly like
+        /// unsafe_dev_attestation/host_cost_confidence elsewhere — defaults to
+        /// false so an arbitrary custom suite can never silently gain this
+        /// treatment.
+        #[serde(default)]
+        trusted_canonical_source: bool,
+    },
+    Observe {
+        /// Look up by LLM-Driven Proof Search Environment suite id. Exactly one of `suite_id` / `name` is required.
+        #[serde(default)]
+        suite_id: Option<String>,
+        /// Look up by registered suite name (e.g. "PutnamBench").
+        #[serde(default)]
+        name: Option<String>,
+        /// Include every registered problem's full row (statements, prover-ready
+        /// form, import manifest). Defaults true — the point of this tool (issue
+        /// #65) is that a host can read registered problems without a database
+        /// side channel.
+        #[serde(default = "default_true")]
+        include_problems: bool,
+    },
+    SetTrust {
+        suite_id: String,
+        /// The new value of the suite's trusted_canonical_source flag. Same
+        /// honesty contract as the create action's flag: assert true ONLY
+        /// for a real, externally-curated benchmark corpus whose registered
+        /// statements are themselves sufficient fidelity evidence.
+        trusted_canonical_source: bool,
+        /// Who is making this trust assertion. Recorded verbatim in the
+        /// append-only audit trail (benchmark_suite_trust_reviews).
+        approver_id: String,
+        /// Why. Required (non-empty) when RAISING trust to true — a trust grant
+        /// without recorded justification is exactly the unaudited flag-flip this
+        /// tool exists to prevent.
+        #[serde(default)]
+        notes: Option<String>,
+    },
+}
+
+/// Issue #193: args for the single consolidated `benchmark_suite` tool. The
+/// entire payload lives on the internally-tagged `action` — see
+/// `BenchmarkSuiteAction`'s doc for why there are no shared wrapper fields.
+#[derive(JsonSchema, Deserialize)]
+pub struct BenchmarkSuiteArgs {
+    pub action: BenchmarkSuiteAction,
+}
+
 #[derive(JsonSchema, Deserialize)]
 pub enum BenchmarkSolveMode {
     #[serde(rename = "solve_only")] SolveOnly,
@@ -10950,6 +11030,173 @@ impl ChatDbMcp {
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
     }
 
+    async fn do_benchmark_suite(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: BenchmarkSuiteArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize benchmark_suite action: {}", e)))?;
+        match &args.action {
+            BenchmarkSuiteAction::Create { .. } => self.do_benchmark_suite_create(inner).await,
+            BenchmarkSuiteAction::Observe { .. } => self.do_benchmark_suite_observe(inner).await,
+            BenchmarkSuiteAction::SetTrust { .. } => self.do_benchmark_suite_set_trust(inner).await,
+        }
+    }
+
+    async fn do_benchmark_suite_create(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: BenchmarkSuiteCreateArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if args.name.trim().is_empty() {
+            return Err(mcp_invalid_params("name must be non-empty"));
+        }
+
+        let conn = self.conn.lock().await;
+        let suite_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO benchmark_suites (id, name, upstream_url, upstream_commit, language, trusted_canonical_source, imported_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (&suite_id, &args.name, &args.upstream_url, &args.upstream_commit, &args.language, args.trusted_canonical_source, &now),
+        ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
+            mcp_invalid_params(format!("a benchmark suite named {:?} already exists", args.name))
+        } else {
+            rs(e)
+        })?;
+
+        let res = serde_json::json!({ "suite_id": suite_id, "name": args.name, "trusted_canonical_source": args.trusted_canonical_source, "created_at": now });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_benchmark_suite_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: BenchmarkSuiteObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let conn = self.conn.lock().await;
+        let suite = match (&args.suite_id, &args.name) {
+            (Some(id), _) => conn.query_row(
+                "SELECT id, name, upstream_url, upstream_commit, language, trusted_canonical_source, imported_at FROM benchmark_suites WHERE id = ?1",
+                [id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, String>(6)?)),
+            ).optional().map_err(rs)?,
+            (None, Some(name)) => conn.query_row(
+                "SELECT id, name, upstream_url, upstream_commit, language, trusted_canonical_source, imported_at FROM benchmark_suites WHERE name = ?1",
+                [name],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, String>(6)?)),
+            ).optional().map_err(rs)?,
+            (None, None) => return Err(mcp_invalid_params("provide suite_id or name")),
+        };
+        let Some((suite_id, name, upstream_url, upstream_commit, language, trusted, imported_at)) = suite else {
+            return Err(mcp_invalid_params("no benchmark suite matches the given suite_id/name"));
+        };
+        let trust_history: Vec<serde_json::Value> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, previous_value, new_value, approver_id, notes, created_at
+                 FROM benchmark_suite_trust_reviews WHERE suite_id = ?1 ORDER BY created_at ASC",
+            ).map_err(rs)?;
+            let rows = stmt.query_map([&suite_id], |row| Ok(serde_json::json!({
+                "trust_review_id": row.get::<_, String>(0)?,
+                "previous_value": row.get::<_, i64>(1)? == 1,
+                "new_value": row.get::<_, i64>(2)? == 1,
+                "approver_id": row.get::<_, String>(3)?,
+                "notes": row.get::<_, Option<String>>(4)?,
+                "created_at": row.get::<_, String>(5)?,
+            }))).map_err(rs)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(rs)?
+        };
+        let problems: Vec<serde_json::Value> = if args.include_problems {
+            let mut stmt = conn.prepare(
+                "SELECT id, upstream_problem_id, theorem_name, source_file_path, root_formal_statement,
+                        root_statement_hash, import_manifest_json, prover_ready_statement,
+                        prover_ready_statement_hash, status, goal_class, brute_force_admissible, created_at
+                 FROM benchmark_problems WHERE suite_id = ?1 ORDER BY upstream_problem_id ASC",
+            ).map_err(rs)?;
+            let rows = stmt.query_map([&suite_id], |row| {
+                let manifest_json: String = row.get(6)?;
+                Ok(serde_json::json!({
+                    "benchmark_problem_id": row.get::<_, String>(0)?,
+                    "upstream_problem_id": row.get::<_, String>(1)?,
+                    "theorem_name": row.get::<_, String>(2)?,
+                    "source_file_path": row.get::<_, Option<String>>(3)?,
+                    "root_formal_statement": row.get::<_, String>(4)?,
+                    "root_statement_hash": row.get::<_, String>(5)?,
+                    "import_manifest": serde_json::from_str::<serde_json::Value>(&manifest_json).unwrap_or(serde_json::Value::Null),
+                    "prover_ready_statement": row.get::<_, Option<String>>(7)?,
+                    "prover_ready_statement_hash": row.get::<_, Option<String>>(8)?,
+                    "status": row.get::<_, String>(9)?,
+                    "goal_class": row.get::<_, String>(10)?,
+                    "brute_force_admissible": row.get::<_, i64>(11)? == 1,
+                    "created_at": row.get::<_, String>(12)?,
+                }))
+            }).map_err(rs)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(rs)?
+        } else {
+            vec![]
+        };
+        let problem_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM benchmark_problems WHERE suite_id = ?1", [&suite_id], |row| row.get(0),
+        ).map_err(rs)?;
+        let res = serde_json::json!({
+            "suite_id": suite_id,
+            "name": name,
+            "upstream_url": upstream_url,
+            "upstream_commit": upstream_commit,
+            "language": language,
+            "trusted_canonical_source": trusted == 1,
+            "imported_at": imported_at,
+            "trust_review_history": trust_history,
+            "problem_count": problem_count,
+            "problems": if args.include_problems { serde_json::Value::Array(problems) } else { serde_json::Value::Null },
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_benchmark_suite_set_trust(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: BenchmarkSuiteSetTrustArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if args.approver_id.trim().is_empty() {
+            return Err(mcp_invalid_params("approver_id must be non-empty — trust changes are audited"));
+        }
+        if args.trusted_canonical_source && args.notes.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            return Err(mcp_invalid_params(
+                "raising trusted_canonical_source to true requires non-empty notes — record WHY this suite qualifies as an externally-curated canonical corpus (upstream provenance, commit, review basis)",
+            ));
+        }
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        let previous: Option<i64> = tx.query_row(
+            "SELECT trusted_canonical_source FROM benchmark_suites WHERE id = ?1",
+            [&args.suite_id], |row| row.get(0),
+        ).optional().map_err(rs)?;
+        let Some(previous) = previous else {
+            return Err(mcp_invalid_params(format!("unknown suite_id: {}", args.suite_id)));
+        };
+        let new_value = if args.trusted_canonical_source { 1_i64 } else { 0_i64 };
+        let changed = previous != new_value;
+        let trust_review_id = if changed {
+            let review_id = Uuid::new_v4().to_string();
+            let now = Utc::now().to_rfc3339();
+            tx.execute(
+                "UPDATE benchmark_suites SET trusted_canonical_source = ?1 WHERE id = ?2",
+                (new_value, &args.suite_id),
+            ).map_err(rs)?;
+            tx.execute(
+                "INSERT INTO benchmark_suite_trust_reviews (id, suite_id, previous_value, new_value, approver_id, notes, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                (&review_id, &args.suite_id, previous, new_value, &args.approver_id, &args.notes, &now),
+            ).map_err(rs)?;
+            Some(review_id)
+        } else {
+            None
+        };
+        tx.commit().map_err(rs)?;
+        let res = serde_json::json!({
+            "suite_id": args.suite_id,
+            "trusted_canonical_source": new_value == 1,
+            "previous_value": previous == 1,
+            "changed": changed,
+            "trust_review_id": trust_review_id,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
 }
 
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
@@ -11012,11 +11259,9 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
             make_tool::<MathlibSearchLocalArtifactsArgs>("mathlib_search_local_artifacts", "Search THIS LLM-Driven Proof Search Environment instance's own previously-verified theorem/def names for a substring match — a local usage_example precedent, not a Mathlib-library result"),
             make_tool::<RunEnvelopeArgs>("run_envelope", "Issue #190: ONE tool for the entire run-envelope family (issues #34/#38/#46) — create, correct, and read back who/what produced a set of episodes: host, model, mode (development/evaluation/benchmark/private_audit/public_report), and host-side cost accounting LLM-Driven Proof Search Environment itself cannot observe. Purely descriptive metadata; NO action ever affects proof status. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"mode\":\"development\"|\"evaluation\"|\"benchmark\"|\"private_audit\"|\"public_report\"} (+ optional host_name, host_model, benchmark_suite_name, host_side_cost_micros, host_cost_confidence, notes — creates the envelope and, issue #46, an origin cost observation so the append-only history has a defined head from creation) | {\"type\":\"update\",\"run_envelope_id\":\"..\"} (+ optional host_side_cost_micros, host_cost_confidence, notes — update a run envelope's host-side cost fields or notes after the fact; APPEND-ONLY under the hood (issue #46): a cost correction appends an immutable observation rather than overwriting, so the prior value stays queryable via the observe action's cost_observations) | {\"type\":\"cost_observation_add\",\"run_envelope_id\":\"..\"} (+ optional host_side_cost_micros, host_cost_confidence, source, notes — append an auditable, append-only host-side cost observation (issue #46); never overwrites a prior observation — the previous value stays queryable; sets the envelope's current selected cost figure while preserving the full supersedes chain) | {\"type\":\"attach_episode\",\"run_envelope_id\":\"..\",\"episode_id\":\"..\"} (+ optional allow_dev_attested — tag an existing episode with a run envelope, metadata only, never changes the episode's outcome/state; mode-enforcement policy: unconditionally rejects attaching an 'attested'/unsafe_dev_attestation episode to a benchmark/evaluation/public_report-mode envelope with no override, 'development' is always allowed, and 'private_audit' requires allow_dev_attested=true) | {\"type\":\"observe\",\"run_envelope_id\":\"..\"} (read back a run envelope, every episode tagged with it, and its full append-only host-side cost observation history)"),
-            make_tool::<BenchmarkSuiteCreateArgs>("benchmark_suite_create", "Register a benchmark suite (e.g. PutnamBench) — manual/structured registration, not automated parsing. Issue #29/#30"),
+            make_tool::<BenchmarkSuiteArgs>("benchmark_suite", "Issue #193: ONE tool for the benchmark-suite lifecycle (issues #29/#30/#65) — register a benchmark suite (e.g. PutnamBench), read it back with its append-only trust-review history and (by default) every registered problem, and change its trusted_canonical_source flag after creation. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"name\":\"..\"} (+ optional upstream_url, upstream_commit, language (defaults \"Lean4\"), trusted_canonical_source — manual/structured registration, not automated parsing; rejects a duplicate name rather than silently creating a second suite with the same identity. trusted_canonical_source is an honest, self-declared trust assertion: assert true ONLY for a suite you can vouch is a real, externally-curated benchmark corpus whose own registered root_formal_statement is itself sufficient fidelity evidence — a statement-hash match against such a suite is accepted by benchmark_result_record as fidelity basis for a kernel_verified/certified claim WITHOUT requiring a separate problem_submit_fidelity_review. LLM-Driven Proof Search Environment never independently verifies this claim; defaults to false so an arbitrary custom suite can never silently gain this treatment) | {\"type\":\"observe\"} (+ suite_id OR name, optional include_problems defaulting true — read back the suite row (upstream provenance, trusted_canonical_source), its append-only trust-review history, and every registered problem's full row (root_formal_statement, prover_ready_statement + hashes, import manifest, goal class). The sanctioned way for a host to read registered benchmark content; no database side channel needed) | {\"type\":\"set_trust\",\"suite_id\":\"..\",\"trusted_canonical_source\":true|false,\"approver_id\":\"..\"} (+ optional notes — the admin path for changing a suite's trusted_canonical_source flag after creation, forcing per-problem fidelity reviews when an importer forgot the flag. approver_id must be non-empty — trust changes are audited. Same honesty contract as create: assert true ONLY for a real, externally-curated corpus, and raising trust to true REQUIRES non-empty notes recording WHY this suite qualifies. Every REAL change (previous value != new value) is recorded append-only in benchmark_suite_trust_reviews (approver, previous → new value, notes) alongside the update; a same-value call is a recorded-as-unchanged no-op — no audit row, no update, trust_review_id null in the response. Never affects proof status of existing results — only the fidelity basis future benchmark_result_record calls can claim). The wider benchmark_* family is deliberately split into three consolidated tools by epic #182 — `benchmark_problem_register`/`benchmark_problem_observe` and `benchmark_run_create`/`benchmark_result_record`/`benchmark_run_observe` are separate tools, not part of this consolidation"),
             make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise. import_manifest entries may be Lean module paths AND `open [scoped] <Namespace> ...` directives (issue #62) — capture the upstream file's own open context here so registered statements that rely on scoped notation (ℤ[X], ∠, π) elaborate faithfully at proving time"),
-            make_tool::<BenchmarkSuiteObserveArgs>("benchmark_suite_observe", "Read back a registered benchmark suite by suite_id or name (issue #65): the suite row (upstream provenance, trusted_canonical_source), its append-only trust-review history, and — by default — every registered problem's full row (root_formal_statement, prover_ready_statement + hashes, import manifest, goal class). This is the sanctioned way for a host to read registered benchmark content; no database side channel needed"),
             make_tool::<BenchmarkProblemObserveArgs>("benchmark_problem_observe", "Read back one registered benchmark problem (issue #65) by benchmark_problem_id, or by (suite_id, upstream_problem_id). Returns the full row: root_formal_statement, server-derived prover_ready_statement (the exact bytes problem_create/SubmitModule must receive), both hashes, import manifest (module paths + open directives), goal class, and status"),
-            make_tool::<BenchmarkSuiteSetTrustArgs>("benchmark_suite_set_trust", "Change a suite's trusted_canonical_source flag after creation (issue #65) — the admin path that previously didn't exist, forcing per-problem fidelity reviews when an importer forgot the flag. Same honesty contract as benchmark_suite_create: assert true ONLY for a real, externally-curated corpus. Every change is recorded append-only in benchmark_suite_trust_reviews (approver, previous → new value, notes); raising trust to true REQUIRES non-empty notes. Never affects proof status of existing results — only the fidelity basis future benchmark_result_record calls can claim"),
             make_tool::<BenchmarkRunCreateArgs>("benchmark_run_create", "Create a benchmark run against a suite. Requires an existing run_envelope_id (call run_envelope_create first — a run should not start unassociated with host/mode/cost tracking). lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results"),
             make_tool::<BenchmarkResultRecordArgs>("benchmark_result_record", "Record (or update) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem. For failed/gave-up results, optionally attach structured gap_categories (issue #76: math_unknown / library_missing / statement_elaboration_gap / statement_elaborates_but_bridge_missing / tactic_timeout / tactic_transport_hazard / geometry_case_analysis_missing / coefficient_uniqueness_missing / area_coordinate_scaffold_missing / convexity_extreme_point_missing / export_trust_policy_gap / benchmark_admin_gap) — reporting metadata that never affects proof authority or score, so failures read as an infrastructure roadmap instead of a flat failure count. Issue #92 adds kit-aware reporting: kit_lemmas_used (fully qualified kit lemma names the attempt used) and missing_route_step (which kit route step blocked a failure) — while kits_imported is derived SERVER-SIDE from the linked problem_version's import manifest, never client-claimed"),
             make_tool::<BenchmarkRunObserveArgs>("benchmark_run_observe", "Read back a run, every result recorded against it, and aggregate pass/attempt metrics. Issue #92: per-result kit fields (kits_imported server-derived from the manifest, kit_lemmas_used, missing_route_step) plus metrics.failures_by_missing_route_step, metrics.kits_imported_by_problem, and metrics.kit_acceptance_matrix (embedded kit registry targets crossed with this run's outcomes — which problems are blocked by which kit issue). solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric. cost_summary separates real metrics (verifier_wall_time_ms/verifier_cpu_time_ms/mcp_action_count/mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms — all real, measured data, null only when genuinely no correlated activity exists yet) from monetary cost (*_cost_micros fields, null unless real money data or a rate card exists — mcp_side_cost_micros/storage_export_cost_micros stay null with no pricing profile decided for either surface). cost_completeness is 'total_cost_known' only when every material cost surface is exact (currently unreachable: mcp_side/storage_export have real metrics but no pricing), 'reported_total_not_exact' when some real monetary signal exists (exact/attested/estimated) but not a complete exact total, else 'total_cost_incomplete'"),
@@ -11168,8 +11413,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 52,
-                        "total_tool_count": 52,
+                        "classified_tool_count": 50,
+                        "total_tool_count": 50,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -11625,15 +11870,16 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none — moves are not obligations until explicitly promoted, and promotion itself never creates an obligation, only links to one that already exists",
                                 "required_run_mode": "any"
                             },
-                            "benchmark_suite_create": {
-                                "side_effect": "mutating — inserts a benchmark_suites row; rejects a duplicate name rather than silently creating a second suite with the same identity",
-                                "trust_level": "human_attested — a suite's name/upstream_url/upstream_commit/language are exactly what the caller declares; LLM-Driven Proof Search Environment does not itself fetch or verify the upstream repository. trusted_canonical_source (v0.3.21, issue #38's fidelity-basis policy) is the SAME kind of honest self-declared trust assertion, not independently verified — it defaults to false so an arbitrary custom suite can never silently gain the 'hash-match alone is sufficient fidelity evidence' treatment meant only for a real, externally-curated corpus like PutnamBench",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output — suite metadata, no proof content",
-                                "replayability": "deterministic",
+                            "benchmark_suite": {
+                                "side_effect": "mixed by action (issue #193: one tool consolidating the former benchmark_suite_create / benchmark_suite_observe / benchmark_suite_set_trust tools; per-action semantics unchanged): create is append_only — inserts a benchmark_suites row, rejects a duplicate name rather than silently creating a second suite with the same identity; observe is read_only — the suite row, its append-only trust-review history, and (by default) every registered problem's full row; set_trust is mutating and appends one benchmark_suite_trust_reviews audit row per REAL change to trusted_canonical_source (a same-value call is a recorded-as-unchanged no-op — no audit row, no update statement executed, trust_review_id null in the response)",
+                                "trust_level": "human_attested for every action — a suite's name/upstream_url/upstream_commit/language are exactly what the caller declares; LLM-Driven Proof Search Environment does not itself fetch or verify the upstream repository. trusted_canonical_source (v0.3.21, issue #38's fidelity-basis policy) is the SAME kind of honest self-declared trust assertion on both create and set_trust, not independently verified — it defaults to false on create so an arbitrary custom suite can never silently gain the 'hash-match alone is sufficient fidelity evidence' treatment meant only for a real, externally-curated corpus like PutnamBench; set_trust is now auditable: approver_id and notes are mandatory context, and raising trust to true REQUIRES non-empty notes. Issue #65: set_trust is the admin path that previously didn't exist, which forced per-problem fidelity self-reviews when an importer forgot the flag. observe reads back exactly what registration/set_trust stored, no re-derivation",
+                                "cost_surface": "none for every action",
+                                "benchmark_safety": "safe_public_output for every action — suite metadata and registered problem statements (upstream-published benchmark text), never proof content. set_trust changes the fidelity basis FUTURE benchmark_result_record calls can claim (hash-match against a trusted suite); never retroactively upgrades or downgrades an already-recorded result",
+                                "replayability": "deterministic for every action; set_trust's audit table is append-only, so the flag's full history is reconstructible",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
-                                "required_run_mode": "any"
+                                "required_run_mode": "any — but set_trust's trust assertion itself is a maintainer-level act; the audit row is what makes that accountable",
+                                "unresolved_design_question": "should raising trust additionally require a second, distinct approver (two-person rule)? Left open — single-approver-with-audit matches the rest of the attestation surface today"
                             },
                             "lean_declaration_lookup": {
                                 "side_effect": "read_only — no DB write; the DB mutex is deliberately released BEFORE the real (potentially 15-40+ second) Lean invocation, matching this codebase's convention of not stalling other concurrent tool calls on a slow operation",
@@ -11655,16 +11901,6 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
                             },
-                            "benchmark_suite_observe": {
-                                "side_effect": "read_only — suite row, its append-only trust-review history, and (by default) every registered problem's full row",
-                                "trust_level": "reads back exactly what registration stored; statements/manifests are the registered bytes, no re-derivation. Issue #65: this replaces the database side channel a host previously needed to read registered benchmark content",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output — registered problem statements are upstream-published benchmark text, never proof bodies",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
                             "benchmark_problem_observe": {
                                 "side_effect": "read_only — one benchmark_problems row by id or (suite_id, upstream_problem_id)",
                                 "trust_level": "reads back exactly what registration stored, including the server-derived prover_ready_statement a prover must submit byte-for-byte",
@@ -11674,17 +11910,6 @@ impl ServerHandler for ChatDbMcp {
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
-                            },
-                            "benchmark_suite_set_trust": {
-                                "side_effect": "mutating — flips benchmark_suites.trusted_canonical_source and appends one benchmark_suite_trust_reviews audit row per REAL change (a same-value call is a recorded-as-unchanged no-op)",
-                                "trust_level": "human_attested — the same honest self-declared assertion as benchmark_suite_create's flag (LLM-Driven Proof Search Environment never verifies the upstream corpus itself), but now auditable: approver_id and notes are mandatory context, and raising trust to true REQUIRES non-empty notes. Issue #65: the admin path that previously didn't exist, which forced per-problem fidelity self-reviews when an importer forgot the flag",
-                                "cost_surface": "none",
-                                "benchmark_safety": "changes the fidelity basis FUTURE benchmark_result_record calls can claim (hash-match against a trusted suite); never retroactively upgrades or downgrades an already-recorded result",
-                                "replayability": "deterministic; the audit table is append-only, so the flag's full history is reconstructible",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any — but the trust assertion itself is a maintainer-level act; the audit row is what makes that accountable",
-                                "unresolved_design_question": "should raising trust additionally require a second, distinct approver (two-person rule)? Left open — single-approver-with-audit matches the rest of the attestation surface today"
                             },
                             "proof_session": {
                                 "side_effect": "mixed by action (issue #183: one tool consolidating the former ten proof_session_* tools; per-action semantics unchanged): observe/export and replay's trace_only/backend modes are read_only; start inserts interactive_proof_sessions + its root interactive_proof_nodes row; tactic_step/branch insert one interactive_proof_nodes row (on success) and one interactive_proof_steps row (always); select_node updates only interactive_proof_sessions.selected_final_node_id; reconstruct inserts one interactive_proof_reconstructed_scripts row; close updates session state/closed_at/close_reason only and deletes nothing; promote_to_attempt — and replay's final_proof mode, which calls the same internal path — routes into the REAL do_attempt_claim/do_episode_step methods episode_step's own arm calls, so every write episode_step can make (action_attempts, episodes, episode_obligations, episode_verified_lemmas/_modules) can happen there too",
@@ -13325,29 +13550,7 @@ impl ServerHandler for ChatDbMcp {
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
             "run_envelope" => self.do_run_envelope(args_val).await,
-            "benchmark_suite_create" => {
-                let args: BenchmarkSuiteCreateArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                if args.name.trim().is_empty() {
-                    return Err(mcp_invalid_params("name must be non-empty"));
-                }
-
-                let conn = self.conn.lock().await;
-                let suite_id = Uuid::new_v4().to_string();
-                let now = Utc::now().to_rfc3339();
-                conn.execute(
-                    "INSERT INTO benchmark_suites (id, name, upstream_url, upstream_commit, language, trusted_canonical_source, imported_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    (&suite_id, &args.name, &args.upstream_url, &args.upstream_commit, &args.language, args.trusted_canonical_source, &now),
-                ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
-                    mcp_invalid_params(format!("a benchmark suite named {:?} already exists", args.name))
-                } else {
-                    rs(e)
-                })?;
-
-                let res = serde_json::json!({ "suite_id": suite_id, "name": args.name, "trusted_canonical_source": args.trusted_canonical_source, "created_at": now });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
+            "benchmark_suite" => self.do_benchmark_suite(args_val).await,
             "benchmark_problem_register" => {
                 let args: BenchmarkProblemRegisterArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -13447,87 +13650,6 @@ impl ServerHandler for ChatDbMcp {
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
-            "benchmark_suite_observe" => {
-                let args: BenchmarkSuiteObserveArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                let conn = self.conn.lock().await;
-                let suite = match (&args.suite_id, &args.name) {
-                    (Some(id), _) => conn.query_row(
-                        "SELECT id, name, upstream_url, upstream_commit, language, trusted_canonical_source, imported_at FROM benchmark_suites WHERE id = ?1",
-                        [id],
-                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, String>(6)?)),
-                    ).optional().map_err(rs)?,
-                    (None, Some(name)) => conn.query_row(
-                        "SELECT id, name, upstream_url, upstream_commit, language, trusted_canonical_source, imported_at FROM benchmark_suites WHERE name = ?1",
-                        [name],
-                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, String>(6)?)),
-                    ).optional().map_err(rs)?,
-                    (None, None) => return Err(mcp_invalid_params("provide suite_id or name")),
-                };
-                let Some((suite_id, name, upstream_url, upstream_commit, language, trusted, imported_at)) = suite else {
-                    return Err(mcp_invalid_params("no benchmark suite matches the given suite_id/name"));
-                };
-                let trust_history: Vec<serde_json::Value> = {
-                    let mut stmt = conn.prepare(
-                        "SELECT id, previous_value, new_value, approver_id, notes, created_at
-                         FROM benchmark_suite_trust_reviews WHERE suite_id = ?1 ORDER BY created_at ASC",
-                    ).map_err(rs)?;
-                    let rows = stmt.query_map([&suite_id], |row| Ok(serde_json::json!({
-                        "trust_review_id": row.get::<_, String>(0)?,
-                        "previous_value": row.get::<_, i64>(1)? == 1,
-                        "new_value": row.get::<_, i64>(2)? == 1,
-                        "approver_id": row.get::<_, String>(3)?,
-                        "notes": row.get::<_, Option<String>>(4)?,
-                        "created_at": row.get::<_, String>(5)?,
-                    }))).map_err(rs)?;
-                    rows.collect::<Result<Vec<_>, _>>().map_err(rs)?
-                };
-                let problems: Vec<serde_json::Value> = if args.include_problems {
-                    let mut stmt = conn.prepare(
-                        "SELECT id, upstream_problem_id, theorem_name, source_file_path, root_formal_statement,
-                                root_statement_hash, import_manifest_json, prover_ready_statement,
-                                prover_ready_statement_hash, status, goal_class, brute_force_admissible, created_at
-                         FROM benchmark_problems WHERE suite_id = ?1 ORDER BY upstream_problem_id ASC",
-                    ).map_err(rs)?;
-                    let rows = stmt.query_map([&suite_id], |row| {
-                        let manifest_json: String = row.get(6)?;
-                        Ok(serde_json::json!({
-                            "benchmark_problem_id": row.get::<_, String>(0)?,
-                            "upstream_problem_id": row.get::<_, String>(1)?,
-                            "theorem_name": row.get::<_, String>(2)?,
-                            "source_file_path": row.get::<_, Option<String>>(3)?,
-                            "root_formal_statement": row.get::<_, String>(4)?,
-                            "root_statement_hash": row.get::<_, String>(5)?,
-                            "import_manifest": serde_json::from_str::<serde_json::Value>(&manifest_json).unwrap_or(serde_json::Value::Null),
-                            "prover_ready_statement": row.get::<_, Option<String>>(7)?,
-                            "prover_ready_statement_hash": row.get::<_, Option<String>>(8)?,
-                            "status": row.get::<_, String>(9)?,
-                            "goal_class": row.get::<_, String>(10)?,
-                            "brute_force_admissible": row.get::<_, i64>(11)? == 1,
-                            "created_at": row.get::<_, String>(12)?,
-                        }))
-                    }).map_err(rs)?;
-                    rows.collect::<Result<Vec<_>, _>>().map_err(rs)?
-                } else {
-                    vec![]
-                };
-                let problem_count: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM benchmark_problems WHERE suite_id = ?1", [&suite_id], |row| row.get(0),
-                ).map_err(rs)?;
-                let res = serde_json::json!({
-                    "suite_id": suite_id,
-                    "name": name,
-                    "upstream_url": upstream_url,
-                    "upstream_commit": upstream_commit,
-                    "language": language,
-                    "trusted_canonical_source": trusted == 1,
-                    "imported_at": imported_at,
-                    "trust_review_history": trust_history,
-                    "problem_count": problem_count,
-                    "problems": if args.include_problems { serde_json::Value::Array(problems) } else { serde_json::Value::Null },
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
             "benchmark_problem_observe" => {
                 let args: BenchmarkProblemObserveArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -13571,54 +13693,6 @@ impl ServerHandler for ChatDbMcp {
                     return Err(mcp_invalid_params("no benchmark problem matches the given identifiers"));
                 };
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&problem).unwrap())]))
-            }
-            "benchmark_suite_set_trust" => {
-                let args: BenchmarkSuiteSetTrustArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                if args.approver_id.trim().is_empty() {
-                    return Err(mcp_invalid_params("approver_id must be non-empty — trust changes are audited"));
-                }
-                if args.trusted_canonical_source && args.notes.as_deref().map(str::trim).unwrap_or("").is_empty() {
-                    return Err(mcp_invalid_params(
-                        "raising trusted_canonical_source to true requires non-empty notes — record WHY this suite qualifies as an externally-curated canonical corpus (upstream provenance, commit, review basis)",
-                    ));
-                }
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                let previous: Option<i64> = tx.query_row(
-                    "SELECT trusted_canonical_source FROM benchmark_suites WHERE id = ?1",
-                    [&args.suite_id], |row| row.get(0),
-                ).optional().map_err(rs)?;
-                let Some(previous) = previous else {
-                    return Err(mcp_invalid_params(format!("unknown suite_id: {}", args.suite_id)));
-                };
-                let new_value = if args.trusted_canonical_source { 1_i64 } else { 0_i64 };
-                let changed = previous != new_value;
-                let trust_review_id = if changed {
-                    let review_id = Uuid::new_v4().to_string();
-                    let now = Utc::now().to_rfc3339();
-                    tx.execute(
-                        "UPDATE benchmark_suites SET trusted_canonical_source = ?1 WHERE id = ?2",
-                        (new_value, &args.suite_id),
-                    ).map_err(rs)?;
-                    tx.execute(
-                        "INSERT INTO benchmark_suite_trust_reviews (id, suite_id, previous_value, new_value, approver_id, notes, created_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                        (&review_id, &args.suite_id, previous, new_value, &args.approver_id, &args.notes, &now),
-                    ).map_err(rs)?;
-                    Some(review_id)
-                } else {
-                    None
-                };
-                tx.commit().map_err(rs)?;
-                let res = serde_json::json!({
-                    "suite_id": args.suite_id,
-                    "trusted_canonical_source": new_value == 1,
-                    "previous_value": previous == 1,
-                    "changed": changed,
-                    "trust_review_id": trust_review_id,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
             "benchmark_run_create" => {
                 let args: BenchmarkRunCreateArgs = serde_json::from_value(args_val)
@@ -14647,7 +14721,12 @@ mod tests {
         // - 2 (issue #192: the three flat proof_pattern_* tools consolidated
         // into the ONE `proof_pattern` tool; distilled_strategy_add is
         // dossier-scoped, not pattern-library-scoped, and stays standalone) = 52.
-        assert_eq!(list_res.tools.len(), 52);
+        // - 2 (issue #193: the three flat benchmark_suite_* tools consolidated
+        // into the ONE `benchmark_suite` tool; benchmark_problem_register/
+        // benchmark_problem_observe/benchmark_run_create/benchmark_result_record/
+        // benchmark_run_observe are separate future consolidations, and stay
+        // standalone here) = 50.
+        assert_eq!(list_res.tools.len(), 50);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -15251,8 +15330,8 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
-            "name": "ShadowGuardSuite",
+        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
+            "action": { "type": "create", "name": "ShadowGuardSuite" },
         }).as_object().unwrap().clone())).await.unwrap());
         let suite_id = suite["suite_id"].as_str().unwrap().to_string();
 
@@ -19937,21 +20016,21 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
-            "name": "TrustAdminSuite", "upstream_url": "https://example.org/suite", "upstream_commit": "abc123",
+        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
+            "action": { "type": "create", "name": "TrustAdminSuite", "upstream_url": "https://example.org/suite", "upstream_commit": "abc123" },
         }).as_object().unwrap().clone())).await.unwrap());
         let suite_id = suite["suite_id"].as_str().unwrap().to_string();
         assert_eq!(suite["trusted_canonical_source"], false, "trust must default to false");
 
         // Raising trust WITHOUT notes is rejected — the grant must be justified.
-        let err = peer.call_tool(CallToolRequestParams::new("benchmark_suite_set_trust").with_arguments(serde_json::json!({
-            "suite_id": suite_id, "trusted_canonical_source": true, "approver_id": "maintainer",
+        let err = peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
+            "action": { "type": "set_trust", "suite_id": suite_id, "trusted_canonical_source": true, "approver_id": "maintainer" },
         }).as_object().unwrap().clone())).await.expect_err("trust grant without notes must be rejected");
         assert!(format!("{err:?}").contains("notes"), "{err:?}");
 
-        let granted = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_set_trust").with_arguments(serde_json::json!({
-            "suite_id": suite_id, "trusted_canonical_source": true, "approver_id": "maintainer",
-            "notes": "externally curated corpus, upstream commit abc123 reviewed",
+        let granted = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
+            "action": { "type": "set_trust", "suite_id": suite_id, "trusted_canonical_source": true, "approver_id": "maintainer",
+            "notes": "externally curated corpus, upstream commit abc123 reviewed" },
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(granted["changed"], true);
         assert_eq!(granted["previous_value"], false);
@@ -19959,8 +20038,8 @@ mod tests {
         assert!(granted["trust_review_id"].is_string(), "a change must produce an audit row id");
 
         // A no-op set (same value) is not silently recorded as a change.
-        let noop = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_set_trust").with_arguments(serde_json::json!({
-            "suite_id": suite_id, "trusted_canonical_source": true, "approver_id": "maintainer", "notes": "same value",
+        let noop = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
+            "action": { "type": "set_trust", "suite_id": suite_id, "trusted_canonical_source": true, "approver_id": "maintainer", "notes": "same value" },
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(noop["changed"], false);
         assert!(noop["trust_review_id"].is_null());
@@ -19974,8 +20053,8 @@ mod tests {
         let problem_id = registered["benchmark_problem_id"].as_str().unwrap().to_string();
 
         // Observe the suite: trust flag, audit history, and the problem row.
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_observe").with_arguments(serde_json::json!({
-            "name": "TrustAdminSuite",
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
+            "action": { "type": "observe", "name": "TrustAdminSuite" },
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed["suite_id"].as_str().unwrap(), suite_id);
         assert_eq!(observed["trusted_canonical_source"], true);
@@ -20017,8 +20096,8 @@ mod tests {
         assert!(hazards.contains("nlinarith"), "{hazards}");
 
         // A run with one failed result carrying structured gap categories.
-        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
-            "name": "GapTaxonomySuite",
+        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
+            "action": { "type": "create", "name": "GapTaxonomySuite" },
         }).as_object().unwrap().clone())).await.unwrap());
         let suite_id = suite["suite_id"].as_str().unwrap().to_string();
         let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
@@ -20367,10 +20446,10 @@ mod tests {
     /// behaves like a real, externally-curated corpus (PutnamBench) whose
     /// own canonical statement-hash match is sufficient fidelity evidence —
     /// dedicated tests below exercise the untrusted-suite rejection path
-    /// explicitly via a raw benchmark_suite_create call instead of this helper.
+    /// explicitly via a raw benchmark_suite create action call instead of this helper.
     async fn create_suite(peer: &rmcp::service::Peer<rmcp::RoleClient>, name: &str) -> String {
-        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
-            "name": name, "trusted_canonical_source": true,
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
+            "action": { "type": "create", "name": name, "trusted_canonical_source": true },
         }).as_object().unwrap().clone())).await.unwrap());
         created["suite_id"].as_str().unwrap().to_string()
     }
@@ -20503,8 +20582,8 @@ mod tests {
     async fn test_benchmark_alignment_rejects_untrusted_suite() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
-        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
-            "name": "CustomUntrusted", "trusted_canonical_source": false,
+        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
+            "action": { "type": "create", "name": "CustomUntrusted", "trusted_canonical_source": false },
         }).as_object().unwrap().clone())).await.unwrap());
         let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
             "suite_id": suite["suite_id"], "upstream_problem_id": "u1", "theorem_name": "u1", "root_formal_statement": "1 + 1 = 2",
@@ -20691,8 +20770,8 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         create_suite(&peer, "PutnamBench").await;
-        let dup = peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
-            "name": "PutnamBench",
+        let dup = peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
+            "action": { "type": "create", "name": "PutnamBench" },
         }).as_object().unwrap().clone())).await;
         assert!(dup.is_err(), "duplicate suite name must be rejected");
     }
@@ -21579,8 +21658,8 @@ mod tests {
         let peer = client.peer();
         // NOT create_suite() -- that helper defaults trusted_canonical_source
         // to true; this test needs the real, untrusted default explicitly.
-        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
-            "name": "UntrustedCustomSuite",
+        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
+            "action": { "type": "create", "name": "UntrustedCustomSuite" },
         }).as_object().unwrap().clone())).await.unwrap());
         let suite_id = suite["suite_id"].as_str().unwrap().to_string();
         assert_eq!(suite["trusted_canonical_source"], false, "trusted_canonical_source must default to false, never silently true");
@@ -21671,8 +21750,8 @@ mod tests {
     async fn test_benchmark_result_record_reports_exact_mode_enforcement_message_for_untrusted_suite() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
-        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite_create").with_arguments(serde_json::json!({
-            "name": "UntrustedBenchmarkModeSuite",
+        let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
+            "action": { "type": "create", "name": "UntrustedBenchmarkModeSuite" },
         }).as_object().unwrap().clone())).await.unwrap());
         let suite_id = suite["suite_id"].as_str().unwrap().to_string();
         let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
