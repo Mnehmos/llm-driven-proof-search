@@ -84,9 +84,7 @@ Antigravity, or a custom script — should call this first.
 | `proof_export` | Proof dossier in one of 7 modes: `markdown` (default), `lean`, `public_summary` (redacted, never includes the proof body), `audit_archive`, `training_export` (structured JSON for SFT/RL/DPO), `paper_dossier` (adds a written narrative), `maintainer_submission`. Modes exposing the proof body require `allow_putnambench_proof_export=true` when the episode is linked to a tracked benchmark suite — see [docs/benchmarks/putnambench.md](docs/benchmarks/putnambench.md) |
 | `lean_declaration_lookup` | Checks whether names resolve under a problem's import manifest (fast, default). Pass `deep_check=true` to also check under the full Mathlib umbrella and distinguish "not imported here" from "genuinely absent" (slow — loads all of Mathlib). Call this before concluding an API is unavailable |
 | `proof_pattern` | ONE tool for the proof-pattern-library family (issue #24 proof-pattern memory), dispatching on an internally-tagged `action` (`create` / `search` / `record_application`) — exactly like `episode_step`'s typed `action`. The pattern library is **purely advisory**: no action here can ever mark anything proved or change fidelity/certification status. `create` registers a reusable proof-pattern lesson (failure signature + recommended repair), rejecting a duplicate `pattern_key` rather than overwriting it; `search` free-text searches the library, or lists it whole — call before repeating a failure another attempt already diagnosed; `record_application` records that a pattern was relevant to a real episode/attempt (failed example, repair example, or suggested hint) — insert-only metadata that never touches proof/fidelity/certification status. `distilled_strategy_add` is dossier-scoped, not pattern-library-scoped, and remains its own tool below rather than folding into this one |
-| `draft_create` | Register an informal Draft artifact — untrusted planning/reasoning content. A draft can never mark anything proved |
-| `draft_observe` | Read back a draft's content and any moves recorded against it |
-| `draft_extract_moves` | Record structured moves (construction, auxiliary_lemma, case_split, ...) the external agent identified in a draft. Metadata only |
+| `draft` | ONE tool for the draft artifact lifecycle (issue #23), dispatching on an internally-tagged `action` (`create` / `observe` / `extract_moves`) — exactly like `episode_step`'s typed `action`. `create` registers an informal Draft artifact — untrusted planning/reasoning content preserved before formalization begins; a draft can **never** mark anything proved; `observe` reads back a draft's content and any moves recorded against it; `extract_moves` records structured moves (construction, auxiliary_lemma, case_split, induction, reduction, bijection, counterexample_search, asymptotic_step, external_citation, unknown) the external agent identified in a draft — metadata only, moves are not obligations until explicitly promoted into a formalization plan item |
 | `formalization_plan` | ONE tool for the whole Level 3 formalization-plan family, dispatching on an internally-tagged `action` (`create` / `observe` / `update` / `add_item` / `attach_lookup` / `promote_item_to_obligation` / `attach_librarian_result`) — exactly like `episode_step`'s typed `action`. Advisory scaffolding, never proof authority: `promote_item_to_obligation` links a plan item to an episode_obligation that **already exists** (created via a normal `Decompose` action) and never creates one; `attach_lookup` / `attach_librarian_result` attach `lean_declaration_lookup` / Mathlib-librarian search results to a plan item as hints, updating its Mathlib coverage status but never proof status |
 | `research_dossier` | ONE tool for the whole Level 4 research-dossier family, dispatching on an internally-tagged `action` (`create` / `observe` / `node_add` / `external_reference_add` / `assumption_boundary_add` / `citation_review_add` / `verification_layer_set`) — exactly like `episode_step`'s typed `action`. Explicit trust-boundary metadata, never proof authority: `external_reference_add` records citations as **tracked assumptions**, never proof; `citation_review_add` records human review, which remains distinct from Lean verification; `verification_layer_set` is the **only path** to a `kernel_verified` layer and accepts that status only where kernel evidence already exists (e.g. a node whose `trust_status` is already `proved_in_episode`, backed by a verified lemma from **this dossier's own** episode/problem context) |
 | `candidate_construction` | ONE tool for the whole candidate-construction family (issue #8), dispatching on an internally-tagged `action` (`add` / `observe` / `update_status` / `link_node` / `link_verification_layer`) — exactly like `episode_step`'s typed `action`. A candidate construction is a **proposed mathematical object, not a proof certificate**: its `trust_status` never certifies anything, and empirical support, human review, citation, and "a formal statement exists" all remain distinct from kernel verification. `add` proposes a construction (`graph_family`, `counterexample`, `coloring`, etc.) with motivated-discovery metadata — it can exist before a dossier, node, Lean theorem, or episode; `observe` records one empirical check (`supports`/`refutes`/`inconclusive`) against it, and never changes proof status; `update_status` updates status/trust_status/claimed_properties/known_failures/next_check (`kernel_verified_claim_linked` is rejected unless a real kernel-verified layer is already linked); `link_node` attaches it to a research node, adopting the node's dossier if the construction has none yet; `link_verification_layer` attaches it to an existing verification layer, adopting the layer's dossier if the construction has none yet — provenance, never promotion |
@@ -579,15 +577,19 @@ negative-space training/export value.
 ## Drafts and formalization planning (Level 3)
 
 Before a `Solve`/`SubmitModule` attempt, a client can preserve informal
-reasoning as a **Draft** (`draft_create`) and record the moves it identifies
-within it (`draft_extract_moves` — construction, auxiliary_lemma, case_split,
+reasoning as a **Draft** (`draft {"action": {"type": "create", ...}}`) and
+record the moves it identifies within it (`draft {"action": {"type":
+"extract_moves", ...}}` — construction, auxiliary_lemma, case_split,
 induction, reduction, bijection, counterexample_search, asymptotic_step,
-external_citation, unknown). Selected moves can seed a **formalization
-plan** — since issue #184 the whole plan family is the single
-`formalization_plan` tool, dispatching on an internally-tagged action
-(`formalization_plan {"action": {"type": "create", ...}}`, exactly like
-`episode_step`) — which tracks planned concepts, definitions, lemmas, and
-modules together with their Mathlib coverage status (the `attach_lookup`
+external_citation, unknown). Since issue #195 the whole draft family is the
+single `draft` tool, dispatching on an internally-tagged action
+(`create` / `observe` / `extract_moves`), exactly like `episode_step`.
+Selected moves can seed a **formalization plan** — since issue #184 the whole
+plan family is the single `formalization_plan` tool, dispatching on an
+internally-tagged action (`formalization_plan {"action": {"type": "create",
+...}}`, exactly like `episode_step`) — which tracks planned concepts,
+definitions, lemmas, and modules together with their Mathlib coverage status
+(the `attach_lookup`
 action, using `lean_declaration_lookup` results, or the
 `attach_librarian_result` action, using `mathlib_search_declarations` /
 `mathlib_search_local_artifacts` results).

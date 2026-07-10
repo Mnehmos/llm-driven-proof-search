@@ -1753,7 +1753,7 @@ pub struct DraftObserveArgs {
     pub draft_id: String,
 }
 
-#[derive(JsonSchema, Deserialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema, Deserialize)]
 pub enum DraftMoveKind {
     #[serde(rename = "construction")] Construction,
     #[serde(rename = "auxiliary_lemma")] AuxiliaryLemma,
@@ -1767,7 +1767,7 @@ pub enum DraftMoveKind {
     #[serde(rename = "unknown")] Unknown,
 }
 
-#[derive(JsonSchema, Deserialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema, Deserialize)]
 pub struct DraftMoveInput {
     pub move_kind: DraftMoveKind,
     pub description: String,
@@ -1781,6 +1781,49 @@ pub struct DraftExtractMovesArgs {
     /// Appended after any moves already recorded for this draft, not
     /// replaced.
     pub moves: Vec<DraftMoveInput>,
+}
+
+/// Issue #195 (epic #182, 13th consolidation after #183's `proof_session`
+/// pilot through #194's `benchmark_run`): the single `draft` tool's
+/// internally-tagged action enum, mirroring the established `episode_step`
+/// pattern (`#[serde(tag = "type", rename_all = "snake_case")]`). Each
+/// variant's fields are the corresponding pre-#195 flat `Draft*Args`
+/// struct's fields verbatim — those structs remain (unchanged) as what the
+/// `do_draft_*` handlers deserialize; this enum is only the MCP-layer
+/// dispatch shape. There are no shared wrapper fields: `create` mints a new
+/// draft_id while `observe`/`extract_moves` key on an existing draft_id.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DraftAction {
+    Create {
+        problem_version_id: String,
+        /// A draft may exist before any episode is created for the problem.
+        #[serde(default)]
+        episode_id: Option<String>,
+        content: String,
+        /// Free text naming who/what produced this draft (a model identity, a
+        /// human reviewer, ...). Not policy-enforced.
+        author: String,
+    },
+    Observe {
+        draft_id: String,
+    },
+    ExtractMoves {
+        draft_id: String,
+        /// The moves an external agent identified in this draft's content — the
+        /// server never infers these itself (no inference code lives in LLM-Driven Proof Search Environment).
+        /// Appended after any moves already recorded for this draft, not
+        /// replaced.
+        moves: Vec<DraftMoveInput>,
+    },
+}
+
+/// Issue #195: args for the single consolidated `draft` tool. The entire
+/// payload lives on the internally-tagged `action` — see `DraftAction`'s doc
+/// for why there are no shared wrapper fields.
+#[derive(JsonSchema, Deserialize)]
+pub struct DraftArgs {
+    pub action: DraftAction,
 }
 
 #[derive(Debug, Clone, JsonSchema, Serialize, Deserialize)]
@@ -8690,6 +8733,170 @@ impl ChatDbMcp {
             "passed": promote_json["episode_step_result"]["accepted"].as_bool().unwrap_or(false),
         }))
     }
+
+    // -----------------------------------------------------------------
+    // Issue #195 (epic #182): draft artifact family. Untrusted planning/
+    // reasoning content preserved before formalization begins — a draft can
+    // never mark anything proved, and do_draft_extract_moves only records
+    // metadata (moves are not obligations until explicitly promoted into a
+    // formalization plan item via formalization_plan_create /
+    // formalization_plan_promote_item_to_obligation).
+    // -----------------------------------------------------------------
+
+    /// Issue #195 (epic #182): the single `draft` tool's dispatcher.
+    /// Deserializes `DraftArgs`, matches on the internally-tagged action, and
+    /// routes to the per-action handlers below UNCHANGED (each extracted
+    /// verbatim from the former inline match arm of the same name). Each arm
+    /// re-serializes the variant back to JSON and passes that through: the
+    /// variant's field names are identical to the old flat `Draft*Args`
+    /// shape by construction, and the extra internal `"type"` tag is ignored
+    /// by the handlers' serde derives. This transitional double-serialization
+    /// is deliberate — it keeps the three `do_draft_*` handlers
+    /// byte-identical (the epic's key risk-reducer) at negligible cost.
+    async fn do_draft(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: DraftArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize draft action: {}", e)))?;
+        match &args.action {
+            DraftAction::Create { .. } => self.do_draft_create(inner).await,
+            DraftAction::Observe { .. } => self.do_draft_observe(inner).await,
+            DraftAction::ExtractMoves { .. } => self.do_draft_extract_moves(inner).await,
+        }
+    }
+
+    async fn do_draft_create(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: DraftCreateArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let pv_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM problem_versions WHERE id = ?1", [&args.problem_version_id], |row| row.get(0),
+        ).map_err(rs)?;
+        if pv_exists == 0 {
+            return Err(mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id)));
+        }
+        if let Some(ep_id) = &args.episode_id {
+            let ep_pv_id: Option<String> = conn.query_row(
+                "SELECT problem_version_id FROM episodes WHERE id = ?1", [ep_id], |row| row.get(0),
+            ).optional().map_err(rs)?;
+            let Some(ep_pv_id) = ep_pv_id else {
+                return Err(mcp_invalid_params(format!("unknown episode_id: {}", ep_id)));
+            };
+            if ep_pv_id != args.problem_version_id {
+                return Err(mcp_invalid_params(format!("episode_id {} belongs to a different problem_version", ep_id)));
+            }
+        }
+
+        let draft_id = Uuid::new_v4().to_string();
+        let content_hash = canonical_hash(&args.content).map_err(mcp_internal_error)?;
+        let created_at = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO drafts (id, problem_version_id, episode_id, content, content_hash, author, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (&draft_id, &args.problem_version_id, &args.episode_id, &args.content, &content_hash, &args.author, &created_at),
+        ).map_err(rs)?;
+
+        let res = serde_json::json!({
+            "draft_id": draft_id,
+            "content_hash": content_hash,
+            "created_at": created_at,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_draft_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: DraftObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let draft: Option<(String, Option<String>, String, String, String, String)> = conn.query_row(
+            "SELECT problem_version_id, episode_id, content, content_hash, author, created_at FROM drafts WHERE id = ?1",
+            [&args.draft_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        ).optional().map_err(rs)?;
+        let Some((pv_id, ep_id, content, content_hash, author, created_at)) = draft else {
+            return Err(mcp_invalid_params(format!("unknown draft_id: {}", args.draft_id)));
+        };
+
+        let mut stmt = conn.prepare(
+            "SELECT id, move_order, move_kind, description, promoted_plan_item_id FROM draft_moves WHERE draft_id = ?1 ORDER BY move_order ASC"
+        ).map_err(rs)?;
+        let moves: Vec<serde_json::Value> = stmt.query_map([&args.draft_id], |row| {
+            Ok(serde_json::json!({
+                "move_id": row.get::<_, String>(0)?,
+                "move_order": row.get::<_, i64>(1)?,
+                "move_kind": row.get::<_, String>(2)?,
+                "description": row.get::<_, String>(3)?,
+                "promoted_plan_item_id": row.get::<_, Option<String>>(4)?,
+            }))
+        }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+
+        let res = serde_json::json!({
+            "draft_id": args.draft_id,
+            "problem_version_id": pv_id,
+            "episode_id": ep_id,
+            "content": content,
+            "content_hash": content_hash,
+            "author": author,
+            "created_at": created_at,
+            "moves": moves,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_draft_extract_moves(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: DraftExtractMovesArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if args.moves.is_empty() {
+            return Err(mcp_invalid_params("moves must be non-empty"));
+        }
+
+        let mut conn = self.conn.lock().await;
+        let draft_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM drafts WHERE id = ?1", [&args.draft_id], |row| row.get(0),
+        ).map_err(rs)?;
+        if draft_exists == 0 {
+            return Err(mcp_invalid_params(format!("unknown draft_id: {}", args.draft_id)));
+        }
+
+        let tx = conn.transaction().map_err(rs)?;
+        let next_order: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(move_order), -1) + 1 FROM draft_moves WHERE draft_id = ?1", [&args.draft_id], |row| row.get(0),
+        ).map_err(rs)?;
+
+        let mut created_move_ids = Vec::new();
+        let created_at = Utc::now().to_rfc3339();
+        for (i, m) in args.moves.iter().enumerate() {
+            let move_kind_str = match m.move_kind {
+                DraftMoveKind::Construction => "construction",
+                DraftMoveKind::AuxiliaryLemma => "auxiliary_lemma",
+                DraftMoveKind::CaseSplit => "case_split",
+                DraftMoveKind::Induction => "induction",
+                DraftMoveKind::Reduction => "reduction",
+                DraftMoveKind::Bijection => "bijection",
+                DraftMoveKind::CounterexampleSearch => "counterexample_search",
+                DraftMoveKind::AsymptoticStep => "asymptotic_step",
+                DraftMoveKind::ExternalCitation => "external_citation",
+                DraftMoveKind::Unknown => "unknown",
+            };
+            let move_id = Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO draft_moves (id, draft_id, move_order, move_kind, description, promoted_plan_item_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+                (&move_id, &args.draft_id, next_order + i as i64, move_kind_str, &m.description, &created_at),
+            ).map_err(rs)?;
+            created_move_ids.push(move_id);
+        }
+        tx.commit().map_err(rs)?;
+
+        let res = serde_json::json!({
+            "draft_id": args.draft_id,
+            "created_move_ids": created_move_ids,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
     // -----------------------------------------------------------------
     // Issue #184 (epic #182): Level 3 formalization-plan family. Advisory
     // planning scaffolding only — nothing here is proof authority, and
@@ -12152,9 +12359,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ProofExportArgs>("proof_export", "Render an episode as a proof dossier. format: \"markdown\" (default, full dossier) | \"lean\" (bare assembled source) | \"public_summary\" (redacted, safe for public/benchmark disclosure — never includes the proof body) | \"audit_archive\" (full dossier, explicitly labeled private) | \"training_export\" (structured JSON records for SFT/RL/DPO) | \"paper_dossier\" (full dossier plus a written narrative section) | \"maintainer_submission\" (full dossier packaged for a benchmark suite's own maintainers). Modes that expose the completed proof body require allow_putnambench_proof_export=true when the episode's problem is linked to a tracked benchmark suite — see docs/benchmarks/putnambench.md"),
             make_tool::<LeanDeclarationLookupArgs>("lean_declaration_lookup", "Check whether declaration names resolve — WITHOUT changing proof strategy first. An 'unknown identifier' error from episode_step only ever proves a name didn't resolve under the exact import manifest that attempt used; it never proves the name is absent from the pinned Mathlib. By default this only checks under the problem's own manifest (fast, a few seconds) and returns 'not_available_under_current_manifest' if it fails to resolve — that result alone does NOT mean the name is absent from the library, only that it needs an import. Pass deep_check=true to additionally check under the full Mathlib umbrella and distinguish 'not_in_current_import_scope' (add an import to problem_imports, see problem_create) from genuinely 'unknown_declaration' (misspelled, wrong namespace, or absent); deep_check loads all of Mathlib and reliably takes 15-40+ seconds. Epistemic rule: before concluding an API is unavailable, call this tool with deep_check=true — do not infer library capability from one elaboration failure or from a fast-path result alone"),
             make_tool::<ProofPatternArgs>("proof_pattern", "Issue #192: ONE tool for the proof-pattern-library family (issue #24 proof-pattern memory) — register a reusable proof-pattern lesson, search the library, and record that a pattern was relevant to a real attempt. THE PATTERN LIBRARY IS PURELY ADVISORY: no action here can ever mark anything proved or change fidelity/certification status. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"pattern_key\":\"..\",\"title\":\"..\",\"failure_signature\":\"..\",\"recommended_repair\":\"..\",\"confidence\":\"seed\"|\"mined\"|\"confirmed\"} (+ optional applicable_when, avoid_when, source_episode_id, source_attempt_ids — register a failure_signature + recommended_repair pair, e.g. \"decide fails on a def-wrapped goal\" -> \"unfold the def first\". Rejects a duplicate pattern_key rather than overwriting it) | {\"type\":\"search\"} (+ optional query, limit — free-text search over pattern_key/title/failure_signature/recommended_repair, or omit query to list the active library; `%` and `_` act as SQL LIKE wildcards rather than literal characters. Call this before repeating a failure another attempt already diagnosed) | {\"type\":\"record_application\",\"pattern_id\":\"..\",\"episode_id\":\"..\",\"role\":\"failed_example\"|\"repair_example\"|\"suggested_hint\"} (+ optional action_attempt_id, notes — record that a pattern was relevant to a real (episode[, attempt]). Insert-only metadata: never writes to episodes/episode_obligations/action_attempts, so it can never change proof/fidelity/certification status). `distilled_strategy_add` is dossier-scoped, not pattern-library-scoped (it keys on a required dossier_id and writes into the separate distilled_strategy_artifacts table, with no pattern_id/pattern_key relationship to proof_patterns at all), and remains its own standalone tool rather than folding into this one"),
-            make_tool::<DraftCreateArgs>("draft_create", "Register an informal Draft artifact (issue #23) — untrusted planning/reasoning content preserved before formalization begins. A draft can never mark anything proved"),
-            make_tool::<DraftObserveArgs>("draft_observe", "Read back a draft's content and any moves recorded against it"),
-            make_tool::<DraftExtractMovesArgs>("draft_extract_moves", "Record structured moves (construction, auxiliary_lemma, case_split, induction, reduction, bijection, counterexample_search, asymptotic_step, external_citation, unknown) the external agent identified in a draft. Metadata only — moves are not obligations until explicitly promoted into a formalization plan item"),
+            make_tool::<DraftArgs>("draft", "Issue #195: ONE tool for the draft artifact lifecycle (issue #23) — register an informal Draft, read it back with its recorded moves, and extract structured moves an external agent identified in its content. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"problem_version_id\":\"..\",\"content\":\"..\",\"author\":\"..\"} (+ optional episode_id — registers an informal Draft artifact: untrusted planning/reasoning content preserved before formalization begins. A draft can never mark anything proved. episode_id is optional since a draft may exist before any episode is created for the problem; when given, it must belong to problem_version_id) | {\"type\":\"observe\",\"draft_id\":\"..\"} (read back a draft's content and any moves recorded against it, in move_order) | {\"type\":\"extract_moves\",\"draft_id\":\"..\",\"moves\":[{\"move_kind\":\"construction\"|\"auxiliary_lemma\"|\"case_split\"|\"induction\"|\"reduction\"|\"bijection\"|\"counterexample_search\"|\"asymptotic_step\"|\"external_citation\"|\"unknown\",\"description\":\"..\"}, ...]} (records structured moves the external agent identified in a draft — the server never infers these itself (no inference code lives in LLM-Driven Proof Search Environment). Appended after any moves already recorded for this draft, not replaced. Metadata only — moves are not obligations until explicitly promoted into a formalization plan item via formalization_plan_create's seed_items_from_draft_moves or formalization_plan_promote_item_to_obligation)"),
             make_tool::<FormalizationPlanArgs>("formalization_plan", "Issue #184: ONE tool for the entire Level 3 formalization-plan family (issue #10) — create/inspect/maintain a formalization plan (required concepts, definitions, lemmas, modules and their Mathlib coverage status) for a problem. Advisory scaffolding, not a proof authority: nothing here can mark anything proved. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"problem_version_id\":\"..\",\"title\":\"..\"} (+ optional source_draft_id, seed_items_from_draft_moves [{\"draft_move_id\":\"..\",\"kind\":\"..\"}, ...], risk_flags — creates a plan, optionally seeded from selected moves of an existing draft; every seed move must belong to source_draft_id, not be already promoted, and the whole batch is validated before any row is written, so a bad move never leaves a partially-seeded plan behind; each seeded move is marked promoted) | {\"type\":\"observe\",\"plan_id\":\"..\"} (read-only: the plan and all its items with coverage/promotion status) | {\"type\":\"update\",\"plan_id\":\"..\"} (+ optional title, status \"draft\"|\"active\"|\"completed\"|\"abandoned\", risk_flags — partial in-place update: an omitted field keeps its current value) | {\"type\":\"add_item\",\"plan_id\":\"..\",\"kind\":\"concept\"|\"missing_definition\"|\"missing_lemma\"|\"planned_module\"|\"external_citation\",\"description\":\"..\"} (+ optional mathlib_candidate_names, asymptotic_role — appends one planning item) | {\"type\":\"attach_lookup\",\"plan_item_id\":\"..\",\"lookup_status\":\"..\"} (+ optional matched_name, diagnostics — attach a lean_declaration_lookup result to an OPEN plan item, mapping its status verbatim into the item's Mathlib coverage status found/not_found/partial/unknown. A hint attachment, not a re-check — nothing is re-validated or re-run, and it never changes proof status) | {\"type\":\"promote_item_to_obligation\",\"plan_item_id\":\"..\",\"episode_id\":\"..\",\"obligation_id\":\"..\"} (link an open plan item to an episode_obligation that ALREADY EXISTS — created through a normal Decompose action via episode_step and verified to belong to the given episode. Records the link only — this action never creates the obligation itself, so it can never bypass the episode's budget/CAS accounting; a DB-level UNIQUE index stops two plan items from claiming the same obligation) | {\"type\":\"attach_librarian_result\",\"plan_item_id\":\"..\",\"declaration_name\":\"..\",\"confidence\":\"exact_match\"|\"nearby_name\"|\"type_match\"|\"usage_example\"|\"unknown\"} (+ optional import_module, snippet — attach a mathlib_search_declarations/mathlib_search_local_artifacts result to an OPEN plan item: confidence is the CALLER's own assessment of its search hit, mapped into the same coverage vocabulary attach_lookup writes (exact_match→found, nearby_name/type_match/usage_example→partial, unknown→unknown); candidate declaration names ACCUMULATE deduped across attachments while the full latest result overwrites lookup_result_json, latest wins. A hint attachment, not a re-check — never changes proof status)"),
             make_tool::<ResearchDossierArgs>("research_dossier", "Issue #185: ONE tool for the entire Level 4 research-dossier family (issues #9/#11/#13) — research dossiers, nodes, citations, assumptions, and verification layers are explicit trust-boundary METADATA: they can reference Lean-backed artifacts, but they never create proof authority and never write to episode outcome, obligations, canonical lemmas, budgets, fidelity reviews, or benchmark result tables. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\"} (+ optional description, problem_version_id, episode_id — create a dossier optionally linked to a problem_version, an episode, both, or neither; metadata only: never changes proof, fidelity, budget, or benchmark state) | {\"type\":\"observe\",\"dossier_id\":\"..\"} (read-only: the dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets) | {\"type\":\"node_add\",\"dossier_id\":\"..\",\"node_type\":\"definition\"|\"proposition\"|\"lemma\"|\"theorem\"|\"remark\"|\"reference\"|\"open_gap\",\"title\":\"..\"} (+ optional section_id OR section_title, statement, content, trust_status, linked_obligation_id, linked_verified_lemma_id — add a typed research node. Trust status is explicit and never implies kernel verification unless linked to a real verified lemma: trust_status='proved_in_episode' REQUIRES linked_verified_lemma_id naming a verified lemma from THIS dossier's own episode/problem context — never borrowed kernel evidence from an unrelated episode; a node added here is metadata, never proof authority) | {\"type\":\"external_reference_add\",\"dossier_id\":\"..\",\"title\":\"..\"} (+ optional authors/venue/year/url/doi/raw_citation, and optionally ONE theorem claim via theorem_label/theorem_statement/claim_status/mathlib_name/proved_episode_id/proved_lemma_id/notes — records a citation as a TRACKED ASSUMPTION, never proof: external citations are self-reported metadata and never become kernel verification; claim_status='proved_in_episode' requires proved_lemma_id naming a verified lemma from THIS dossier's own context, with any proved_episode_id matching that lemma's actual episode, and 'imported_from_mathlib' requires mathlib_name) | {\"type\":\"assumption_boundary_add\",\"dossier_id\":\"..\",\"label\":\"..\",\"statement\":\"..\",\"assumption_status\":\"unformalized_assumption\"|\"rejected_unsafe_assumption\"} (+ optional node_id, rationale — add an unformalized or rejected unsafe assumption boundary. Assumptions are visible metadata, not proof authority) | {\"type\":\"citation_review_add\",\"dossier_id\":\"..\",\"external_theorem_claim_id\":\"..\",\"reviewer_id\":\"..\",\"decision\":\"human_reviewed\"|\"rejected\"|\"needs_formalization\"} (+ optional notes — record a human citation review for an external theorem claim. Human review remains distinct from Lean kernel verification and never upgrades a claim to a proved status) | {\"type\":\"verification_layer_set\",\"dossier_id\":\"..\",\"target_kind\":\"..\",\"target_id\":\"..\",\"layer_kind\":\"..\",\"status\":\"..\"} (+ optional summary, evidence_json — upsert an independent verification layer for a dossier target. Blocked/failed layers do not fail the dossier, and cited/reviewed/assumed artifacts cannot be mislabeled kernel_verified: this action is the ONLY PATH to a kernel_verified layer, and status='kernel_verified' is accepted only where kernel evidence already exists — e.g. a node whose trust_status is already proved_in_episode backed by a verified lemma from THIS dossier's own episode/problem context — it can never manufacture that evidence)"),
             make_tool::<CandidateConstructionArgs>("candidate_construction", "Issue #188: ONE tool for the entire candidate-construction family (issue #8) — propose a candidate mathematical object, record empirical checks against it, revise its status, and attach it to a research node or verification layer. A CANDIDATE CONSTRUCTION IS A PROPOSED MATHEMATICAL OBJECT, NOT A PROOF CERTIFICATE: every action records research artifacts useful for search and planning; trust_status never certifies anything — empirical support, human review, citation, and 'a formal statement exists' are all explicitly distinct from kernel verification, and no field can hold kernel evidence. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"construction_type\":\"graph_family\"|\"point_configuration\"|\"coloring\"|\"field_tower\"|\"lattice\"|\"counterexample\"|\"asymptotic_family\"|\"algebraic_object\"|\"combinatorial_design\"|\"other\",\"informal_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, verification_layer_id, problem_version_id, episode_id, name, parameters_json, construction_json, claimed_properties_json, known_failures_json, empirical_checks_json, verification_targets_json, status, trust_status, and motivated-discovery metadata: motivating_move, source_observation, intended_role, strategy_context, why_this_might_work, why_this_might_fail, next_check, future_challenge_relevance — propose a candidate construction. Can exist before a dossier, node, Lean theorem, problem, or episode; a research artifact, not a proof certificate) | {\"type\":\"observe\",\"candidate_construction_id\":\"..\",\"description\":\"..\",\"result\":\"supports\"|\"refutes\"|\"inconclusive\"} (+ optional details_json, observed_by — record one empirical check, appended to the construction's empirical_checks history. Never changes proof status, and 'supports' never implies proved) | {\"type\":\"update_status\",\"candidate_construction_id\":\"..\"} (+ at least one of status, trust_status, claimed_properties_json, known_failures_json, next_check — update the construction in place; a falsified/rejected construction stays visible, never deleted. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified — and no other trust_status confers proof either) | {\"type\":\"link_node\",\"candidate_construction_id\":\"..\",\"node_id\":\"..\"} (attach the construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier. Linking never changes either side's trust_status) | {\"type\":\"link_verification_layer\",\"candidate_construction_id\":\"..\",\"verification_layer_id\":\"..\"} (attach the construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier. Linking a layer is provenance, not promotion — the construction's trust_status is unchanged, and a kernel_verified_claim_linked construction is re-checked against the newly linked layer)"),
@@ -12249,7 +12454,7 @@ impl ServerHandler for ChatDbMcp {
                         "external_sessions_warning": "A Pantograph install you run yourself, a bare `lake env lean` REPL, or ANY other proof-state tool driven OUTSIDE the proof_session tool produces NO trace in this environment at all — proof_session only records steps you route through it, and there is no separate ingestion path for an externally-run session's history. If you explore a goal outside MCP, either replay the tactic decisions that mattered through proof_session's tactic_step/branch actions so they become real, queryable search evidence here, or skip the session machinery entirely and submit the final result straight through Solve/SubmitModule (which never requires an interactive session at all). An external session succeeding tells this environment nothing until its result is submitted through one of those two tracked paths.",
                         "backend_availability": "Two `backend` values are recognized by the start action. \"mock\" (issue #161, the default) is deterministic and always available, but has no real Lean elaborator behind it — every nonempty tactic just closes the first open goal, so its outcomes carry no elaboration evidence. \"pantograph\" (issue #166) is a RECOGNIZED value, not yet a USABLE one: it runs a real PATH/lake-manifest/toolchain compatibility probe against this environment and always fails closed today, because this prototype has no process-spawning/IPC implementation behind it — check environment_describe's pantograph_available/pantograph_reason flags for exactly why, in this environment, right now. Any other `backend` value is rejected outright."
                     },
-                    "lookup_and_planning_tools": "Use lean_declaration_lookup, mathlib_search_declarations, mathlib_search_local_artifacts, the proof_pattern tool's search action (one tool since issue #192, dispatching on an internally-tagged action: {\"action\": {\"type\": \"create\" | \"search\" | \"record_application\", ...}}), draft_create/draft_extract_moves, and the formalization_plan tool (one tool since issue #184, dispatching on an internally-tagged action: {\"action\": {\"type\": \"create\" | \"observe\" | \"update\" | \"add_item\" | \"attach_lookup\" | \"promote_item_to_obligation\" | \"attach_librarian_result\", ...}}) rather than an external side channel for the same job during a tracked run — that keeps the reasoning trail inside the environment's own ledger, replayable and auditable later.",
+                    "lookup_and_planning_tools": "Use lean_declaration_lookup, mathlib_search_declarations, mathlib_search_local_artifacts, the proof_pattern tool's search action (one tool since issue #192, dispatching on an internally-tagged action: {\"action\": {\"type\": \"create\" | \"search\" | \"record_application\", ...}}), the draft tool's create/extract_moves actions (one tool since issue #195, dispatching on an internally-tagged action: {\"action\": {\"type\": \"create\" | \"observe\" | \"extract_moves\", ...}}), and the formalization_plan tool (one tool since issue #184, dispatching on an internally-tagged action: {\"action\": {\"type\": \"create\" | \"observe\" | \"update\" | \"add_item\" | \"attach_lookup\" | \"promote_item_to_obligation\" | \"attach_librarian_result\", ...}}) rather than an external side channel for the same job during a tracked run — that keeps the reasoning trail inside the environment's own ledger, replayable and auditable later.",
                     "cost_boundary": "cost_micros (episode_step), model_call_reserve/model_call_settle, and the episode budget ledger are enforcement/accounting mechanisms for this environment's MCP-visible budget, not proof-soundness claims. episode_step.cost_micros is reserved before a step executes; model_call_reserve immediately reserves bounded episode budget; model_call_settle adjusts only the reserved-vs-actual delta or refunds a voided reservation. They are NOT the total cost of running you (the external host/model). Host-side reasoning cost (tokens spent thinking, editing, or calling other tools before or around an MCP call) is invisible to LLM-Driven Proof Search Environment entirely unless you report it through model_call_reserve/model_call_settle. Never present MCP-visible cost_micros as if it were the complete cost of a run.",
                     "benchmark_mode": "Development/exploratory use and a frozen benchmark run (e.g. PutnamBench) are different modes with different rules. In benchmark mode: every candidate attempt must flow through episode_step (see proof_attempts above) so the run counts as valid evidence, not just a trophy case; and public reports of benchmark results follow a redaction policy — a public summary must not contain completed proof source by default, only aggregate status/hashes/replay information. Check the benchmark documentation (docs/benchmarks/) for the exact export mode to use before publishing any benchmark result.",
                     "forbidden_or_discouraged": [
@@ -12327,8 +12532,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 48,
-                        "total_tool_count": 48,
+                        "classified_tool_count": 46,
+                        "total_tool_count": 46,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -12412,14 +12617,14 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
                             },
-                            "draft_create": {
-                                "side_effect": "append_only — inserts a drafts row",
-                                "trust_level": "untrusted_input, explicitly — issue #23's whole point is preserving informal planning content WITHOUT letting it masquerade as evidence; a draft can never mark anything proved",
-                                "cost_surface": "none",
-                                "benchmark_safety": "private_artifact by default framing (informal reasoning, not a public metric), though not currently export-gated the way proof_export/trajectory_export are — lower risk since it never contains a completed formal proof, but worth noting it's a different exposure category, not a proven-safe one",
-                                "replayability": "deterministic",
+                            "draft": {
+                                "side_effect": "mixed by action (issue #195: one tool consolidating the former draft_create / draft_observe / draft_extract_moves tools; per-action semantics unchanged): create is append_only — inserts a drafts row; observe is read_only; extract_moves is mutating — inserts one or more draft_moves rows in a single transaction",
+                                "trust_level": "untrusted_input for every action, explicitly — issue #23's whole point is preserving informal planning content WITHOUT letting it masquerade as evidence: create's content/author are the caller's own draft text and attribution, and a draft can never mark anything proved; observe is an untrusted_input pass-through, reading back exactly what create/extract_moves asserted; extract_moves' move kind/description is the caller's own characterization of the draft content, not independently checked",
+                                "cost_surface": "none for every action",
+                                "benchmark_safety": "private_artifact by default framing for create/observe (informal reasoning content, not export-gated the way proof_export/trajectory_export are, though lower risk since it can never contain a completed formal proof); safe_public_output for extract_moves — structured metadata about informal reasoning, not itself a proof artifact",
+                                "replayability": "deterministic for create/extract_moves; deterministic given current DB state for observe",
                                 "source_code_impact": "no_source_change",
-                                "artifact_risk": "none (advisory scaffolding only)",
+                                "artifact_risk": "none — advisory scaffolding only; extract_moves' moves are not obligations until explicitly promoted, and promotion itself never creates an obligation, only links to one that already exists",
                                 "required_run_mode": "any"
                             },
                             "proof_pattern": {
@@ -12741,26 +12946,6 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "replayable_with_hashes — records a real episode_terminated trajectory event like any other terminal transition",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "draft_observe": {
-                                "side_effect": "read_only",
-                                "trust_level": "untrusted_input pass-through — reads back exactly what draft_create/draft_extract_moves asserted",
-                                "cost_surface": "none",
-                                "benchmark_safety": "private_artifact framing, same caveat as draft_create: informal reasoning content, not export-gated the way proof_export/trajectory_export are, though lower risk since it can't contain a completed formal proof",
-                                "replayability": "deterministic given current DB state",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "draft_extract_moves": {
-                                "side_effect": "mutating — inserts one or more draft_moves rows in a single transaction",
-                                "trust_level": "untrusted_input — a move's kind/description is the caller's own characterization of the draft content, not independently checked",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output — structured metadata about informal reasoning, not itself a proof artifact",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none — moves are not obligations until explicitly promoted, and promotion itself never creates an obligation, only links to one that already exists",
                                 "required_run_mode": "any"
                             },
                             "benchmark_suite": {
@@ -13775,135 +13960,7 @@ impl ServerHandler for ChatDbMcp {
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
             "proof_pattern" => self.do_proof_pattern(args_val).await,
-            "draft_create" => {
-                let args: DraftCreateArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let conn = self.conn.lock().await;
-                let pv_exists: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM problem_versions WHERE id = ?1", [&args.problem_version_id], |row| row.get(0),
-                ).map_err(rs)?;
-                if pv_exists == 0 {
-                    return Err(mcp_invalid_params(format!("unknown problem_version_id: {}", args.problem_version_id)));
-                }
-                if let Some(ep_id) = &args.episode_id {
-                    let ep_pv_id: Option<String> = conn.query_row(
-                        "SELECT problem_version_id FROM episodes WHERE id = ?1", [ep_id], |row| row.get(0),
-                    ).optional().map_err(rs)?;
-                    let Some(ep_pv_id) = ep_pv_id else {
-                        return Err(mcp_invalid_params(format!("unknown episode_id: {}", ep_id)));
-                    };
-                    if ep_pv_id != args.problem_version_id {
-                        return Err(mcp_invalid_params(format!("episode_id {} belongs to a different problem_version", ep_id)));
-                    }
-                }
-
-                let draft_id = Uuid::new_v4().to_string();
-                let content_hash = canonical_hash(&args.content).map_err(mcp_internal_error)?;
-                let created_at = Utc::now().to_rfc3339();
-                conn.execute(
-                    "INSERT INTO drafts (id, problem_version_id, episode_id, content, content_hash, author, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    (&draft_id, &args.problem_version_id, &args.episode_id, &args.content, &content_hash, &args.author, &created_at),
-                ).map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "draft_id": draft_id,
-                    "content_hash": content_hash,
-                    "created_at": created_at,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "draft_observe" => {
-                let args: DraftObserveArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let conn = self.conn.lock().await;
-                let draft: Option<(String, Option<String>, String, String, String, String)> = conn.query_row(
-                    "SELECT problem_version_id, episode_id, content, content_hash, author, created_at FROM drafts WHERE id = ?1",
-                    [&args.draft_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
-                ).optional().map_err(rs)?;
-                let Some((pv_id, ep_id, content, content_hash, author, created_at)) = draft else {
-                    return Err(mcp_invalid_params(format!("unknown draft_id: {}", args.draft_id)));
-                };
-
-                let mut stmt = conn.prepare(
-                    "SELECT id, move_order, move_kind, description, promoted_plan_item_id FROM draft_moves WHERE draft_id = ?1 ORDER BY move_order ASC"
-                ).map_err(rs)?;
-                let moves: Vec<serde_json::Value> = stmt.query_map([&args.draft_id], |row| {
-                    Ok(serde_json::json!({
-                        "move_id": row.get::<_, String>(0)?,
-                        "move_order": row.get::<_, i64>(1)?,
-                        "move_kind": row.get::<_, String>(2)?,
-                        "description": row.get::<_, String>(3)?,
-                        "promoted_plan_item_id": row.get::<_, Option<String>>(4)?,
-                    }))
-                }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "draft_id": args.draft_id,
-                    "problem_version_id": pv_id,
-                    "episode_id": ep_id,
-                    "content": content,
-                    "content_hash": content_hash,
-                    "author": author,
-                    "created_at": created_at,
-                    "moves": moves,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "draft_extract_moves" => {
-                let args: DraftExtractMovesArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                if args.moves.is_empty() {
-                    return Err(mcp_invalid_params("moves must be non-empty"));
-                }
-
-                let mut conn = self.conn.lock().await;
-                let draft_exists: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM drafts WHERE id = ?1", [&args.draft_id], |row| row.get(0),
-                ).map_err(rs)?;
-                if draft_exists == 0 {
-                    return Err(mcp_invalid_params(format!("unknown draft_id: {}", args.draft_id)));
-                }
-
-                let tx = conn.transaction().map_err(rs)?;
-                let next_order: i64 = tx.query_row(
-                    "SELECT COALESCE(MAX(move_order), -1) + 1 FROM draft_moves WHERE draft_id = ?1", [&args.draft_id], |row| row.get(0),
-                ).map_err(rs)?;
-
-                let mut created_move_ids = Vec::new();
-                let created_at = Utc::now().to_rfc3339();
-                for (i, m) in args.moves.iter().enumerate() {
-                    let move_kind_str = match m.move_kind {
-                        DraftMoveKind::Construction => "construction",
-                        DraftMoveKind::AuxiliaryLemma => "auxiliary_lemma",
-                        DraftMoveKind::CaseSplit => "case_split",
-                        DraftMoveKind::Induction => "induction",
-                        DraftMoveKind::Reduction => "reduction",
-                        DraftMoveKind::Bijection => "bijection",
-                        DraftMoveKind::CounterexampleSearch => "counterexample_search",
-                        DraftMoveKind::AsymptoticStep => "asymptotic_step",
-                        DraftMoveKind::ExternalCitation => "external_citation",
-                        DraftMoveKind::Unknown => "unknown",
-                    };
-                    let move_id = Uuid::new_v4().to_string();
-                    tx.execute(
-                        "INSERT INTO draft_moves (id, draft_id, move_order, move_kind, description, promoted_plan_item_id, created_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
-                        (&move_id, &args.draft_id, next_order + i as i64, move_kind_str, &m.description, &created_at),
-                    ).map_err(rs)?;
-                    created_move_ids.push(move_id);
-                }
-                tx.commit().map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "draft_id": args.draft_id,
-                    "created_move_ids": created_move_ids,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
+            "draft" => self.do_draft(args_val).await,
             "formalization_plan" => self.do_formalization_plan(args_val).await,
             "research_dossier" => self.do_research_dossier(args_val).await,
             "candidate_construction" => self.do_candidate_construction(args_val).await,
@@ -14853,7 +14910,10 @@ mod tests {
         // benchmark_result_record/benchmark_run_observe tools consolidated into
         // the ONE `benchmark_run` tool; benchmark_problem_register/
         // benchmark_problem_observe stay standalone) = 48.
-        assert_eq!(list_res.tools.len(), 48);
+        // - 2 (issue #195: the three flat draft_create/draft_observe/
+        // draft_extract_moves tools consolidated into the ONE `draft` tool)
+        // = 46.
+        assert_eq!(list_res.tools.len(), 46);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -19262,15 +19322,15 @@ mod tests {
         let peer = client.peer();
         let pv_id = create_problem(&peer, "True").await;
 
-        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "content": "Sketch: use a bijection between A and B.", "author": "model-x",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let draft_id = created["draft_id"].as_str().unwrap().to_string();
         assert!(!created["content_hash"].as_str().unwrap().is_empty());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "observe",
             "draft_id": draft_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed["content"], "Sketch: use a bijection between A and B.");
         assert_eq!(observed["author"], "model-x");
         assert_eq!(observed["moves"].as_array().unwrap().len(), 0);
@@ -19281,23 +19341,23 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let pv_id = create_problem(&peer, "True").await;
-        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "content": "x", "author": "model-x",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let draft_id = created["draft_id"].as_str().unwrap().to_string();
 
-        tool_json(&peer.call_tool(CallToolRequestParams::new("draft_extract_moves").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "extract_moves",
             "draft_id": draft_id,
             "moves": [{"move_kind": "bijection", "description": "map A to B"}],
-        }).as_object().unwrap().clone())).await.unwrap());
-        tool_json(&peer.call_tool(CallToolRequestParams::new("draft_extract_moves").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "extract_moves",
             "draft_id": draft_id,
             "moves": [{"move_kind": "induction", "description": "induct on n"}],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "observe",
             "draft_id": draft_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let moves = observed["moves"].as_array().unwrap();
         assert_eq!(moves.len(), 2, "{:?}", moves);
         assert_eq!(moves[0]["move_kind"], "bijection");
@@ -19339,16 +19399,16 @@ mod tests {
         };
         let before = { let c = conn_arc.lock().await; snapshot(&c) };
 
-        let draft = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+        let draft = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "episode_id": episode_id,
             "content": "Claim: this theorem is trivially true by inspection, no further work needed. QED.",
             "author": "adversarial-model",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let draft_id = draft["draft_id"].as_str().unwrap().to_string();
-        tool_json(&peer.call_tool(CallToolRequestParams::new("draft_extract_moves").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "extract_moves",
             "draft_id": draft_id,
             "moves": [{"move_kind": "unknown", "description": "asserted trivially true, no actual argument given"}],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let after = { let c = conn_arc.lock().await; snapshot(&c) };
         assert_eq!(before, after, "a draft (even one containing a false proof claim) must never change episodes or episode_obligations");
@@ -19359,17 +19419,17 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let pv_id = create_problem(&peer, "True").await;
-        let draft = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+        let draft = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "content": "x", "author": "model-x",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let draft_id = draft["draft_id"].as_str().unwrap().to_string();
-        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_extract_moves").with_arguments(serde_json::json!({
+        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "extract_moves",
             "draft_id": draft_id,
             "moves": [
                 {"move_kind": "auxiliary_lemma", "description": "need: sum of first n squares"},
                 {"move_kind": "external_citation", "description": "cites a known bound from a paper"},
             ],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let move_ids: Vec<String> = extracted["created_move_ids"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
 
         let plan = tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
@@ -19395,9 +19455,9 @@ mod tests {
         assert_eq!(items[1]["kind"], "external_citation");
 
         // The seeded draft moves are now marked promoted.
-        let draft_after = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_observe").with_arguments(serde_json::json!({
+        let draft_after = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "observe",
             "draft_id": draft_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         for m in draft_after["moves"].as_array().unwrap() {
             assert!(!m["promoted_plan_item_id"].is_null(), "{:?}", m);
         }
@@ -19409,18 +19469,18 @@ mod tests {
         let peer = client.peer();
         let pv_id = create_problem(&peer, "True").await;
 
-        let draft_a = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+        let draft_a = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "content": "a", "author": "model-x",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let draft_a_id = draft_a["draft_id"].as_str().unwrap().to_string();
-        let draft_b = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+        let draft_b = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "content": "b", "author": "model-x",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let draft_b_id = draft_b["draft_id"].as_str().unwrap().to_string();
 
-        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_extract_moves").with_arguments(serde_json::json!({
+        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "extract_moves",
             "draft_id": draft_a_id, "moves": [{"move_kind": "unknown", "description": "m1"}],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let move_id = extracted["created_move_ids"][0].as_str().unwrap().to_string();
 
         // Wrong draft: move belongs to draft_a, not draft_b.
@@ -19453,13 +19513,13 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let pv_id = create_problem(&peer, "True").await;
-        let draft = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+        let draft = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "content": "x", "author": "model-x",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let draft_id = draft["draft_id"].as_str().unwrap().to_string();
-        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_extract_moves").with_arguments(serde_json::json!({
+        let extracted = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "extract_moves",
             "draft_id": draft_id, "moves": [{"move_kind": "unknown", "description": "m1"}],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let move_id = extracted["created_move_ids"][0].as_str().unwrap().to_string();
 
         let res = peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
@@ -19490,14 +19550,14 @@ mod tests {
         let episode_b_id = ep_b["episode_id"].as_str().unwrap().to_string();
 
         // episode_b belongs to problem B, not problem A.
-        let bad_draft = peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+        let bad_draft = peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_a, "episode_id": episode_b_id, "content": "x", "author": "model-x",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_draft.is_err(), "a draft's problem_version_id must match its episode_id's own problem_version_id");
 
-        let draft_b = tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+        let draft_b = tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_b, "content": "x", "author": "model-x",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let draft_b_id = draft_b["draft_id"].as_str().unwrap().to_string();
 
         // draft_b belongs to problem B, not problem A.
@@ -19719,9 +19779,9 @@ mod tests {
         assert!(!md0.contains("## Drafts"), "no Drafts section with zero drafts: {md0}");
         assert!(!md0.contains("## Formalization plans"), "no plans section with zero plans: {md0}");
 
-        tool_json(&peer.call_tool(CallToolRequestParams::new("draft_create").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("draft").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "episode_id": episode_id, "content": "informal sketch here", "author": "model-x",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         tool_json(&peer.call_tool(CallToolRequestParams::new("formalization_plan").with_arguments(serde_json::json!({"action": {"type": "create",
             "problem_version_id": pv_id, "title": "Plan E",
         }}).as_object().unwrap().clone())).await.unwrap());
