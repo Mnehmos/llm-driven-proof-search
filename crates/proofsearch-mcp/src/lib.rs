@@ -330,7 +330,7 @@ pub struct ReadmeFirstArgs {}
 // doesn't justify that cost — validated at the application layer instead
 // (run_envelope_attach_episode checks both ids exist before writing).
 
-#[derive(JsonSchema, Deserialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema, Deserialize)]
 pub enum RunEnvelopeMode {
     #[serde(rename = "development")] Development,
     #[serde(rename = "evaluation")] Evaluation,
@@ -339,7 +339,7 @@ pub enum RunEnvelopeMode {
     #[serde(rename = "public_report")] PublicReport,
 }
 
-#[derive(JsonSchema, Deserialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema, Deserialize)]
 pub enum HostCostConfidence {
     #[serde(rename = "exact_provider_receipt")] ExactProviderReceipt,
     #[serde(rename = "exact_local_meter")] ExactLocalMeter,
@@ -424,6 +424,93 @@ pub struct RunEnvelopeAttachEpisodeArgs {
 #[derive(JsonSchema, Deserialize)]
 pub struct RunEnvelopeObserveArgs {
     pub run_envelope_id: String,
+}
+
+/// Issue #190 (epic #182): the single `run_envelope` tool's internally-tagged
+/// action enum, mirroring `TypedAction`/`ProofSessionAction`/
+/// `TaskSubmissionAction`'s shape exactly (`#[serde(tag = "type",
+/// rename_all = "snake_case")]`). Each variant's fields are the corresponding
+/// pre-#190 flat `RunEnvelope*Args` struct's fields verbatim — those structs
+/// remain (unchanged) as what the `do_run_envelope_*` handlers deserialize;
+/// this enum is only the MCP-layer dispatch shape. As with the earlier
+/// consolidations there are NO shared wrapper fields: `create` has no id at
+/// all (it mints `run_envelope_id`) while every other variant keys on
+/// `run_envelope_id`, so every field stays per-variant.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RunEnvelopeAction {
+    Create {
+        mode: RunEnvelopeMode,
+        /// Free text naming the calling agent host, e.g. "Claude Code", "Codex".
+        #[serde(default)]
+        host_name: Option<String>,
+        #[serde(default)]
+        host_model: Option<String>,
+        /// e.g. "PutnamBench" for a benchmark-mode run. Free text, not validated
+        /// against any registry.
+        #[serde(default)]
+        benchmark_suite_name: Option<String>,
+        #[serde(default)]
+        host_side_cost_micros: Option<i64>,
+        /// Defaults to "unknown" — the honest default when the caller hasn't
+        /// measured or attested any host-side cost yet.
+        #[serde(default)]
+        host_cost_confidence: Option<HostCostConfidence>,
+        #[serde(default)]
+        notes: Option<String>,
+    },
+    /// Self-review note: an omitted field and an explicit JSON `null` are
+    /// indistinguishable here (both deserialize to `None` and are treated as
+    /// "leave unchanged") — there's currently no way to intentionally reset a
+    /// field back to NULL/unknown once set.
+    Update {
+        run_envelope_id: String,
+        #[serde(default)]
+        host_side_cost_micros: Option<i64>,
+        #[serde(default)]
+        host_cost_confidence: Option<HostCostConfidence>,
+        #[serde(default)]
+        notes: Option<String>,
+    },
+    /// Issue #46: append an auditable host-side cost observation. Every value
+    /// is preserved (append-only) rather than overwriting the prior one.
+    CostObservationAdd {
+        run_envelope_id: String,
+        #[serde(default)]
+        host_side_cost_micros: Option<i64>,
+        #[serde(default)]
+        host_cost_confidence: Option<HostCostConfidence>,
+        /// Free-text provenance, e.g. "provider_receipt_import". Defaults to
+        /// "cost_observation_add".
+        #[serde(default)]
+        source: Option<String>,
+        #[serde(default)]
+        notes: Option<String>,
+    },
+    AttachEpisode {
+        run_envelope_id: String,
+        episode_id: String,
+        /// Required (true) to attach an episode built from an
+        /// unsafe_dev_attestation ("attested", never independently reviewed)
+        /// problem to a `private_audit`-mode run envelope. Has NO effect for
+        /// `benchmark`/`evaluation`/`public_report` modes — those always reject
+        /// an attested-problem episode outright, no override possible. That flag
+        /// means development playtest; it must never leak into a measured
+        /// benchmark/evaluation/public claim (issue #38's mode-enforcement policy).
+        #[serde(default)]
+        allow_dev_attested: bool,
+    },
+    Observe {
+        run_envelope_id: String,
+    },
+}
+
+/// Issue #190: args for the single consolidated `run_envelope` tool. The
+/// entire payload lives on the internally-tagged `action` — see
+/// `RunEnvelopeAction`'s doc for why there are no shared wrapper fields.
+#[derive(JsonSchema, Deserialize)]
+pub struct RunEnvelopeArgs {
+    pub action: RunEnvelopeAction,
 }
 
 // -- PutnamBench benchmark schema (issues #29, #30) ------------------------
@@ -10261,6 +10348,252 @@ impl ChatDbMcp {
         })).unwrap())]))
     }
 
+    // -----------------------------------------------------------------
+
+    /// Issue #190 (epic #182): the single `run_envelope` tool's dispatcher.
+    /// Deserializes `RunEnvelopeArgs`, matches on the internally-tagged
+    /// action, and routes to the per-action handlers below UNCHANGED (each
+    /// extracted verbatim from the former inline match arm of the same
+    /// name). Each arm re-serializes the variant back to JSON and passes
+    /// that through: the variant's field names are identical to the old flat
+    /// `RunEnvelope*Args` shape by construction, and the extra internal
+    /// `"type"` tag is ignored by the handlers' serde derives. This
+    /// transitional double-serialization is deliberate — it keeps the five
+    /// `do_run_envelope_*` handlers byte-identical (the epic's key
+    /// risk-reducer) at negligible cost.
+    async fn do_run_envelope(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: RunEnvelopeArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize run_envelope action: {}", e)))?;
+        match &args.action {
+            RunEnvelopeAction::Create { .. } => self.do_run_envelope_create(inner).await,
+            RunEnvelopeAction::Update { .. } => self.do_run_envelope_update(inner).await,
+            RunEnvelopeAction::CostObservationAdd { .. } => self.do_run_envelope_cost_observation_add(inner).await,
+            RunEnvelopeAction::AttachEpisode { .. } => self.do_run_envelope_attach_episode(inner).await,
+            RunEnvelopeAction::Observe { .. } => self.do_run_envelope_observe(inner).await,
+        }
+    }
+
+    async fn do_run_envelope_create(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: RunEnvelopeCreateArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let mode_str = match args.mode {
+            RunEnvelopeMode::Development => "development",
+            RunEnvelopeMode::Evaluation => "evaluation",
+            RunEnvelopeMode::Benchmark => "benchmark",
+            RunEnvelopeMode::PrivateAudit => "private_audit",
+            RunEnvelopeMode::PublicReport => "public_report",
+        };
+        let confidence_str = host_cost_confidence_str(&args.host_cost_confidence.unwrap_or(HostCostConfidence::Unknown));
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        let run_envelope_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO run_envelopes (
+                id, mode, host_name, host_model, benchmark_suite_name,
+                host_side_cost_micros, host_cost_confidence, notes, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+            (&run_envelope_id, mode_str, &args.host_name, &args.host_model, &args.benchmark_suite_name,
+             &args.host_side_cost_micros, confidence_str, &args.notes, &now),
+        ).map_err(rs)?;
+        // Issue #46: every envelope starts with an origin cost observation
+        // so the append-only history has a defined head from creation.
+        let cost_observation_id = append_cost_observation(
+            &tx, &run_envelope_id, args.host_side_cost_micros, confidence_str,
+            args.notes.as_deref(), "run_envelope_create", &now,
+        )?;
+        tx.commit().map_err(rs)?;
+
+        let res = serde_json::json!({
+            "run_envelope_id": run_envelope_id,
+            "mode": mode_str,
+            "host_cost_confidence": confidence_str,
+            "cost_observation_id": cost_observation_id,
+            "created_at": now,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_run_envelope_update(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: RunEnvelopeUpdateArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        let current: Option<(Option<i64>, String, Option<String>)> = tx.query_row(
+            "SELECT host_side_cost_micros, host_cost_confidence, notes FROM run_envelopes WHERE id = ?1",
+            [&args.run_envelope_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional().map_err(rs)?;
+        let Some((cur_cost, cur_confidence, cur_notes)) = current else {
+            return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
+        };
+
+        let new_cost = args.host_side_cost_micros.or(cur_cost);
+        let new_confidence = match &args.host_cost_confidence {
+            Some(c) => host_cost_confidence_str(c).to_string(),
+            None => cur_confidence,
+        };
+        let new_notes = args.notes.or(cur_notes);
+        let now = Utc::now().to_rfc3339();
+
+        // Issue #46: append a new observation (source='run_envelope_update')
+        // rather than overwriting in place, so the prior value stays
+        // queryable. The helper also updates the convenience summary.
+        let cost_observation_id = append_cost_observation(
+            &tx, &args.run_envelope_id, new_cost, &new_confidence,
+            new_notes.as_deref(), "run_envelope_update", &now,
+        )?;
+        tx.commit().map_err(rs)?;
+
+        let res = serde_json::json!({
+            "run_envelope_id": args.run_envelope_id,
+            "host_side_cost_micros": new_cost,
+            "host_cost_confidence": new_confidence,
+            "cost_observation_id": cost_observation_id,
+            "updated_at": now,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_run_envelope_cost_observation_add(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: RunEnvelopeCostObservationAddArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let confidence_str = host_cost_confidence_str(&args.host_cost_confidence.unwrap_or(HostCostConfidence::Unknown));
+        let source = args.source.clone().unwrap_or_else(|| "cost_observation_add".to_string());
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        let exists: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM run_envelopes WHERE id = ?1", [&args.run_envelope_id], |row| row.get(0),
+        ).map_err(rs)?;
+        if exists == 0 {
+            return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
+        }
+        let prior: Option<String> = tx.query_row(
+            "SELECT current_cost_observation_id FROM run_envelopes WHERE id = ?1",
+            [&args.run_envelope_id], |r| r.get(0),
+        ).map_err(rs)?;
+        let now = Utc::now().to_rfc3339();
+        let cost_observation_id = append_cost_observation(
+            &tx, &args.run_envelope_id, args.host_side_cost_micros, confidence_str,
+            args.notes.as_deref(), &source, &now,
+        )?;
+        tx.commit().map_err(rs)?;
+
+        let res = serde_json::json!({
+            "run_envelope_id": args.run_envelope_id,
+            "cost_observation_id": cost_observation_id,
+            "host_side_cost_micros": args.host_side_cost_micros,
+            "host_cost_confidence": confidence_str,
+            "source": source,
+            "supersedes_observation_id": prior,
+            "created_at": now,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_run_envelope_attach_episode(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: RunEnvelopeAttachEpisodeArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let envelope_mode: Option<String> = conn.query_row(
+            "SELECT mode FROM run_envelopes WHERE id = ?1", [&args.run_envelope_id], |row| row.get(0),
+        ).optional().map_err(rs)?;
+        let Some(envelope_mode) = envelope_mode else {
+            return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
+        };
+        let episode_fidelity: Option<String> = conn.query_row(
+            "SELECT pv.fidelity_status FROM episodes e JOIN problem_versions pv ON e.problem_version_id = pv.id WHERE e.id = ?1",
+            [&args.episode_id], |row| row.get(0),
+        ).optional().map_err(rs)?;
+        let Some(episode_fidelity) = episode_fidelity else {
+            return Err(mcp_invalid_params(format!("unknown episode_id: {}", args.episode_id)));
+        };
+        enforce_dev_attestation_mode_policy(&episode_fidelity, &envelope_mode, args.allow_dev_attested)?;
+
+        // Sets episodes.run_id only — never touches outcome/state/
+        // current_revision or any other proof-status column.
+        conn.execute(
+            "UPDATE episodes SET run_id = ?1 WHERE id = ?2",
+            (&args.run_envelope_id, &args.episode_id),
+        ).map_err(rs)?;
+
+        let res = serde_json::json!({
+            "run_envelope_id": args.run_envelope_id,
+            "episode_id": args.episode_id,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_run_envelope_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: RunEnvelopeObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let conn = self.conn.lock().await;
+        let row: Option<(String, Option<String>, Option<String>, Option<String>, Option<i64>, String, Option<String>, String, String, Option<String>)> = conn.query_row(
+            "SELECT mode, host_name, host_model, benchmark_suite_name, host_side_cost_micros,
+                    host_cost_confidence, notes, created_at, updated_at, current_cost_observation_id
+             FROM run_envelopes WHERE id = ?1",
+            [&args.run_envelope_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?)),
+        ).optional().map_err(rs)?;
+        let Some((mode, host_name, host_model, benchmark_suite_name, host_side_cost_micros, host_cost_confidence, notes, created_at, updated_at, current_cost_observation_id)) = row else {
+            return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
+        };
+
+        let mut estmt = conn.prepare(
+            "SELECT id, outcome, state FROM episodes WHERE run_id = ?1 ORDER BY created_at ASC"
+        ).map_err(rs)?;
+        let episodes: Vec<serde_json::Value> = estmt.query_map([&args.run_envelope_id], |row| {
+            Ok(serde_json::json!({
+                "episode_id": row.get::<_, String>(0)?,
+                "outcome": row.get::<_, Option<String>>(1)?,
+                "state": row.get::<_, String>(2)?,
+            }))
+        }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+        drop(estmt);
+
+        // Issue #46: the full append-only host-side cost history.
+        let mut cstmt = conn.prepare(
+            "SELECT id, host_side_cost_micros, host_cost_confidence, source, notes, supersedes_observation_id, created_at
+             FROM run_envelope_cost_observations WHERE run_envelope_id = ?1 ORDER BY created_at ASC, id ASC"
+        ).map_err(rs)?;
+        let cost_observations: Vec<serde_json::Value> = cstmt.query_map([&args.run_envelope_id], |row| {
+            Ok(serde_json::json!({
+                "cost_observation_id": row.get::<_, String>(0)?,
+                "host_side_cost_micros": row.get::<_, Option<i64>>(1)?,
+                "host_cost_confidence": row.get::<_, String>(2)?,
+                "source": row.get::<_, String>(3)?,
+                "notes": row.get::<_, Option<String>>(4)?,
+                "supersedes_observation_id": row.get::<_, Option<String>>(5)?,
+                "created_at": row.get::<_, String>(6)?,
+            }))
+        }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
+
+        let res = serde_json::json!({
+            "run_envelope_id": args.run_envelope_id,
+            "mode": mode,
+            "host_name": host_name,
+            "host_model": host_model,
+            "benchmark_suite_name": benchmark_suite_name,
+            "host_side_cost_micros": host_side_cost_micros,
+            "host_cost_confidence": host_cost_confidence,
+            "notes": notes,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "episodes": episodes,
+            "current_cost_observation_id": current_cost_observation_id,
+            "cost_observations": cost_observations,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
 }
 
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
@@ -10326,11 +10659,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ExpertReviewObserveArgs>("expert_review_observe", "Read expert-review ledger entries, filtered by dossier, polymorphic target (kind+id together), and/or reviewer role. Revoked reviews are omitted unless include_revoked=true. Read-only"),
             make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
             make_tool::<MathlibSearchLocalArtifactsArgs>("mathlib_search_local_artifacts", "Search THIS LLM-Driven Proof Search Environment instance's own previously-verified theorem/def names for a substring match — a local usage_example precedent, not a Mathlib-library result"),
-            make_tool::<RunEnvelopeCreateArgs>("run_envelope_create", "Create a run envelope (issues #34/#38): who/what produced a set of episodes — host, model, mode (development/evaluation/benchmark/private_audit/public_report), and host-side cost accounting LLM-Driven Proof Search Environment itself cannot observe. Purely descriptive metadata; never affects proof status"),
-            make_tool::<RunEnvelopeUpdateArgs>("run_envelope_update", "Update a run envelope's host-side cost fields or notes after the fact. Append-only under the hood (issue #46): a cost correction appends an immutable observation, so the prior value stays queryable via run_envelope_observe"),
-            make_tool::<RunEnvelopeCostObservationAddArgs>("run_envelope_cost_observation_add", "Append an auditable, append-only host-side cost observation to a run envelope (issue #46). Never overwrites a prior observation — the previous value stays queryable; sets the envelope's current selected cost figure while preserving the full supersedes chain"),
-            make_tool::<RunEnvelopeAttachEpisodeArgs>("run_envelope_attach_episode", "Tag an existing episode with a run envelope. Metadata only — never changes the episode's outcome/state"),
-            make_tool::<RunEnvelopeObserveArgs>("run_envelope_observe", "Read back a run envelope, every episode tagged with it, and its full append-only host-side cost observation history"),
+            make_tool::<RunEnvelopeArgs>("run_envelope", "Issue #190: ONE tool for the entire run-envelope family (issues #34/#38/#46) — create, correct, and read back who/what produced a set of episodes: host, model, mode (development/evaluation/benchmark/private_audit/public_report), and host-side cost accounting LLM-Driven Proof Search Environment itself cannot observe. Purely descriptive metadata; NO action ever affects proof status. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"mode\":\"development\"|\"evaluation\"|\"benchmark\"|\"private_audit\"|\"public_report\"} (+ optional host_name, host_model, benchmark_suite_name, host_side_cost_micros, host_cost_confidence, notes — creates the envelope and, issue #46, an origin cost observation so the append-only history has a defined head from creation) | {\"type\":\"update\",\"run_envelope_id\":\"..\"} (+ optional host_side_cost_micros, host_cost_confidence, notes — update a run envelope's host-side cost fields or notes after the fact; APPEND-ONLY under the hood (issue #46): a cost correction appends an immutable observation rather than overwriting, so the prior value stays queryable via the observe action's cost_observations) | {\"type\":\"cost_observation_add\",\"run_envelope_id\":\"..\"} (+ optional host_side_cost_micros, host_cost_confidence, source, notes — append an auditable, append-only host-side cost observation (issue #46); never overwrites a prior observation — the previous value stays queryable; sets the envelope's current selected cost figure while preserving the full supersedes chain) | {\"type\":\"attach_episode\",\"run_envelope_id\":\"..\",\"episode_id\":\"..\"} (+ optional allow_dev_attested — tag an existing episode with a run envelope, metadata only, never changes the episode's outcome/state; mode-enforcement policy: unconditionally rejects attaching an 'attested'/unsafe_dev_attestation episode to a benchmark/evaluation/public_report-mode envelope with no override, 'development' is always allowed, and 'private_audit' requires allow_dev_attested=true) | {\"type\":\"observe\",\"run_envelope_id\":\"..\"} (read back a run envelope, every episode tagged with it, and its full append-only host-side cost observation history)"),
             make_tool::<BenchmarkSuiteCreateArgs>("benchmark_suite_create", "Register a benchmark suite (e.g. PutnamBench) — manual/structured registration, not automated parsing. Issue #29/#30"),
             make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise. import_manifest entries may be Lean module paths AND `open [scoped] <Namespace> ...` directives (issue #62) — capture the upstream file's own open context here so registered statements that rely on scoped notation (ℤ[X], ∠, π) elaborate faithfully at proving time"),
             make_tool::<BenchmarkSuiteObserveArgs>("benchmark_suite_observe", "Read back a registered benchmark suite by suite_id or name (issue #65): the suite row (upstream provenance, trusted_canonical_source), its append-only trust-review history, and — by default — every registered problem's full row (root_formal_statement, prover_ready_statement + hashes, import manifest, goal class). This is the sanctioned way for a host to read registered benchmark content; no database side channel needed"),
@@ -10487,8 +10816,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 60,
-                        "total_tool_count": 60,
+                        "classified_tool_count": 56,
+                        "total_tool_count": 56,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -10563,16 +10892,6 @@ impl ServerHandler for ChatDbMcp {
                                 "required_run_mode": "benchmark",
                                 "note": "since issue #34's first bounded slice (v0.3.13), run_envelope_id is REQUIRED, not optional — a benchmark run cannot exist unassociated with host/mode/cost tracking. Since issue #42 the run's run_envelope must itself be mode='benchmark' (a development/evaluation/private_audit/public_report envelope is rejected), and when that envelope declares a benchmark_suite_name it must equal the suite this run targets"
                             },
-                            "run_envelope_create": {
-                                "side_effect": "append_only — inserts a run_envelopes row",
-                                "trust_level": "human_attested for host_name/host_model/mode (self-declared by the caller) with an explicit, honest confidence tier (host_cost_confidence: exact_provider_receipt/exact_local_meter/estimated/attested/unknown) rather than pretending self-declaration is verifier-grade",
-                                "cost_surface": "host_side — this tool IS the host-side cost declaration surface",
-                                "benchmark_safety": "safe_public_output — metadata only",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any — creates the envelope FOR whichever mode is declared"
-                            },
                             "problem_create": {
                                 "side_effect": "mutating — inserts a problem_versions row",
                                 "trust_level": "untrusted_input by design — root_formal_statement is entirely client-authored, and fidelity_status starts 'unreviewed' until either a real problem_submit_fidelity_review or the honestly-named unsafe_dev_attestation=true (capped at kernel_verified, never certified)",
@@ -10644,45 +10963,15 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
                             },
-                            "run_envelope_update": {
-                                "side_effect": "mutating — APPEND-ONLY since issue #46: inserts a run_envelope_cost_observations row (source='run_envelope_update') that supersedes the prior current observation, then updates the run_envelopes convenience summary + current_cost_observation_id pointer. The prior value is never destroyed",
-                                "trust_level": "human_attested, same as run_envelope_create — self-declared, with an explicit confidence tier rather than pretending certainty",
-                                "cost_surface": "host_side — this is the correction/refinement path for that same declaration",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "auditable: every cost correction appends an immutable observation (supersedes chain); prior values stay queryable via run_envelope_observe.cost_observations — resolves the append-only-revision-log question this entry previously raised (issue #46)",
+                            "run_envelope": {
+                                "side_effect": "mixed by action (issue #190: one tool consolidating the former run_envelope_create / run_envelope_update / run_envelope_cost_observation_add / run_envelope_attach_episode / run_envelope_observe tools; per-action semantics unchanged): create is append_only — inserts a run_envelopes row plus an origin cost observation (issue #46) so the append-only history has a defined head from creation; update is mutating and APPEND-ONLY under the hood since issue #46 — inserts a run_envelope_cost_observations row (source='run_envelope_update') that supersedes the prior current observation, then updates the run_envelopes convenience summary + current_cost_observation_id pointer, the prior value never destroyed; cost_observation_add is mutating and append_only — inserts a run_envelope_cost_observations row and repoints run_envelopes.current_cost_observation_id, never overwriting a prior observation; attach_episode is mutating but narrow — sets episodes.run_id only, confirmed by reading the handler that it never touches outcome/state/current_revision or any other proof-status column; observe is read_only — reads run_envelopes plus every episodes row with matching run_id, writes nothing",
+                                "trust_level": "mixed by action, transparently — none reaches verifier_backed authority: create and update are human_attested for host_name/host_model/mode/cost fields (self-declared by the caller) with an explicit, honest confidence tier (host_cost_confidence: exact_provider_receipt/exact_local_meter/estimated/attested/unknown) rather than pretending self-declaration is verifier-grade; cost_observation_add is human_attested at those same confidence tiers, self-declared host cost, never a measured or proof-authority figure; attach_episode is mcp_generated linkage between two things that separately already exist (a real run_envelope, a real episode) — the action itself asserts nothing new about either, but see required_run_mode for the one policy check it DOES enforce; observe is a read-back of that same mixed input, with host_cost_confidence surfaced alongside the cost figure specifically so a reader can judge how much to trust it rather than presenting one undifferentiated number",
+                                "cost_surface": "host_side for create/update/cost_observation_add — together they ARE the host-side cost declaration/correction surface; none directly for attach_episode; observe surfaces host_side cost data for other surfaces without adding to it",
+                                "benchmark_safety": "safe_public_output for every action — metadata only, no proof content ever moves",
+                                "replayability": "deterministic for create/cost_observation_add/attach_episode/observe; update is auditable rather than merely deterministic — every cost correction appends an immutable observation (supersedes chain) rather than overwriting in place, so prior values stay queryable via observe's cost_observations",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "run_envelope_cost_observation_add": {
-                                "side_effect": "mutating — append_only: inserts a run_envelope_cost_observations row and repoints run_envelopes.current_cost_observation_id; never overwrites a prior observation",
-                                "trust_level": "human_attested — same confidence tiers as run_envelope_create/update (exact_provider_receipt/exact_local_meter/estimated/attested/unknown); self-declared host cost, never a measured or proof-authority figure",
-                                "cost_surface": "host_side",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic; the full observation history is durable and queryable",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "run_envelope_attach_episode": {
-                                "side_effect": "mutating — sets episodes.run_id only; confirmed by reading the handler that it never touches outcome/state/current_revision or any other proof-status column",
-                                "trust_level": "mcp_generated linkage between two things that separately already exist (a real run_envelope, a real episode) — the tool itself asserts nothing new about either",
-                                "cost_surface": "none directly",
-                                "benchmark_safety": "safe_public_output — a tagging operation, no proof content moves",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "since v0.3.22 (issue #38's mode-enforcement policy, resolving the gap this entry used to note), unconditionally rejects attaching an 'attested' (unsafe_dev_attestation) episode to a benchmark/evaluation/public_report-mode envelope — no override possible, no suite-trust exception here (unlike benchmark_result_record, this tool has no suite concept to reason about at all). 'development' is always allowed; 'private_audit' requires the new allow_dev_attested=true argument"
-                            },
-                            "run_envelope_observe": {
-                                "side_effect": "read_only — reads run_envelopes plus every episodes row with matching run_id, writes nothing",
-                                "trust_level": "mixed, transparently: mode/host_name/host_model/notes are human_attested (as declared at creation/update); host_cost_confidence is reported alongside the cost figure specifically so a reader can judge how much to trust it, rather than presenting one undifferentiated number",
-                                "cost_surface": "none directly; surfaces host_side cost data for other surfaces",
-                                "benchmark_safety": "safe_public_output — episode_id/outcome/state only, never proof content",
-                                "replayability": "deterministic given current DB state (see run_envelope_update's replayability note on why 'current state' isn't the same as 'full history')",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
+                                "required_run_mode": "any for create/update/cost_observation_add/observe — create mints the envelope FOR whichever mode is declared. attach_episode is the one action with a real gate: since v0.3.22 (issue #38's mode-enforcement policy) it unconditionally rejects attaching an 'attested' (unsafe_dev_attestation) episode to a benchmark/evaluation/public_report-mode envelope — no override possible, no suite-trust exception here (unlike benchmark_result_record, this tool has no suite concept to reason about at all); 'development' is always allowed; 'private_audit' requires the caller to pass allow_dev_attested=true"
                             },
                             "formalization_plan": {
                                 "side_effect": "mixed by action (issue #184: one tool consolidating the former seven formalization_plan_* tools; per-action semantics unchanged): observe is read_only; create inserts a formalization_plans row and, when seeding from draft moves, formalization_plan_items rows plus UPDATEs on draft_moves.promoted_plan_item_id, all in one transaction (validates every seed move before writing any row, so a bad move in the batch never leaves a partially-seeded plan behind); update overwrites a plan's title/status/risk_flags_json IN PLACE (partial update: an omitted field keeps its current value rather than being cleared); add_item inserts a formalization_plan_items row; attach_lookup and attach_librarian_result update one item's mathlib_coverage_status/lookup_result_json (attach_librarian_result additionally accumulates mathlib_candidate_names_json deduped, not overwritten), both rejecting a non-'open' item (already promoted/dropped) rather than silently overwriting settled state; promote_item_to_obligation sets one item's status/promoted_obligation_id — the ONLY action that even touches obligation linkage, and it links to an obligation that ALREADY exists (a partial UNIQUE index on promoted_obligation_id in schema_v1.rs stops two plan items from claiming the same real obligation, enforced at the DB layer rather than only the handler's logic)",
@@ -12907,220 +13196,7 @@ impl ServerHandler for ChatDbMcp {
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
-            "run_envelope_create" => {
-                let args: RunEnvelopeCreateArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let mode_str = match args.mode {
-                    RunEnvelopeMode::Development => "development",
-                    RunEnvelopeMode::Evaluation => "evaluation",
-                    RunEnvelopeMode::Benchmark => "benchmark",
-                    RunEnvelopeMode::PrivateAudit => "private_audit",
-                    RunEnvelopeMode::PublicReport => "public_report",
-                };
-                let confidence_str = host_cost_confidence_str(&args.host_cost_confidence.unwrap_or(HostCostConfidence::Unknown));
-
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                let run_envelope_id = Uuid::new_v4().to_string();
-                let now = Utc::now().to_rfc3339();
-                tx.execute(
-                    "INSERT INTO run_envelopes (
-                        id, mode, host_name, host_model, benchmark_suite_name,
-                        host_side_cost_micros, host_cost_confidence, notes, created_at, updated_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
-                    (&run_envelope_id, mode_str, &args.host_name, &args.host_model, &args.benchmark_suite_name,
-                     &args.host_side_cost_micros, confidence_str, &args.notes, &now),
-                ).map_err(rs)?;
-                // Issue #46: every envelope starts with an origin cost observation
-                // so the append-only history has a defined head from creation.
-                let cost_observation_id = append_cost_observation(
-                    &tx, &run_envelope_id, args.host_side_cost_micros, confidence_str,
-                    args.notes.as_deref(), "run_envelope_create", &now,
-                )?;
-                tx.commit().map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "run_envelope_id": run_envelope_id,
-                    "mode": mode_str,
-                    "host_cost_confidence": confidence_str,
-                    "cost_observation_id": cost_observation_id,
-                    "created_at": now,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "run_envelope_update" => {
-                let args: RunEnvelopeUpdateArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                let current: Option<(Option<i64>, String, Option<String>)> = tx.query_row(
-                    "SELECT host_side_cost_micros, host_cost_confidence, notes FROM run_envelopes WHERE id = ?1",
-                    [&args.run_envelope_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                ).optional().map_err(rs)?;
-                let Some((cur_cost, cur_confidence, cur_notes)) = current else {
-                    return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
-                };
-
-                let new_cost = args.host_side_cost_micros.or(cur_cost);
-                let new_confidence = match &args.host_cost_confidence {
-                    Some(c) => host_cost_confidence_str(c).to_string(),
-                    None => cur_confidence,
-                };
-                let new_notes = args.notes.or(cur_notes);
-                let now = Utc::now().to_rfc3339();
-
-                // Issue #46: append a new observation (source='run_envelope_update')
-                // rather than overwriting in place, so the prior value stays
-                // queryable. The helper also updates the convenience summary.
-                let cost_observation_id = append_cost_observation(
-                    &tx, &args.run_envelope_id, new_cost, &new_confidence,
-                    new_notes.as_deref(), "run_envelope_update", &now,
-                )?;
-                tx.commit().map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "run_envelope_id": args.run_envelope_id,
-                    "host_side_cost_micros": new_cost,
-                    "host_cost_confidence": new_confidence,
-                    "cost_observation_id": cost_observation_id,
-                    "updated_at": now,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "run_envelope_cost_observation_add" => {
-                let args: RunEnvelopeCostObservationAddArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                let confidence_str = host_cost_confidence_str(&args.host_cost_confidence.unwrap_or(HostCostConfidence::Unknown));
-                let source = args.source.clone().unwrap_or_else(|| "cost_observation_add".to_string());
-
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                let exists: i64 = tx.query_row(
-                    "SELECT COUNT(*) FROM run_envelopes WHERE id = ?1", [&args.run_envelope_id], |row| row.get(0),
-                ).map_err(rs)?;
-                if exists == 0 {
-                    return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
-                }
-                let prior: Option<String> = tx.query_row(
-                    "SELECT current_cost_observation_id FROM run_envelopes WHERE id = ?1",
-                    [&args.run_envelope_id], |r| r.get(0),
-                ).map_err(rs)?;
-                let now = Utc::now().to_rfc3339();
-                let cost_observation_id = append_cost_observation(
-                    &tx, &args.run_envelope_id, args.host_side_cost_micros, confidence_str,
-                    args.notes.as_deref(), &source, &now,
-                )?;
-                tx.commit().map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "run_envelope_id": args.run_envelope_id,
-                    "cost_observation_id": cost_observation_id,
-                    "host_side_cost_micros": args.host_side_cost_micros,
-                    "host_cost_confidence": confidence_str,
-                    "source": source,
-                    "supersedes_observation_id": prior,
-                    "created_at": now,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "run_envelope_attach_episode" => {
-                let args: RunEnvelopeAttachEpisodeArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let conn = self.conn.lock().await;
-                let envelope_mode: Option<String> = conn.query_row(
-                    "SELECT mode FROM run_envelopes WHERE id = ?1", [&args.run_envelope_id], |row| row.get(0),
-                ).optional().map_err(rs)?;
-                let Some(envelope_mode) = envelope_mode else {
-                    return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
-                };
-                let episode_fidelity: Option<String> = conn.query_row(
-                    "SELECT pv.fidelity_status FROM episodes e JOIN problem_versions pv ON e.problem_version_id = pv.id WHERE e.id = ?1",
-                    [&args.episode_id], |row| row.get(0),
-                ).optional().map_err(rs)?;
-                let Some(episode_fidelity) = episode_fidelity else {
-                    return Err(mcp_invalid_params(format!("unknown episode_id: {}", args.episode_id)));
-                };
-                enforce_dev_attestation_mode_policy(&episode_fidelity, &envelope_mode, args.allow_dev_attested)?;
-
-                // Sets episodes.run_id only — never touches outcome/state/
-                // current_revision or any other proof-status column.
-                conn.execute(
-                    "UPDATE episodes SET run_id = ?1 WHERE id = ?2",
-                    (&args.run_envelope_id, &args.episode_id),
-                ).map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "run_envelope_id": args.run_envelope_id,
-                    "episode_id": args.episode_id,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "run_envelope_observe" => {
-                let args: RunEnvelopeObserveArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let conn = self.conn.lock().await;
-                let row: Option<(String, Option<String>, Option<String>, Option<String>, Option<i64>, String, Option<String>, String, String, Option<String>)> = conn.query_row(
-                    "SELECT mode, host_name, host_model, benchmark_suite_name, host_side_cost_micros,
-                            host_cost_confidence, notes, created_at, updated_at, current_cost_observation_id
-                     FROM run_envelopes WHERE id = ?1",
-                    [&args.run_envelope_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?)),
-                ).optional().map_err(rs)?;
-                let Some((mode, host_name, host_model, benchmark_suite_name, host_side_cost_micros, host_cost_confidence, notes, created_at, updated_at, current_cost_observation_id)) = row else {
-                    return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", args.run_envelope_id)));
-                };
-
-                let mut estmt = conn.prepare(
-                    "SELECT id, outcome, state FROM episodes WHERE run_id = ?1 ORDER BY created_at ASC"
-                ).map_err(rs)?;
-                let episodes: Vec<serde_json::Value> = estmt.query_map([&args.run_envelope_id], |row| {
-                    Ok(serde_json::json!({
-                        "episode_id": row.get::<_, String>(0)?,
-                        "outcome": row.get::<_, Option<String>>(1)?,
-                        "state": row.get::<_, String>(2)?,
-                    }))
-                }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
-                drop(estmt);
-
-                // Issue #46: the full append-only host-side cost history.
-                let mut cstmt = conn.prepare(
-                    "SELECT id, host_side_cost_micros, host_cost_confidence, source, notes, supersedes_observation_id, created_at
-                     FROM run_envelope_cost_observations WHERE run_envelope_id = ?1 ORDER BY created_at ASC, id ASC"
-                ).map_err(rs)?;
-                let cost_observations: Vec<serde_json::Value> = cstmt.query_map([&args.run_envelope_id], |row| {
-                    Ok(serde_json::json!({
-                        "cost_observation_id": row.get::<_, String>(0)?,
-                        "host_side_cost_micros": row.get::<_, Option<i64>>(1)?,
-                        "host_cost_confidence": row.get::<_, String>(2)?,
-                        "source": row.get::<_, String>(3)?,
-                        "notes": row.get::<_, Option<String>>(4)?,
-                        "supersedes_observation_id": row.get::<_, Option<String>>(5)?,
-                        "created_at": row.get::<_, String>(6)?,
-                    }))
-                }).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "run_envelope_id": args.run_envelope_id,
-                    "mode": mode,
-                    "host_name": host_name,
-                    "host_model": host_model,
-                    "benchmark_suite_name": benchmark_suite_name,
-                    "host_side_cost_micros": host_side_cost_micros,
-                    "host_cost_confidence": host_cost_confidence,
-                    "notes": notes,
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                    "episodes": episodes,
-                    "current_cost_observation_id": current_cost_observation_id,
-                    "cost_observations": cost_observations,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
+            "run_envelope" => self.do_run_envelope(args_val).await,
             "benchmark_suite_create" => {
                 let args: BenchmarkSuiteCreateArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -14434,8 +14510,10 @@ mod tests {
         // - 4 (issue #188: the five flat candidate_construction_* tools
         // consolidated into the ONE `candidate_construction` tool) = 64,
         // - 4 (issue #189: the five flat empirical_search_* tools consolidated
-        // into the ONE `empirical_search` tool) = 60.
-        assert_eq!(list_res.tools.len(), 60);
+        // into the ONE `empirical_search` tool) = 60,
+        // - 4 (issue #190: the five flat run_envelope_* tools consolidated
+        // into the ONE `run_envelope` tool) = 56.
+        assert_eq!(list_res.tools.len(), 56);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -19814,9 +19892,9 @@ mod tests {
             "root_formal_statement": "1 + 1 = 2",
         }).as_object().unwrap().clone())).await.unwrap());
         let problem_id = problem["benchmark_problem_id"].as_str().unwrap().to_string();
-        let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "benchmark_suite_name": "GapTaxonomySuite",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
             "suite_id": suite_id, "run_envelope_id": envelope["run_envelope_id"].as_str().unwrap(),
             "solve_mode": "submit_module_allowed", "attempt_budget": 2,
@@ -19953,23 +20031,23 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "Claude Code", "host_model": "claude-sonnet-5",
             "benchmark_suite_name": "PutnamBench",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let envelope_id = created["run_envelope_id"].as_str().unwrap().to_string();
         assert_eq!(created["mode"], "benchmark");
         assert_eq!(created["host_cost_confidence"], "unknown", "omitted confidence must default to the honest 'unknown', not a made-up value");
 
-        let updated = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_update").with_arguments(serde_json::json!({
+        let updated = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "update",
             "run_envelope_id": envelope_id, "host_side_cost_micros": 42_000_000i64, "host_cost_confidence": "estimated",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(updated["host_side_cost_micros"], 42_000_000i64);
         assert_eq!(updated["host_cost_confidence"], "estimated");
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "observe",
             "run_envelope_id": envelope_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed["mode"], "benchmark");
         assert_eq!(observed["host_name"], "Claude Code");
         assert_eq!(observed["benchmark_suite_name"], "PutnamBench");
@@ -19981,19 +20059,19 @@ mod tests {
     async fn test_run_envelope_update_preserves_omitted_fields() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
-        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "development", "notes": "original note",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let envelope_id = created["run_envelope_id"].as_str().unwrap().to_string();
 
         // Update ONLY cost — notes must survive untouched.
-        tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_update").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "update",
             "run_envelope_id": envelope_id, "host_side_cost_micros": 10i64,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "observe",
             "run_envelope_id": envelope_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(observed["notes"], "original note", "an update that omits notes must not clear it");
         assert_eq!(observed["host_side_cost_micros"], 10i64);
     }
@@ -20005,23 +20083,23 @@ mod tests {
     async fn test_run_envelope_cost_observation_append_preserves_prior_value() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
-        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_side_cost_micros": 1000i64, "host_cost_confidence": "estimated",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let envelope_id = created["run_envelope_id"].as_str().unwrap().to_string();
         let origin_obs_id = created["cost_observation_id"].as_str().unwrap().to_string();
 
         // A later, more precise observation supersedes the estimate.
-        let added = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_cost_observation_add").with_arguments(serde_json::json!({
+        let added = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "cost_observation_add",
             "run_envelope_id": envelope_id, "host_side_cost_micros": 2000i64,
             "host_cost_confidence": "exact_local_meter", "source": "provider_receipt_import",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let new_obs_id = added["cost_observation_id"].as_str().unwrap().to_string();
         assert_eq!(added["supersedes_observation_id"], origin_obs_id, "new observation must point back at the prior current: {added:?}");
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "observe",
             "run_envelope_id": envelope_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let history = observed["cost_observations"].as_array().unwrap();
         assert_eq!(history.len(), 2, "origin + append must both be preserved: {observed:?}");
         // The prior 1000/estimated value is still queryable in the history.
@@ -20040,17 +20118,17 @@ mod tests {
     async fn test_run_envelope_update_appends_observation() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
-        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let envelope_id = created["run_envelope_id"].as_str().unwrap().to_string();
-        tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_update").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "update",
             "run_envelope_id": envelope_id, "host_side_cost_micros": 42_000_000i64, "host_cost_confidence": "estimated",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_observe").with_arguments(serde_json::json!({
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "observe",
             "run_envelope_id": envelope_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let sources: Vec<&str> = observed["cost_observations"].as_array().unwrap().iter().map(|o| o["source"].as_str().unwrap()).collect();
         assert!(sources.contains(&"run_envelope_create"), "origin observation must survive the correction: {sources:?}");
         assert!(sources.contains(&"run_envelope_update"), "the update must append its own observation: {sources:?}");
@@ -20066,27 +20144,27 @@ mod tests {
             "problem_version_id": pv_id, "max_steps": 5,
         }).as_object().unwrap().clone())).await.unwrap());
         let episode_id = ep["episode_id"].as_str().unwrap().to_string();
-        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "development",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let envelope_id = created["run_envelope_id"].as_str().unwrap().to_string();
 
-        let bad1 = peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+        let bad1 = peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "attach_episode",
             "run_envelope_id": "not-a-real-envelope", "episode_id": episode_id,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad1.is_err());
-        let bad2 = peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+        let bad2 = peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "attach_episode",
             "run_envelope_id": envelope_id, "episode_id": "not-a-real-episode",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad2.is_err());
 
         // Happy path: attaching succeeds and shows up in observe.
-        tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "attach_episode",
             "run_envelope_id": envelope_id, "episode_id": episode_id,
-        }).as_object().unwrap().clone())).await.unwrap());
-        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_observe").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "observe",
             "run_envelope_id": envelope_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let episodes = observed["episodes"].as_array().unwrap();
         assert_eq!(episodes.len(), 1, "{:?}", episodes);
         assert_eq!(episodes[0]["episode_id"], episode_id);
@@ -20112,9 +20190,9 @@ mod tests {
             "problem_version_id": pv_id, "max_steps": 5,
         }).as_object().unwrap().clone())).await.unwrap());
         let episode_id = ep["episode_id"].as_str().unwrap().to_string();
-        let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "development",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let envelope_id = envelope["run_envelope_id"].as_str().unwrap().to_string();
 
         // Snapshot every column EXCEPT run_id (found by name, not by a
@@ -20137,9 +20215,9 @@ mod tests {
         };
         let before = { let c = conn_arc.lock().await; snapshot(&c) };
 
-        tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "attach_episode",
             "run_envelope_id": envelope_id, "episode_id": episode_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let after = { let c = conn_arc.lock().await; snapshot(&c) };
         assert_eq!(before, after, "attaching a run envelope must change ONLY episodes.run_id — everything else (outcome, state, revision, obligations) must be untouched");
@@ -20167,9 +20245,9 @@ mod tests {
     /// "a benchmark run should not start unless a run envelope exists").
     async fn create_run_envelope(peer: &rmcp::service::Peer<rmcp::RoleClient>) -> String {
         // benchmark mode so benchmark_run_create's issue-#42 mode gate accepts it.
-        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-suite",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         created["run_envelope_id"].as_str().unwrap().to_string()
     }
 
@@ -20675,9 +20753,9 @@ mod tests {
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
         for mode in ["development", "evaluation", "private_audit", "public_report"] {
-            let env = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            let env = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
                 "mode": mode, "host_name": "test-host",
-            }).as_object().unwrap().clone())).await.unwrap());
+            }}).as_object().unwrap().clone())).await.unwrap());
             let res = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
                 "suite_id": suite_id, "run_envelope_id": env["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
             }).as_object().unwrap().clone())).await;
@@ -20685,9 +20763,9 @@ mod tests {
             assert!(format!("{:?}", res.unwrap_err()).contains("benchmark-mode run envelope"), "mode={mode:?}");
         }
         // A benchmark-mode envelope with no declared suite name: accepted.
-        let ok_env = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let ok_env = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let ok = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
             "suite_id": suite_id, "run_envelope_id": ok_env["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await;
@@ -20701,18 +20779,18 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let wrong = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let wrong = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host", "benchmark_suite_name": "MiniF2F",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let bad = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
             "suite_id": suite_id, "run_envelope_id": wrong["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await;
         assert!(bad.is_err(), "mismatched benchmark_suite_name must be rejected");
         assert!(format!("{:?}", bad.unwrap_err()).contains("does not match"));
 
-        let right = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let right = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host", "benchmark_suite_name": "PutnamBench",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let good = peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
             "suite_id": suite_id, "run_envelope_id": right["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await;
@@ -20734,9 +20812,9 @@ mod tests {
         let suite_id = create_suite(&peer, "PutnamBench").await;
 
         // Default confidence ("unknown", the honest default when unset) -> incomplete.
-        let unknown_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let unknown_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run_unknown = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
             "suite_id": suite_id, "run_envelope_id": unknown_envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
@@ -20756,9 +20834,9 @@ mod tests {
         // an exact one -- this is the honest middle tier, not "incomplete"
         // (which should mean "we know nothing"), and not "known" (which
         // would overstate an estimate's reliability).
-        let estimated_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let estimated_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host", "host_side_cost_micros": 100, "host_cost_confidence": "estimated",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run_estimated = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
             "suite_id": suite_id, "run_envelope_id": estimated_envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
@@ -20777,9 +20855,9 @@ mod tests {
         // is intentionally unreachable until those surfaces are instrumented,
         // exactly the point of never conflating "one surface is exact" with
         // "the total is known."
-        let exact_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let exact_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host", "host_side_cost_micros": 100, "host_cost_confidence": "exact_local_meter",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run_exact = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
             "suite_id": suite_id, "run_envelope_id": exact_envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
@@ -21030,9 +21108,9 @@ mod tests {
         let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
-        let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host", "host_side_cost_micros": 500, "host_cost_confidence": "exact_local_meter",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
             "suite_id": suite_id, "run_envelope_id": envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
@@ -21466,9 +21544,9 @@ mod tests {
         let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
             "suite_id": suite_id, "upstream_problem_id": "m1", "theorem_name": "m1", "root_formal_statement": "True",
         }).as_object().unwrap().clone())).await.unwrap());
-        let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run_create").with_arguments(serde_json::json!({
             "suite_id": suite_id, "run_envelope_id": envelope["run_envelope_id"], "solve_mode": "solve_only", "attempt_budget": 5,
         }).as_object().unwrap().clone())).await.unwrap());
@@ -21516,13 +21594,13 @@ mod tests {
         }
 
         for mode in ["benchmark", "evaluation", "public_report"] {
-            let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+            let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
                 "mode": mode, "host_name": "test-host",
-            }).as_object().unwrap().clone())).await.unwrap());
+            }}).as_object().unwrap().clone())).await.unwrap());
             let episode_id = new_episode(&peer, &pv_id).await;
-            let rejected = peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+            let rejected = peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "attach_episode",
                 "run_envelope_id": envelope["run_envelope_id"], "episode_id": episode_id,
-            }).as_object().unwrap().clone())).await;
+            }}).as_object().unwrap().clone())).await;
             assert!(rejected.is_err(), "an attested episode must be blocked from a {mode:?}-mode envelope, no override possible");
             let err_text = format!("{:?}", rejected.unwrap_err());
             assert!(err_text.contains("attested/dev-bypass problems are not valid for benchmark/evaluation/public_report runs"),
@@ -21530,27 +21608,27 @@ mod tests {
         }
 
         // development: always allowed, no flag needed.
-        let dev_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let dev_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "development", "host_name": "test-host",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let dev_episode_id = new_episode(&peer, &pv_id).await;
-        let dev_ok = peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+        let dev_ok = peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "attach_episode",
             "run_envelope_id": dev_envelope["run_envelope_id"], "episode_id": dev_episode_id,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(dev_ok.is_ok(), "development mode must always allow an attested episode: {:?}", dev_ok.err());
 
         // private_audit: blocked without the explicit override, allowed with it.
-        let audit_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope_create").with_arguments(serde_json::json!({
+        let audit_envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "private_audit", "host_name": "test-host",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let audit_episode_id = new_episode(&peer, &pv_id).await;
-        let audit_denied = peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+        let audit_denied = peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "attach_episode",
             "run_envelope_id": audit_envelope["run_envelope_id"], "episode_id": audit_episode_id,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(audit_denied.is_err(), "private_audit must require the explicit allow_dev_attested override, not allow it silently");
-        let audit_allowed = peer.call_tool(CallToolRequestParams::new("run_envelope_attach_episode").with_arguments(serde_json::json!({
+        let audit_allowed = peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "attach_episode",
             "run_envelope_id": audit_envelope["run_envelope_id"], "episode_id": audit_episode_id, "allow_dev_attested": true,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(audit_allowed.is_ok(), "private_audit + allow_dev_attested=true must succeed: {:?}", audit_allowed.err());
     }
 
