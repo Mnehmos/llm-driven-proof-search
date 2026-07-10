@@ -1379,7 +1379,7 @@ pub struct ProofExportArgs {
     pub allow_putnambench_proof_export: bool,
 }
 
-#[derive(JsonSchema, Deserialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema, Deserialize)]
 pub enum PatternConfidence {
     /// Hand-authored from a documented lesson (e.g. a playtest report), not
     /// mined from local attempt data.
@@ -1427,7 +1427,7 @@ pub struct ProofPatternSearchArgs {
     pub limit: Option<i64>,
 }
 
-#[derive(JsonSchema, Deserialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema, Deserialize)]
 pub enum PatternApplicationRole {
     /// This attempt is a real example of the pattern's failure_signature.
     #[serde(rename = "failed_example")]
@@ -1450,6 +1450,72 @@ pub struct ProofPatternRecordApplicationArgs {
     pub role: PatternApplicationRole,
     #[serde(default)]
     pub notes: Option<String>,
+}
+
+/// Issue #192 (epic #182, 10th consolidation after #183's `proof_session`
+/// pilot through #191's `challenge`): the single `proof_pattern` tool's
+/// internally-tagged action enum, mirroring the established `episode_step`
+/// pattern (`#[serde(tag = "type", rename_all = "snake_case")]`). Each
+/// variant's fields are the corresponding pre-#192 flat `ProofPattern*Args`
+/// struct's fields verbatim — those structs remain (unchanged) as what the
+/// `do_proof_pattern_*` handlers deserialize; this enum is only the MCP-layer
+/// dispatch shape. There are no shared wrapper fields: `create` mints a new
+/// pattern_id while `search` has no id at all and `record_application` keys
+/// on an existing `pattern_id`. `distilled_strategy_add` is deliberately NOT
+/// folded in here — it is dossier-scoped (a required `dossier_id`, writing
+/// into the separate `distilled_strategy_artifacts` table), not
+/// pattern-library-scoped (`proof_patterns` is a global, dossier-independent
+/// table), and remains its own standalone tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProofPatternAction {
+    Create {
+        /// A unique, stable slug, e.g. "def_wrapped_decide_needs_unfold".
+        /// Creating with a pattern_key that already exists is rejected —
+        /// patterns are not silently overwritten by a second create call.
+        pattern_key: String,
+        title: String,
+        /// Free-text symptom this pattern recognizes, e.g. "decide fails on a
+        /// goal wrapped behind a def".
+        failure_signature: String,
+        /// Free-text recommended fix, e.g. "unfold <def_name> before decide".
+        recommended_repair: String,
+        #[serde(default)]
+        applicable_when: Vec<String>,
+        #[serde(default)]
+        avoid_when: Vec<String>,
+        #[serde(default)]
+        source_episode_id: Option<String>,
+        #[serde(default)]
+        source_attempt_ids: Vec<String>,
+        confidence: PatternConfidence,
+    },
+    Search {
+        /// Free-text search against pattern_key/title/failure_signature/
+        /// recommended_repair. Omit to list the whole active library. `%` and
+        /// `_` act as SQL LIKE wildcards rather than literal characters.
+        #[serde(default)]
+        query: Option<String>,
+        #[serde(default)]
+        limit: Option<i64>,
+    },
+    RecordApplication {
+        pattern_id: String,
+        episode_id: String,
+        #[serde(default)]
+        action_attempt_id: Option<String>,
+        role: PatternApplicationRole,
+        #[serde(default)]
+        notes: Option<String>,
+    },
+}
+
+/// Issue #192: args for the single consolidated `proof_pattern` tool. The
+/// entire payload lives on the internally-tagged `action` — see
+/// `ProofPatternAction`'s doc for why there are no shared wrapper fields.
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofPatternArgs {
+    pub action: ProofPatternAction,
 }
 
 // -- Draft artifacts + formalization planning (issues #23, #10) -----------
@@ -6586,7 +6652,7 @@ fn render_proof_export(conn: &Connection, episode_id: &str, mode: ExportMode) ->
 
     // Lessons applied (issue #24 proof-pattern memory): listed separately from
     // the verified proof above, and never affects it — a pattern application
-    // is advisory metadata (see proof_pattern_record_application), not a proof
+    // is advisory metadata (see proof_pattern's record_application action), not a proof
     // status. Only rendered if at least one was actually recorded for this
     // episode, so a dossier with no pattern activity stays exactly as before.
     let mut pstmt = conn.prepare(
@@ -9334,6 +9400,174 @@ impl ChatDbMcp {
 
     // -----------------------------------------------------------------
 
+    /// Issue #192 (epic #182): the single `proof_pattern` tool's dispatcher.
+    /// Deserializes `ProofPatternArgs`, matches on the internally-tagged
+    /// action, and routes to the per-action handlers below UNCHANGED (each
+    /// extracted verbatim from the former inline match arm of the same
+    /// name). Each arm re-serializes the variant back to JSON and passes
+    /// that through: the variant's field names are identical to the old flat
+    /// `ProofPattern*Args` shape by construction, and the extra internal
+    /// `"type"` tag is ignored by the handlers' serde derives. This
+    /// transitional double-serialization is deliberate — it keeps the three
+    /// `do_proof_pattern_*` handlers byte-identical (the epic's key
+    /// risk-reducer) at negligible cost. `distilled_strategy_add` is
+    /// intentionally NOT part of this tool — it stays standalone (see
+    /// `ProofPatternAction`'s doc).
+    async fn do_proof_pattern(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofPatternArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize proof_pattern action: {}", e)))?;
+        match &args.action {
+            ProofPatternAction::Create { .. } => self.do_proof_pattern_create(inner).await,
+            ProofPatternAction::Search { .. } => self.do_proof_pattern_search(inner).await,
+            ProofPatternAction::RecordApplication { .. } => self.do_proof_pattern_record_application(inner).await,
+        }
+    }
+
+    async fn do_proof_pattern_create(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofPatternCreateArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let confidence_str = match args.confidence {
+            PatternConfidence::Seed => "seed",
+            PatternConfidence::Mined => "mined",
+            PatternConfidence::Confirmed => "confirmed",
+        };
+        let applicable_when_json = serde_json::to_string(&args.applicable_when).unwrap();
+        let avoid_when_json = serde_json::to_string(&args.avoid_when).unwrap();
+        let source_attempt_ids_json = serde_json::to_string(&args.source_attempt_ids).unwrap();
+
+        let conn = self.conn.lock().await;
+        let pattern_id = Uuid::new_v4().to_string();
+        let created_at = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO proof_patterns (
+                id, pattern_key, title, failure_signature, recommended_repair,
+                applicable_when_json, avoid_when_json, source_episode_id,
+                source_attempt_ids_json, confidence, status, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active', ?11)",
+            (
+                &pattern_id, &args.pattern_key, &args.title, &args.failure_signature,
+                &args.recommended_repair, &applicable_when_json, &avoid_when_json,
+                &args.source_episode_id, &source_attempt_ids_json, confidence_str, &created_at,
+            ),
+        ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
+            mcp_invalid_params(format!("pattern_key {:?} already exists — patterns are not overwritten by a second create call", args.pattern_key))
+        } else {
+            rs(e)
+        })?;
+
+        let res = serde_json::json!({
+            "pattern_id": pattern_id,
+            "pattern_key": args.pattern_key,
+            "status": "active",
+            "created_at": created_at,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_proof_pattern_search(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofPatternSearchArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let limit = args.limit.unwrap_or(50).clamp(1, 500);
+
+        let conn = self.conn.lock().await;
+        let rows: Vec<(String, String, String, String, String, String, String, String, Option<String>, String)> = if let Some(q) = args.query.filter(|q| !q.trim().is_empty()) {
+            let like = format!("%{}%", q);
+            let mut stmt = conn.prepare(
+                "SELECT id, pattern_key, title, failure_signature, recommended_repair,
+                        applicable_when_json, avoid_when_json, confidence, source_episode_id, created_at
+                 FROM proof_patterns
+                 WHERE status = 'active' AND (
+                     pattern_key LIKE ?1 ESCAPE '\\' OR title LIKE ?1 ESCAPE '\\' OR
+                     failure_signature LIKE ?1 ESCAPE '\\' OR recommended_repair LIKE ?1 ESCAPE '\\'
+                 )
+                 ORDER BY title ASC LIMIT ?2"
+            ).map_err(rs)?;
+            stmt.query_map((like, limit), |row| Ok((
+                row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
+                row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+            ))).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT id, pattern_key, title, failure_signature, recommended_repair,
+                        applicable_when_json, avoid_when_json, confidence, source_episode_id, created_at
+                 FROM proof_patterns WHERE status = 'active' ORDER BY title ASC LIMIT ?1"
+            ).map_err(rs)?;
+            stmt.query_map([limit], |row| Ok((
+                row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
+                row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+            ))).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?
+        };
+
+        let patterns: Vec<serde_json::Value> = rows.into_iter().map(|(id, key, title, sig, repair, aw_json, avw_json, confidence, source_ep, created_at)| {
+            serde_json::json!({
+                "pattern_id": id,
+                "pattern_key": key,
+                "title": title,
+                "failure_signature": sig,
+                "recommended_repair": repair,
+                "applicable_when": serde_json::from_str::<serde_json::Value>(&aw_json).unwrap_or(serde_json::Value::Array(vec![])),
+                "avoid_when": serde_json::from_str::<serde_json::Value>(&avw_json).unwrap_or(serde_json::Value::Array(vec![])),
+                "confidence": confidence,
+                "source_episode_id": source_ep,
+                "created_at": created_at,
+            })
+        }).collect();
+
+        let res = serde_json::json!({ "patterns": patterns });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_proof_pattern_record_application(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofPatternRecordApplicationArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+
+        let role_str = match args.role {
+            PatternApplicationRole::FailedExample => "failed_example",
+            PatternApplicationRole::RepairExample => "repair_example",
+            PatternApplicationRole::SuggestedHint => "suggested_hint",
+        };
+
+        let conn = self.conn.lock().await;
+        let pattern_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM proof_patterns WHERE id = ?1", [&args.pattern_id], |row| row.get(0),
+        ).map_err(rs)?;
+        if pattern_exists == 0 {
+            return Err(mcp_invalid_params(format!("unknown pattern_id: {}", args.pattern_id)));
+        }
+        let episode_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM episodes WHERE id = ?1", [&args.episode_id], |row| row.get(0),
+        ).map_err(rs)?;
+        if episode_exists == 0 {
+            return Err(mcp_invalid_params(format!("unknown episode_id: {}", args.episode_id)));
+        }
+
+        // Pure insert — this is the entire operation. Deliberately never
+        // touches episodes/episode_obligations/action_attempts: a pattern
+        // application is advisory metadata, not a proof-status change.
+        let application_id = Uuid::new_v4().to_string();
+        let created_at = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO proof_pattern_applications (
+                id, pattern_id, episode_id, action_attempt_id, role, notes, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (&application_id, &args.pattern_id, &args.episode_id, &args.action_attempt_id, role_str, &args.notes, &created_at),
+        ).map_err(rs)?;
+
+        let res = serde_json::json!({
+            "application_id": application_id,
+            "pattern_id": args.pattern_id,
+            "episode_id": args.episode_id,
+            "role": role_str,
+            "created_at": created_at,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    // -----------------------------------------------------------------
+
     /// Issue #186 (epic #182): the single `task_submission` tool's
     /// dispatcher. Deserializes `TaskSubmissionArgs`, matches on the
     /// internally-tagged action, and routes to the per-action handlers below
@@ -10754,9 +10988,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EpisodeReplayArgs>("episode_replay", "Re-execute typed actions through canonical reducer with Lean re-verification"),
             make_tool::<ProofExportArgs>("proof_export", "Render an episode as a proof dossier. format: \"markdown\" (default, full dossier) | \"lean\" (bare assembled source) | \"public_summary\" (redacted, safe for public/benchmark disclosure — never includes the proof body) | \"audit_archive\" (full dossier, explicitly labeled private) | \"training_export\" (structured JSON records for SFT/RL/DPO) | \"paper_dossier\" (full dossier plus a written narrative section) | \"maintainer_submission\" (full dossier packaged for a benchmark suite's own maintainers). Modes that expose the completed proof body require allow_putnambench_proof_export=true when the episode's problem is linked to a tracked benchmark suite — see docs/benchmarks/putnambench.md"),
             make_tool::<LeanDeclarationLookupArgs>("lean_declaration_lookup", "Check whether declaration names resolve — WITHOUT changing proof strategy first. An 'unknown identifier' error from episode_step only ever proves a name didn't resolve under the exact import manifest that attempt used; it never proves the name is absent from the pinned Mathlib. By default this only checks under the problem's own manifest (fast, a few seconds) and returns 'not_available_under_current_manifest' if it fails to resolve — that result alone does NOT mean the name is absent from the library, only that it needs an import. Pass deep_check=true to additionally check under the full Mathlib umbrella and distinguish 'not_in_current_import_scope' (add an import to problem_imports, see problem_create) from genuinely 'unknown_declaration' (misspelled, wrong namespace, or absent); deep_check loads all of Mathlib and reliably takes 15-40+ seconds. Epistemic rule: before concluding an API is unavailable, call this tool with deep_check=true — do not infer library capability from one elaboration failure or from a fast-path result alone"),
-            make_tool::<ProofPatternCreateArgs>("proof_pattern_create", "Register a reusable proof-pattern lesson (issue #24 proof-pattern memory) — a failure_signature + recommended_repair pair, e.g. \"decide fails on a def-wrapped goal\" -> \"unfold the def first\". Purely advisory: a pattern can never mark anything proved or change fidelity/certification status. Rejects a duplicate pattern_key rather than overwriting it"),
-            make_tool::<ProofPatternSearchArgs>("proof_pattern_search", "Search the proof-pattern library (free-text over pattern_key/title/failure_signature/recommended_repair, or omit query to list the active library). Call this before repeating a failure another attempt already diagnosed"),
-            make_tool::<ProofPatternRecordApplicationArgs>("proof_pattern_record_application", "Record that a pattern was relevant to a real (episode[, attempt]) — a failed_example, a repair_example, or a suggested_hint. Insert-only metadata: never writes to episodes/episode_obligations/action_attempts, so it can never change proof/fidelity/certification status"),
+            make_tool::<ProofPatternArgs>("proof_pattern", "Issue #192: ONE tool for the proof-pattern-library family (issue #24 proof-pattern memory) — register a reusable proof-pattern lesson, search the library, and record that a pattern was relevant to a real attempt. THE PATTERN LIBRARY IS PURELY ADVISORY: no action here can ever mark anything proved or change fidelity/certification status. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"pattern_key\":\"..\",\"title\":\"..\",\"failure_signature\":\"..\",\"recommended_repair\":\"..\",\"confidence\":\"seed\"|\"mined\"|\"confirmed\"} (+ optional applicable_when, avoid_when, source_episode_id, source_attempt_ids — register a failure_signature + recommended_repair pair, e.g. \"decide fails on a def-wrapped goal\" -> \"unfold the def first\". Rejects a duplicate pattern_key rather than overwriting it) | {\"type\":\"search\"} (+ optional query, limit — free-text search over pattern_key/title/failure_signature/recommended_repair, or omit query to list the active library; `%` and `_` act as SQL LIKE wildcards rather than literal characters. Call this before repeating a failure another attempt already diagnosed) | {\"type\":\"record_application\",\"pattern_id\":\"..\",\"episode_id\":\"..\",\"role\":\"failed_example\"|\"repair_example\"|\"suggested_hint\"} (+ optional action_attempt_id, notes — record that a pattern was relevant to a real (episode[, attempt]). Insert-only metadata: never writes to episodes/episode_obligations/action_attempts, so it can never change proof/fidelity/certification status). `distilled_strategy_add` is dossier-scoped, not pattern-library-scoped (it keys on a required dossier_id and writes into the separate distilled_strategy_artifacts table, with no pattern_id/pattern_key relationship to proof_patterns at all), and remains its own standalone tool rather than folding into this one"),
             make_tool::<DraftCreateArgs>("draft_create", "Register an informal Draft artifact (issue #23) — untrusted planning/reasoning content preserved before formalization begins. A draft can never mark anything proved"),
             make_tool::<DraftObserveArgs>("draft_observe", "Read back a draft's content and any moves recorded against it"),
             make_tool::<DraftExtractMovesArgs>("draft_extract_moves", "Record structured moves (construction, auxiliary_lemma, case_split, induction, reduction, bijection, counterexample_search, asymptotic_step, external_citation, unknown) the external agent identified in a draft. Metadata only — moves are not obligations until explicitly promoted into a formalization plan item"),
@@ -10858,7 +11090,7 @@ impl ServerHandler for ChatDbMcp {
                         "external_sessions_warning": "A Pantograph install you run yourself, a bare `lake env lean` REPL, or ANY other proof-state tool driven OUTSIDE the proof_session tool produces NO trace in this environment at all — proof_session only records steps you route through it, and there is no separate ingestion path for an externally-run session's history. If you explore a goal outside MCP, either replay the tactic decisions that mattered through proof_session's tactic_step/branch actions so they become real, queryable search evidence here, or skip the session machinery entirely and submit the final result straight through Solve/SubmitModule (which never requires an interactive session at all). An external session succeeding tells this environment nothing until its result is submitted through one of those two tracked paths.",
                         "backend_availability": "Two `backend` values are recognized by the start action. \"mock\" (issue #161, the default) is deterministic and always available, but has no real Lean elaborator behind it — every nonempty tactic just closes the first open goal, so its outcomes carry no elaboration evidence. \"pantograph\" (issue #166) is a RECOGNIZED value, not yet a USABLE one: it runs a real PATH/lake-manifest/toolchain compatibility probe against this environment and always fails closed today, because this prototype has no process-spawning/IPC implementation behind it — check environment_describe's pantograph_available/pantograph_reason flags for exactly why, in this environment, right now. Any other `backend` value is rejected outright."
                     },
-                    "lookup_and_planning_tools": "Use lean_declaration_lookup, mathlib_search_declarations, mathlib_search_local_artifacts, proof_pattern_search, draft_create/draft_extract_moves, and the formalization_plan tool (one tool since issue #184, dispatching on an internally-tagged action: {\"action\": {\"type\": \"create\" | \"observe\" | \"update\" | \"add_item\" | \"attach_lookup\" | \"promote_item_to_obligation\" | \"attach_librarian_result\", ...}}) rather than an external side channel for the same job during a tracked run — that keeps the reasoning trail inside the environment's own ledger, replayable and auditable later.",
+                    "lookup_and_planning_tools": "Use lean_declaration_lookup, mathlib_search_declarations, mathlib_search_local_artifacts, the proof_pattern tool's search action (one tool since issue #192, dispatching on an internally-tagged action: {\"action\": {\"type\": \"create\" | \"search\" | \"record_application\", ...}}), draft_create/draft_extract_moves, and the formalization_plan tool (one tool since issue #184, dispatching on an internally-tagged action: {\"action\": {\"type\": \"create\" | \"observe\" | \"update\" | \"add_item\" | \"attach_lookup\" | \"promote_item_to_obligation\" | \"attach_librarian_result\", ...}}) rather than an external side channel for the same job during a tracked run — that keeps the reasoning trail inside the environment's own ledger, replayable and auditable later.",
                     "cost_boundary": "cost_micros (episode_step), model_call_reserve/model_call_settle, and the episode budget ledger are enforcement/accounting mechanisms for this environment's MCP-visible budget, not proof-soundness claims. episode_step.cost_micros is reserved before a step executes; model_call_reserve immediately reserves bounded episode budget; model_call_settle adjusts only the reserved-vs-actual delta or refunds a voided reservation. They are NOT the total cost of running you (the external host/model). Host-side reasoning cost (tokens spent thinking, editing, or calling other tools before or around an MCP call) is invisible to LLM-Driven Proof Search Environment entirely unless you report it through model_call_reserve/model_call_settle. Never present MCP-visible cost_micros as if it were the complete cost of a run.",
                     "benchmark_mode": "Development/exploratory use and a frozen benchmark run (e.g. PutnamBench) are different modes with different rules. In benchmark mode: every candidate attempt must flow through episode_step (see proof_attempts above) so the run counts as valid evidence, not just a trophy case; and public reports of benchmark results follow a redaction policy — a public summary must not contain completed proof source by default, only aggregate status/hashes/replay information. Check the benchmark documentation (docs/benchmarks/) for the exact export mode to use before publishing any benchmark result.",
                     "forbidden_or_discouraged": [
@@ -10936,8 +11168,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 54,
-                        "total_tool_count": 54,
+                        "classified_tool_count": 52,
+                        "total_tool_count": 52,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -11052,12 +11284,12 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none (advisory scaffolding only)",
                                 "required_run_mode": "any"
                             },
-                            "proof_pattern_create": {
-                                "side_effect": "append_only — inserts a proof_patterns row, rejects a duplicate pattern_key rather than overwriting",
-                                "trust_level": "untrusted_input — a pattern is a free-text failure_signature/recommended_repair pair the caller asserts, never independently checked against real proof state",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output — a lesson, not a proof or a problem-specific artifact",
-                                "replayability": "deterministic",
+                            "proof_pattern": {
+                                "side_effect": "mutating for create/record_application, read_only for search (issue #192: one tool consolidating the former proof_pattern_create / proof_pattern_search / proof_pattern_record_application tools; per-action semantics unchanged): create is append_only — inserts a proof_patterns row, rejects a duplicate pattern_key rather than overwriting; search queries proof_patterns WHERE status='active'; record_application is append_only — inserts a proof_pattern_applications row, and deliberately never touches episodes/episode_obligations/action_attempts. distilled_strategy_add is dossier-scoped, not pattern-library-scoped, and stays its own standalone tool — not part of this consolidation",
+                                "trust_level": "untrusted_input for every action — create's pattern is a free-text failure_signature/recommended_repair pair the caller asserts, never independently checked against real proof state; search is a pass-through returning exactly what create asserted, no re-verification; record_application is an mcp_generated linkage between two things that separately already exist (a real pattern_id, a real episode_id) — independently checked to exist before the insert, though the role (failed_example/repair_example/suggested_hint) is the caller's own untrusted_input characterization of the relationship",
+                                "cost_surface": "none for every action",
+                                "benchmark_safety": "safe_public_output for every action — lessons and linkages, not problem-specific proof content",
+                                "replayability": "deterministic for create/record_application, deterministic given current DB state for search",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none — purely advisory, can never mark anything proved or change fidelity/certification status",
                                 "required_run_mode": "any"
@@ -11369,26 +11601,6 @@ impl ServerHandler for ChatDbMcp {
                                 "cost_surface": "none",
                                 "benchmark_safety": "safe_public_output — forces a gave_up outcome, can never produce a false kernel_verified/certified claim",
                                 "replayability": "replayable_with_hashes — records a real episode_terminated trajectory event like any other terminal transition",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "proof_pattern_search": {
-                                "side_effect": "read_only — queries proof_patterns WHERE status='active'",
-                                "trust_level": "untrusted_input pass-through — returns exactly what proof_pattern_create asserted, no re-verification",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output — lessons, not problem-specific proof content",
-                                "replayability": "deterministic given current DB state",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "proof_pattern_record_application": {
-                                "side_effect": "append_only — inserts a proof_pattern_applications row; confirmed by reading the handler that it deliberately never touches episodes/episode_obligations/action_attempts, so a pattern application can never itself change proof/fidelity/certification status",
-                                "trust_level": "mcp_generated linkage between two things that separately already exist (a real pattern_id, a real episode_id) — independently checked to exist before the insert, though the role (failed_example/repair_example/suggested_hint) is the caller's own untrusted_input characterization of the relationship",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
@@ -12444,144 +12656,7 @@ impl ServerHandler for ChatDbMcp {
                 });
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
             }
-            "proof_pattern_create" => {
-                let args: ProofPatternCreateArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let confidence_str = match args.confidence {
-                    PatternConfidence::Seed => "seed",
-                    PatternConfidence::Mined => "mined",
-                    PatternConfidence::Confirmed => "confirmed",
-                };
-                let applicable_when_json = serde_json::to_string(&args.applicable_when).unwrap();
-                let avoid_when_json = serde_json::to_string(&args.avoid_when).unwrap();
-                let source_attempt_ids_json = serde_json::to_string(&args.source_attempt_ids).unwrap();
-
-                let conn = self.conn.lock().await;
-                let pattern_id = Uuid::new_v4().to_string();
-                let created_at = Utc::now().to_rfc3339();
-                conn.execute(
-                    "INSERT INTO proof_patterns (
-                        id, pattern_key, title, failure_signature, recommended_repair,
-                        applicable_when_json, avoid_when_json, source_episode_id,
-                        source_attempt_ids_json, confidence, status, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active', ?11)",
-                    (
-                        &pattern_id, &args.pattern_key, &args.title, &args.failure_signature,
-                        &args.recommended_repair, &applicable_when_json, &avoid_when_json,
-                        &args.source_episode_id, &source_attempt_ids_json, confidence_str, &created_at,
-                    ),
-                ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
-                    mcp_invalid_params(format!("pattern_key {:?} already exists — patterns are not overwritten by a second create call", args.pattern_key))
-                } else {
-                    rs(e)
-                })?;
-
-                let res = serde_json::json!({
-                    "pattern_id": pattern_id,
-                    "pattern_key": args.pattern_key,
-                    "status": "active",
-                    "created_at": created_at,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "proof_pattern_search" => {
-                let args: ProofPatternSearchArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                let limit = args.limit.unwrap_or(50).clamp(1, 500);
-
-                let conn = self.conn.lock().await;
-                let rows: Vec<(String, String, String, String, String, String, String, String, Option<String>, String)> = if let Some(q) = args.query.filter(|q| !q.trim().is_empty()) {
-                    let like = format!("%{}%", q);
-                    let mut stmt = conn.prepare(
-                        "SELECT id, pattern_key, title, failure_signature, recommended_repair,
-                                applicable_when_json, avoid_when_json, confidence, source_episode_id, created_at
-                         FROM proof_patterns
-                         WHERE status = 'active' AND (
-                             pattern_key LIKE ?1 ESCAPE '\\' OR title LIKE ?1 ESCAPE '\\' OR
-                             failure_signature LIKE ?1 ESCAPE '\\' OR recommended_repair LIKE ?1 ESCAPE '\\'
-                         )
-                         ORDER BY title ASC LIMIT ?2"
-                    ).map_err(rs)?;
-                    stmt.query_map((like, limit), |row| Ok((
-                        row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
-                        row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
-                    ))).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?
-                } else {
-                    let mut stmt = conn.prepare(
-                        "SELECT id, pattern_key, title, failure_signature, recommended_repair,
-                                applicable_when_json, avoid_when_json, confidence, source_episode_id, created_at
-                         FROM proof_patterns WHERE status = 'active' ORDER BY title ASC LIMIT ?1"
-                    ).map_err(rs)?;
-                    stmt.query_map([limit], |row| Ok((
-                        row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
-                        row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
-                    ))).map_err(rs)?.collect::<Result<Vec<_>, _>>().map_err(rs)?
-                };
-
-                let patterns: Vec<serde_json::Value> = rows.into_iter().map(|(id, key, title, sig, repair, aw_json, avw_json, confidence, source_ep, created_at)| {
-                    serde_json::json!({
-                        "pattern_id": id,
-                        "pattern_key": key,
-                        "title": title,
-                        "failure_signature": sig,
-                        "recommended_repair": repair,
-                        "applicable_when": serde_json::from_str::<serde_json::Value>(&aw_json).unwrap_or(serde_json::Value::Array(vec![])),
-                        "avoid_when": serde_json::from_str::<serde_json::Value>(&avw_json).unwrap_or(serde_json::Value::Array(vec![])),
-                        "confidence": confidence,
-                        "source_episode_id": source_ep,
-                        "created_at": created_at,
-                    })
-                }).collect();
-
-                let res = serde_json::json!({ "patterns": patterns });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "proof_pattern_record_application" => {
-                let args: ProofPatternRecordApplicationArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-
-                let role_str = match args.role {
-                    PatternApplicationRole::FailedExample => "failed_example",
-                    PatternApplicationRole::RepairExample => "repair_example",
-                    PatternApplicationRole::SuggestedHint => "suggested_hint",
-                };
-
-                let conn = self.conn.lock().await;
-                let pattern_exists: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM proof_patterns WHERE id = ?1", [&args.pattern_id], |row| row.get(0),
-                ).map_err(rs)?;
-                if pattern_exists == 0 {
-                    return Err(mcp_invalid_params(format!("unknown pattern_id: {}", args.pattern_id)));
-                }
-                let episode_exists: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM episodes WHERE id = ?1", [&args.episode_id], |row| row.get(0),
-                ).map_err(rs)?;
-                if episode_exists == 0 {
-                    return Err(mcp_invalid_params(format!("unknown episode_id: {}", args.episode_id)));
-                }
-
-                // Pure insert — this is the entire operation. Deliberately never
-                // touches episodes/episode_obligations/action_attempts: a pattern
-                // application is advisory metadata, not a proof-status change.
-                let application_id = Uuid::new_v4().to_string();
-                let created_at = Utc::now().to_rfc3339();
-                conn.execute(
-                    "INSERT INTO proof_pattern_applications (
-                        id, pattern_id, episode_id, action_attempt_id, role, notes, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    (&application_id, &args.pattern_id, &args.episode_id, &args.action_attempt_id, role_str, &args.notes, &created_at),
-                ).map_err(rs)?;
-
-                let res = serde_json::json!({
-                    "application_id": application_id,
-                    "pattern_id": args.pattern_id,
-                    "episode_id": args.episode_id,
-                    "role": role_str,
-                    "created_at": created_at,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
+            "proof_pattern" => self.do_proof_pattern(args_val).await,
             "draft_create" => {
                 let args: DraftCreateArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -14568,8 +14643,11 @@ mod tests {
         // into the ONE `run_envelope` tool) = 56.
         // - 2 (issue #191: the three flat challenge_* tools consolidated into
         // the ONE `challenge` tool; validation_protocol_create is
-        // dossier-scoped, not challenge-scoped, and stays standalone) = 54.
-        assert_eq!(list_res.tools.len(), 54);
+        // dossier-scoped, not challenge-scoped, and stays standalone) = 54,
+        // - 2 (issue #192: the three flat proof_pattern_* tools consolidated
+        // into the ONE `proof_pattern` tool; distilled_strategy_add is
+        // dossier-scoped, not pattern-library-scoped, and stays standalone) = 52.
+        assert_eq!(list_res.tools.len(), 52);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -16890,7 +16968,7 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        let res = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_search").with_arguments(serde_json::json!({}).as_object().unwrap().clone())).await.unwrap());
+        let res = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern").with_arguments(serde_json::json!({"action": {"type": "search"}}).as_object().unwrap().clone())).await.unwrap());
         let patterns = res["patterns"].as_array().unwrap();
         assert!(patterns.len() >= 7, "expected at least the 7 seeded patterns, got {}: {:?}", patterns.len(), patterns);
         assert!(patterns.iter().any(|p| p["pattern_key"] == "mutual_recursion_needs_mutual_group"), "{:?}", patterns);
@@ -16904,9 +16982,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        let res = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_search").with_arguments(serde_json::json!({
+        let res = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern").with_arguments(serde_json::json!({"action": {"type": "search",
             "query": "well-founded",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let patterns = res["patterns"].as_array().unwrap();
         assert!(patterns.iter().any(|p| p["pattern_key"] == "well_founded_recursion_needs_simp_not_rfl"), "{:?}", patterns);
         for p in patterns {
@@ -16921,17 +16999,17 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
-        let create_args = serde_json::json!({
+        let create_args = serde_json::json!({"action": {"type": "create",
             "pattern_key": "test_custom_pattern_xyz",
             "title": "Custom test pattern",
             "failure_signature": "some symptom",
             "recommended_repair": "some fix",
             "confidence": "mined",
-        });
-        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_create").with_arguments(create_args.as_object().unwrap().clone())).await.unwrap());
+        }});
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern").with_arguments(create_args.as_object().unwrap().clone())).await.unwrap());
         assert!(created["pattern_id"].as_str().is_some_and(|s| !s.is_empty()), "{:?}", created);
 
-        let dup = peer.call_tool(CallToolRequestParams::new("proof_pattern_create").with_arguments(create_args.as_object().unwrap().clone())).await;
+        let dup = peer.call_tool(CallToolRequestParams::new("proof_pattern").with_arguments(create_args.as_object().unwrap().clone())).await;
         assert!(dup.is_err(), "duplicate pattern_key must be rejected, not silently overwritten");
     }
 
@@ -16960,9 +17038,9 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         let episode_id = ep["episode_id"].as_str().unwrap().to_string();
 
-        let pattern = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_search").with_arguments(serde_json::json!({
+        let pattern = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern").with_arguments(serde_json::json!({"action": {"type": "search",
             "query": "unfold",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let pattern_id = pattern["patterns"][0]["pattern_id"].as_str().unwrap().to_string();
 
         // Snapshot every row (as raw JSON, columns and all) in the two tables a
@@ -16978,9 +17056,9 @@ mod tests {
         };
         let before = { let c = conn_arc.lock().await; snapshot(&c) };
 
-        let app = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_record_application").with_arguments(serde_json::json!({
+        let app = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern").with_arguments(serde_json::json!({"action": {"type": "record_application",
             "pattern_id": pattern_id, "episode_id": episode_id, "role": "suggested_hint",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert!(app["application_id"].as_str().is_some_and(|s| !s.is_empty()), "{:?}", app);
 
         let after = { let c = conn_arc.lock().await; snapshot(&c) };
@@ -17007,18 +17085,18 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         let episode_id = ep["episode_id"].as_str().unwrap().to_string();
 
-        let res = peer.call_tool(CallToolRequestParams::new("proof_pattern_record_application").with_arguments(serde_json::json!({
+        let res = peer.call_tool(CallToolRequestParams::new("proof_pattern").with_arguments(serde_json::json!({"action": {"type": "record_application",
             "pattern_id": "not-a-real-pattern-id", "episode_id": episode_id, "role": "suggested_hint",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(res.is_err(), "unknown pattern_id must be rejected: {:?}", res);
 
-        let pattern = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_search").with_arguments(serde_json::json!({
+        let pattern = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern").with_arguments(serde_json::json!({"action": {"type": "search",
             "query": "unfold",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let pattern_id = pattern["patterns"][0]["pattern_id"].as_str().unwrap().to_string();
-        let res = peer.call_tool(CallToolRequestParams::new("proof_pattern_record_application").with_arguments(serde_json::json!({
+        let res = peer.call_tool(CallToolRequestParams::new("proof_pattern").with_arguments(serde_json::json!({"action": {"type": "record_application",
             "pattern_id": pattern_id, "episode_id": "not-a-real-episode-id", "role": "suggested_hint",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(res.is_err(), "unknown episode_id must be rejected: {:?}", res);
     }
 
@@ -17047,13 +17125,13 @@ mod tests {
         let md = md_res.content[0].as_text().unwrap().text.clone();
         assert!(!md.contains("## Lessons applied"), "no Lessons section should appear with zero applications: {md}");
 
-        let pattern = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_search").with_arguments(serde_json::json!({
+        let pattern = tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern").with_arguments(serde_json::json!({"action": {"type": "search",
             "query": "mutual recursion",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let pattern_id = pattern["patterns"][0]["pattern_id"].as_str().unwrap().to_string();
-        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern_record_application").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("proof_pattern").with_arguments(serde_json::json!({"action": {"type": "record_application",
             "pattern_id": pattern_id, "episode_id": episode_id, "role": "suggested_hint", "notes": "tried mutual defs, hit unknown identifier",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let md_res2 = peer.call_tool(CallToolRequestParams::new("proof_export").with_arguments(serde_json::json!({
             "episode_id": episode_id,
