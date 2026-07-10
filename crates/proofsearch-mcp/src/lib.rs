@@ -3182,6 +3182,58 @@ pub struct ExpositionObserveArgs {
     pub dossier_id: Option<String>,
 }
 
+/// Issue #198 (epic #182, 16th consolidation after #183's `proof_session`
+/// pilot through #197's `task`): the single `exposition` tool's
+/// internally-tagged action enum, mirroring the established `episode_step`
+/// pattern (`#[serde(tag = "type", rename_all = "snake_case")]`). Each
+/// variant's fields are the corresponding pre-#198 flat
+/// `Exposition{Add,Observe}Args` struct's fields verbatim — those structs
+/// remain (unchanged) as what the `do_exposition_add`/`do_exposition_observe`
+/// handlers deserialize; this enum is only the MCP-layer dispatch shape.
+/// There are no shared wrapper fields: `add` inserts a new prose section
+/// while `observe` reads existing sections back by scope.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExpositionAction {
+    Add {
+        #[serde(default)]
+        problem_version_id: Option<String>,
+        #[serde(default)]
+        episode_id: Option<String>,
+        #[serde(default)]
+        obligation_id: Option<String>,
+        #[serde(default)]
+        verified_module_id: Option<String>,
+        #[serde(default)]
+        verified_lemma_id: Option<String>,
+        #[serde(default)]
+        dossier_id: Option<String>,
+        section_kind: String,
+        #[serde(default)]
+        prose_status: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+        content: String,
+        author: String,
+    },
+    Observe {
+        #[serde(default)]
+        problem_version_id: Option<String>,
+        #[serde(default)]
+        episode_id: Option<String>,
+        #[serde(default)]
+        dossier_id: Option<String>,
+    },
+}
+
+/// Issue #198: args for the single consolidated `exposition` tool. The
+/// entire payload lives on the internally-tagged `action` — see
+/// `ExpositionAction`'s doc for why there are no shared wrapper fields.
+#[derive(JsonSchema, Deserialize)]
+pub struct ExpositionArgs {
+    pub action: ExpositionAction,
+}
+
 // -- Semantic skeletons / module-aware fidelity (issue #6) ------------------
 //
 // A structured reading of what a statement/module/solution actually says
@@ -10672,6 +10724,112 @@ impl ChatDbMcp {
 
     // -----------------------------------------------------------------
 
+    /// Issue #198 (epic #182, 16th consolidation): the single `exposition`
+    /// tool's dispatcher. Deserializes `ExpositionArgs`, matches on the
+    /// internally-tagged action, and routes to the per-action handlers below
+    /// UNCHANGED (each extracted verbatim from the former inline match arm of
+    /// the same name). Same transitional double-serialization pattern as
+    /// every prior family in this epic.
+    async fn do_exposition(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ExpositionArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize exposition action: {}", e)))?;
+        match &args.action {
+            ExpositionAction::Add { .. } => self.do_exposition_add(inner).await,
+            ExpositionAction::Observe { .. } => self.do_exposition_observe(inner).await,
+        }
+    }
+
+    async fn do_exposition_add(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ExpositionAddArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("section_kind", &args.section_kind, EXPOSITION_SECTION_KINDS)?;
+        let prose_status = args.prose_status.clone().unwrap_or_else(|| "prose".to_string());
+        validate_one_of("prose_status", &prose_status, EXPOSITION_PROSE_STATUSES)?;
+        if args.content.trim().is_empty() {
+            return Err(mcp_invalid_params("content must be non-empty"));
+        }
+        if args.author.trim().is_empty() {
+            return Err(mcp_invalid_params("author must be non-empty"));
+        }
+
+        let content_hash = canonical_hash(&args.content).map_err(mcp_internal_error)?;
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        // Every link is optional; each present one must resolve. When a
+        // dossier is given, a linked node/obligation is still just checked
+        // for existence (exposition is not dossier-scoped the way nodes are).
+        if let Some(id) = &args.problem_version_id { require_row_exists(&tx, "problem_versions", id, "problem_version_id")?; }
+        if let Some(id) = &args.episode_id { require_row_exists(&tx, "episodes", id, "episode_id")?; }
+        if let Some(id) = &args.obligation_id { require_row_exists(&tx, "episode_obligations", id, "obligation_id")?; }
+        if let Some(id) = &args.verified_module_id { require_row_exists(&tx, "episode_verified_modules", id, "verified_module_id")?; }
+        if let Some(id) = &args.verified_lemma_id { require_row_exists(&tx, "episode_verified_lemmas", id, "verified_lemma_id")?; }
+        if let Some(id) = &args.dossier_id { require_row_exists(&tx, "research_dossiers", id, "dossier_id")?; }
+
+        let exposition_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO exposition_artifacts (
+                id, problem_version_id, episode_id, obligation_id, verified_module_id, verified_lemma_id,
+                dossier_id, section_kind, prose_status, title, content, content_hash, author, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+            rusqlite::params![
+                &exposition_id,
+                args.problem_version_id.as_deref(),
+                args.episode_id.as_deref(),
+                args.obligation_id.as_deref(),
+                args.verified_module_id.as_deref(),
+                args.verified_lemma_id.as_deref(),
+                args.dossier_id.as_deref(),
+                &args.section_kind,
+                &prose_status,
+                args.title.as_deref().map(str::trim),
+                args.content.trim(),
+                &content_hash,
+                args.author.trim(),
+                &now,
+            ],
+        ).map_err(rs)?;
+        let artifact = exposition_json(&tx, &exposition_id)?;
+        let dossier = match &args.dossier_id {
+            Some(dossier_id) => Some(research_dossier_observe_json(&tx, dossier_id)?),
+            None => None,
+        };
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "exposition_artifact_id": exposition_id,
+            "exposition_artifact": artifact,
+            "dossier": dossier,
+        })).unwrap())]))
+    }
+
+    async fn do_exposition_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ExpositionObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if args.problem_version_id.is_none() && args.episode_id.is_none() && args.dossier_id.is_none() {
+            return Err(mcp_invalid_params("exposition's observe action requires one of problem_version_id, episode_id, dossier_id"));
+        }
+        let conn = self.conn.lock().await;
+        let (col, id) = if let Some(id) = &args.episode_id {
+            ("episode_id", id)
+        } else if let Some(id) = &args.dossier_id {
+            ("dossier_id", id)
+        } else {
+            ("problem_version_id", args.problem_version_id.as_ref().unwrap())
+        };
+        let sql = format!("{} WHERE {} = ?1 ORDER BY created_at ASC, id ASC", EXPOSITION_SELECT, col);
+        let mut stmt = conn.prepare(&sql).map_err(rs)?;
+        let artifacts = stmt.query_map([id], map_exposition_row)
+            .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "exposition_artifacts": artifacts,
+            "policy": "Exposition is human-readable prose, explicitly separate from kernel-verified proof. prose_status (prose/reviewed_prose/formalized) marks epistemic weight; none of these is a proof, and exposition never changes certification, fidelity, or training eligibility.",
+        })).unwrap())]))
+    }
+
+    // -----------------------------------------------------------------
+
     /// Issue #188 (epic #182): the single `candidate_construction` tool's
     /// dispatcher. Deserializes `CandidateConstructionArgs`, matches on the
     /// internally-tagged action, and routes to the per-action handlers below
@@ -12705,8 +12863,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<TaskSubmissionArgs>("task_submission", "Issue #186: ONE tool for the entire challenge-submission family (issue #53) — submit, check, score, review, link, and settle contributions to a bounded challenge task. TRUST PROFILES DIFFER BY ACTION and the tool's overall profile is mixed: `create` records an UNTRUSTED payload, `validate` records at most a script/human-attested check result, `score` records an untrusted measurement, `review` records a role-separated HUMAN decision (human-attested, never verifier_backed), `link` records provenance to artifacts that keep their own trust, `update_status` is outcome bookkeeping — NO action ever confers proof authority, kernel verification, or training eligibility. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"task_id\":\"..\",\"submitted_by\":\"..\"} (+ optional content_json, notes — submit a contribution to a task. content_json is the UNTRUSTED payload; the submission starts 'submitted' and is never proof — no field can hold kernel evidence) | {\"type\":\"validate\",\"submission_id\":\"..\",\"passed\":true|false} (+ optional validation_protocol_id, notes — mark a submission validated (passed) or validation_failed, typically from an AUTOMATED check against its declared validation protocol. 'validated' means it passed its declared check, NEVER that a theorem is kernel-verified. A validation_failed submission stays visible) | {\"type\":\"score\",\"submission_id\":\"..\",\"scoring_rule\":\"..\",\"created_by\":\"..\"} (+ optional score_value/score_units, validation_method, reproducibility_notes, novelty_notes, cost_summary_id — record a score for a submission and advance it to 'scored' (never past a review outcome). A score is a measurement, never proof; a rank is not proof authority; a score never confers training eligibility) | {\"type\":\"review\",\"submission_id\":\"..\",\"reviewer_id\":\"..\",\"decision\":\"accepted\"|\"rejected\"|\"needs_changes\"|\"superseded\"} (+ optional notes — record a HUMAN review of a submission, the role-separated counterpart to the automated `validate` check. Human review is distinct from kernel verification — 'accepted' means accepted into the dossier as a contribution, never proved; reviewer_id is free text, not an authenticated principal. Rejected/superseded stay visible) | {\"type\":\"link\",\"submission_id\":\"..\",\"target_kind\":\"candidate_construction\"|\"empirical_result\"|\"verification_layer\",\"target_id\":\"..\"} (link a submission to an artifact in its dossier as PROVENANCE. Even linking to a kernel_verified layer never makes the submission a proof; the linked artifact keeps its own trust) | {\"type\":\"update_status\",\"submission_id\":\"..\",\"status\":\"accepted\"|\"rejected\"|\"superseded\"|\"merged_into_dossier\"} (set a submission's outcome without a full review row. Rejected/superseded stay visible; nothing here confers proof authority)"),
             make_tool::<DistilledStrategyAddArgs>("distilled_strategy_add", "Store a reusable distilled strategy artifact (strategy_cheat_sheet/failed_attempt_summary/heuristic_rule/counterexample_pattern/construction_recipe/formalization_hint/review_checklist). A distilled strategy is NOT a proof; trust_status tops out at human_reviewed"),
             make_tool::<PaperIngestArgs>("paper_ingest", "Issue #187: ONE tool for the entire paper/PDF ingestion family (issue #27) — ingest a source document, append extracted claim nodes, read it back, attach it to a dossier, mark review/trust statuses, and promote extracted nodes to real dossier artifacts. EVERY ACTION HANDLES UNTRUSTED EXTRACTION, NEVER PROOF: LLM-Driven Proof Search Environment does no OCR/LLM extraction — the host records its own extraction result, untrusted by construction; an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT an accepted assumption; no field can hold kernel evidence and no status confers proof, kernel verification, statement fidelity, or citation validation. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\",\"source_kind\":\"pdf\"|\"manuscript\"|\"proof_sketch\"|\"exposition\"|..,\"created_by\":\"..\"} (+ optional dossier_id, source_ref, source_content_hash, ingest_status, extraction_trust_status, notes — ingest a paper/manuscript/proof_sketch/exposition as a reviewable source document, optionally linked to a dossier. Records the host's UNTRUSTED extraction; ingestion is not proof) | {\"type\":\"extract_claims\",\"document_id\":\"..\",\"nodes\":[{\"node_kind\":\"main_theorem\",\"natural_language_text\":\"..\",\"source_span\":\"p.1 Thm 1\"},..]} (append extracted nodes (abstract/main_theorem/definition/proposition/lemma/proof_step/construction/remark/appendix_fact/reference/open_gap) with source_span, confidence, and status labels to an ingested document, all-or-nothing; every node REQUIRES a non-empty source_span tracing it back to the paper. Each node is UNTRUSTED EXTRACTION — an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT accepted) | {\"type\":\"observe\",\"document_id\":\"..\"} (read an ingested document with all its extracted nodes and their trust labels. Read-only; nothing here is proof or kernel evidence) | {\"type\":\"link_to_dossier\",\"document_id\":\"..\",\"dossier_id\":\"..\"} (attach an ingested document and its extracted nodes to a research dossier so they surface in research_dossier observe's ingestion bucket, separate from proof authority) | {\"type\":\"mark_review_status\",\"document_id\":\"..\"} (+ optional node_id; document-level ingest_status/extraction_trust_status, or node-level review_status/formalization_status/citation_status with node_id — rejected_extraction stays visible, never deleted. None of these statuses confers proof, kernel verification, statement fidelity, or citation validation) | {\"type\":\"link_node\",\"document_id\":\"..\",\"node_id\":\"..\",\"target_kind\":\"external_reference\"|\"external_theorem_claim\"|\"research_node\"|\"formalization_plan_item\",\"target_id\":\"..\"} (promote/attach an extracted node to a real dossier artifact — external_reference / external_theorem_claim set citation_status=citation_recorded, research_node / formalization_plan_item set formalization_status=formalization_target_linked. Records provenance and marks review_status=linked_to_dossier_artifact; the linked artifact keeps its own trust and the node NEVER gains proof/kernel authority)"),
-            make_tool::<ExpositionAddArgs>("exposition_add", "Add a human-readable mathematical exposition section (problem_summary/formalization_explanation/construction_intuition/key_lemmas/proof_strategy/verified_claim/unverified_bridges/reviewer_notes/next_formalization_targets) linked to a problem, episode, obligation, verified module, verified lemma, and/or dossier. prose_status (prose/reviewed_prose/formalized) marks epistemic weight — prose is never proof and never changes certification or training eligibility"),
-            make_tool::<ExpositionObserveArgs>("exposition_observe", "List exposition artifacts for a problem_version, episode, or dossier. Read-only prose, explicitly separate from kernel-verified proof"),
+            make_tool::<ExpositionArgs>("exposition", "Issue #198: ONE tool for the exposition-artifact family (issue #7), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, obligation_id, verified_module_id, verified_lemma_id, dossier_id, prose_status, title) records a human-readable mathematical exposition section (section_kind: problem_summary/formalization_explanation/construction_intuition/key_lemmas/proof_strategy/verified_claim/unverified_bridges/reviewer_notes/next_formalization_targets) linked to a problem, episode, obligation, verified module, verified lemma, and/or dossier — prose_status (prose/reviewed_prose/formalized) marks epistemic weight: prose is never proof and never changes certification or training eligibility; `observe` (+ one of problem_version_id, episode_id, dossier_id) lists exposition artifacts for that scope — read-only prose, explicitly separate from kernel-verified proof"),
             make_tool::<SemanticSkeletonAddArgs>("semantic_skeleton_add", "Attach a semantic statement skeleton / module-aware fidelity note (issue #6): a structured reading of a root statement, verified module, or source-aligned solution — quantifiers, hypotheses, conclusion, helper definitions, construction/final-answer map, back-translation, and fidelity risk_flags — scoped by review_scope (root_statement_only/module_artifact/source_aligned_solution/computational_check_only/structural_proof). All links optional. semantic_fingerprint_hash is server-computed. Metadata only: never marks anything proved, never sets fidelity_status, never substitutes for problem_submit_fidelity_review"),
             make_tool::<SemanticSkeletonObserveArgs>("semantic_skeleton_observe", "Append one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive, optional risk_flags) to a semantic skeleton's review_notes history and read it back. Never changes proof/fidelity/budget/benchmark status; 'confirms_faithful' is not the root fidelity gate"),
             make_tool::<ExpertReviewAddArgs>("expert_review_add", "Record one role-separated expert-review ledger entry (proposer/construction_searcher/formalizer/prover/reviewer/domain_expert/refuter/editor/librarian) against a polymorphic target (source_problem/formal_statement/construction_artifact/module_artifact/external_citation/asymptotic_extraction/exposition/full_dossier) with a decision, confidence, expertise tags, requested changes, and risk flags. ADDITIVE metadata only: a pure insert that never marks anything proved and never changes proof, certification, obligation, budget, or benchmark state. reviewer_id is free text, not an authenticated principal; a human decision stays distinct from Lean kernel verification. dossier_id is optional"),
@@ -12865,8 +13022,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 44,
-                        "total_tool_count": 44,
+                        "classified_tool_count": 43,
+                        "total_tool_count": 43,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -13101,24 +13258,14 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none — an ingested document and its extracted nodes are candidates that must pass the normal Lean/fidelity/citation/review paths to gain any authority; no action can mark anything kernel_verified/certified/proved/statement_fidelity_approved/benchmark_certified/training_eligible",
                                 "required_run_mode": "any"
                             },
-                            "exposition_add": {
-                                "side_effect": "mutating — inserts one exposition_artifacts row, optionally linked to a problem_version/episode/obligation/verified_module/verified_lemma/dossier that must already exist; content_hash is server-computed via canonical_hash, never client-supplied",
-                                "trust_level": "untrusted_input — human-readable mathematical prose; prose_status (prose/reviewed_prose/formalized) is a self-declared epistemic label, NEVER kernel verification. 'formalized' means a linked formal artifact exists, not that the prose itself was checked. The tool writes only exposition_artifacts — it never touches fidelity_status, episode outcome, obligation status, canonical promotion, or training eligibility",
-                                "cost_surface": "none",
+                            "exposition": {
+                                "side_effect": "mutating for add (issue #198: one tool consolidating the former exposition_add / exposition_observe tools; per-action semantics unchanged) — inserts one exposition_artifacts row, optionally linked to a problem_version/episode/obligation/verified_module/verified_lemma/dossier that must already exist; content_hash is server-computed via canonical_hash, never client-supplied; read_only for observe — lists exposition_artifacts rows for a problem_version, episode, or dossier",
+                                "trust_level": "untrusted_input for both actions, never proof authority — add records human-readable mathematical prose; prose_status (prose/reviewed_prose/formalized) is a self-declared epistemic label, NEVER kernel verification. 'formalized' means a linked formal artifact exists, not that the prose itself was checked. The tool writes only exposition_artifacts — it never touches fidelity_status, episode outcome, obligation status, canonical promotion, or training eligibility; observe echoes prose back with its self-declared prose_status — reading it never confers proof authority",
+                                "cost_surface": "none for either action",
                                 "benchmark_safety": "safe_public_output — prose commentary, rendered in proof_export under an explicit 'Exposition (prose — not part of the verified proof)' heading, never inside the proof tree or verified-module source",
-                                "replayability": "deterministic",
+                                "replayability": "deterministic for both actions",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none — an unreviewed prose bridge cannot change certification or training eligibility; those are decided by fidelity_status, which this tool never writes",
-                                "required_run_mode": "any"
-                            },
-                            "exposition_observe": {
-                                "side_effect": "read_only — lists exposition_artifacts rows for a problem_version, episode, or dossier",
-                                "trust_level": "untrusted_input echoed back — surfaces prose with its self-declared prose_status; reading it never confers proof authority",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
                                 "required_run_mode": "any"
                             },
                             "semantic_skeleton_add": {
@@ -14338,91 +14485,7 @@ impl ServerHandler for ChatDbMcp {
                 })).unwrap())]))
             }
             "paper_ingest" => self.do_paper_ingest(args_val).await,
-            "exposition_add" => {
-                let args: ExpositionAddArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                validate_one_of("section_kind", &args.section_kind, EXPOSITION_SECTION_KINDS)?;
-                let prose_status = args.prose_status.clone().unwrap_or_else(|| "prose".to_string());
-                validate_one_of("prose_status", &prose_status, EXPOSITION_PROSE_STATUSES)?;
-                if args.content.trim().is_empty() {
-                    return Err(mcp_invalid_params("content must be non-empty"));
-                }
-                if args.author.trim().is_empty() {
-                    return Err(mcp_invalid_params("author must be non-empty"));
-                }
-
-                let content_hash = canonical_hash(&args.content).map_err(mcp_internal_error)?;
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                // Every link is optional; each present one must resolve. When a
-                // dossier is given, a linked node/obligation is still just checked
-                // for existence (exposition is not dossier-scoped the way nodes are).
-                if let Some(id) = &args.problem_version_id { require_row_exists(&tx, "problem_versions", id, "problem_version_id")?; }
-                if let Some(id) = &args.episode_id { require_row_exists(&tx, "episodes", id, "episode_id")?; }
-                if let Some(id) = &args.obligation_id { require_row_exists(&tx, "episode_obligations", id, "obligation_id")?; }
-                if let Some(id) = &args.verified_module_id { require_row_exists(&tx, "episode_verified_modules", id, "verified_module_id")?; }
-                if let Some(id) = &args.verified_lemma_id { require_row_exists(&tx, "episode_verified_lemmas", id, "verified_lemma_id")?; }
-                if let Some(id) = &args.dossier_id { require_row_exists(&tx, "research_dossiers", id, "dossier_id")?; }
-
-                let exposition_id = Uuid::new_v4().to_string();
-                let now = Utc::now().to_rfc3339();
-                tx.execute(
-                    "INSERT INTO exposition_artifacts (
-                        id, problem_version_id, episode_id, obligation_id, verified_module_id, verified_lemma_id,
-                        dossier_id, section_kind, prose_status, title, content, content_hash, author, created_at, updated_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
-                    rusqlite::params![
-                        &exposition_id,
-                        args.problem_version_id.as_deref(),
-                        args.episode_id.as_deref(),
-                        args.obligation_id.as_deref(),
-                        args.verified_module_id.as_deref(),
-                        args.verified_lemma_id.as_deref(),
-                        args.dossier_id.as_deref(),
-                        &args.section_kind,
-                        &prose_status,
-                        args.title.as_deref().map(str::trim),
-                        args.content.trim(),
-                        &content_hash,
-                        args.author.trim(),
-                        &now,
-                    ],
-                ).map_err(rs)?;
-                let artifact = exposition_json(&tx, &exposition_id)?;
-                let dossier = match &args.dossier_id {
-                    Some(dossier_id) => Some(research_dossier_observe_json(&tx, dossier_id)?),
-                    None => None,
-                };
-                tx.commit().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "exposition_artifact_id": exposition_id,
-                    "exposition_artifact": artifact,
-                    "dossier": dossier,
-                })).unwrap())]))
-            }
-            "exposition_observe" => {
-                let args: ExpositionObserveArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                if args.problem_version_id.is_none() && args.episode_id.is_none() && args.dossier_id.is_none() {
-                    return Err(mcp_invalid_params("exposition_observe requires one of problem_version_id, episode_id, dossier_id"));
-                }
-                let conn = self.conn.lock().await;
-                let (col, id) = if let Some(id) = &args.episode_id {
-                    ("episode_id", id)
-                } else if let Some(id) = &args.dossier_id {
-                    ("dossier_id", id)
-                } else {
-                    ("problem_version_id", args.problem_version_id.as_ref().unwrap())
-                };
-                let sql = format!("{} WHERE {} = ?1 ORDER BY created_at ASC, id ASC", EXPOSITION_SELECT, col);
-                let mut stmt = conn.prepare(&sql).map_err(rs)?;
-                let artifacts = stmt.query_map([id], map_exposition_row)
-                    .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "exposition_artifacts": artifacts,
-                    "policy": "Exposition is human-readable prose, explicitly separate from kernel-verified proof. prose_status (prose/reviewed_prose/formalized) marks epistemic weight; none of these is a proof, and exposition never changes certification, fidelity, or training eligibility.",
-                })).unwrap())]))
-            }
+            "exposition" => self.do_exposition(args_val).await,
             "semantic_skeleton_add" => {
                 let args: SemanticSkeletonAddArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -15053,7 +15116,9 @@ mod tests {
         // #186) is a separate, already-consolidated tool and stays
         // untouched — a task and a task_submission are genuinely different
         // entities) = 44.
-        assert_eq!(list_res.tools.len(), 44);
+        // - 1 (issue #198: the two flat exposition_add/exposition_observe
+        // tools consolidated into the ONE `exposition` tool) = 43.
+        assert_eq!(list_res.tools.len(), 43);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -19018,36 +19083,36 @@ mod tests {
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
 
         // prose (default), reviewed_prose, and formalized are all distinct epistemic labels — none is proof.
-        let prose = tool_json(&peer.call_tool(CallToolRequestParams::new("exposition_add").with_arguments(serde_json::json!({
+        let prose = tool_json(&peer.call_tool(CallToolRequestParams::new("exposition").with_arguments(serde_json::json!({"action": {"type": "add",
             "dossier_id": dossier_id,
             "section_kind": "construction_intuition",
             "content": "The construction packs points on a shifted grid.",
             "author": "author-1",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(prose["exposition_artifact"]["prose_status"], "prose", "{:?}", prose);
         assert_eq!(prose["exposition_artifact"]["is_kernel_verified"], false, "{:?}", prose);
         assert_eq!(prose["exposition_artifact"]["is_proof"], false, "{:?}", prose);
         assert!(prose["exposition_artifact"]["content_hash"].as_str().is_some_and(|s| !s.is_empty()), "{:?}", prose);
 
-        tool_json(&peer.call_tool(CallToolRequestParams::new("exposition_add").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("exposition").with_arguments(serde_json::json!({"action": {"type": "add",
             "dossier_id": dossier_id,
             "section_kind": "verified_claim",
             "prose_status": "formalized",
             "content": "This claim corresponds to the kernel-verified root lemma.",
             "author": "author-1",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         // Even 'formalized' prose is not itself kernel verification.
-        let bad_status = peer.call_tool(CallToolRequestParams::new("exposition_add").with_arguments(serde_json::json!({
+        let bad_status = peer.call_tool(CallToolRequestParams::new("exposition").with_arguments(serde_json::json!({"action": {"type": "add",
             "dossier_id": dossier_id,
             "section_kind": "verified_claim",
             "prose_status": "kernel_verified",
             "content": "x",
             "author": "author-1",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_status.is_err(), "prose_status must not accept a kernel-verification-sounding value");
-        let bad_kind = peer.call_tool(CallToolRequestParams::new("exposition_add").with_arguments(serde_json::json!({
+        let bad_kind = peer.call_tool(CallToolRequestParams::new("exposition").with_arguments(serde_json::json!({"action": {"type": "add",
             "dossier_id": dossier_id, "section_kind": "totally_made_up", "content": "x", "author": "a",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_kind.is_err(), "unknown section_kind must be rejected");
 
         // Dossier observe surfaces exposition in its OWN bucket, separate from nodes/citations/
@@ -19062,15 +19127,15 @@ mod tests {
         assert!(observed["nodes"].as_array().unwrap().is_empty(), "{:?}", observed);
         assert!(observed["external_theorem_claims"].as_array().unwrap().is_empty(), "{:?}", observed);
 
-        // exposition_observe reads the same rows back by dossier.
-        let listed = tool_json(&peer.call_tool(CallToolRequestParams::new("exposition_observe").with_arguments(serde_json::json!({
+        // exposition observe action reads the same rows back by dossier.
+        let listed = tool_json(&peer.call_tool(CallToolRequestParams::new("exposition").with_arguments(serde_json::json!({"action": {"type": "observe",
             "dossier_id": dossier_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(listed["exposition_artifacts"].as_array().unwrap().len(), 2, "{:?}", listed);
 
-        // exposition_observe requires at least one scope.
-        let no_scope = peer.call_tool(CallToolRequestParams::new("exposition_observe").with_arguments(serde_json::json!({}).as_object().unwrap().clone())).await;
-        assert!(no_scope.is_err(), "exposition_observe with no scope must be rejected");
+        // exposition observe action requires at least one scope.
+        let no_scope = peer.call_tool(CallToolRequestParams::new("exposition").with_arguments(serde_json::json!({"action": {"type": "observe"}}).as_object().unwrap().clone())).await;
+        assert!(no_scope.is_err(), "exposition observe with no scope must be rejected");
     }
 
     #[tokio::test]
@@ -19117,14 +19182,14 @@ mod tests {
         let training_quarantined_before = md_before.contains("QUARANTINED");
 
         // Add an explicitly-unverified prose bridge linked to the episode.
-        tool_json(&peer.call_tool(CallToolRequestParams::new("exposition_add").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("exposition").with_arguments(serde_json::json!({"action": {"type": "add",
             "episode_id": episode_id,
             "problem_version_id": pv_id,
             "section_kind": "unverified_bridges",
             "prose_status": "prose",
             "content": "The final-answer extraction from the formal root to the source claim is argued only in prose here.",
             "author": "author-1",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let (fidelity_after, outcome_after) = read_state(conn_arc.clone(), pv_id.clone(), episode_id.clone()).await;
         let md_after = export_md(peer.clone(), episode_id.clone()).await;
