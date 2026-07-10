@@ -3409,6 +3409,62 @@ pub struct ExpertReviewObserveArgs {
     pub include_revoked: bool,
 }
 
+/// Issue #200 (epic #182, 18th and final consolidation after #199's
+/// `semantic_skeleton`): the single `expert_review` tool's internally-tagged
+/// action enum, mirroring the established `episode_step` pattern
+/// (`#[serde(tag = "type", rename_all = "snake_case")]`). Each variant's
+/// fields are the corresponding pre-#200 flat
+/// `ExpertReview{Add,Observe}Args` struct's fields verbatim — those structs
+/// remain (unchanged) as what the
+/// `do_expert_review_add`/`do_expert_review_observe` handlers deserialize;
+/// this enum is only the MCP-layer dispatch shape. There are no shared
+/// wrapper fields: `add` inserts one role-separated expert-review ledger
+/// entry against a polymorphic target while `observe` reads ledger entries
+/// back, read-only.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExpertReviewAction {
+    Add {
+        #[serde(default)]
+        dossier_id: Option<String>,
+        reviewer_id: String,
+        reviewer_role: String,
+        #[serde(default)]
+        expertise_tags: Option<Vec<String>>,
+        review_target_kind: String,
+        review_target_id: String,
+        decision: String,
+        #[serde(default)]
+        confidence: Option<String>,
+        #[serde(default)]
+        notes: Option<String>,
+        #[serde(default)]
+        requested_changes_json: Option<String>,
+        #[serde(default)]
+        risk_flags_json: Option<String>,
+    },
+    Observe {
+        #[serde(default)]
+        dossier_id: Option<String>,
+        #[serde(default)]
+        review_target_kind: Option<String>,
+        #[serde(default)]
+        review_target_id: Option<String>,
+        #[serde(default)]
+        reviewer_role: Option<String>,
+        #[serde(default)]
+        include_revoked: bool,
+    },
+}
+
+/// Issue #200: args for the single consolidated `expert_review` tool. The
+/// entire payload lives on the internally-tagged `action` — see
+/// `ExpertReviewAction`'s doc for why there are no shared wrapper fields.
+#[derive(JsonSchema, Deserialize)]
+pub struct ExpertReviewArgs {
+    pub action: ExpertReviewAction,
+}
+
 // -- Mathlib librarian (issue #25) -----------------------------------------
 
 #[derive(JsonSchema, Deserialize)]
@@ -11087,6 +11143,132 @@ impl ChatDbMcp {
 
     // -----------------------------------------------------------------
 
+    /// Issue #200 (epic #182, 18th and final consolidation): the single
+    /// `expert_review` tool's dispatcher. Deserializes `ExpertReviewArgs`,
+    /// matches on the internally-tagged action, and routes to the per-action
+    /// handlers below UNCHANGED (each extracted verbatim from the former
+    /// inline match arm of the same name). Same transitional
+    /// double-serialization pattern as every prior family in this epic.
+    async fn do_expert_review(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ExpertReviewArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize expert_review action: {}", e)))?;
+        match &args.action {
+            ExpertReviewAction::Add { .. } => self.do_expert_review_add(inner).await,
+            ExpertReviewAction::Observe { .. } => self.do_expert_review_observe(inner).await,
+        }
+    }
+
+    async fn do_expert_review_add(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ExpertReviewAddArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("reviewer_role", &args.reviewer_role, EXPERT_REVIEW_ROLES)?;
+        validate_one_of("review_target_kind", &args.review_target_kind, EXPERT_REVIEW_TARGET_KINDS)?;
+        validate_one_of("decision", &args.decision, EXPERT_REVIEW_DECISIONS)?;
+        if let Some(c) = &args.confidence {
+            validate_one_of("confidence", c, EXPERT_REVIEW_CONFIDENCE)?;
+        }
+        if args.reviewer_id.trim().is_empty() {
+            return Err(mcp_invalid_params("reviewer_id must be non-empty"));
+        }
+        let expertise_tags_json = serde_json::to_string(&args.expertise_tags.clone().unwrap_or_default()).unwrap();
+        let requested_changes_json = args.requested_changes_json.clone().unwrap_or_else(|| "[]".to_string());
+        serde_json::from_str::<serde_json::Value>(&requested_changes_json)
+            .map_err(|e| mcp_invalid_params(format!("requested_changes_json must be valid JSON: {}", e)))?;
+        let risk_flags_json = args.risk_flags_json.clone().unwrap_or_else(|| "[]".to_string());
+        serde_json::from_str::<serde_json::Value>(&risk_flags_json)
+            .map_err(|e| mcp_invalid_params(format!("risk_flags_json must be valid JSON: {}", e)))?;
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        if let Some(dossier_id) = &args.dossier_id {
+            require_row_exists(&tx, "research_dossiers", dossier_id, "dossier_id")?;
+        }
+        ensure_review_target_exists(&tx, &args.dossier_id, &args.review_target_kind, &args.review_target_id)?;
+
+        // A PURE INSERT — deliberately no cross-table UPDATE (contrast
+        // citation_review_add, which updates external_theorem_claims). An
+        // expert review can never mark anything proved or change fidelity,
+        // certification, budget, or benchmark state.
+        let review_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO expert_reviews (
+                id, dossier_id, reviewer_id, reviewer_role, expertise_tags_json, review_target_kind,
+                review_target_id, decision, confidence, notes, requested_changes_json, risk_flags_json, created_at, revoked_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL)",
+            rusqlite::params![
+                &review_id,
+                args.dossier_id.as_deref(),
+                args.reviewer_id.trim(),
+                &args.reviewer_role,
+                &expertise_tags_json,
+                &args.review_target_kind,
+                &args.review_target_id,
+                &args.decision,
+                args.confidence.as_deref(),
+                args.notes.as_deref(),
+                &requested_changes_json,
+                &risk_flags_json,
+                &now,
+            ],
+        ).map_err(rs)?;
+        let review = {
+            let sql = format!("{} WHERE id = ?1", EXPERT_REVIEW_SELECT);
+            tx.query_row(&sql, [&review_id], map_expert_review_row).map_err(rs)?
+        };
+        let dossier = match &args.dossier_id {
+            Some(dossier_id) => Some(research_dossier_observe_json(&tx, dossier_id)?),
+            None => None,
+        };
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "expert_review_id": review_id,
+            "expert_review": review,
+            "dossier": dossier,
+        })).unwrap())]))
+    }
+
+    async fn do_expert_review_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ExpertReviewObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if args.review_target_kind.is_some() != args.review_target_id.is_some() {
+            return Err(mcp_invalid_params("review_target_kind and review_target_id must be provided together"));
+        }
+        if args.dossier_id.is_none() && args.review_target_kind.is_none() && args.reviewer_role.is_none() {
+            return Err(mcp_invalid_params("expert_review's observe action requires at least one of dossier_id, (review_target_kind + review_target_id), reviewer_role"));
+        }
+        if let Some(kind) = &args.review_target_kind {
+            validate_one_of("review_target_kind", kind, EXPERT_REVIEW_TARGET_KINDS)?;
+        }
+        if let Some(role) = &args.reviewer_role {
+            validate_one_of("reviewer_role", role, EXPERT_REVIEW_ROLES)?;
+        }
+
+        let mut clauses: Vec<String> = Vec::new();
+        let mut params: Vec<String> = Vec::new();
+        if let Some(id) = &args.dossier_id { clauses.push(format!("dossier_id = ?{}", params.len() + 1)); params.push(id.clone()); }
+        if let Some(kind) = &args.review_target_kind { clauses.push(format!("review_target_kind = ?{}", params.len() + 1)); params.push(kind.clone()); }
+        if let Some(id) = &args.review_target_id { clauses.push(format!("review_target_id = ?{}", params.len() + 1)); params.push(id.clone()); }
+        if let Some(role) = &args.reviewer_role { clauses.push(format!("reviewer_role = ?{}", params.len() + 1)); params.push(role.clone()); }
+        if !args.include_revoked { clauses.push("revoked_at IS NULL".to_string()); }
+        let where_clause = if clauses.is_empty() { String::new() } else { format!(" WHERE {}", clauses.join(" AND ")) };
+        let sql = format!("{}{} ORDER BY created_at ASC, id ASC", EXPERT_REVIEW_SELECT, where_clause);
+
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(&sql).map_err(rs)?;
+        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
+        let reviews = stmt.query_map(param_refs.as_slice(), map_expert_review_row)
+            .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "expert_reviews": reviews,
+            "policy": "Expert reviews are a human-attested, role-separated ledger. reviewer_id is not an authenticated principal; a decision is a recorded opinion, never kernel verification and never a change to proof, certification, budget, or benchmark state.",
+        })).unwrap())]))
+    }
+
+    // -----------------------------------------------------------------
+
     /// Issue #188 (epic #182): the single `candidate_construction` tool's
     /// dispatcher. Deserializes `CandidateConstructionArgs`, matches on the
     /// internally-tagged action, and routes to the per-action handlers below
@@ -13122,8 +13304,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<PaperIngestArgs>("paper_ingest", "Issue #187: ONE tool for the entire paper/PDF ingestion family (issue #27) — ingest a source document, append extracted claim nodes, read it back, attach it to a dossier, mark review/trust statuses, and promote extracted nodes to real dossier artifacts. EVERY ACTION HANDLES UNTRUSTED EXTRACTION, NEVER PROOF: LLM-Driven Proof Search Environment does no OCR/LLM extraction — the host records its own extraction result, untrusted by construction; an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT an accepted assumption; no field can hold kernel evidence and no status confers proof, kernel verification, statement fidelity, or citation validation. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\",\"source_kind\":\"pdf\"|\"manuscript\"|\"proof_sketch\"|\"exposition\"|..,\"created_by\":\"..\"} (+ optional dossier_id, source_ref, source_content_hash, ingest_status, extraction_trust_status, notes — ingest a paper/manuscript/proof_sketch/exposition as a reviewable source document, optionally linked to a dossier. Records the host's UNTRUSTED extraction; ingestion is not proof) | {\"type\":\"extract_claims\",\"document_id\":\"..\",\"nodes\":[{\"node_kind\":\"main_theorem\",\"natural_language_text\":\"..\",\"source_span\":\"p.1 Thm 1\"},..]} (append extracted nodes (abstract/main_theorem/definition/proposition/lemma/proof_step/construction/remark/appendix_fact/reference/open_gap) with source_span, confidence, and status labels to an ingested document, all-or-nothing; every node REQUIRES a non-empty source_span tracing it back to the paper. Each node is UNTRUSTED EXTRACTION — an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT accepted) | {\"type\":\"observe\",\"document_id\":\"..\"} (read an ingested document with all its extracted nodes and their trust labels. Read-only; nothing here is proof or kernel evidence) | {\"type\":\"link_to_dossier\",\"document_id\":\"..\",\"dossier_id\":\"..\"} (attach an ingested document and its extracted nodes to a research dossier so they surface in research_dossier observe's ingestion bucket, separate from proof authority) | {\"type\":\"mark_review_status\",\"document_id\":\"..\"} (+ optional node_id; document-level ingest_status/extraction_trust_status, or node-level review_status/formalization_status/citation_status with node_id — rejected_extraction stays visible, never deleted. None of these statuses confers proof, kernel verification, statement fidelity, or citation validation) | {\"type\":\"link_node\",\"document_id\":\"..\",\"node_id\":\"..\",\"target_kind\":\"external_reference\"|\"external_theorem_claim\"|\"research_node\"|\"formalization_plan_item\",\"target_id\":\"..\"} (promote/attach an extracted node to a real dossier artifact — external_reference / external_theorem_claim set citation_status=citation_recorded, research_node / formalization_plan_item set formalization_status=formalization_target_linked. Records provenance and marks review_status=linked_to_dossier_artifact; the linked artifact keeps its own trust and the node NEVER gains proof/kernel authority)"),
             make_tool::<ExpositionArgs>("exposition", "Issue #198: ONE tool for the exposition-artifact family (issue #7), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, obligation_id, verified_module_id, verified_lemma_id, dossier_id, prose_status, title) records a human-readable mathematical exposition section (section_kind: problem_summary/formalization_explanation/construction_intuition/key_lemmas/proof_strategy/verified_claim/unverified_bridges/reviewer_notes/next_formalization_targets) linked to a problem, episode, obligation, verified module, verified lemma, and/or dossier — prose_status (prose/reviewed_prose/formalized) marks epistemic weight: prose is never proof and never changes certification or training eligibility; `observe` (+ one of problem_version_id, episode_id, dossier_id) lists exposition artifacts for that scope — read-only prose, explicitly separate from kernel-verified proof"),
             make_tool::<SemanticSkeletonArgs>("semantic_skeleton", "Issue #199: ONE tool for the semantic-skeleton / module-aware-fidelity family (issue #6), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, root_obligation_id, module_id, module_item_id, verified_lemma_id, dossier_id, node_id, root_fidelity_review_id — all links optional) attaches a semantic statement skeleton / module-aware fidelity note: a structured reading of a root statement, verified module, or source-aligned solution — quantifiers, hypotheses, conclusion, helper definitions, construction/final-answer map, back-translation, and fidelity risk_flags — scoped by review_scope (root_statement_only/module_artifact/source_aligned_solution/computational_check_only/structural_proof). semantic_fingerprint_hash is server-computed. Metadata only: never marks anything proved, never sets fidelity_status, never substitutes for problem_submit_fidelity_review; `observe` (semantic_skeleton_id, observation, finding, + optional risk_flags_json, details_json, observed_by) appends one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive, optional risk_flags) to a semantic skeleton's review_notes history and reads it back. Never changes proof/fidelity/budget/benchmark status; 'confirms_faithful' is not the root fidelity gate"),
-            make_tool::<ExpertReviewAddArgs>("expert_review_add", "Record one role-separated expert-review ledger entry (proposer/construction_searcher/formalizer/prover/reviewer/domain_expert/refuter/editor/librarian) against a polymorphic target (source_problem/formal_statement/construction_artifact/module_artifact/external_citation/asymptotic_extraction/exposition/full_dossier) with a decision, confidence, expertise tags, requested changes, and risk flags. ADDITIVE metadata only: a pure insert that never marks anything proved and never changes proof, certification, obligation, budget, or benchmark state. reviewer_id is free text, not an authenticated principal; a human decision stays distinct from Lean kernel verification. dossier_id is optional"),
-            make_tool::<ExpertReviewObserveArgs>("expert_review_observe", "Read expert-review ledger entries, filtered by dossier, polymorphic target (kind+id together), and/or reviewer role. Revoked reviews are omitted unless include_revoked=true. Read-only"),
+            make_tool::<ExpertReviewArgs>("expert_review", "Issue #200: ONE tool for the expert-review ledger family (issue #14), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (dossier_id optional, reviewer_id, reviewer_role: proposer/construction_searcher/formalizer/prover/reviewer/domain_expert/refuter/editor/librarian, review_target_kind: source_problem/formal_statement/construction_artifact/module_artifact/external_citation/asymptotic_extraction/exposition/full_dossier, review_target_id, decision: approved/approved_with_changes/needs_changes/rejected/abstain, + optional expertise_tags, confidence: low/medium/high, notes, requested_changes_json, risk_flags_json) records one role-separated expert-review ledger entry against a polymorphic target. ADDITIVE metadata only: a pure insert that never marks anything proved and never changes proof, certification, obligation, budget, or benchmark state. reviewer_id is free text, not an authenticated principal; a human decision stays distinct from Lean kernel verification; `observe` (+ optional dossier_id, review_target_kind + review_target_id together, reviewer_role, include_revoked) reads expert-review ledger entries back, filtered by dossier, polymorphic target (kind+id together), and/or reviewer role. Revoked reviews are omitted unless include_revoked=true. Read-only. Across both actions: expert reviews are a role-separated ledger of who reviewed what, not a substitute for kernel verification"),
             make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
             make_tool::<MathlibSearchLocalArtifactsArgs>("mathlib_search_local_artifacts", "Search THIS LLM-Driven Proof Search Environment instance's own previously-verified theorem/def names for a substring match — a local usage_example precedent, not a Mathlib-library result"),
             make_tool::<RunEnvelopeArgs>("run_envelope", "Issue #190: ONE tool for the entire run-envelope family (issues #34/#38/#46) — create, correct, and read back who/what produced a set of episodes: host, model, mode (development/evaluation/benchmark/private_audit/public_report), and host-side cost accounting LLM-Driven Proof Search Environment itself cannot observe. Purely descriptive metadata; NO action ever affects proof status. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"mode\":\"development\"|\"evaluation\"|\"benchmark\"|\"private_audit\"|\"public_report\"} (+ optional host_name, host_model, benchmark_suite_name, host_side_cost_micros, host_cost_confidence, notes — creates the envelope and, issue #46, an origin cost observation so the append-only history has a defined head from creation) | {\"type\":\"update\",\"run_envelope_id\":\"..\"} (+ optional host_side_cost_micros, host_cost_confidence, notes — update a run envelope's host-side cost fields or notes after the fact; APPEND-ONLY under the hood (issue #46): a cost correction appends an immutable observation rather than overwriting, so the prior value stays queryable via the observe action's cost_observations) | {\"type\":\"cost_observation_add\",\"run_envelope_id\":\"..\"} (+ optional host_side_cost_micros, host_cost_confidence, source, notes — append an auditable, append-only host-side cost observation (issue #46); never overwrites a prior observation — the previous value stays queryable; sets the envelope's current selected cost figure while preserving the full supersedes chain) | {\"type\":\"attach_episode\",\"run_envelope_id\":\"..\",\"episode_id\":\"..\"} (+ optional allow_dev_attested — tag an existing episode with a run envelope, metadata only, never changes the episode's outcome/state; mode-enforcement policy: unconditionally rejects attaching an 'attested'/unsafe_dev_attestation episode to a benchmark/evaluation/public_report-mode envelope with no override, 'development' is always allowed, and 'private_audit' requires allow_dev_attested=true) | {\"type\":\"observe\",\"run_envelope_id\":\"..\"} (read back a run envelope, every episode tagged with it, and its full append-only host-side cost observation history)"),
@@ -13278,8 +13459,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 42,
-                        "total_tool_count": 42,
+                        "classified_tool_count": 41,
+                        "total_tool_count": 41,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -13534,24 +13715,14 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none — a skeleton is descriptive metadata; it cannot set fidelity_status, mark an obligation proved, or change an episode outcome",
                                 "required_run_mode": "any"
                             },
-                            "expert_review_add": {
-                                "side_effect": "mutating — inserts exactly one expert_reviews row and NOTHING else. Unlike citation_review_add it updates no other table: it never touches claim_status, node trust_status, verification_layers, episode outcome, obligation status, certification, budget, or benchmark rows",
-                                "trust_level": "human-attested, not verifier_backed — reviewer_id is caller-supplied free text, not an authenticated principal; reviewer_role/expertise_tags are self-declared. An 'approved' decision by a 'domain_expert' means a person asserts they checked the target, not that Lean verified it. The table has no column able to carry kernel evidence",
-                                "cost_surface": "none",
+                            "expert_review": {
+                                "side_effect": "mutating for add (issue #200, epic #182's 18th and final consolidation: one tool consolidating the former expert_review_add / expert_review_observe tools; per-action semantics unchanged) — inserts exactly one expert_reviews row and NOTHING else; unlike citation_review_add it updates no other table: it never touches claim_status, node trust_status, verification_layers, episode outcome, obligation status, certification, budget, or benchmark rows. read_only for observe — selects expert_reviews rows by optional dossier/target/role filters, no write",
+                                "trust_level": "human-attested, not verifier_backed, for both actions — expert reviews are a role-separated ledger of who reviewed what, not a substitute for kernel verification. add: reviewer_id is caller-supplied free text, not an authenticated principal; reviewer_role/expertise_tags are self-declared. An 'approved' decision by a 'domain_expert' means a person asserts they checked the target, not that Lean verified it. The table has no column able to carry kernel evidence. observe: untrusted_input echoed back — surfaces self-declared review metadata; reading it never confers proof authority",
+                                "cost_surface": "none for either action",
                                 "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
+                                "replayability": "deterministic for both actions",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none — cannot promote any artifact to kernel_verified or alter certification; a 'rejected' review is a recorded opinion, and enforcing it against certification would be a separate future read-side policy, not something this insert performs",
-                                "required_run_mode": "any"
-                            },
-                            "expert_review_observe": {
-                                "side_effect": "read_only — selects expert_reviews rows by optional dossier/target/role filters",
-                                "trust_level": "untrusted_input echoed back — surfaces self-declared review metadata; reading it never confers proof authority",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
                                 "required_run_mode": "any"
                             },
                             "mathlib_search_declarations": {
@@ -14733,111 +14904,7 @@ impl ServerHandler for ChatDbMcp {
             "paper_ingest" => self.do_paper_ingest(args_val).await,
             "exposition" => self.do_exposition(args_val).await,
             "semantic_skeleton" => self.do_semantic_skeleton(args_val).await,
-            "expert_review_add" => {
-                let args: ExpertReviewAddArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                validate_one_of("reviewer_role", &args.reviewer_role, EXPERT_REVIEW_ROLES)?;
-                validate_one_of("review_target_kind", &args.review_target_kind, EXPERT_REVIEW_TARGET_KINDS)?;
-                validate_one_of("decision", &args.decision, EXPERT_REVIEW_DECISIONS)?;
-                if let Some(c) = &args.confidence {
-                    validate_one_of("confidence", c, EXPERT_REVIEW_CONFIDENCE)?;
-                }
-                if args.reviewer_id.trim().is_empty() {
-                    return Err(mcp_invalid_params("reviewer_id must be non-empty"));
-                }
-                let expertise_tags_json = serde_json::to_string(&args.expertise_tags.clone().unwrap_or_default()).unwrap();
-                let requested_changes_json = args.requested_changes_json.clone().unwrap_or_else(|| "[]".to_string());
-                serde_json::from_str::<serde_json::Value>(&requested_changes_json)
-                    .map_err(|e| mcp_invalid_params(format!("requested_changes_json must be valid JSON: {}", e)))?;
-                let risk_flags_json = args.risk_flags_json.clone().unwrap_or_else(|| "[]".to_string());
-                serde_json::from_str::<serde_json::Value>(&risk_flags_json)
-                    .map_err(|e| mcp_invalid_params(format!("risk_flags_json must be valid JSON: {}", e)))?;
-
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                if let Some(dossier_id) = &args.dossier_id {
-                    require_row_exists(&tx, "research_dossiers", dossier_id, "dossier_id")?;
-                }
-                ensure_review_target_exists(&tx, &args.dossier_id, &args.review_target_kind, &args.review_target_id)?;
-
-                // A PURE INSERT — deliberately no cross-table UPDATE (contrast
-                // citation_review_add, which updates external_theorem_claims). An
-                // expert review can never mark anything proved or change fidelity,
-                // certification, budget, or benchmark state.
-                let review_id = Uuid::new_v4().to_string();
-                let now = Utc::now().to_rfc3339();
-                tx.execute(
-                    "INSERT INTO expert_reviews (
-                        id, dossier_id, reviewer_id, reviewer_role, expertise_tags_json, review_target_kind,
-                        review_target_id, decision, confidence, notes, requested_changes_json, risk_flags_json, created_at, revoked_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL)",
-                    rusqlite::params![
-                        &review_id,
-                        args.dossier_id.as_deref(),
-                        args.reviewer_id.trim(),
-                        &args.reviewer_role,
-                        &expertise_tags_json,
-                        &args.review_target_kind,
-                        &args.review_target_id,
-                        &args.decision,
-                        args.confidence.as_deref(),
-                        args.notes.as_deref(),
-                        &requested_changes_json,
-                        &risk_flags_json,
-                        &now,
-                    ],
-                ).map_err(rs)?;
-                let review = {
-                    let sql = format!("{} WHERE id = ?1", EXPERT_REVIEW_SELECT);
-                    tx.query_row(&sql, [&review_id], map_expert_review_row).map_err(rs)?
-                };
-                let dossier = match &args.dossier_id {
-                    Some(dossier_id) => Some(research_dossier_observe_json(&tx, dossier_id)?),
-                    None => None,
-                };
-                tx.commit().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "expert_review_id": review_id,
-                    "expert_review": review,
-                    "dossier": dossier,
-                })).unwrap())]))
-            }
-            "expert_review_observe" => {
-                let args: ExpertReviewObserveArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                if args.review_target_kind.is_some() != args.review_target_id.is_some() {
-                    return Err(mcp_invalid_params("review_target_kind and review_target_id must be provided together"));
-                }
-                if args.dossier_id.is_none() && args.review_target_kind.is_none() && args.reviewer_role.is_none() {
-                    return Err(mcp_invalid_params("expert_review_observe requires at least one of dossier_id, (review_target_kind + review_target_id), reviewer_role"));
-                }
-                if let Some(kind) = &args.review_target_kind {
-                    validate_one_of("review_target_kind", kind, EXPERT_REVIEW_TARGET_KINDS)?;
-                }
-                if let Some(role) = &args.reviewer_role {
-                    validate_one_of("reviewer_role", role, EXPERT_REVIEW_ROLES)?;
-                }
-
-                let mut clauses: Vec<String> = Vec::new();
-                let mut params: Vec<String> = Vec::new();
-                if let Some(id) = &args.dossier_id { clauses.push(format!("dossier_id = ?{}", params.len() + 1)); params.push(id.clone()); }
-                if let Some(kind) = &args.review_target_kind { clauses.push(format!("review_target_kind = ?{}", params.len() + 1)); params.push(kind.clone()); }
-                if let Some(id) = &args.review_target_id { clauses.push(format!("review_target_id = ?{}", params.len() + 1)); params.push(id.clone()); }
-                if let Some(role) = &args.reviewer_role { clauses.push(format!("reviewer_role = ?{}", params.len() + 1)); params.push(role.clone()); }
-                if !args.include_revoked { clauses.push("revoked_at IS NULL".to_string()); }
-                let where_clause = if clauses.is_empty() { String::new() } else { format!(" WHERE {}", clauses.join(" AND ")) };
-                let sql = format!("{}{} ORDER BY created_at ASC, id ASC", EXPERT_REVIEW_SELECT, where_clause);
-
-                let conn = self.conn.lock().await;
-                let mut stmt = conn.prepare(&sql).map_err(rs)?;
-                let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
-                let reviews = stmt.query_map(param_refs.as_slice(), map_expert_review_row)
-                    .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "expert_reviews": reviews,
-                    "policy": "Expert reviews are a human-attested, role-separated ledger. reviewer_id is not an authenticated principal; a decision is a recorded opinion, never kernel verification and never a change to proof, certification, budget, or benchmark state.",
-                })).unwrap())]))
-            }
+            "expert_review" => self.do_expert_review(args_val).await,
             "mathlib_search_declarations" => {
                 let args: MathlibSearchDeclarationsArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -15207,7 +15274,11 @@ mod tests {
         // - 1 (issue #199: the two flat semantic_skeleton_add/
         // semantic_skeleton_observe tools consolidated into the ONE
         // `semantic_skeleton` tool) = 42.
-        assert_eq!(list_res.tools.len(), 42);
+        // - 1 (issue #200: the two flat expert_review_add/expert_review_observe
+        // tools consolidated into the ONE `expert_review` tool — epic #182's
+        // 18th and FINAL consolidation; every family in the epic's sprint
+        // order is now a single action-enum tool) = 41.
+        assert_eq!(list_res.tools.len(), 41);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -19481,7 +19552,7 @@ mod tests {
         let cc_id = cc["candidate_construction_id"].as_str().unwrap().to_string();
 
         // formal_statement (scoped node), construction_artifact (scoped cc), full_dossier (global).
-        let r1 = tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review_add").with_arguments(serde_json::json!({
+        let r1 = tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": {"type": "add",
             "dossier_id": dossier_id,
             "reviewer_id": "dr-referee",
             "reviewer_role": "domain_expert",
@@ -19491,37 +19562,37 @@ mod tests {
             "decision": "approved",
             "confidence": "high",
             "notes": "Statement faithfully captures the source claim.",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(r1["expert_review"]["reviewer_role"], "domain_expert", "{:?}", r1);
         assert_eq!(r1["expert_review"]["expertise_tags"], serde_json::json!(["combinatorics", "additive_number_theory"]), "tags round-trip: {:?}", r1);
         assert_eq!(r1["expert_review"]["is_kernel_verified"], false, "{:?}", r1);
 
-        tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review_add").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": {"type": "add",
             "dossier_id": dossier_id, "reviewer_id": "cs-1", "reviewer_role": "construction_searcher",
             "review_target_kind": "construction_artifact", "review_target_id": cc_id, "decision": "needs_changes",
-        }).as_object().unwrap().clone())).await.unwrap());
-        tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review_add").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": {"type": "add",
             "dossier_id": dossier_id, "reviewer_id": "ed-1", "reviewer_role": "editor",
             "review_target_kind": "full_dossier", "review_target_id": dossier_id, "decision": "approved_with_changes",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         // Observe by dossier → 3; dossier bucket shows them separately.
-        let all = tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review_observe").with_arguments(serde_json::json!({
+        let all = tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": {"type": "observe",
             "dossier_id": dossier_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(all["expert_reviews"].as_array().unwrap().len(), 3, "{:?}", all);
 
         // Filter by reviewer role.
-        let experts = tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review_observe").with_arguments(serde_json::json!({
+        let experts = tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": {"type": "observe",
             "dossier_id": dossier_id, "reviewer_role": "domain_expert",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(experts["expert_reviews"].as_array().unwrap().len(), 1, "{:?}", experts);
 
         // full_dossier target must equal dossier_id.
-        let mismatch = peer.call_tool(CallToolRequestParams::new("expert_review_add").with_arguments(serde_json::json!({
+        let mismatch = peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": {"type": "add",
             "dossier_id": dossier_id, "reviewer_id": "x", "reviewer_role": "editor",
             "review_target_kind": "full_dossier", "review_target_id": node_id, "decision": "approved",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(mismatch.is_err(), "full_dossier review_target_id must equal dossier_id");
     }
 
@@ -19549,16 +19620,16 @@ mod tests {
         }}).as_object().unwrap().clone())).await.unwrap());
 
         // A domain_expert "approved" review on the node must NOT kernel-verify it.
-        tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review_add").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": {"type": "add",
             "dossier_id": dossier_id, "reviewer_id": "dr", "reviewer_role": "domain_expert",
             "review_target_kind": "formal_statement", "review_target_id": node_id, "decision": "approved", "confidence": "high",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         // A "rejected" expert review on the citation must NOT mutate its claim_status
         // (contrast citation_review_add, which does).
-        tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review_add").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": {"type": "add",
             "dossier_id": dossier_id, "reviewer_id": "ref", "reviewer_role": "refuter",
             "review_target_kind": "external_citation", "review_target_id": claim_id, "decision": "rejected",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "observe",
             "dossier_id": dossier_id,
@@ -19582,32 +19653,32 @@ mod tests {
 
         // A standalone review (no dossier) targeting a source_problem.
         let pv_id = create_problem(&peer, "True").await;
-        let standalone = tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review_add").with_arguments(serde_json::json!({
+        let standalone = tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": {"type": "add",
             "reviewer_id": "solo", "reviewer_role": "reviewer",
             "review_target_kind": "source_problem", "review_target_id": pv_id, "decision": "abstain",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert!(standalone["dossier"].is_null(), "{:?}", standalone);
-        let by_target = tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review_observe").with_arguments(serde_json::json!({
+        let by_target = tool_json(&peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": {"type": "observe",
             "review_target_kind": "source_problem", "review_target_id": pv_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(by_target["expert_reviews"].as_array().unwrap().len(), 1, "{:?}", by_target);
 
         // Validation rejections.
-        let bad = |body: serde_json::Value| {
+        let bad = |action_body: serde_json::Value| {
             let peer = peer.clone();
-            async move { peer.call_tool(CallToolRequestParams::new("expert_review_add").with_arguments(body.as_object().unwrap().clone())).await }
+            async move { peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": action_body}).as_object().unwrap().clone())).await }
         };
-        assert!(bad(serde_json::json!({"reviewer_id":"a","reviewer_role":"wizard","review_target_kind":"source_problem","review_target_id":pv_id,"decision":"approved"})).await.is_err(), "bad role");
-        assert!(bad(serde_json::json!({"reviewer_id":"a","reviewer_role":"reviewer","review_target_kind":"source_problem","review_target_id":pv_id,"decision":"blessed"})).await.is_err(), "bad decision");
-        assert!(bad(serde_json::json!({"reviewer_id":"a","reviewer_role":"reviewer","review_target_kind":"source_problem","review_target_id":pv_id,"decision":"approved","confidence":"certain"})).await.is_err(), "bad confidence");
-        assert!(bad(serde_json::json!({"reviewer_id":"   ","reviewer_role":"reviewer","review_target_kind":"source_problem","review_target_id":pv_id,"decision":"approved"})).await.is_err(), "empty reviewer_id");
-        assert!(bad(serde_json::json!({"reviewer_id":"a","reviewer_role":"reviewer","review_target_kind":"source_problem","review_target_id":"00000000-0000-0000-0000-000000000000","decision":"approved"})).await.is_err(), "unknown target");
+        assert!(bad(serde_json::json!({"type":"add","reviewer_id":"a","reviewer_role":"wizard","review_target_kind":"source_problem","review_target_id":pv_id,"decision":"approved"})).await.is_err(), "bad role");
+        assert!(bad(serde_json::json!({"type":"add","reviewer_id":"a","reviewer_role":"reviewer","review_target_kind":"source_problem","review_target_id":pv_id,"decision":"blessed"})).await.is_err(), "bad decision");
+        assert!(bad(serde_json::json!({"type":"add","reviewer_id":"a","reviewer_role":"reviewer","review_target_kind":"source_problem","review_target_id":pv_id,"decision":"approved","confidence":"certain"})).await.is_err(), "bad confidence");
+        assert!(bad(serde_json::json!({"type":"add","reviewer_id":"   ","reviewer_role":"reviewer","review_target_kind":"source_problem","review_target_id":pv_id,"decision":"approved"})).await.is_err(), "empty reviewer_id");
+        assert!(bad(serde_json::json!({"type":"add","reviewer_id":"a","reviewer_role":"reviewer","review_target_kind":"source_problem","review_target_id":"00000000-0000-0000-0000-000000000000","decision":"approved"})).await.is_err(), "unknown target");
 
         // observe: kind without id is rejected; empty filter set is rejected.
-        assert!(peer.call_tool(CallToolRequestParams::new("expert_review_observe").with_arguments(serde_json::json!({
+        assert!(peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": {"type": "observe",
             "review_target_kind": "source_problem",
-        }).as_object().unwrap().clone())).await.is_err(), "target_kind without target_id");
-        assert!(peer.call_tool(CallToolRequestParams::new("expert_review_observe").with_arguments(serde_json::json!({}).as_object().unwrap().clone())).await.is_err(), "no filters");
+        }}).as_object().unwrap().clone())).await.is_err(), "target_kind without target_id");
+        assert!(peer.call_tool(CallToolRequestParams::new("expert_review").with_arguments(serde_json::json!({"action": {"type": "observe"}}).as_object().unwrap().clone())).await.is_err(), "no filters");
     }
 
     #[tokio::test]
