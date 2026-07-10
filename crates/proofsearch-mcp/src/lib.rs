@@ -2736,6 +2736,53 @@ pub struct TaskUpdateStatusArgs {
     pub status: String,
 }
 
+/// Issue #197 (epic #182, 15th consolidation after #183's `proof_session`
+/// pilot through #196's `benchmark_problem`): the single `task` tool's
+/// internally-tagged action enum, mirroring the established `episode_step`
+/// pattern (`#[serde(tag = "type", rename_all = "snake_case")]`). Each
+/// variant's fields are the corresponding pre-#197 flat
+/// `Task{Create,UpdateStatus}Args` struct's fields verbatim — those structs
+/// remain (unchanged) as what the `do_task_create`/`do_task_update_status`
+/// handlers deserialize; this enum is only the MCP-layer dispatch shape.
+/// There are no shared wrapper fields: `create` mints a new task under an
+/// existing challenge while `update_status` keys on an existing task_id.
+/// Kept deliberately separate from the already-consolidated `task_submission`
+/// tool (issue #186) even though both live in the same challenge/task/
+/// submission pipeline — a task (a bounded challenge assignment) and a task
+/// submission (a contribution submitted against a task) are genuinely
+/// different entities.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TaskAction {
+    Create {
+        challenge_id: String,
+        task_type: String,
+        title: String,
+        #[serde(default)]
+        description: Option<String>,
+        /// The explicit bound that keeps the task small and reviewable.
+        #[serde(default)]
+        bounds_json: Option<String>,
+        #[serde(default)]
+        success_criteria: Option<String>,
+        #[serde(default)]
+        validation_protocol_id: Option<String>,
+        created_by: String,
+    },
+    UpdateStatus {
+        task_id: String,
+        status: String,
+    },
+}
+
+/// Issue #197: args for the single consolidated `task` tool. The entire
+/// payload lives on the internally-tagged `action` — see `TaskAction`'s doc
+/// for why there are no shared wrapper fields.
+#[derive(JsonSchema, Deserialize)]
+pub struct TaskArgs {
+    pub action: TaskAction,
+}
+
 #[derive(JsonSchema, Deserialize)]
 pub struct TaskSubmissionCreateArgs {
     pub task_id: String,
@@ -10054,6 +10101,69 @@ impl ChatDbMcp {
 
     // -----------------------------------------------------------------
 
+    /// Issue #197 (epic #182, 15th consolidation): the single `task` tool's
+    /// dispatcher. Deserializes `TaskArgs`, matches on the internally-tagged
+    /// action, and routes to the per-action handlers below UNCHANGED (each
+    /// extracted verbatim from the former inline match arm of the same name).
+    /// Same transitional double-serialization pattern as every prior family
+    /// in this epic (e.g. `task_submission`, `benchmark_problem`).
+    async fn do_task(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: TaskArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize task action: {}", e)))?;
+        match &args.action {
+            TaskAction::Create { .. } => self.do_task_create(inner).await,
+            TaskAction::UpdateStatus { .. } => self.do_task_update_status(inner).await,
+        }
+    }
+
+    async fn do_task_create(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: TaskCreateArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("task_type", &args.task_type, TASK_TYPES)?;
+        if args.title.trim().is_empty() { return Err(mcp_invalid_params("title must be non-empty")); }
+        if args.created_by.trim().is_empty() { return Err(mcp_invalid_params("created_by must be non-empty")); }
+        let bounds_json = args.bounds_json.clone().unwrap_or_else(|| "{}".to_string());
+        serde_json::from_str::<serde_json::Value>(&bounds_json).map_err(|e| mcp_invalid_params(format!("bounds_json must be valid JSON: {}", e)))?;
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        let dossier_id: Option<String> = tx.query_row("SELECT dossier_id FROM research_challenges WHERE id = ?1", [&args.challenge_id], |r| r.get(0)).optional().map_err(rs)?;
+        let Some(dossier_id) = dossier_id else { return Err(mcp_invalid_params(format!("unknown challenge_id: {}", args.challenge_id))); };
+        if let Some(vp) = &args.validation_protocol_id { require_row_in_dossier(&tx, "validation_protocols", vp, &dossier_id, "validation_protocol_id")?; }
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO research_tasks (id, challenge_id, dossier_id, validation_protocol_id, task_type, title, description, bounds_json, success_criteria, status, created_by, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'open', ?10, ?11, ?11)",
+            (&id, &args.challenge_id, &dossier_id, args.validation_protocol_id.as_deref(), &args.task_type, args.title.trim(), args.description.as_deref(), &bounds_json, args.success_criteria.as_deref(), &args.created_by, &now),
+        ).map_err(rs)?;
+        let challenge = challenge_observe_json(&tx, &args.challenge_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "task_id": id, "challenge": challenge,
+        })).unwrap())]))
+    }
+
+    async fn do_task_update_status(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: TaskUpdateStatusArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("status", &args.status, TASK_STATUSES)?;
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        let challenge_id: Option<String> = tx.query_row("SELECT challenge_id FROM research_tasks WHERE id = ?1", [&args.task_id], |r| r.get(0)).optional().map_err(rs)?;
+        let Some(challenge_id) = challenge_id else { return Err(mcp_invalid_params(format!("unknown task_id: {}", args.task_id))); };
+        let now = Utc::now().to_rfc3339();
+        tx.execute("UPDATE research_tasks SET status = ?1, updated_at = ?2 WHERE id = ?3", (&args.status, &now, &args.task_id)).map_err(rs)?;
+        let challenge = challenge_observe_json(&tx, &challenge_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "task_id": args.task_id, "challenge": challenge,
+        })).unwrap())]))
+    }
+
+    // -----------------------------------------------------------------
+
     /// Issue #186 (epic #182): the single `task_submission` tool's
     /// dispatcher. Deserializes `TaskSubmissionArgs`, matches on the
     /// internally-tagged action, and routes to the per-action handlers below
@@ -12591,8 +12701,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EmpiricalSearchArgs>("empirical_search", "Issue #189: ONE tool for the entire empirical math-lab family (issue #26) — create and update finite checks, counterexample searches, construction searches, parameter sweeps, candidate rankings, and external-tool runs. AN EMPIRICAL SEARCH RESULT IS EXPERIMENTAL EVIDENCE, NEVER PROOF: no field can carry kernel evidence, no trust_status implies proof, and no status can certify an asymptotic or universal theorem. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"search_type\":\"small_case_search\"|\"counterexample_search\"|\"construction_search\"|\"parameter_sweep\"|\"finite_model_check\"|\"candidate_ranking\"|\"random_search\"|\"exhaustive_search\"|\"symbolic_search\"|\"external_tool_run\"|\"other\",\"search_space_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, candidate_construction_id, verification_layer_id, problem_version_id, episode_id, parameters_json, generator_description, checks_json, results_json, counterexamples_json, candidate_construction_ids_json, status, trust_status, runtime_metadata_json, cost_summary_json — record a search, which may exist before a dossier, candidate, episode, or Lean proof) | {\"type\":\"observe\",\"empirical_search_id\":\"..\",\"description\":\"..\",\"result\":\"supports_candidate\"|\"refutes_candidate\"|\"counterexample_found\"|\"no_counterexample\"|\"inconclusive\"} (+ optional details_json, counterexample_json, observed_by — append one check and optional counterexample witness. A counterexample stays visible; no_counterexample never certifies a universal claim) | {\"type\":\"update_status\",\"empirical_search_id\":\"..\"} (+ at least one of status, trust_status, results_json, candidate_construction_ids_json — update the search in place. Counterexamples are deliberately not updatable here and can only be appended through observe; falsified/failed/timed-out searches stay visible) | {\"type\":\"link_candidate\",\"empirical_search_id\":\"..\",\"candidate_construction_id\":\"..\"} (link a candidate construction, adopting its dossier when the search has none. Empirical support never proves the candidate's claimed properties) | {\"type\":\"link_verification_layer\",\"empirical_search_id\":\"..\",\"verification_layer_id\":\"..\"} (link an existing verification layer, adopting its dossier when the search has none. The link records evidence and can never make the layer kernel_verified)"),
             make_tool::<ChallengeArgs>("challenge", "Issue #191: ONE tool for the challenge lifecycle (issue #53) — define a challenge in a dossier, read it back with its tasks/submissions/scores/reviews, and update its status. A bounded, scored, reviewable competition frame for AI-generated math: a challenge/task/score is research bookkeeping, NEVER proof. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"dossier_id\":\"..\",\"title\":\"..\",\"created_by\":\"..\"} (+ optional description, problem_version_id, episode_id — define a challenge in an existing dossier, optionally linked to a problem_version and/or episode that must already exist. Starts status='open') | {\"type\":\"observe\",\"challenge_id\":\"..\"} (read-only: the challenge with its tasks -> submissions -> scores/reviews, plus the export grouping accepted/rejected/superseded/open shown separately. Nothing here is proof) | {\"type\":\"update_status\",\"challenge_id\":\"..\",\"status\":\"open\"|\"closed\"|\"archived\"|\"superseded\"} (update a challenge's status; never touches proof/fidelity/benchmark state — a closed/archived/superseded challenge stays visible). `validation_protocol_create` is dossier-scoped, not challenge-scoped (challenge_id on it is optional), and remains its own standalone tool rather than folding into this one"),
             make_tool::<ValidationProtocolCreateArgs>("validation_protocol_create", "Register a validation protocol (reproducible_script/property_check/independent_recompute/finite_case_check/symbolic_check/manual_review/external_tool/other) a task's submissions can be checked against. A protocol describes a check; it is never itself proof"),
-            make_tool::<TaskCreateArgs>("task_create", "Add a bounded task to a challenge: find_candidate_object/improve_bound/find_counterexample/classify_small_cases/produce_witness/minimize_example/maximize_parameter/verify_property/compress_strategy/distill_method/formalize_claim. bounds_json keeps it small and reviewable"),
-            make_tool::<TaskUpdateStatusArgs>("task_update_status", "Update a task's status (open/closed/superseded). A superseded task stays visible"),
+            make_tool::<TaskArgs>("task", "Issue #197: ONE tool for the bounded-task lifecycle within a challenge (issue #53) — create a task and update its status. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"challenge_id\":\"..\",\"task_type\":\"..\",\"title\":\"..\",\"created_by\":\"..\"} (+ optional description, bounds_json, success_criteria, validation_protocol_id — add a bounded task to a challenge: find_candidate_object/improve_bound/find_counterexample/classify_small_cases/produce_witness/minimize_example/maximize_parameter/verify_property/compress_strategy/distill_method/formalize_claim. bounds_json keeps it small and reviewable) | {\"type\":\"update_status\",\"task_id\":\"..\",\"status\":\"..\"} (update a task's status: open/closed/superseded. A superseded task stays visible). Kept separate from `task_submission` (issue #186) — a task is a bounded challenge assignment, a task_submission is a contribution submitted against a task"),
             make_tool::<TaskSubmissionArgs>("task_submission", "Issue #186: ONE tool for the entire challenge-submission family (issue #53) — submit, check, score, review, link, and settle contributions to a bounded challenge task. TRUST PROFILES DIFFER BY ACTION and the tool's overall profile is mixed: `create` records an UNTRUSTED payload, `validate` records at most a script/human-attested check result, `score` records an untrusted measurement, `review` records a role-separated HUMAN decision (human-attested, never verifier_backed), `link` records provenance to artifacts that keep their own trust, `update_status` is outcome bookkeeping — NO action ever confers proof authority, kernel verification, or training eligibility. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"task_id\":\"..\",\"submitted_by\":\"..\"} (+ optional content_json, notes — submit a contribution to a task. content_json is the UNTRUSTED payload; the submission starts 'submitted' and is never proof — no field can hold kernel evidence) | {\"type\":\"validate\",\"submission_id\":\"..\",\"passed\":true|false} (+ optional validation_protocol_id, notes — mark a submission validated (passed) or validation_failed, typically from an AUTOMATED check against its declared validation protocol. 'validated' means it passed its declared check, NEVER that a theorem is kernel-verified. A validation_failed submission stays visible) | {\"type\":\"score\",\"submission_id\":\"..\",\"scoring_rule\":\"..\",\"created_by\":\"..\"} (+ optional score_value/score_units, validation_method, reproducibility_notes, novelty_notes, cost_summary_id — record a score for a submission and advance it to 'scored' (never past a review outcome). A score is a measurement, never proof; a rank is not proof authority; a score never confers training eligibility) | {\"type\":\"review\",\"submission_id\":\"..\",\"reviewer_id\":\"..\",\"decision\":\"accepted\"|\"rejected\"|\"needs_changes\"|\"superseded\"} (+ optional notes — record a HUMAN review of a submission, the role-separated counterpart to the automated `validate` check. Human review is distinct from kernel verification — 'accepted' means accepted into the dossier as a contribution, never proved; reviewer_id is free text, not an authenticated principal. Rejected/superseded stay visible) | {\"type\":\"link\",\"submission_id\":\"..\",\"target_kind\":\"candidate_construction\"|\"empirical_result\"|\"verification_layer\",\"target_id\":\"..\"} (link a submission to an artifact in its dossier as PROVENANCE. Even linking to a kernel_verified layer never makes the submission a proof; the linked artifact keeps its own trust) | {\"type\":\"update_status\",\"submission_id\":\"..\",\"status\":\"accepted\"|\"rejected\"|\"superseded\"|\"merged_into_dossier\"} (set a submission's outcome without a full review row. Rejected/superseded stay visible; nothing here confers proof authority)"),
             make_tool::<DistilledStrategyAddArgs>("distilled_strategy_add", "Store a reusable distilled strategy artifact (strategy_cheat_sheet/failed_attempt_summary/heuristic_rule/counterexample_pattern/construction_recipe/formalization_hint/review_checklist). A distilled strategy is NOT a proof; trust_status tops out at human_reviewed"),
             make_tool::<PaperIngestArgs>("paper_ingest", "Issue #187: ONE tool for the entire paper/PDF ingestion family (issue #27) — ingest a source document, append extracted claim nodes, read it back, attach it to a dossier, mark review/trust statuses, and promote extracted nodes to real dossier artifacts. EVERY ACTION HANDLES UNTRUSTED EXTRACTION, NEVER PROOF: LLM-Driven Proof Search Environment does no OCR/LLM extraction — the host records its own extraction result, untrusted by construction; an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT an accepted assumption; no field can hold kernel evidence and no status confers proof, kernel verification, statement fidelity, or citation validation. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\",\"source_kind\":\"pdf\"|\"manuscript\"|\"proof_sketch\"|\"exposition\"|..,\"created_by\":\"..\"} (+ optional dossier_id, source_ref, source_content_hash, ingest_status, extraction_trust_status, notes — ingest a paper/manuscript/proof_sketch/exposition as a reviewable source document, optionally linked to a dossier. Records the host's UNTRUSTED extraction; ingestion is not proof) | {\"type\":\"extract_claims\",\"document_id\":\"..\",\"nodes\":[{\"node_kind\":\"main_theorem\",\"natural_language_text\":\"..\",\"source_span\":\"p.1 Thm 1\"},..]} (append extracted nodes (abstract/main_theorem/definition/proposition/lemma/proof_step/construction/remark/appendix_fact/reference/open_gap) with source_span, confidence, and status labels to an ingested document, all-or-nothing; every node REQUIRES a non-empty source_span tracing it back to the paper. Each node is UNTRUSTED EXTRACTION — an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT accepted) | {\"type\":\"observe\",\"document_id\":\"..\"} (read an ingested document with all its extracted nodes and their trust labels. Read-only; nothing here is proof or kernel evidence) | {\"type\":\"link_to_dossier\",\"document_id\":\"..\",\"dossier_id\":\"..\"} (attach an ingested document and its extracted nodes to a research dossier so they surface in research_dossier observe's ingestion bucket, separate from proof authority) | {\"type\":\"mark_review_status\",\"document_id\":\"..\"} (+ optional node_id; document-level ingest_status/extraction_trust_status, or node-level review_status/formalization_status/citation_status with node_id — rejected_extraction stays visible, never deleted. None of these statuses confers proof, kernel verification, statement fidelity, or citation validation) | {\"type\":\"link_node\",\"document_id\":\"..\",\"node_id\":\"..\",\"target_kind\":\"external_reference\"|\"external_theorem_claim\"|\"research_node\"|\"formalization_plan_item\",\"target_id\":\"..\"} (promote/attach an extracted node to a real dossier artifact — external_reference / external_theorem_claim set citation_status=citation_recorded, research_node / formalization_plan_item set formalization_status=formalization_target_linked. Records provenance and marks review_status=linked_to_dossier_artifact; the linked artifact keeps its own trust and the node NEVER gains proof/kernel authority)"),
@@ -12756,8 +12865,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 45,
-                        "total_tool_count": 45,
+                        "classified_tool_count": 44,
+                        "total_tool_count": 44,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -12952,22 +13061,12 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
                             },
-                            "task_create": {
-                                "side_effect": "mutating — inserts one research_tasks row under an existing challenge",
-                                "trust_level": "untrusted_metadata — a bounded task, never proof",
-                                "cost_surface": "none",
+                            "task": {
+                                "side_effect": "mutating by action (issue #197: one tool consolidating the former task_create / task_update_status tools; per-action semantics unchanged): create inserts one research_tasks row under an existing challenge; update_status updates one research_tasks.status (open/closed/superseded) — a superseded task stays visible",
+                                "trust_level": "untrusted_metadata for both actions — a bounded task and its status are never proof",
+                                "cost_surface": "none for either action",
                                 "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "task_update_status": {
-                                "side_effect": "mutating — updates one research_tasks.status (open/closed/superseded); a superseded task stays visible",
-                                "trust_level": "untrusted_metadata — status bookkeeping only",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
+                                "replayability": "deterministic for both actions",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
@@ -14205,48 +14304,7 @@ impl ServerHandler for ChatDbMcp {
                     "validation_protocol_id": id, "validation_method": args.validation_method,
                 })).unwrap())]))
             }
-            "task_create" => {
-                let args: TaskCreateArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                validate_one_of("task_type", &args.task_type, TASK_TYPES)?;
-                if args.title.trim().is_empty() { return Err(mcp_invalid_params("title must be non-empty")); }
-                if args.created_by.trim().is_empty() { return Err(mcp_invalid_params("created_by must be non-empty")); }
-                let bounds_json = args.bounds_json.clone().unwrap_or_else(|| "{}".to_string());
-                serde_json::from_str::<serde_json::Value>(&bounds_json).map_err(|e| mcp_invalid_params(format!("bounds_json must be valid JSON: {}", e)))?;
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                let dossier_id: Option<String> = tx.query_row("SELECT dossier_id FROM research_challenges WHERE id = ?1", [&args.challenge_id], |r| r.get(0)).optional().map_err(rs)?;
-                let Some(dossier_id) = dossier_id else { return Err(mcp_invalid_params(format!("unknown challenge_id: {}", args.challenge_id))); };
-                if let Some(vp) = &args.validation_protocol_id { require_row_in_dossier(&tx, "validation_protocols", vp, &dossier_id, "validation_protocol_id")?; }
-                let id = Uuid::new_v4().to_string();
-                let now = Utc::now().to_rfc3339();
-                tx.execute(
-                    "INSERT INTO research_tasks (id, challenge_id, dossier_id, validation_protocol_id, task_type, title, description, bounds_json, success_criteria, status, created_by, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'open', ?10, ?11, ?11)",
-                    (&id, &args.challenge_id, &dossier_id, args.validation_protocol_id.as_deref(), &args.task_type, args.title.trim(), args.description.as_deref(), &bounds_json, args.success_criteria.as_deref(), &args.created_by, &now),
-                ).map_err(rs)?;
-                let challenge = challenge_observe_json(&tx, &args.challenge_id)?;
-                tx.commit().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "task_id": id, "challenge": challenge,
-                })).unwrap())]))
-            }
-            "task_update_status" => {
-                let args: TaskUpdateStatusArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                validate_one_of("status", &args.status, TASK_STATUSES)?;
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                let challenge_id: Option<String> = tx.query_row("SELECT challenge_id FROM research_tasks WHERE id = ?1", [&args.task_id], |r| r.get(0)).optional().map_err(rs)?;
-                let Some(challenge_id) = challenge_id else { return Err(mcp_invalid_params(format!("unknown task_id: {}", args.task_id))); };
-                let now = Utc::now().to_rfc3339();
-                tx.execute("UPDATE research_tasks SET status = ?1, updated_at = ?2 WHERE id = ?3", (&args.status, &now, &args.task_id)).map_err(rs)?;
-                let challenge = challenge_observe_json(&tx, &challenge_id)?;
-                tx.commit().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "task_id": args.task_id, "challenge": challenge,
-                })).unwrap())]))
-            }
+            "task" => self.do_task(args_val).await,
             "task_submission" => self.do_task_submission(args_val).await,
             "distilled_strategy_add" => {
                 let args: DistilledStrategyAddArgs = serde_json::from_value(args_val)
@@ -14990,7 +15048,12 @@ mod tests {
         // `benchmark_problem` tool — the last piece of epic #182's
         // benchmark_* family split, alongside #193's `benchmark_suite` and
         // #194's `benchmark_run`) = 45.
-        assert_eq!(list_res.tools.len(), 45);
+        // - 1 (issue #197: the two flat task_create/task_update_status tools
+        // consolidated into the ONE `task` tool; `task_submission` (issue
+        // #186) is a separate, already-consolidated tool and stays
+        // untouched — a task and a task_submission are genuinely different
+        // entities) = 44.
+        assert_eq!(list_res.tools.len(), 44);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -18766,10 +18829,10 @@ mod tests {
         assert_eq!(challenge["challenge"]["is_proof"], false, "{:?}", challenge);
 
         // (2) A challenge can define bounded tasks.
-        let task = tool_json(&peer.call_tool(CallToolRequestParams::new("task_create").with_arguments(serde_json::json!({
+        let task = tool_json(&peer.call_tool(CallToolRequestParams::new("task").with_arguments(serde_json::json!({"action": {"type": "create",
             "challenge_id": challenge_id, "task_type": "improve_bound", "title": "Improve the packing bound",
             "bounds_json": "{\"max_n\": 1000}", "success_criteria": "beat 0.91", "created_by": "host",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let task_id = tool_json(&peer.call_tool(CallToolRequestParams::new("challenge").with_arguments(serde_json::json!({"action": {"type": "observe",
             "challenge_id": challenge_id,
         }}).as_object().unwrap().clone())).await.unwrap())["challenge"]["tasks"][0]["task_id"].as_str().unwrap().to_string();
@@ -18896,14 +18959,14 @@ mod tests {
         let challenge_id = challenge["challenge_id"].as_str().unwrap().to_string();
 
         // Unknown task_type is rejected.
-        let bad_type = peer.call_tool(CallToolRequestParams::new("task_create").with_arguments(serde_json::json!({
+        let bad_type = peer.call_tool(CallToolRequestParams::new("task").with_arguments(serde_json::json!({"action": {"type": "create",
             "challenge_id": challenge_id, "task_type": "prove_the_theorem", "title": "x", "created_by": "h",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_type.is_err(), "unknown task_type must be rejected");
 
-        let task = tool_json(&peer.call_tool(CallToolRequestParams::new("task_create").with_arguments(serde_json::json!({
+        let task = tool_json(&peer.call_tool(CallToolRequestParams::new("task").with_arguments(serde_json::json!({"action": {"type": "create",
             "challenge_id": challenge_id, "task_type": "verify_property", "title": "t", "created_by": "h",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let task_id = task["task_id"].as_str().unwrap().to_string();
         let sub = tool_json(&peer.call_tool(CallToolRequestParams::new("task_submission").with_arguments(serde_json::json!({"action": {"type": "create",
             "task_id": task_id, "submitted_by": "a",
