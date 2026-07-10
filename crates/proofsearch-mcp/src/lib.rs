@@ -680,7 +680,7 @@ pub enum BenchmarkSuiteAction {
     SetTrust {
         suite_id: String,
         /// The new value of the suite's trusted_canonical_source flag. Same
-        /// honesty contract as benchmark_suite_create's flag: assert true ONLY
+        /// honesty contract as the create action's flag: assert true ONLY
         /// for a real, externally-curated benchmark corpus whose registered
         /// statements are themselves sufficient fidelity evidence.
         trusted_canonical_source: bool,
