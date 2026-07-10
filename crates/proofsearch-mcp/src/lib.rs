@@ -10808,7 +10808,7 @@ impl ChatDbMcp {
         let args: ExpositionObserveArgs = serde_json::from_value(args_val)
             .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
         if args.problem_version_id.is_none() && args.episode_id.is_none() && args.dossier_id.is_none() {
-            return Err(mcp_invalid_params("exposition_observe requires one of problem_version_id, episode_id, dossier_id"));
+            return Err(mcp_invalid_params("exposition's observe action requires one of problem_version_id, episode_id, dossier_id"));
         }
         let conn = self.conn.lock().await;
         let (col, id) = if let Some(id) = &args.episode_id {
