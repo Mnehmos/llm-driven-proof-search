@@ -3293,6 +3293,79 @@ pub struct SemanticSkeletonObserveArgs {
     pub observed_by: Option<String>,
 }
 
+/// Issue #199 (epic #182, 17th consolidation after #198's `exposition`):
+/// the single `semantic_skeleton` tool's internally-tagged action enum,
+/// mirroring the established `episode_step` pattern
+/// (`#[serde(tag = "type", rename_all = "snake_case")]`). Each variant's
+/// fields are the corresponding pre-#199 flat
+/// `SemanticSkeleton{Add,Observe}Args` struct's fields verbatim — those
+/// structs remain (unchanged) as what the
+/// `do_semantic_skeleton_add`/`do_semantic_skeleton_observe` handlers
+/// deserialize; this enum is only the MCP-layer dispatch shape. There are
+/// no shared wrapper fields: `add` records a new structured reading of a
+/// statement/module/solution while `observe` appends one fidelity
+/// observation to an existing skeleton's review-notes history.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SemanticSkeletonAction {
+    Add {
+        #[serde(default)]
+        problem_version_id: Option<String>,
+        #[serde(default)]
+        episode_id: Option<String>,
+        #[serde(default)]
+        root_obligation_id: Option<String>,
+        #[serde(default)]
+        module_id: Option<String>,
+        #[serde(default)]
+        module_item_id: Option<String>,
+        #[serde(default)]
+        verified_lemma_id: Option<String>,
+        #[serde(default)]
+        dossier_id: Option<String>,
+        #[serde(default)]
+        node_id: Option<String>,
+        #[serde(default)]
+        root_fidelity_review_id: Option<String>,
+        review_scope: String,
+        #[serde(default)]
+        quantifiers_json: Option<String>,
+        #[serde(default)]
+        hypotheses_json: Option<String>,
+        #[serde(default)]
+        conclusion_json: Option<String>,
+        #[serde(default)]
+        definitions_json: Option<String>,
+        #[serde(default)]
+        construction_map_json: Option<String>,
+        #[serde(default)]
+        backtranslation_text: Option<String>,
+        #[serde(default)]
+        risk_flags_json: Option<String>,
+        created_by: String,
+    },
+    Observe {
+        semantic_skeleton_id: String,
+        observation: String,
+        finding: String,
+        #[serde(default)]
+        risk_flags_json: Option<String>,
+        #[serde(default)]
+        details_json: Option<String>,
+        #[serde(default)]
+        observed_by: Option<String>,
+    },
+}
+
+/// Issue #199: args for the single consolidated `semantic_skeleton` tool.
+/// The entire payload lives on the internally-tagged `action` — see
+/// `SemanticSkeletonAction`'s doc for why there are no shared wrapper
+/// fields.
+#[derive(JsonSchema, Deserialize)]
+pub struct SemanticSkeletonArgs {
+    pub action: SemanticSkeletonAction,
+}
+
 // -- Expert reviews / role-separated research ledger (issue #14) ------------
 //
 // A role-separated ledger of who reviewed what and what they decided. Pure
@@ -10830,6 +10903,190 @@ impl ChatDbMcp {
 
     // -----------------------------------------------------------------
 
+    /// Issue #199 (epic #182, 17th consolidation): the single
+    /// `semantic_skeleton` tool's dispatcher. Deserializes
+    /// `SemanticSkeletonArgs`, matches on the internally-tagged action, and
+    /// routes to the per-action handlers below UNCHANGED (each extracted
+    /// verbatim from the former inline match arm of the same name, including
+    /// the semantic_fingerprint_hash computation in
+    /// `do_semantic_skeleton_add`). Same transitional double-serialization
+    /// pattern as every prior family in this epic.
+    async fn do_semantic_skeleton(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: SemanticSkeletonArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize semantic_skeleton action: {}", e)))?;
+        match &args.action {
+            SemanticSkeletonAction::Add { .. } => self.do_semantic_skeleton_add(inner).await,
+            SemanticSkeletonAction::Observe { .. } => self.do_semantic_skeleton_observe(inner).await,
+        }
+    }
+
+    async fn do_semantic_skeleton_add(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: SemanticSkeletonAddArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("review_scope", &args.review_scope, SEMANTIC_SKELETON_REVIEW_SCOPES)?;
+        if args.created_by.trim().is_empty() {
+            return Err(mcp_invalid_params("created_by must be non-empty"));
+        }
+        // Module-scope guard mirrors the DB CHECK, with a clearer message.
+        if args.review_scope == "module_artifact" && args.module_id.is_none() && args.module_item_id.is_none() {
+            return Err(mcp_invalid_params("review_scope='module_artifact' requires module_id or module_item_id"));
+        }
+        let quantifiers_json = args.quantifiers_json.clone().unwrap_or_else(|| "[]".to_string());
+        let hypotheses_json = args.hypotheses_json.clone().unwrap_or_else(|| "[]".to_string());
+        let conclusion_json = args.conclusion_json.clone().unwrap_or_else(|| "{}".to_string());
+        let definitions_json = args.definitions_json.clone().unwrap_or_else(|| "[]".to_string());
+        let construction_map_json = args.construction_map_json.clone().unwrap_or_else(|| "[]".to_string());
+        for (field, raw) in [
+            ("quantifiers_json", &quantifiers_json),
+            ("hypotheses_json", &hypotheses_json),
+            ("conclusion_json", &conclusion_json),
+            ("definitions_json", &definitions_json),
+            ("construction_map_json", &construction_map_json),
+        ] {
+            serde_json::from_str::<serde_json::Value>(raw)
+                .map_err(|e| mcp_invalid_params(format!("{} must be valid JSON: {}", field, e)))?;
+        }
+        let risk_flags_json = args.risk_flags_json.clone().unwrap_or_else(|| "[]".to_string());
+        validate_string_array_vocab("risk_flags_json", &risk_flags_json, SEMANTIC_SKELETON_RISK_FLAGS)?;
+
+        // semantic_fingerprint_hash is server-computed over the normalized
+        // skeleton content — never accepted from the client.
+        let fingerprint = canonical_hash(&serde_json::json!({
+            "review_scope": args.review_scope,
+            "quantifiers": parse_json_or_wrap(&quantifiers_json),
+            "hypotheses": parse_json_or_wrap(&hypotheses_json),
+            "conclusion": parse_json_or_wrap(&conclusion_json),
+            "definitions": parse_json_or_wrap(&definitions_json),
+            "construction_map": parse_json_or_wrap(&construction_map_json),
+        })).map_err(mcp_internal_error)?;
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        if let Some(id) = &args.problem_version_id { require_row_exists(&tx, "problem_versions", id, "problem_version_id")?; }
+        if let Some(id) = &args.episode_id { require_row_exists(&tx, "episodes", id, "episode_id")?; }
+        if let Some(id) = &args.root_obligation_id { require_row_exists(&tx, "episode_obligations", id, "root_obligation_id")?; }
+        if let Some(id) = &args.module_id { require_row_exists(&tx, "episode_verified_modules", id, "module_id")?; }
+        if let Some(id) = &args.module_item_id { require_row_exists(&tx, "episode_verified_module_items", id, "module_item_id")?; }
+        if let Some(id) = &args.verified_lemma_id { require_row_exists(&tx, "episode_verified_lemmas", id, "verified_lemma_id")?; }
+        if let Some(id) = &args.root_fidelity_review_id { require_row_exists(&tx, "problem_fidelity_reviews", id, "root_fidelity_review_id")?; }
+        if let Some(id) = &args.dossier_id { require_row_exists(&tx, "research_dossiers", id, "dossier_id")?; }
+        if let Some(id) = &args.node_id {
+            match &args.dossier_id {
+                Some(dossier_id) => require_row_in_dossier(&tx, "research_nodes", id, dossier_id, "node_id")?,
+                None => require_row_exists(&tx, "research_nodes", id, "node_id")?,
+            }
+        }
+
+        let skeleton_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO semantic_skeletons (
+                id, problem_version_id, episode_id, root_obligation_id, module_id, module_item_id,
+                verified_lemma_id, dossier_id, node_id, root_fidelity_review_id, review_scope,
+                quantifiers_json, hypotheses_json, conclusion_json, definitions_json, construction_map_json,
+                backtranslation_text, risk_flags_json, review_notes_json, semantic_fingerprint_hash,
+                created_by, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, '[]', ?19, ?20, ?21, ?21)",
+            rusqlite::params![
+                &skeleton_id,
+                args.problem_version_id.as_deref(),
+                args.episode_id.as_deref(),
+                args.root_obligation_id.as_deref(),
+                args.module_id.as_deref(),
+                args.module_item_id.as_deref(),
+                args.verified_lemma_id.as_deref(),
+                args.dossier_id.as_deref(),
+                args.node_id.as_deref(),
+                args.root_fidelity_review_id.as_deref(),
+                &args.review_scope,
+                &quantifiers_json,
+                &hypotheses_json,
+                &conclusion_json,
+                &definitions_json,
+                &construction_map_json,
+                args.backtranslation_text.as_deref(),
+                &risk_flags_json,
+                &fingerprint,
+                args.created_by.trim(),
+                &now,
+            ],
+        ).map_err(rs)?;
+        let skeleton = semantic_skeleton_json(&tx, &skeleton_id)?;
+        let dossier = match &args.dossier_id {
+            Some(dossier_id) => Some(research_dossier_observe_json(&tx, dossier_id)?),
+            None => None,
+        };
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "semantic_skeleton_id": skeleton_id,
+            "semantic_skeleton": skeleton,
+            "dossier": dossier,
+        })).unwrap())]))
+    }
+
+    async fn do_semantic_skeleton_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: SemanticSkeletonObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("finding", &args.finding, SEMANTIC_SKELETON_OBSERVATION_FINDINGS)?;
+        if args.observation.trim().is_empty() {
+            return Err(mcp_invalid_params("observation must be non-empty"));
+        }
+        if let Some(raw) = &args.risk_flags_json {
+            validate_string_array_vocab("risk_flags_json", raw, SEMANTIC_SKELETON_RISK_FLAGS)?;
+        }
+        let details: serde_json::Value = match &args.details_json {
+            Some(raw) => serde_json::from_str(raw)
+                .map_err(|e| mcp_invalid_params(format!("details_json must be valid JSON: {}", e)))?,
+            None => serde_json::json!({}),
+        };
+        let risk_flags: serde_json::Value = match &args.risk_flags_json {
+            Some(raw) => serde_json::from_str(raw).unwrap_or_else(|_| serde_json::json!([])),
+            None => serde_json::json!([]),
+        };
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        let existing_notes: Option<String> = tx.query_row(
+            "SELECT review_notes_json FROM semantic_skeletons WHERE id = ?1",
+            [&args.semantic_skeleton_id],
+            |row| row.get(0),
+        ).optional().map_err(rs)?;
+        let Some(existing_notes) = existing_notes else {
+            return Err(mcp_invalid_params(format!("unknown semantic_skeleton_id: {}", args.semantic_skeleton_id)));
+        };
+        let mut notes: Vec<serde_json::Value> = serde_json::from_str(&existing_notes).unwrap_or_default();
+        let now = Utc::now().to_rfc3339();
+        notes.push(serde_json::json!({
+            "observation": args.observation.trim(),
+            "finding": args.finding,
+            "risk_flags": risk_flags,
+            "details": details,
+            "observed_by": args.observed_by,
+            "observed_at": now,
+        }));
+        let updated_notes = serde_json::to_string(&notes).unwrap();
+        tx.execute(
+            "UPDATE semantic_skeletons SET review_notes_json = ?1, updated_at = ?2 WHERE id = ?3",
+            (&updated_notes, &now, &args.semantic_skeleton_id),
+        ).map_err(rs)?;
+        let skeleton = semantic_skeleton_json(&tx, &args.semantic_skeleton_id)?;
+        let dossier_id = skeleton.get("dossier_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let dossier = match &dossier_id {
+            Some(dossier_id) => Some(research_dossier_observe_json(&tx, dossier_id)?),
+            None => None,
+        };
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "semantic_skeleton_id": args.semantic_skeleton_id,
+            "semantic_skeleton": skeleton,
+            "dossier": dossier,
+        })).unwrap())]))
+    }
+
+    // -----------------------------------------------------------------
+
     /// Issue #188 (epic #182): the single `candidate_construction` tool's
     /// dispatcher. Deserializes `CandidateConstructionArgs`, matches on the
     /// internally-tagged action, and routes to the per-action handlers below
@@ -12864,8 +13121,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<DistilledStrategyAddArgs>("distilled_strategy_add", "Store a reusable distilled strategy artifact (strategy_cheat_sheet/failed_attempt_summary/heuristic_rule/counterexample_pattern/construction_recipe/formalization_hint/review_checklist). A distilled strategy is NOT a proof; trust_status tops out at human_reviewed"),
             make_tool::<PaperIngestArgs>("paper_ingest", "Issue #187: ONE tool for the entire paper/PDF ingestion family (issue #27) — ingest a source document, append extracted claim nodes, read it back, attach it to a dossier, mark review/trust statuses, and promote extracted nodes to real dossier artifacts. EVERY ACTION HANDLES UNTRUSTED EXTRACTION, NEVER PROOF: LLM-Driven Proof Search Environment does no OCR/LLM extraction — the host records its own extraction result, untrusted by construction; an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT an accepted assumption; no field can hold kernel evidence and no status confers proof, kernel verification, statement fidelity, or citation validation. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\",\"source_kind\":\"pdf\"|\"manuscript\"|\"proof_sketch\"|\"exposition\"|..,\"created_by\":\"..\"} (+ optional dossier_id, source_ref, source_content_hash, ingest_status, extraction_trust_status, notes — ingest a paper/manuscript/proof_sketch/exposition as a reviewable source document, optionally linked to a dossier. Records the host's UNTRUSTED extraction; ingestion is not proof) | {\"type\":\"extract_claims\",\"document_id\":\"..\",\"nodes\":[{\"node_kind\":\"main_theorem\",\"natural_language_text\":\"..\",\"source_span\":\"p.1 Thm 1\"},..]} (append extracted nodes (abstract/main_theorem/definition/proposition/lemma/proof_step/construction/remark/appendix_fact/reference/open_gap) with source_span, confidence, and status labels to an ingested document, all-or-nothing; every node REQUIRES a non-empty source_span tracing it back to the paper. Each node is UNTRUSTED EXTRACTION — an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT accepted) | {\"type\":\"observe\",\"document_id\":\"..\"} (read an ingested document with all its extracted nodes and their trust labels. Read-only; nothing here is proof or kernel evidence) | {\"type\":\"link_to_dossier\",\"document_id\":\"..\",\"dossier_id\":\"..\"} (attach an ingested document and its extracted nodes to a research dossier so they surface in research_dossier observe's ingestion bucket, separate from proof authority) | {\"type\":\"mark_review_status\",\"document_id\":\"..\"} (+ optional node_id; document-level ingest_status/extraction_trust_status, or node-level review_status/formalization_status/citation_status with node_id — rejected_extraction stays visible, never deleted. None of these statuses confers proof, kernel verification, statement fidelity, or citation validation) | {\"type\":\"link_node\",\"document_id\":\"..\",\"node_id\":\"..\",\"target_kind\":\"external_reference\"|\"external_theorem_claim\"|\"research_node\"|\"formalization_plan_item\",\"target_id\":\"..\"} (promote/attach an extracted node to a real dossier artifact — external_reference / external_theorem_claim set citation_status=citation_recorded, research_node / formalization_plan_item set formalization_status=formalization_target_linked. Records provenance and marks review_status=linked_to_dossier_artifact; the linked artifact keeps its own trust and the node NEVER gains proof/kernel authority)"),
             make_tool::<ExpositionArgs>("exposition", "Issue #198: ONE tool for the exposition-artifact family (issue #7), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, obligation_id, verified_module_id, verified_lemma_id, dossier_id, prose_status, title) records a human-readable mathematical exposition section (section_kind: problem_summary/formalization_explanation/construction_intuition/key_lemmas/proof_strategy/verified_claim/unverified_bridges/reviewer_notes/next_formalization_targets) linked to a problem, episode, obligation, verified module, verified lemma, and/or dossier — prose_status (prose/reviewed_prose/formalized) marks epistemic weight: prose is never proof and never changes certification or training eligibility; `observe` (+ one of problem_version_id, episode_id, dossier_id) lists exposition artifacts for that scope — read-only prose, explicitly separate from kernel-verified proof"),
-            make_tool::<SemanticSkeletonAddArgs>("semantic_skeleton_add", "Attach a semantic statement skeleton / module-aware fidelity note (issue #6): a structured reading of a root statement, verified module, or source-aligned solution — quantifiers, hypotheses, conclusion, helper definitions, construction/final-answer map, back-translation, and fidelity risk_flags — scoped by review_scope (root_statement_only/module_artifact/source_aligned_solution/computational_check_only/structural_proof). All links optional. semantic_fingerprint_hash is server-computed. Metadata only: never marks anything proved, never sets fidelity_status, never substitutes for problem_submit_fidelity_review"),
-            make_tool::<SemanticSkeletonObserveArgs>("semantic_skeleton_observe", "Append one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive, optional risk_flags) to a semantic skeleton's review_notes history and read it back. Never changes proof/fidelity/budget/benchmark status; 'confirms_faithful' is not the root fidelity gate"),
+            make_tool::<SemanticSkeletonArgs>("semantic_skeleton", "Issue #199: ONE tool for the semantic-skeleton / module-aware-fidelity family (issue #6), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, root_obligation_id, module_id, module_item_id, verified_lemma_id, dossier_id, node_id, root_fidelity_review_id — all links optional) attaches a semantic statement skeleton / module-aware fidelity note: a structured reading of a root statement, verified module, or source-aligned solution — quantifiers, hypotheses, conclusion, helper definitions, construction/final-answer map, back-translation, and fidelity risk_flags — scoped by review_scope (root_statement_only/module_artifact/source_aligned_solution/computational_check_only/structural_proof). semantic_fingerprint_hash is server-computed. Metadata only: never marks anything proved, never sets fidelity_status, never substitutes for problem_submit_fidelity_review; `observe` (semantic_skeleton_id, observation, finding, + optional risk_flags_json, details_json, observed_by) appends one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive, optional risk_flags) to a semantic skeleton's review_notes history and reads it back. Never changes proof/fidelity/budget/benchmark status; 'confirms_faithful' is not the root fidelity gate"),
             make_tool::<ExpertReviewAddArgs>("expert_review_add", "Record one role-separated expert-review ledger entry (proposer/construction_searcher/formalizer/prover/reviewer/domain_expert/refuter/editor/librarian) against a polymorphic target (source_problem/formal_statement/construction_artifact/module_artifact/external_citation/asymptotic_extraction/exposition/full_dossier) with a decision, confidence, expertise tags, requested changes, and risk flags. ADDITIVE metadata only: a pure insert that never marks anything proved and never changes proof, certification, obligation, budget, or benchmark state. reviewer_id is free text, not an authenticated principal; a human decision stays distinct from Lean kernel verification. dossier_id is optional"),
             make_tool::<ExpertReviewObserveArgs>("expert_review_observe", "Read expert-review ledger entries, filtered by dossier, polymorphic target (kind+id together), and/or reviewer role. Revoked reviews are omitted unless include_revoked=true. Read-only"),
             make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
@@ -13022,8 +13278,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 43,
-                        "total_tool_count": 43,
+                        "classified_tool_count": 42,
+                        "total_tool_count": 42,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -13268,24 +13524,14 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "none — an unreviewed prose bridge cannot change certification or training eligibility; those are decided by fidelity_status, which this tool never writes",
                                 "required_run_mode": "any"
                             },
-                            "semantic_skeleton_add": {
-                                "side_effect": "mutating — inserts one semantic_skeletons row, optionally linked to a problem_version/episode/root_obligation/verified_module/module_item/verified_lemma/dossier/node and the existing root problem_fidelity_review it elaborates; every link is optional and validated to exist. semantic_fingerprint_hash is server-computed",
-                                "trust_level": "untrusted_input — a caller-authored structured reading of a statement/module/solution (quantifiers/hypotheses/conclusion/definitions/construction_map/backtranslation) plus fidelity risk_flags; never proof authority and never the root fidelity gate. The table has no column able to carry kernel evidence, so there is no kernel-boundary bypass to guard",
-                                "cost_surface": "none",
+                            "semantic_skeleton": {
+                                "side_effect": "mutating for both actions (issue #199: one tool consolidating the former semantic_skeleton_add / semantic_skeleton_observe tools; per-action semantics unchanged) — add inserts one semantic_skeletons row, optionally linked to a problem_version/episode/root_obligation/verified_module/module_item/verified_lemma/dossier/node and the existing root problem_fidelity_review it elaborates (every link optional and validated to exist; semantic_fingerprint_hash is server-computed); observe appends one observation (finding/observation/risk_flags/details/observed_by/observed_at) to a semantic_skeleton's review_notes_json array; touches nothing else",
+                                "trust_level": "untrusted_input for both actions, never proof authority and never the root fidelity gate — add is a caller-authored structured reading of a statement/module/solution (quantifiers/hypotheses/conclusion/definitions/construction_map/backtranslation) plus fidelity risk_flags; the table has no column able to carry kernel evidence, so there is no kernel-boundary bypass to guard; observe is a caller-reported fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive) — 'confirms_faithful' is note-taking, not the problem_submit_fidelity_review gate and not a proof",
+                                "cost_surface": "none for either action",
                                 "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
+                                "replayability": "deterministic for both actions",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none — a skeleton is descriptive metadata; it cannot set fidelity_status, mark an obligation proved, or change an episode outcome",
-                                "required_run_mode": "any"
-                            },
-                            "semantic_skeleton_observe": {
-                                "side_effect": "mutating — appends one observation (finding/observation/risk_flags/details/observed_by/observed_at) to a semantic_skeleton's review_notes_json array; touches nothing else",
-                                "trust_level": "untrusted_input — a caller-reported fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive); 'confirms_faithful' is note-taking, not the problem_submit_fidelity_review gate and not a proof",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output",
-                                "replayability": "deterministic",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
                                 "required_run_mode": "any"
                             },
                             "expert_review_add": {
@@ -14486,167 +14732,7 @@ impl ServerHandler for ChatDbMcp {
             }
             "paper_ingest" => self.do_paper_ingest(args_val).await,
             "exposition" => self.do_exposition(args_val).await,
-            "semantic_skeleton_add" => {
-                let args: SemanticSkeletonAddArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                validate_one_of("review_scope", &args.review_scope, SEMANTIC_SKELETON_REVIEW_SCOPES)?;
-                if args.created_by.trim().is_empty() {
-                    return Err(mcp_invalid_params("created_by must be non-empty"));
-                }
-                // Module-scope guard mirrors the DB CHECK, with a clearer message.
-                if args.review_scope == "module_artifact" && args.module_id.is_none() && args.module_item_id.is_none() {
-                    return Err(mcp_invalid_params("review_scope='module_artifact' requires module_id or module_item_id"));
-                }
-                let quantifiers_json = args.quantifiers_json.clone().unwrap_or_else(|| "[]".to_string());
-                let hypotheses_json = args.hypotheses_json.clone().unwrap_or_else(|| "[]".to_string());
-                let conclusion_json = args.conclusion_json.clone().unwrap_or_else(|| "{}".to_string());
-                let definitions_json = args.definitions_json.clone().unwrap_or_else(|| "[]".to_string());
-                let construction_map_json = args.construction_map_json.clone().unwrap_or_else(|| "[]".to_string());
-                for (field, raw) in [
-                    ("quantifiers_json", &quantifiers_json),
-                    ("hypotheses_json", &hypotheses_json),
-                    ("conclusion_json", &conclusion_json),
-                    ("definitions_json", &definitions_json),
-                    ("construction_map_json", &construction_map_json),
-                ] {
-                    serde_json::from_str::<serde_json::Value>(raw)
-                        .map_err(|e| mcp_invalid_params(format!("{} must be valid JSON: {}", field, e)))?;
-                }
-                let risk_flags_json = args.risk_flags_json.clone().unwrap_or_else(|| "[]".to_string());
-                validate_string_array_vocab("risk_flags_json", &risk_flags_json, SEMANTIC_SKELETON_RISK_FLAGS)?;
-
-                // semantic_fingerprint_hash is server-computed over the normalized
-                // skeleton content — never accepted from the client.
-                let fingerprint = canonical_hash(&serde_json::json!({
-                    "review_scope": args.review_scope,
-                    "quantifiers": parse_json_or_wrap(&quantifiers_json),
-                    "hypotheses": parse_json_or_wrap(&hypotheses_json),
-                    "conclusion": parse_json_or_wrap(&conclusion_json),
-                    "definitions": parse_json_or_wrap(&definitions_json),
-                    "construction_map": parse_json_or_wrap(&construction_map_json),
-                })).map_err(mcp_internal_error)?;
-
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                if let Some(id) = &args.problem_version_id { require_row_exists(&tx, "problem_versions", id, "problem_version_id")?; }
-                if let Some(id) = &args.episode_id { require_row_exists(&tx, "episodes", id, "episode_id")?; }
-                if let Some(id) = &args.root_obligation_id { require_row_exists(&tx, "episode_obligations", id, "root_obligation_id")?; }
-                if let Some(id) = &args.module_id { require_row_exists(&tx, "episode_verified_modules", id, "module_id")?; }
-                if let Some(id) = &args.module_item_id { require_row_exists(&tx, "episode_verified_module_items", id, "module_item_id")?; }
-                if let Some(id) = &args.verified_lemma_id { require_row_exists(&tx, "episode_verified_lemmas", id, "verified_lemma_id")?; }
-                if let Some(id) = &args.root_fidelity_review_id { require_row_exists(&tx, "problem_fidelity_reviews", id, "root_fidelity_review_id")?; }
-                if let Some(id) = &args.dossier_id { require_row_exists(&tx, "research_dossiers", id, "dossier_id")?; }
-                if let Some(id) = &args.node_id {
-                    match &args.dossier_id {
-                        Some(dossier_id) => require_row_in_dossier(&tx, "research_nodes", id, dossier_id, "node_id")?,
-                        None => require_row_exists(&tx, "research_nodes", id, "node_id")?,
-                    }
-                }
-
-                let skeleton_id = Uuid::new_v4().to_string();
-                let now = Utc::now().to_rfc3339();
-                tx.execute(
-                    "INSERT INTO semantic_skeletons (
-                        id, problem_version_id, episode_id, root_obligation_id, module_id, module_item_id,
-                        verified_lemma_id, dossier_id, node_id, root_fidelity_review_id, review_scope,
-                        quantifiers_json, hypotheses_json, conclusion_json, definitions_json, construction_map_json,
-                        backtranslation_text, risk_flags_json, review_notes_json, semantic_fingerprint_hash,
-                        created_by, created_at, updated_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, '[]', ?19, ?20, ?21, ?21)",
-                    rusqlite::params![
-                        &skeleton_id,
-                        args.problem_version_id.as_deref(),
-                        args.episode_id.as_deref(),
-                        args.root_obligation_id.as_deref(),
-                        args.module_id.as_deref(),
-                        args.module_item_id.as_deref(),
-                        args.verified_lemma_id.as_deref(),
-                        args.dossier_id.as_deref(),
-                        args.node_id.as_deref(),
-                        args.root_fidelity_review_id.as_deref(),
-                        &args.review_scope,
-                        &quantifiers_json,
-                        &hypotheses_json,
-                        &conclusion_json,
-                        &definitions_json,
-                        &construction_map_json,
-                        args.backtranslation_text.as_deref(),
-                        &risk_flags_json,
-                        &fingerprint,
-                        args.created_by.trim(),
-                        &now,
-                    ],
-                ).map_err(rs)?;
-                let skeleton = semantic_skeleton_json(&tx, &skeleton_id)?;
-                let dossier = match &args.dossier_id {
-                    Some(dossier_id) => Some(research_dossier_observe_json(&tx, dossier_id)?),
-                    None => None,
-                };
-                tx.commit().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "semantic_skeleton_id": skeleton_id,
-                    "semantic_skeleton": skeleton,
-                    "dossier": dossier,
-                })).unwrap())]))
-            }
-            "semantic_skeleton_observe" => {
-                let args: SemanticSkeletonObserveArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                validate_one_of("finding", &args.finding, SEMANTIC_SKELETON_OBSERVATION_FINDINGS)?;
-                if args.observation.trim().is_empty() {
-                    return Err(mcp_invalid_params("observation must be non-empty"));
-                }
-                if let Some(raw) = &args.risk_flags_json {
-                    validate_string_array_vocab("risk_flags_json", raw, SEMANTIC_SKELETON_RISK_FLAGS)?;
-                }
-                let details: serde_json::Value = match &args.details_json {
-                    Some(raw) => serde_json::from_str(raw)
-                        .map_err(|e| mcp_invalid_params(format!("details_json must be valid JSON: {}", e)))?,
-                    None => serde_json::json!({}),
-                };
-                let risk_flags: serde_json::Value = match &args.risk_flags_json {
-                    Some(raw) => serde_json::from_str(raw).unwrap_or_else(|_| serde_json::json!([])),
-                    None => serde_json::json!([]),
-                };
-
-                let mut conn = self.conn.lock().await;
-                let tx = conn.transaction().map_err(rs)?;
-                let existing_notes: Option<String> = tx.query_row(
-                    "SELECT review_notes_json FROM semantic_skeletons WHERE id = ?1",
-                    [&args.semantic_skeleton_id],
-                    |row| row.get(0),
-                ).optional().map_err(rs)?;
-                let Some(existing_notes) = existing_notes else {
-                    return Err(mcp_invalid_params(format!("unknown semantic_skeleton_id: {}", args.semantic_skeleton_id)));
-                };
-                let mut notes: Vec<serde_json::Value> = serde_json::from_str(&existing_notes).unwrap_or_default();
-                let now = Utc::now().to_rfc3339();
-                notes.push(serde_json::json!({
-                    "observation": args.observation.trim(),
-                    "finding": args.finding,
-                    "risk_flags": risk_flags,
-                    "details": details,
-                    "observed_by": args.observed_by,
-                    "observed_at": now,
-                }));
-                let updated_notes = serde_json::to_string(&notes).unwrap();
-                tx.execute(
-                    "UPDATE semantic_skeletons SET review_notes_json = ?1, updated_at = ?2 WHERE id = ?3",
-                    (&updated_notes, &now, &args.semantic_skeleton_id),
-                ).map_err(rs)?;
-                let skeleton = semantic_skeleton_json(&tx, &args.semantic_skeleton_id)?;
-                let dossier_id = skeleton.get("dossier_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-                let dossier = match &dossier_id {
-                    Some(dossier_id) => Some(research_dossier_observe_json(&tx, dossier_id)?),
-                    None => None,
-                };
-                tx.commit().map_err(rs)?;
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
-                    "semantic_skeleton_id": args.semantic_skeleton_id,
-                    "semantic_skeleton": skeleton,
-                    "dossier": dossier,
-                })).unwrap())]))
-            }
+            "semantic_skeleton" => self.do_semantic_skeleton(args_val).await,
             "expert_review_add" => {
                 let args: ExpertReviewAddArgs = serde_json::from_value(args_val)
                     .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -15118,7 +15204,10 @@ mod tests {
         // entities) = 44.
         // - 1 (issue #198: the two flat exposition_add/exposition_observe
         // tools consolidated into the ONE `exposition` tool) = 43.
-        assert_eq!(list_res.tools.len(), 43);
+        // - 1 (issue #199: the two flat semantic_skeleton_add/
+        // semantic_skeleton_observe tools consolidated into the ONE
+        // `semantic_skeleton` tool) = 42.
+        assert_eq!(list_res.tools.len(), 42);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -19211,12 +19300,12 @@ mod tests {
         let peer = client.peer();
 
         // A skeleton can describe a bare root statement before any dossier/episode/module exists.
-        let root = tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton_add").with_arguments(serde_json::json!({
+        let root = tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton").with_arguments(serde_json::json!({"action": {"type": "add",
             "review_scope": "root_statement_only",
             "quantifiers_json": "[{\"var\":\"n\",\"kind\":\"forall\",\"type\":\"Nat\"}]",
             "conclusion_json": "{\"claim\":\"P n holds\"}",
             "created_by": "reviewer-1",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let sk = &root["semantic_skeleton"];
         assert_eq!(sk["review_scope"], "root_statement_only", "{:?}", sk);
         assert_eq!(sk["is_kernel_verified"], false, "{:?}", sk);
@@ -19225,26 +19314,26 @@ mod tests {
 
         // Other scopes persist; a prose_only_bridge risk flag is accepted under source_aligned_solution.
         for scope in ["source_aligned_solution", "computational_check_only", "structural_proof"] {
-            let r = tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton_add").with_arguments(serde_json::json!({
+            let r = tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton").with_arguments(serde_json::json!({"action": {"type": "add",
                 "review_scope": scope,
                 "risk_flags_json": "[\"prose_only_bridge\"]",
                 "created_by": "reviewer-1",
-            }).as_object().unwrap().clone())).await.unwrap());
+            }}).as_object().unwrap().clone())).await.unwrap());
             assert_eq!(r["semantic_skeleton"]["review_scope"], scope, "{:?}", r);
         }
 
         // Bad scope, bad risk flag, and module_artifact-without-module are all rejected.
-        let bad_scope = peer.call_tool(CallToolRequestParams::new("semantic_skeleton_add").with_arguments(serde_json::json!({
+        let bad_scope = peer.call_tool(CallToolRequestParams::new("semantic_skeleton").with_arguments(serde_json::json!({"action": {"type": "add",
             "review_scope": "made_up", "created_by": "r",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_scope.is_err(), "unknown review_scope must be rejected");
-        let bad_flag = peer.call_tool(CallToolRequestParams::new("semantic_skeleton_add").with_arguments(serde_json::json!({
+        let bad_flag = peer.call_tool(CallToolRequestParams::new("semantic_skeleton").with_arguments(serde_json::json!({"action": {"type": "add",
             "review_scope": "root_statement_only", "risk_flags_json": "[\"not_a_flag\"]", "created_by": "r",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_flag.is_err(), "unknown risk flag must be rejected");
-        let module_scope_no_link = peer.call_tool(CallToolRequestParams::new("semantic_skeleton_add").with_arguments(serde_json::json!({
+        let module_scope_no_link = peer.call_tool(CallToolRequestParams::new("semantic_skeleton").with_arguments(serde_json::json!({"action": {"type": "add",
             "review_scope": "module_artifact", "created_by": "r",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(module_scope_no_link.is_err(), "review_scope='module_artifact' must require a module link");
     }
 
@@ -19295,7 +19384,7 @@ mod tests {
         };
 
         // A module_artifact-scoped skeleton attaches to the real verified module.
-        let sk = tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton_add").with_arguments(serde_json::json!({
+        let sk = tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton").with_arguments(serde_json::json!({"action": {"type": "add",
             "problem_version_id": pv_id,
             "episode_id": episode_id,
             "module_id": module_id,
@@ -19303,18 +19392,18 @@ mod tests {
             "definitions_json": "[{\"name\":\"double\",\"means\":\"n |-> n+n\"}]",
             "backtranslation_text": "double doubles its input; double 2 = 4.",
             "created_by": "reviewer-1",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let skeleton_id = sk["semantic_skeleton_id"].as_str().unwrap().to_string();
         assert_eq!(sk["semantic_skeleton"]["module_id"], module_id, "{:?}", sk);
 
         // observe appends fidelity notes in order; a 'confirms_faithful' note is NOT a proof/gate.
-        tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton_observe").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton").with_arguments(serde_json::json!({"action": {"type": "observe",
             "semantic_skeleton_id": skeleton_id, "observation": "Quantifier structure matches.", "finding": "confirms_faithful",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let second = tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton_observe").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let second = tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton").with_arguments(serde_json::json!({"action": {"type": "observe",
             "semantic_skeleton_id": skeleton_id, "observation": "But the source asks for all n, not just n=2.",
             "finding": "reports_mismatch", "risk_flags_json": "[\"conclusion_weakened\"]",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let notes = second["semantic_skeleton"]["review_notes"].as_array().unwrap();
         assert_eq!(notes.len(), 2, "{:?}", notes);
         assert_eq!(notes[0]["finding"], "confirms_faithful");
@@ -19322,13 +19411,13 @@ mod tests {
         assert_eq!(second["semantic_skeleton"]["is_kernel_verified"], false, "{:?}", second);
 
         // Bad finding and unknown id are rejected.
-        let bad_finding = peer.call_tool(CallToolRequestParams::new("semantic_skeleton_observe").with_arguments(serde_json::json!({
+        let bad_finding = peer.call_tool(CallToolRequestParams::new("semantic_skeleton").with_arguments(serde_json::json!({"action": {"type": "observe",
             "semantic_skeleton_id": skeleton_id, "observation": "x", "finding": "proved",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_finding.is_err(), "finding='proved' is not a valid observation outcome");
-        let unknown = peer.call_tool(CallToolRequestParams::new("semantic_skeleton_observe").with_arguments(serde_json::json!({
+        let unknown = peer.call_tool(CallToolRequestParams::new("semantic_skeleton").with_arguments(serde_json::json!({"action": {"type": "observe",
             "semantic_skeleton_id": "00000000-0000-0000-0000-000000000000", "observation": "x", "finding": "inconclusive",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(unknown.is_err(), "unknown semantic_skeleton_id must be rejected");
 
         // The core trust guarantee: a skeleton + confirms_faithful note changes nothing about
@@ -19353,12 +19442,12 @@ mod tests {
         }}).as_object().unwrap().clone())).await.unwrap());
         let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
 
-        let added = tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton_add").with_arguments(serde_json::json!({
+        let added = tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_skeleton").with_arguments(serde_json::json!({"action": {"type": "add",
             "dossier_id": dossier_id,
             "review_scope": "source_aligned_solution",
             "risk_flags_json": "[\"final_answer_extraction_mismatch\"]",
             "created_by": "reviewer-1",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         // The dossier came back with the skeleton in its own bucket.
         let bucket = added["dossier"]["semantic_skeletons"].as_array().unwrap();
         assert_eq!(bucket.len(), 1, "{:?}", added["dossier"]);
