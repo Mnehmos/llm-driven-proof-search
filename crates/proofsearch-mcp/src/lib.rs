@@ -515,12 +515,12 @@ pub struct RunEnvelopeArgs {
 
 // -- PutnamBench benchmark schema (issues #29, #30) ------------------------
 //
-// benchmark_suite_create/benchmark_problem_register are MANUAL/structured
-// registration only — no Lean-file parsing. The real importer (issue #29:
-// automatically extracting theorem name/imports/statement from a real
-// PutnamBench checkout) is a separate, not-yet-built piece; these tools are
-// what it will call once it exists, and are independently useful for
-// hand-registering a problem in the meantime.
+// benchmark_suite's create action / benchmark_problem's register action are
+// MANUAL/structured registration only — no Lean-file parsing. The real
+// importer (issue #29: automatically extracting theorem name/imports/
+// statement from a real PutnamBench checkout) is a separate, not-yet-built
+// piece; these actions are what it will call once it exists, and are
+// independently useful for hand-registering a problem in the meantime.
 
 #[derive(JsonSchema, Deserialize)]
 pub struct BenchmarkSuiteCreateArgs {
@@ -605,6 +605,75 @@ pub struct BenchmarkProblemObserveArgs {
     pub upstream_problem_id: Option<String>,
 }
 
+/// Issue #196 (epic #182, 14th consolidation after #183's `proof_session`
+/// pilot through #195's `draft`): the single `benchmark_problem` tool's
+/// internally-tagged action enum, mirroring the established `episode_step`
+/// pattern (`#[serde(tag = "type", rename_all = "snake_case")]`). Each
+/// variant's fields are the corresponding pre-#196 flat
+/// `BenchmarkProblem{Register,Observe}Args` struct's fields verbatim — those
+/// structs remain (unchanged) as what the `do_benchmark_problem_register`/
+/// `do_benchmark_problem_observe` handlers deserialize; this enum is only the
+/// MCP-layer dispatch shape. There are no shared wrapper fields: `register`
+/// mints a new benchmark_problem_id while `observe` keys on an existing
+/// benchmark_problem_id (or suite_id + upstream_problem_id). `register`'s
+/// trust boundary is UNCHANGED by this consolidation: root_statement_hash is
+/// server-computed from root_formal_statement (never accepted from the
+/// client), and prover_ready_statement/prover_ready_statement_hash are ALWAYS
+/// server-derived via to_pi_form (never client-supplied) — same
+/// anti-fabrication principle as elsewhere in this schema. This is the last
+/// piece of the wider `benchmark_*` family epic #182 deliberately split into
+/// three consolidated tools: `benchmark_suite` (issue #193) and
+/// `benchmark_run` (issue #194) are separate tools, not folded in here.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BenchmarkProblemAction {
+    Register {
+        suite_id: String,
+        /// The problem's own identifier in the upstream suite (e.g. PutnamBench's
+        /// own problem numbering), NOT a LLM-Driven Proof Search Environment-generated id.
+        upstream_problem_id: String,
+        theorem_name: String,
+        #[serde(default)]
+        source_file_path: Option<String>,
+        /// The exact, unmodified formal statement from the upstream suite. The
+        /// server computes root_statement_hash from this (never accepted from
+        /// the client) — same principle as problem_create's own root statement
+        /// hash.
+        root_formal_statement: String,
+        #[serde(default)]
+        import_manifest: Vec<String>,
+        #[serde(default)]
+        context_hash: Option<String>,
+        /// Issue #12: finite_exact (default) / parameterized_family /
+        /// inductive_growth_bound / asymptotic. An asymptotic goal forces
+        /// brute_force_admissible=false.
+        #[serde(default)]
+        goal_class: Option<String>,
+        /// Whether finite enumeration is admissible evidence at all. Defaults true,
+        /// but rejected if set true for an asymptotic goal.
+        #[serde(default)]
+        brute_force_admissible: Option<bool>,
+    },
+    Observe {
+        /// Look up by LLM-Driven Proof Search Environment benchmark problem id — or omit and give
+        /// (`suite_id`, `upstream_problem_id`) instead.
+        #[serde(default)]
+        benchmark_problem_id: Option<String>,
+        #[serde(default)]
+        suite_id: Option<String>,
+        #[serde(default)]
+        upstream_problem_id: Option<String>,
+    },
+}
+
+/// Issue #196: args for the single consolidated `benchmark_problem` tool. The
+/// entire payload lives on the internally-tagged `action` — see
+/// `BenchmarkProblemAction`'s doc for why there are no shared wrapper fields.
+#[derive(JsonSchema, Deserialize)]
+pub struct BenchmarkProblemArgs {
+    pub action: BenchmarkProblemAction,
+}
+
 #[derive(JsonSchema, Deserialize)]
 pub struct BenchmarkSuiteSetTrustArgs {
     pub suite_id: String,
@@ -634,9 +703,9 @@ pub struct BenchmarkSuiteSetTrustArgs {
 /// no shared wrapper fields: `create` mints a new suite_id while
 /// `observe`/`set_trust` key on an existing suite_id/name. The wider
 /// `benchmark_*` family is deliberately split into three consolidated tools
-/// by epic #182 — `benchmark_problem_register`/`benchmark_problem_observe`
-/// (future `benchmark_problem`) and the `benchmark_run` tool (issue #194:
-/// create/result_record/observe) are NOT folded in here.
+/// by epic #182 — `benchmark_problem` (issue #196: register/observe) and the
+/// `benchmark_run` tool (issue #194: create/result_record/observe) are NOT
+/// folded in here.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BenchmarkSuiteAction {
@@ -885,9 +954,8 @@ pub struct BenchmarkRunObserveArgs {
 /// underlying policy functions (`enforce_dev_attestation_mode_policy`,
 /// `trusted_canonical_hash_exemption_applies`) changed. The wider
 /// `benchmark_*` family is deliberately split into three consolidated tools
-/// by epic #182 — `benchmark_suite` (issue #193) and
-/// `benchmark_problem_register`/`benchmark_problem_observe` (future
-/// `benchmark_problem`) are separate tools, not folded in here.
+/// by epic #182 — `benchmark_suite` (issue #193) and `benchmark_problem`
+/// (issue #196: register/observe) are separate tools, not folded in here.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BenchmarkRunAction {
@@ -11535,6 +11603,162 @@ impl ChatDbMcp {
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
     }
 
+    async fn do_benchmark_problem(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: BenchmarkProblemArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize benchmark_problem action: {}", e)))?;
+        match &args.action {
+            BenchmarkProblemAction::Register { .. } => self.do_benchmark_problem_register(inner).await,
+            BenchmarkProblemAction::Observe { .. } => self.do_benchmark_problem_observe(inner).await,
+        }
+    }
+
+    async fn do_benchmark_problem_register(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: BenchmarkProblemRegisterArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if args.root_formal_statement.trim().is_empty() || args.theorem_name.trim().is_empty() {
+            return Err(mcp_invalid_params("theorem_name and root_formal_statement must be non-empty"));
+        }
+        // Issue #12: goal-class metadata. An asymptotic goal is not
+        // decidable by finite enumeration, so it forces
+        // brute_force_admissible=false and rejects an explicit true.
+        let goal_class = args.goal_class.as_deref().unwrap_or("finite_exact");
+        validate_one_of("goal_class", goal_class, &["finite_exact", "parameterized_family", "inductive_growth_bound", "asymptotic"])?;
+        let brute_force_admissible = if goal_class == "asymptotic" {
+            if args.brute_force_admissible == Some(true) {
+                return Err(mcp_invalid_params("an asymptotic goal cannot admit finite brute force as evidence; brute_force_admissible must be false"));
+            }
+            false
+        } else {
+            args.brute_force_admissible.unwrap_or(true)
+        };
+
+        let conn = self.conn.lock().await;
+        let suite_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM benchmark_suites WHERE id = ?1", [&args.suite_id], |row| row.get(0),
+        ).map_err(rs)?;
+        if suite_exists == 0 {
+            return Err(mcp_invalid_params(format!("unknown suite_id: {}", args.suite_id)));
+        }
+
+        let root_statement_hash = canonical_hash(&args.root_formal_statement).map_err(mcp_internal_error)?;
+        // prover_ready_statement is ALWAYS server-derived, never
+        // accepted from the client — same principle as
+        // root_statement_hash/lean_version/mathlib_commit elsewhere
+        // in this schema. A client-supplied conversion would let a
+        // caller register an arbitrary (e.g. trivially easy)
+        // "prover-ready" text alongside a hard root_formal_statement
+        // and have benchmark_result_record's cross-check validate
+        // against the wrong one — exactly the fabrication issue #30
+        // was built to prevent. to_pi_form is a general Lean 4
+        // syntactic fact (named-binder declarations desugar to a
+        // Pi-type identically regardless of benchmark suite), so
+        // attempting it unconditionally is safe: it fails closed
+        // (returns Err, leaving both columns NULL) for any
+        // root_formal_statement that isn't a `theorem {theorem_name}
+        // (binders) : type` declaration — including a suite whose
+        // statements are already bare types needing no conversion.
+        let prover_ready_statement = to_pi_form(&args.root_formal_statement, &args.theorem_name)
+            .ok().map(|form| form.root_theorem_statement);
+        let prover_ready_statement_hash = prover_ready_statement.as_ref()
+            .map(|s| canonical_hash(s)).transpose().map_err(mcp_internal_error)?;
+        // Issue #62: a registered manifest entry is either a module
+        // path or an `open` directive (the upstream file's own scoped-
+        // notation context — e.g. PutnamBench's `open Polynomial`).
+        // Both are validated at registration (open entries stored in
+        // canonical token form) so problem_create can adopt the
+        // manifest verbatim.
+        let mut import_manifest: Vec<String> = Vec::with_capacity(args.import_manifest.len());
+        for m in &args.import_manifest {
+            if valid_lean_module_path(m) {
+                import_manifest.push(m.clone());
+            } else if let Some(canonical_open) = parse_open_directive(m) {
+                import_manifest.push(canonical_open);
+            } else {
+                return Err(mcp_invalid_params(format!(
+                    "import_manifest entry {:?} is neither a valid Lean module path nor a valid open directive (`open [scoped] <Namespace> [<Namespace> ...]`)",
+                    m
+                )));
+            }
+        }
+        let import_manifest_json = serde_json::to_string(&import_manifest).unwrap();
+        let problem_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO benchmark_problems (
+                id, suite_id, upstream_problem_id, theorem_name, source_file_path,
+                root_formal_statement, root_statement_hash, import_manifest_json,
+                context_hash, prover_ready_statement, prover_ready_statement_hash, status, created_at,
+                goal_class, brute_force_admissible
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'imported', ?12, ?13, ?14)",
+            rusqlite::params![&problem_id, &args.suite_id, &args.upstream_problem_id, &args.theorem_name, &args.source_file_path,
+             &args.root_formal_statement, &root_statement_hash, &import_manifest_json, &args.context_hash,
+             &prover_ready_statement, &prover_ready_statement_hash, &now,
+             goal_class, brute_force_admissible],
+        ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
+            mcp_invalid_params(format!("problem {:?} is already registered in this suite", args.upstream_problem_id))
+        } else {
+            rs(e)
+        })?;
+
+        let res = serde_json::json!({
+            "benchmark_problem_id": problem_id,
+            "root_statement_hash": root_statement_hash,
+            "prover_ready_statement_hash": prover_ready_statement_hash,
+            "status": "imported",
+            "goal_class": goal_class,
+            "brute_force_admissible": brute_force_admissible,
+            "created_at": now,
+        });
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
+    }
+
+    async fn do_benchmark_problem_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: BenchmarkProblemObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let conn = self.conn.lock().await;
+        const PROBLEM_COLS: &str =
+            "SELECT id, suite_id, upstream_problem_id, theorem_name, source_file_path, root_formal_statement,
+                    root_statement_hash, import_manifest_json, prover_ready_statement,
+                    prover_ready_statement_hash, status, goal_class, brute_force_admissible, created_at, context_hash
+             FROM benchmark_problems";
+        let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<serde_json::Value> {
+            let manifest_json: String = row.get(7)?;
+            Ok(serde_json::json!({
+                "benchmark_problem_id": row.get::<_, String>(0)?,
+                "suite_id": row.get::<_, String>(1)?,
+                "upstream_problem_id": row.get::<_, String>(2)?,
+                "theorem_name": row.get::<_, String>(3)?,
+                "source_file_path": row.get::<_, Option<String>>(4)?,
+                "root_formal_statement": row.get::<_, String>(5)?,
+                "root_statement_hash": row.get::<_, String>(6)?,
+                "import_manifest": serde_json::from_str::<serde_json::Value>(&manifest_json).unwrap_or(serde_json::Value::Null),
+                "prover_ready_statement": row.get::<_, Option<String>>(8)?,
+                "prover_ready_statement_hash": row.get::<_, Option<String>>(9)?,
+                "status": row.get::<_, String>(10)?,
+                "goal_class": row.get::<_, String>(11)?,
+                "brute_force_admissible": row.get::<_, i64>(12)? == 1,
+                "created_at": row.get::<_, String>(13)?,
+                "context_hash": row.get::<_, Option<String>>(14)?,
+            }))
+        };
+        let row = match (&args.benchmark_problem_id, &args.suite_id, &args.upstream_problem_id) {
+            (Some(id), _, _) => conn.query_row(
+                &format!("{} WHERE id = ?1", PROBLEM_COLS), [id], map_row,
+            ).optional().map_err(rs)?,
+            (None, Some(suite), Some(upstream)) => conn.query_row(
+                &format!("{} WHERE suite_id = ?1 AND upstream_problem_id = ?2", PROBLEM_COLS),
+                [suite, upstream], map_row,
+            ).optional().map_err(rs)?,
+            _ => return Err(mcp_invalid_params("provide benchmark_problem_id, or both suite_id and upstream_problem_id")),
+        };
+        let Some(problem) = row else {
+            return Err(mcp_invalid_params("no benchmark problem matches the given identifiers"));
+        };
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&problem).unwrap())]))
+    }
+
     async fn do_benchmark_run(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
         let args: BenchmarkRunArgs = serde_json::from_value(args_val)
             .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -12381,9 +12605,8 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
             make_tool::<MathlibSearchLocalArtifactsArgs>("mathlib_search_local_artifacts", "Search THIS LLM-Driven Proof Search Environment instance's own previously-verified theorem/def names for a substring match — a local usage_example precedent, not a Mathlib-library result"),
             make_tool::<RunEnvelopeArgs>("run_envelope", "Issue #190: ONE tool for the entire run-envelope family (issues #34/#38/#46) — create, correct, and read back who/what produced a set of episodes: host, model, mode (development/evaluation/benchmark/private_audit/public_report), and host-side cost accounting LLM-Driven Proof Search Environment itself cannot observe. Purely descriptive metadata; NO action ever affects proof status. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"mode\":\"development\"|\"evaluation\"|\"benchmark\"|\"private_audit\"|\"public_report\"} (+ optional host_name, host_model, benchmark_suite_name, host_side_cost_micros, host_cost_confidence, notes — creates the envelope and, issue #46, an origin cost observation so the append-only history has a defined head from creation) | {\"type\":\"update\",\"run_envelope_id\":\"..\"} (+ optional host_side_cost_micros, host_cost_confidence, notes — update a run envelope's host-side cost fields or notes after the fact; APPEND-ONLY under the hood (issue #46): a cost correction appends an immutable observation rather than overwriting, so the prior value stays queryable via the observe action's cost_observations) | {\"type\":\"cost_observation_add\",\"run_envelope_id\":\"..\"} (+ optional host_side_cost_micros, host_cost_confidence, source, notes — append an auditable, append-only host-side cost observation (issue #46); never overwrites a prior observation — the previous value stays queryable; sets the envelope's current selected cost figure while preserving the full supersedes chain) | {\"type\":\"attach_episode\",\"run_envelope_id\":\"..\",\"episode_id\":\"..\"} (+ optional allow_dev_attested — tag an existing episode with a run envelope, metadata only, never changes the episode's outcome/state; mode-enforcement policy: unconditionally rejects attaching an 'attested'/unsafe_dev_attestation episode to a benchmark/evaluation/public_report-mode envelope with no override, 'development' is always allowed, and 'private_audit' requires allow_dev_attested=true) | {\"type\":\"observe\",\"run_envelope_id\":\"..\"} (read back a run envelope, every episode tagged with it, and its full append-only host-side cost observation history)"),
-            make_tool::<BenchmarkSuiteArgs>("benchmark_suite", "Issue #193: ONE tool for the benchmark-suite lifecycle (issues #29/#30/#65) — register a benchmark suite (e.g. PutnamBench), read it back with its append-only trust-review history and (by default) every registered problem, and change its trusted_canonical_source flag after creation. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"name\":\"..\"} (+ optional upstream_url, upstream_commit, language (defaults \"Lean4\"), trusted_canonical_source — manual/structured registration, not automated parsing; rejects a duplicate name rather than silently creating a second suite with the same identity. trusted_canonical_source is an honest, self-declared trust assertion: assert true ONLY for a suite you can vouch is a real, externally-curated benchmark corpus whose own registered root_formal_statement is itself sufficient fidelity evidence — a statement-hash match against such a suite is accepted by benchmark_result_record as fidelity basis for a kernel_verified/certified claim WITHOUT requiring a separate problem_submit_fidelity_review. LLM-Driven Proof Search Environment never independently verifies this claim; defaults to false so an arbitrary custom suite can never silently gain this treatment) | {\"type\":\"observe\"} (+ suite_id OR name, optional include_problems defaulting true — read back the suite row (upstream provenance, trusted_canonical_source), its append-only trust-review history, and every registered problem's full row (root_formal_statement, prover_ready_statement + hashes, import manifest, goal class). The sanctioned way for a host to read registered benchmark content; no database side channel needed) | {\"type\":\"set_trust\",\"suite_id\":\"..\",\"trusted_canonical_source\":true|false,\"approver_id\":\"..\"} (+ optional notes — the admin path for changing a suite's trusted_canonical_source flag after creation, forcing per-problem fidelity reviews when an importer forgot the flag. approver_id must be non-empty — trust changes are audited. Same honesty contract as create: assert true ONLY for a real, externally-curated corpus, and raising trust to true REQUIRES non-empty notes recording WHY this suite qualifies. Every REAL change (previous value != new value) is recorded append-only in benchmark_suite_trust_reviews (approver, previous → new value, notes) alongside the update; a same-value call is a recorded-as-unchanged no-op — no audit row, no update, trust_review_id null in the response. Never affects proof status of existing results — only the fidelity basis future benchmark_result_record calls can claim). The wider benchmark_* family is deliberately split into three consolidated tools by epic #182 — `benchmark_problem_register`/`benchmark_problem_observe` (future `benchmark_problem`) and the `benchmark_run` tool (issue #194: create/result_record/observe) are separate tools, not part of this consolidation"),
-            make_tool::<BenchmarkProblemRegisterArgs>("benchmark_problem_register", "Register one benchmark problem within a suite. root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise. import_manifest entries may be Lean module paths AND `open [scoped] <Namespace> ...` directives (issue #62) — capture the upstream file's own open context here so registered statements that rely on scoped notation (ℤ[X], ∠, π) elaborate faithfully at proving time"),
-            make_tool::<BenchmarkProblemObserveArgs>("benchmark_problem_observe", "Read back one registered benchmark problem (issue #65) by benchmark_problem_id, or by (suite_id, upstream_problem_id). Returns the full row: root_formal_statement, server-derived prover_ready_statement (the exact bytes problem_create/SubmitModule must receive), both hashes, import manifest (module paths + open directives), goal class, and status"),
+            make_tool::<BenchmarkSuiteArgs>("benchmark_suite", "Issue #193: ONE tool for the benchmark-suite lifecycle (issues #29/#30/#65) — register a benchmark suite (e.g. PutnamBench), read it back with its append-only trust-review history and (by default) every registered problem, and change its trusted_canonical_source flag after creation. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"name\":\"..\"} (+ optional upstream_url, upstream_commit, language (defaults \"Lean4\"), trusted_canonical_source — manual/structured registration, not automated parsing; rejects a duplicate name rather than silently creating a second suite with the same identity. trusted_canonical_source is an honest, self-declared trust assertion: assert true ONLY for a suite you can vouch is a real, externally-curated benchmark corpus whose own registered root_formal_statement is itself sufficient fidelity evidence — a statement-hash match against such a suite is accepted by benchmark_result_record as fidelity basis for a kernel_verified/certified claim WITHOUT requiring a separate problem_submit_fidelity_review. LLM-Driven Proof Search Environment never independently verifies this claim; defaults to false so an arbitrary custom suite can never silently gain this treatment) | {\"type\":\"observe\"} (+ suite_id OR name, optional include_problems defaulting true — read back the suite row (upstream provenance, trusted_canonical_source), its append-only trust-review history, and every registered problem's full row (root_formal_statement, prover_ready_statement + hashes, import manifest, goal class). The sanctioned way for a host to read registered benchmark content; no database side channel needed) | {\"type\":\"set_trust\",\"suite_id\":\"..\",\"trusted_canonical_source\":true|false,\"approver_id\":\"..\"} (+ optional notes — the admin path for changing a suite's trusted_canonical_source flag after creation, forcing per-problem fidelity reviews when an importer forgot the flag. approver_id must be non-empty — trust changes are audited. Same honesty contract as create: assert true ONLY for a real, externally-curated corpus, and raising trust to true REQUIRES non-empty notes recording WHY this suite qualifies. Every REAL change (previous value != new value) is recorded append-only in benchmark_suite_trust_reviews (approver, previous → new value, notes) alongside the update; a same-value call is a recorded-as-unchanged no-op — no audit row, no update, trust_review_id null in the response. Never affects proof status of existing results — only the fidelity basis future benchmark_result_record calls can claim). The wider benchmark_* family is deliberately split into three consolidated tools by epic #182 — the `benchmark_problem` tool (issue #196: register/observe) and the `benchmark_run` tool (issue #194: create/result_record/observe) are separate tools, not part of this consolidation"),
+            make_tool::<BenchmarkProblemArgs>("benchmark_problem", "Issue #196: ONE tool for the benchmark-problem lifecycle (issues #29/#30/#62/#65) — register one benchmark problem within a suite, and read one back. `action` is internally tagged — exactly one of: {\"type\":\"register\",\"suite_id\":\"..\",\"upstream_problem_id\":\"..\",\"theorem_name\":\"..\",\"root_formal_statement\":\"..\"} (+ optional source_file_path, import_manifest, context_hash, goal_class, brute_force_admissible — root_statement_hash is server-computed from root_formal_statement, never accepted from the client. The server also derives a prover_ready_statement automatically (never client-supplied) when root_formal_statement is a `theorem NAME (binders) : type` declaration — Lean 4's own named-binder-to-Pi-type desugaring — for suites (e.g. PutnamBench) whose faithful catalog text isn't itself a valid problem_create/SubmitModule statement. benchmark_result_record's episode cross-check uses this hash when present, root_statement_hash otherwise. import_manifest entries may be Lean module paths AND `open [scoped] <Namespace> ...` directives (issue #62) — capture the upstream file's own open context here so registered statements that rely on scoped notation (ℤ[X], ∠, π) elaborate faithfully at proving time) | {\"type\":\"observe\"} (+ benchmark_problem_id OR (suite_id AND upstream_problem_id) — read back one registered benchmark problem (issue #65). Returns the full row: root_formal_statement, server-derived prover_ready_statement (the exact bytes problem_create/SubmitModule must receive), both hashes, import manifest (module paths + open directives), goal class, and status)"),
             make_tool::<BenchmarkRunArgs>("benchmark_run", "Issue #194: ONE tool for the entire benchmark-run family (issue #182's benchmark_run_create/benchmark_result_record/benchmark_run_observe consolidation) — create a benchmark run against a suite, record (or update) a problem's result within it, and read back a run with its results and aggregate metrics. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"suite_id\":\"..\",\"run_envelope_id\":\"..\",\"solve_mode\":\"solve_only\"|\"submit_module_allowed\"|\"submit_module_plus_draft_planning\"|\"submit_module_plus_librarian\",\"attempt_budget\":N} (+ optional proofsearch_commit, allowed_tools, wall_clock_budget_ms, lean_timeout_ms — creates a benchmark run. Requires an existing run_envelope_id (call run_envelope_create first — a run should not start unassociated with host/mode/cost tracking). lean_version/mathlib_commit are read from the server's OWN detected Lean environment, never accepted from the client — the only trustworthy source for what was actually used to verify results) | {\"type\":\"result_record\",\"run_id\":\"..\",\"benchmark_problem_id\":\"..\",\"status\":\"kernel_verified\"|\"certified\"|\"failed\"|\"timeout\"|\"infra_error\"|\"formalization_gap\"|\"skipped\",\"attempts_used\":N} (+ optional problem_version_id, episode_id, outcome, pass_at, time_to_first_success_ms, cost_micros, final_diagnostic_category, proof_artifact_hash, trajectory_export_hash, replay_status, allow_dev_attested, gap_categories, kit_lemmas_used, missing_route_step — records (or updates) one problem's result within a run. When episode_id is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as benchmark_problem_id (root_statement_hash match) — issue #36 — a result cannot claim kernel_verified/certified unless the referenced episode really reached it for this exact problem, and a kernel_verified/certified claim is rejected outright without an episode_id at all. Issue #38's fidelity-basis policy: a kernel_verified/certified claim additionally requires EITHER the suite be trusted_canonical_source=true (a real, externally-curated corpus like PutnamBench, whose own canonical statement-hash match is accepted as sufficient fidelity evidence — basis='canonical_statement_hash_match') OR the backing problem_version's fidelity_status be independently 'verified' (basis='problem_fidelity_verified') — an arbitrary untrusted/custom suite backed only by an unsafe_dev_attestation ('attested') problem is not sufficient. Mode-enforcement exception: this fidelity-basis check is skipped for a trusted_canonical_source suite (trusted_canonical_hash_exemption_applies), avoiding a contradiction with that flag's own purpose; otherwise an 'attested' problem's kernel_verified/certified claim is rejected in benchmark/evaluation/public_report run-envelope modes, and requires allow_dev_attested=true in private_audit mode (enforce_dev_attestation_mode_policy). For failed/gave-up results, optionally attach structured gap_categories (issue #76: math_unknown / library_missing / statement_elaboration_gap / statement_elaborates_but_bridge_missing / tactic_timeout / tactic_transport_hazard / geometry_case_analysis_missing / coefficient_uniqueness_missing / area_coordinate_scaffold_missing / convexity_extreme_point_missing / export_trust_policy_gap / benchmark_admin_gap) — reporting metadata that never affects proof authority or score, so failures read as an infrastructure roadmap instead of a flat failure count. Issue #92 adds kit-aware reporting: kit_lemmas_used (fully qualified kit lemma names the attempt used) and missing_route_step (which kit route step blocked a failure) — while kits_imported is derived SERVER-SIDE from the linked problem_version's import manifest, never client-claimed) | {\"type\":\"observe\",\"run_id\":\"..\"} (read back a run, every result recorded against it, and aggregate pass/attempt metrics. Issue #92: per-result kit fields (kits_imported server-derived from the manifest, kit_lemmas_used, missing_route_step) plus metrics.failures_by_missing_route_step, metrics.kits_imported_by_problem, and metrics.kit_acceptance_matrix (embedded kit registry targets crossed with this run's outcomes — which problems are blocked by which kit issue). solved_rate is 'solved at all within attempt_budget'; pass_at_1_rate is strictly first-attempt success (using pass_at when given, else attempts_used==1) — the two are NOT the same metric. cost_summary separates real metrics (verifier_wall_time_ms/verifier_cpu_time_ms/mcp_action_count/mcp_handler_wall_time_ms/storage_bytes_written/storage_export_bytes/storage_export_wall_time_ms — all real, measured data, null only when genuinely no correlated activity exists yet) from monetary cost (*_cost_micros fields, null unless real money data or a rate card exists — mcp_side_cost_micros/storage_export_cost_micros stay null with no pricing profile decided for either surface). cost_completeness is 'total_cost_known' only when every material cost surface is exact (currently unreachable: mcp_side/storage_export have real metrics but no pricing), 'reported_total_not_exact' when some real monetary signal exists (exact/attested/estimated) but not a complete exact total, else 'total_cost_incomplete')"),
         ];
         Ok(ListToolsResult::with_all_items(tools))
@@ -12533,8 +12756,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 46,
-                        "total_tool_count": 46,
+                        "classified_tool_count": 45,
+                        "total_tool_count": 45,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -12970,22 +13193,12 @@ impl ServerHandler for ChatDbMcp {
                                 "artifact_risk": "diagnostic_only",
                                 "required_run_mode": "any"
                             },
-                            "benchmark_problem_register": {
-                                "side_effect": "mutating — inserts a benchmark_problems row (incl. issue #12 goal_class/brute_force_admissible metadata; an asymptotic goal forces brute_force_admissible=false); rejects a duplicate upstream_problem_id within the same suite",
-                                "trust_level": "human_attested for root_formal_statement/theorem_name/import_manifest (exactly what the caller declares — LLM-Driven Proof Search Environment doesn't itself parse an upstream benchmark repo), but root_statement_hash and prover_ready_statement/prover_ready_statement_hash are ALWAYS server-derived (canonical_hash / to_pi_form), never accepted from the client — the same anti-fabrication principle as root_statement_hash elsewhere, since a client-supplied prover-ready text could otherwise register an easy proxy statement alongside a hard root statement and have benchmark_result_record's cross-check validate against the wrong one",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output — problem metadata (not yet an episode, not yet a proof)",
-                                "replayability": "deterministic; to_pi_form fails closed (returns Err, leaving prover_ready_statement/hash NULL) for any statement that isn't a theorem-with-binders declaration, rather than guessing at a conversion",
-                                "source_code_impact": "no_source_change",
-                                "artifact_risk": "none",
-                                "required_run_mode": "any"
-                            },
-                            "benchmark_problem_observe": {
-                                "side_effect": "read_only — one benchmark_problems row by id or (suite_id, upstream_problem_id)",
-                                "trust_level": "reads back exactly what registration stored, including the server-derived prover_ready_statement a prover must submit byte-for-byte",
-                                "cost_surface": "none",
-                                "benchmark_safety": "safe_public_output — upstream-published statement text, never a proof body",
-                                "replayability": "deterministic",
+                            "benchmark_problem": {
+                                "side_effect": "mixed by action (issue #196: one tool consolidating the former benchmark_problem_register / benchmark_problem_observe tools; per-action semantics unchanged): register is mutating — inserts a benchmark_problems row (incl. issue #12 goal_class/brute_force_admissible metadata; an asymptotic goal forces brute_force_admissible=false), rejects a duplicate upstream_problem_id within the same suite; observe is read_only — one benchmark_problems row by id or (suite_id, upstream_problem_id)",
+                                "trust_level": "register: human_attested for root_formal_statement/theorem_name/import_manifest (exactly what the caller declares — LLM-Driven Proof Search Environment doesn't itself parse an upstream benchmark repo), but root_statement_hash and prover_ready_statement/prover_ready_statement_hash are ALWAYS server-derived (canonical_hash / to_pi_form), never accepted from the client — the same anti-fabrication principle as root_statement_hash elsewhere, since a client-supplied prover-ready text could otherwise register an easy proxy statement alongside a hard root statement and have benchmark_result_record's cross-check validate against the wrong one; observe reads back exactly what registration stored, including the server-derived prover_ready_statement a prover must submit byte-for-byte",
+                                "cost_surface": "none for either action",
+                                "benchmark_safety": "safe_public_output for both actions — problem metadata (not yet an episode, not yet a proof) for register, upstream-published statement text for observe, never a proof body",
+                                "replayability": "deterministic for both actions; register's to_pi_form fails closed (returns Err, leaving prover_ready_statement/hash NULL) for any statement that isn't a theorem-with-binders declaration, rather than guessing at a conversion",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none",
                                 "required_run_mode": "any"
@@ -13032,8 +13245,8 @@ impl ServerHandler for ChatDbMcp {
                 // etc.), and the resulting parse_error looks identical to a
                 // proof-content bug, with nothing in the diagnostic pointing at
                 // the real cause. Default to the full "Mathlib" umbrella instead
-                // (matching benchmark_problem_register's own default for
-                // suite-level registration) so registration is parseable out of
+                // (matching benchmark_problem's register action's own default
+                // for suite-level registration) so registration is parseable out of
                 // the box; a caller that explicitly passes problem_imports
                 // (even `[]`) is making a deliberate narrower choice and keeps
                 // the previous BASE_IMPORT_MANIFEST-plus-extras behavior.
@@ -14502,149 +14715,7 @@ impl ServerHandler for ChatDbMcp {
             }
             "run_envelope" => self.do_run_envelope(args_val).await,
             "benchmark_suite" => self.do_benchmark_suite(args_val).await,
-            "benchmark_problem_register" => {
-                let args: BenchmarkProblemRegisterArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                if args.root_formal_statement.trim().is_empty() || args.theorem_name.trim().is_empty() {
-                    return Err(mcp_invalid_params("theorem_name and root_formal_statement must be non-empty"));
-                }
-                // Issue #12: goal-class metadata. An asymptotic goal is not
-                // decidable by finite enumeration, so it forces
-                // brute_force_admissible=false and rejects an explicit true.
-                let goal_class = args.goal_class.as_deref().unwrap_or("finite_exact");
-                validate_one_of("goal_class", goal_class, &["finite_exact", "parameterized_family", "inductive_growth_bound", "asymptotic"])?;
-                let brute_force_admissible = if goal_class == "asymptotic" {
-                    if args.brute_force_admissible == Some(true) {
-                        return Err(mcp_invalid_params("an asymptotic goal cannot admit finite brute force as evidence; brute_force_admissible must be false"));
-                    }
-                    false
-                } else {
-                    args.brute_force_admissible.unwrap_or(true)
-                };
-
-                let conn = self.conn.lock().await;
-                let suite_exists: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM benchmark_suites WHERE id = ?1", [&args.suite_id], |row| row.get(0),
-                ).map_err(rs)?;
-                if suite_exists == 0 {
-                    return Err(mcp_invalid_params(format!("unknown suite_id: {}", args.suite_id)));
-                }
-
-                let root_statement_hash = canonical_hash(&args.root_formal_statement).map_err(mcp_internal_error)?;
-                // prover_ready_statement is ALWAYS server-derived, never
-                // accepted from the client — same principle as
-                // root_statement_hash/lean_version/mathlib_commit elsewhere
-                // in this schema. A client-supplied conversion would let a
-                // caller register an arbitrary (e.g. trivially easy)
-                // "prover-ready" text alongside a hard root_formal_statement
-                // and have benchmark_result_record's cross-check validate
-                // against the wrong one — exactly the fabrication issue #30
-                // was built to prevent. to_pi_form is a general Lean 4
-                // syntactic fact (named-binder declarations desugar to a
-                // Pi-type identically regardless of benchmark suite), so
-                // attempting it unconditionally is safe: it fails closed
-                // (returns Err, leaving both columns NULL) for any
-                // root_formal_statement that isn't a `theorem {theorem_name}
-                // (binders) : type` declaration — including a suite whose
-                // statements are already bare types needing no conversion.
-                let prover_ready_statement = to_pi_form(&args.root_formal_statement, &args.theorem_name)
-                    .ok().map(|form| form.root_theorem_statement);
-                let prover_ready_statement_hash = prover_ready_statement.as_ref()
-                    .map(|s| canonical_hash(s)).transpose().map_err(mcp_internal_error)?;
-                // Issue #62: a registered manifest entry is either a module
-                // path or an `open` directive (the upstream file's own scoped-
-                // notation context — e.g. PutnamBench's `open Polynomial`).
-                // Both are validated at registration (open entries stored in
-                // canonical token form) so problem_create can adopt the
-                // manifest verbatim.
-                let mut import_manifest: Vec<String> = Vec::with_capacity(args.import_manifest.len());
-                for m in &args.import_manifest {
-                    if valid_lean_module_path(m) {
-                        import_manifest.push(m.clone());
-                    } else if let Some(canonical_open) = parse_open_directive(m) {
-                        import_manifest.push(canonical_open);
-                    } else {
-                        return Err(mcp_invalid_params(format!(
-                            "import_manifest entry {:?} is neither a valid Lean module path nor a valid open directive (`open [scoped] <Namespace> [<Namespace> ...]`)",
-                            m
-                        )));
-                    }
-                }
-                let import_manifest_json = serde_json::to_string(&import_manifest).unwrap();
-                let problem_id = Uuid::new_v4().to_string();
-                let now = Utc::now().to_rfc3339();
-                conn.execute(
-                    "INSERT INTO benchmark_problems (
-                        id, suite_id, upstream_problem_id, theorem_name, source_file_path,
-                        root_formal_statement, root_statement_hash, import_manifest_json,
-                        context_hash, prover_ready_statement, prover_ready_statement_hash, status, created_at,
-                        goal_class, brute_force_admissible
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'imported', ?12, ?13, ?14)",
-                    rusqlite::params![&problem_id, &args.suite_id, &args.upstream_problem_id, &args.theorem_name, &args.source_file_path,
-                     &args.root_formal_statement, &root_statement_hash, &import_manifest_json, &args.context_hash,
-                     &prover_ready_statement, &prover_ready_statement_hash, &now,
-                     goal_class, brute_force_admissible],
-                ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
-                    mcp_invalid_params(format!("problem {:?} is already registered in this suite", args.upstream_problem_id))
-                } else {
-                    rs(e)
-                })?;
-
-                let res = serde_json::json!({
-                    "benchmark_problem_id": problem_id,
-                    "root_statement_hash": root_statement_hash,
-                    "prover_ready_statement_hash": prover_ready_statement_hash,
-                    "status": "imported",
-                    "goal_class": goal_class,
-                    "brute_force_admissible": brute_force_admissible,
-                    "created_at": now,
-                });
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
-            }
-            "benchmark_problem_observe" => {
-                let args: BenchmarkProblemObserveArgs = serde_json::from_value(args_val)
-                    .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
-                let conn = self.conn.lock().await;
-                const PROBLEM_COLS: &str =
-                    "SELECT id, suite_id, upstream_problem_id, theorem_name, source_file_path, root_formal_statement,
-                            root_statement_hash, import_manifest_json, prover_ready_statement,
-                            prover_ready_statement_hash, status, goal_class, brute_force_admissible, created_at, context_hash
-                     FROM benchmark_problems";
-                let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<serde_json::Value> {
-                    let manifest_json: String = row.get(7)?;
-                    Ok(serde_json::json!({
-                        "benchmark_problem_id": row.get::<_, String>(0)?,
-                        "suite_id": row.get::<_, String>(1)?,
-                        "upstream_problem_id": row.get::<_, String>(2)?,
-                        "theorem_name": row.get::<_, String>(3)?,
-                        "source_file_path": row.get::<_, Option<String>>(4)?,
-                        "root_formal_statement": row.get::<_, String>(5)?,
-                        "root_statement_hash": row.get::<_, String>(6)?,
-                        "import_manifest": serde_json::from_str::<serde_json::Value>(&manifest_json).unwrap_or(serde_json::Value::Null),
-                        "prover_ready_statement": row.get::<_, Option<String>>(8)?,
-                        "prover_ready_statement_hash": row.get::<_, Option<String>>(9)?,
-                        "status": row.get::<_, String>(10)?,
-                        "goal_class": row.get::<_, String>(11)?,
-                        "brute_force_admissible": row.get::<_, i64>(12)? == 1,
-                        "created_at": row.get::<_, String>(13)?,
-                        "context_hash": row.get::<_, Option<String>>(14)?,
-                    }))
-                };
-                let row = match (&args.benchmark_problem_id, &args.suite_id, &args.upstream_problem_id) {
-                    (Some(id), _, _) => conn.query_row(
-                        &format!("{} WHERE id = ?1", PROBLEM_COLS), [id], map_row,
-                    ).optional().map_err(rs)?,
-                    (None, Some(suite), Some(upstream)) => conn.query_row(
-                        &format!("{} WHERE suite_id = ?1 AND upstream_problem_id = ?2", PROBLEM_COLS),
-                        [suite, upstream], map_row,
-                    ).optional().map_err(rs)?,
-                    _ => return Err(mcp_invalid_params("provide benchmark_problem_id, or both suite_id and upstream_problem_id")),
-                };
-                let Some(problem) = row else {
-                    return Err(mcp_invalid_params("no benchmark problem matches the given identifiers"));
-                };
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&problem).unwrap())]))
-            }
+            "benchmark_problem" => self.do_benchmark_problem(args_val).await,
             "benchmark_run" => self.do_benchmark_run(args_val).await,
             _ => Err(McpError::new(ErrorCode::METHOD_NOT_FOUND, format!("Method not found: {}", request.name), None)),
             }
@@ -14914,7 +14985,12 @@ mod tests {
         // - 2 (issue #195: the three flat draft_create/draft_observe/
         // draft_extract_moves tools consolidated into the ONE `draft` tool)
         // = 46.
-        assert_eq!(list_res.tools.len(), 46);
+        // - 1 (issue #196: the two flat benchmark_problem_register/
+        // benchmark_problem_observe tools consolidated into the ONE
+        // `benchmark_problem` tool — the last piece of epic #182's
+        // benchmark_* family split, alongside #193's `benchmark_suite` and
+        // #194's `benchmark_run`) = 45.
+        assert_eq!(list_res.tools.len(), 45);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -15553,10 +15629,10 @@ mod tests {
 
         // 1. Registered statement + shadowing helper def → policy rejection.
         let registered_stmt = "shadow_target 0 = shadow_target 0";
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "shadow_e2e", "theorem_name": "shadow_e2e",
             "root_formal_statement": registered_stmt,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let step = run_module_step(registered_stmt.to_string(), serde_json::json!({
             "type": "submit_module",
             "module_items": [{"item_kind": "def", "name": "shadow_target", "type_signature": "Nat → Nat", "body": "fun n => n"}],
@@ -15568,10 +15644,10 @@ mod tests {
 
         // 2. Registered find-the-value statement + `_solution` def → allowed through policy (MockGateway passes it).
         let solution_stmt = "demo_solution = demo_solution";
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "solution_e2e", "theorem_name": "solution_e2e",
             "root_formal_statement": solution_stmt,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let step = run_module_step(solution_stmt.to_string(), serde_json::json!({
             "type": "submit_module",
             "module_items": [{"item_kind": "def", "name": "demo_solution", "type_signature": "Nat", "body": "0"}],
@@ -20233,11 +20309,11 @@ mod tests {
         assert!(noop["trust_review_id"].is_null());
 
         // Register a problem whose manifest carries an open directive (issue #62).
-        let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "toy_0001", "theorem_name": "toy_0001",
             "root_formal_statement": "1 + 1 = 2",
             "import_manifest": ["Mathlib", "open   Polynomial"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let problem_id = registered["benchmark_problem_id"].as_str().unwrap().to_string();
 
         // Observe the suite: trust flag, audit history, and the problem row.
@@ -20256,14 +20332,14 @@ mod tests {
             "the open entry must be stored in canonical token form");
 
         // Observe one problem by (suite_id, upstream_problem_id) and by id.
-        let by_pair = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_observe").with_arguments(serde_json::json!({
+        let by_pair = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "suite_id": suite_id, "upstream_problem_id": "toy_0001",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(by_pair["benchmark_problem_id"].as_str().unwrap(), problem_id);
         assert_eq!(by_pair["root_formal_statement"], "1 + 1 = 2");
-        let by_id = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_observe").with_arguments(serde_json::json!({
+        let by_id = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "observe", 
             "benchmark_problem_id": problem_id,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(by_id["upstream_problem_id"], "toy_0001");
     }
 
@@ -20288,10 +20364,10 @@ mod tests {
             "action": { "type": "create", "name": "GapTaxonomySuite" },
         }).as_object().unwrap().clone())).await.unwrap());
         let suite_id = suite["suite_id"].as_str().unwrap().to_string();
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "gap_0001", "theorem_name": "gap_0001",
             "root_formal_statement": "1 + 1 = 2",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let problem_id = problem["benchmark_problem_id"].as_str().unwrap().to_string();
         let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "benchmark_suite_name": "GapTaxonomySuite",
@@ -20659,9 +20735,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "a1", "theorem_name": "a1", "root_formal_statement": "1 + 1 = 2",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let benchmark_problem_id = bp["benchmark_problem_id"].as_str().unwrap().to_string();
 
         // No unsafe_dev_attestation -> fidelity_status starts 'unreviewed'.
@@ -20707,9 +20783,9 @@ mod tests {
         let peer = client.peer();
 
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "a2", "theorem_name": "a2", "root_formal_statement": "1 + 1 = 2",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
             "source_problem_text": "PutnamBench a2", "root_formal_statement": "1 + 1 = 2",
         }).as_object().unwrap().clone())).await.unwrap());
@@ -20752,9 +20828,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "a3", "theorem_name": "a3", "root_formal_statement": "1 + 1 = 2",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
             "source_problem_text": "different", "root_formal_statement": "2 + 2 = 4",
         }).as_object().unwrap().clone())).await.unwrap());
@@ -20773,9 +20849,9 @@ mod tests {
         let suite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_suite").with_arguments(serde_json::json!({
             "action": { "type": "create", "name": "CustomUntrusted", "trusted_canonical_source": false },
         }).as_object().unwrap().clone())).await.unwrap());
-        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite["suite_id"], "upstream_problem_id": "u1", "theorem_name": "u1", "root_formal_statement": "1 + 1 = 2",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
             "source_problem_text": "x", "root_formal_statement": "1 + 1 = 2",
         }).as_object().unwrap().clone())).await.unwrap());
@@ -20792,9 +20868,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let bp = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "a4", "theorem_name": "a4", "root_formal_statement": "1 + 1 = 2",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
             "source_problem_text": "x", "root_formal_statement": "1 + 1 = 2",
         }).as_object().unwrap().clone())).await.unwrap());
@@ -20820,32 +20896,32 @@ mod tests {
         let suite_id = create_suite(&peer, "StructuralLadder").await;
 
         // finite_exact default -> brute force admissible.
-        let finite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let finite = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "f1", "theorem_name": "f1", "root_formal_statement": "1 + 1 = 2",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(finite["goal_class"], "finite_exact");
         assert_eq!(finite["brute_force_admissible"], true);
 
         // asymptotic -> brute_force_admissible forced false.
-        let asymptotic = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let asymptotic = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "a1", "theorem_name": "a1",
             "root_formal_statement": "∀ n : ℕ, True", "goal_class": "asymptotic",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(asymptotic["goal_class"], "asymptotic");
         assert_eq!(asymptotic["brute_force_admissible"], false, "an asymptotic goal must forbid finite brute force");
 
         // asymptotic + explicit brute_force_admissible=true -> rejected.
-        let bad = peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let bad = peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "a2", "theorem_name": "a2",
             "root_formal_statement": "∀ n : ℕ, True", "goal_class": "asymptotic", "brute_force_admissible": true,
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad.is_err(), "asymptotic goal cannot admit finite brute force");
 
         // unknown goal_class -> rejected.
-        let bad_class = peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let bad_class = peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "a3", "theorem_name": "a3",
             "root_formal_statement": "x", "goal_class": "made_up",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(bad_class.is_err());
     }
 
@@ -20970,16 +21046,16 @@ mod tests {
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
 
-        let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "putnam_1988_a1", "theorem_name": "putnam_1988_a1",
             "root_formal_statement": "∀ n : ℕ, n = n", "import_manifest": ["Mathlib.Tactic.Ring"],
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert!(!registered["root_statement_hash"].as_str().unwrap().is_empty());
 
-        let dup = peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let dup = peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "putnam_1988_a1", "theorem_name": "putnam_1988_a1",
             "root_formal_statement": "∀ n : ℕ, n = n",
-        }).as_object().unwrap().clone())).await;
+        }}).as_object().unwrap().clone())).await;
         assert!(dup.is_err(), "the same upstream_problem_id in the same suite must be rejected on re-registration");
     }
 
@@ -20991,10 +21067,10 @@ mod tests {
         // prover_ready_statement is ALWAYS server-derived (via to_pi_form),
         // never a settable field on the wire — there is no
         // "prover_ready_statement" argument to pass here at all.
-        let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1",
             "root_formal_statement": "theorem p1 (n : ℕ) : n = n := sorry",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert!(!registered["prover_ready_statement_hash"].as_str().unwrap().is_empty());
         assert_ne!(registered["root_statement_hash"], registered["prover_ready_statement_hash"],
             "the catalog's faithful declaration text and the server-derived Pi-type form are different strings and must hash differently");
@@ -21003,10 +21079,10 @@ mod tests {
         // declaration (to_pi_form can't find "theorem p2" here) must leave
         // both DB columns NULL, not error — this is the normal case for any
         // benchmark suite/problem that needs no conversion.
-        let without = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let without = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "p2", "theorem_name": "p2",
             "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         assert!(without["prover_ready_statement_hash"].is_null());
     }
 
@@ -21025,11 +21101,11 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1",
             "root_formal_statement": "theorem p1 (n : ℕ) : n = n := sorry",
             "prover_ready_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let expected_hash = canonical_hash(&"∀ (n : ℕ), n = n".to_string()).unwrap();
         assert_eq!(registered["prover_ready_statement_hash"], expected_hash,
             "a client-supplied prover_ready_statement must be silently ignored, never trusted: {:?}", registered);
@@ -21049,10 +21125,10 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1",
             "root_formal_statement": "theorem p1 (n : ℕ) : n = n := sorry",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }}).as_object().unwrap().clone())).await.unwrap());
@@ -21285,9 +21361,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run_envelope_id = create_run_envelope(&peer).await;
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
@@ -21357,9 +21433,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "mcp1", "theorem_name": "mcp1", "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run_envelope_id = create_run_envelope(&peer).await;
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
@@ -21506,9 +21582,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host", "host_side_cost_micros": 500, "host_cost_confidence": "exact_local_meter",
         }}).as_object().unwrap().clone())).await.unwrap());
@@ -21575,9 +21651,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "unsettled1", "theorem_name": "unsettled1", "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run_envelope_id = create_run_envelope(&peer).await;
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
@@ -21639,9 +21715,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "voided1", "theorem_name": "voided1", "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run_envelope_id = create_run_envelope(&peer).await;
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": run_envelope_id, "solve_mode": "solve_only", "attempt_budget": 5,
@@ -21718,9 +21794,9 @@ mod tests {
         let peer = client.peer();
         let suite_a = create_suite(&peer, "PutnamBench").await;
         let suite_b = create_suite(&peer, "OtherBench").await;
-        let problem_b = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem_b = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_b, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run_a = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_a, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }}).as_object().unwrap().clone())).await.unwrap());
@@ -21745,9 +21821,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }}).as_object().unwrap().clone())).await.unwrap());
@@ -21782,9 +21858,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }}).as_object().unwrap().clone())).await.unwrap());
@@ -21851,9 +21927,9 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         let suite_id = suite["suite_id"].as_str().unwrap().to_string();
         assert_eq!(suite["trusted_canonical_source"], false, "trusted_canonical_source must default to false, never silently true");
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "u1", "theorem_name": "u1", "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }}).as_object().unwrap().clone())).await.unwrap());
@@ -21897,9 +21973,9 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(review["fidelity_status"], "verified");
 
-        let problem2 = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem2 = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "u2", "theorem_name": "u2", "root_formal_statement": "1 + 1 = 2",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let ep2 = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
             "problem_version_id": reviewed_pv_id, "max_steps": 5,
         }).as_object().unwrap().clone())).await.unwrap());
@@ -21942,9 +22018,9 @@ mod tests {
             "action": { "type": "create", "name": "UntrustedBenchmarkModeSuite" },
         }).as_object().unwrap().clone())).await.unwrap());
         let suite_id = suite["suite_id"].as_str().unwrap().to_string();
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "m1", "theorem_name": "m1", "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let envelope = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({"action": {"type": "create",
             "mode": "benchmark", "host_name": "test-host",
         }}).as_object().unwrap().clone())).await.unwrap());
@@ -22042,9 +22118,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await; // trusted_canonical_source: true
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "t1", "theorem_name": "t1", "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }}).as_object().unwrap().clone())).await.unwrap());
@@ -22084,10 +22160,10 @@ mod tests {
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
         // Register a "hard" benchmark problem with a distinct statement.
-        let hard_problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let hard_problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "hard1", "theorem_name": "hard1",
             "root_formal_statement": "putnam_1988_a1_real_statement",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }}).as_object().unwrap().clone())).await.unwrap());
@@ -22125,12 +22201,12 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let p1 = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let p1 = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "True",
-        }).as_object().unwrap().clone())).await.unwrap());
-        let p2 = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let p2 = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "p2", "theorem_name": "p2", "root_formal_statement": "1 + 1 = 2",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }}).as_object().unwrap().clone())).await.unwrap());
@@ -22194,10 +22270,10 @@ mod tests {
         let suite_id = create_suite(&peer, "PutnamBench").await;
         let mut problem_ids = vec![];
         for upstream_id in ["p1", "p2", "p3", "p4"] {
-            let p = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            let p = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
                 "suite_id": suite_id, "upstream_problem_id": upstream_id, "theorem_name": upstream_id,
                 "root_formal_statement": format!("stmt_{}", upstream_id),
-            }).as_object().unwrap().clone())).await.unwrap());
+            }}).as_object().unwrap().clone())).await.unwrap());
             problem_ids.push(p["benchmark_problem_id"].as_str().unwrap().to_string());
         }
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
@@ -22267,9 +22343,9 @@ mod tests {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
-        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let problem = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "p1", "theorem_name": "p1", "root_formal_statement": "1 + 1 = 2",
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         let run = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_run").with_arguments(serde_json::json!({"action": {"type": "create", 
             "suite_id": suite_id, "run_envelope_id": create_run_envelope(&peer).await, "solve_mode": "solve_only", "attempt_budget": 5,
         }}).as_object().unwrap().clone())).await.unwrap());
@@ -22330,9 +22406,9 @@ mod tests {
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
         let statement = "putnam_export_secret_proof_statement";
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "e1", "theorem_name": "e1", "root_formal_statement": statement,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let pv_id = create_problem(&peer, statement).await;
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
@@ -22365,9 +22441,9 @@ mod tests {
         let peer = client.peer();
         let suite_id = create_suite(&peer, "PutnamBench").await;
         let statement = "putnam_export_gate_statement";
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "g1", "theorem_name": "g1", "root_formal_statement": statement,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let pv_id = create_problem(&peer, statement).await;
         let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
@@ -22435,9 +22511,9 @@ mod tests {
         let theorem_name = "putnam_link_49";
         // A declaration-form statement whose to_pi_form conversion changes the text.
         let decl = "theorem putnam_link_49\n(n : ℕ)\n(hn : 0 < n)\n: n + 0 = n :=\nsorry";
-        let reg = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        let reg = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "l49", "theorem_name": theorem_name, "root_formal_statement": decl,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
         // Guard the test itself: the two hashes must actually differ for this fixture.
         assert!(!reg["prover_ready_statement_hash"].is_null(), "fixture must convert via to_pi_form: {reg:?}");
         assert_ne!(reg["root_statement_hash"], reg["prover_ready_statement_hash"], "prover-ready and root hashes must differ for a real test");
@@ -22496,10 +22572,10 @@ mod tests {
         let suite_a = create_suite(&peer, "SuiteA").await;
         let suite_b = create_suite(&peer, "SuiteB").await;
         for (suite_id, upstream_id) in [(&suite_a, "a1"), (&suite_b, "b1")] {
-            tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
                 "suite_id": suite_id, "upstream_problem_id": upstream_id, "theorem_name": upstream_id,
                 "root_formal_statement": statement,
-            }).as_object().unwrap().clone())).await.unwrap());
+            }}).as_object().unwrap().clone())).await.unwrap());
         }
 
         let pv_id = create_problem(&peer, statement).await;
@@ -22874,10 +22950,10 @@ mod tests {
         let suite_id = create_suite(&peer, "PutnamBenchSmoke").await;
 
         for f in &fixture.import_fixtures {
-            let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+            let registered = tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
                 "suite_id": suite_id, "upstream_problem_id": f.upstream_problem_id, "theorem_name": f.theorem_name,
                 "root_formal_statement": f.root_formal_statement, "import_manifest": f.import_manifest,
-            }).as_object().unwrap().clone())).await.unwrap());
+            }}).as_object().unwrap().clone())).await.unwrap());
             assert_eq!(registered["root_statement_hash"], f.root_statement_hash,
                 "root_statement_hash for {} must match the hand-verified expected value — canonical_hash must be stable", f.upstream_problem_id);
             match &f.prover_ready_statement_hash {
@@ -24336,9 +24412,9 @@ mod tests {
 
         let suite_id = create_suite(&peer, "PutnamBench").await;
         let statement = "putnam_interactive_export_164";
-        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem_register").with_arguments(serde_json::json!({
+        tool_json(&peer.call_tool(CallToolRequestParams::new("benchmark_problem").with_arguments(serde_json::json!({"action": {"type": "register", 
             "suite_id": suite_id, "upstream_problem_id": "i164", "theorem_name": "i164", "root_formal_statement": statement,
-        }).as_object().unwrap().clone())).await.unwrap());
+        }}).as_object().unwrap().clone())).await.unwrap());
 
         let (episode_id, obligation_id, _req, revision) =
             setup_solvable_episode_with_statement(&peer, &conn_arc, statement).await;
