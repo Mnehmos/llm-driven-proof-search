@@ -3234,6 +3234,70 @@ pub struct ExpositionArgs {
     pub action: ExpositionAction,
 }
 
+// -- Reasoning logs ---------------------------------------------------------
+//
+// SOP-mandated, append-only summaries of the agent's problem-solving process.
+// These are process metadata only: they can gate whether another attempt may
+// be submitted, but can never change proof status or certification.
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ReasoningLogAddArgs {
+    pub episode_id: String,
+    pub episode_revision: i64,
+    #[serde(default)]
+    pub action_attempt_id: Option<String>,
+    pub reasoning_kind: String,
+    #[serde(default)]
+    pub hypothesis: Option<String>,
+    pub approach_summary: String,
+    #[serde(default)]
+    pub expected_outcome: Option<String>,
+    #[serde(default)]
+    pub actual_outcome: Option<String>,
+    #[serde(default)]
+    pub lesson_learned: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<String>,
+    pub author: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ReasoningLogObserveArgs {
+    pub episode_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReasoningLogAction {
+    Add {
+        episode_id: String,
+        episode_revision: i64,
+        #[serde(default)]
+        action_attempt_id: Option<String>,
+        reasoning_kind: String,
+        #[serde(default)]
+        hypothesis: Option<String>,
+        approach_summary: String,
+        #[serde(default)]
+        expected_outcome: Option<String>,
+        #[serde(default)]
+        actual_outcome: Option<String>,
+        #[serde(default)]
+        lesson_learned: Option<String>,
+        #[serde(default)]
+        confidence: Option<String>,
+        author: String,
+    },
+    Observe {
+        episode_id: String,
+    },
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ReasoningLogArgs {
+    pub action: ReasoningLogAction,
+}
+
 // -- Semantic skeletons / module-aware fidelity (issue #6) ------------------
 //
 // A structured reading of what a statement/module/solution actually says
@@ -4814,6 +4878,51 @@ fn exposition_json(conn: &Connection, exposition_id: &str) -> Result<serde_json:
         .optional()
         .map_err(rs)?
         .ok_or_else(|| mcp_invalid_params(format!("unknown exposition_artifact_id: {}", exposition_id)))
+}
+
+/// Dynamic SOP cadence: ordinary proof search gets at most two submissions
+/// between reasoning checkpoints. GiveUp is stricter and always requires a
+/// fresh, detailed checkpoint because abandoning a line is high-value evidence.
+const REASONING_LOG_GATE_THRESHOLD: i64 = 2;
+const REASONING_KINDS: &[&str] = &[
+    "initial_plan",
+    "retry_after_failure",
+    "strategy_pivot",
+    "error_diagnosis",
+    "success_retrospective",
+    "other",
+];
+const REASONING_CONFIDENCE_LEVELS: &[&str] = &["low", "medium", "high"];
+const REASONING_LOG_SELECT: &str = "SELECT id, episode_id, episode_revision, action_attempt_id, \
+    reasoning_kind, hypothesis, approach_summary, expected_outcome, actual_outcome, lesson_learned, \
+    confidence, author, created_at FROM reasoning_logs";
+
+fn map_reasoning_log_row(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "reasoning_log_id": row.get::<_, String>(0)?,
+        "episode_id": row.get::<_, String>(1)?,
+        "episode_revision": row.get::<_, i64>(2)?,
+        "action_attempt_id": row.get::<_, Option<String>>(3)?,
+        "reasoning_kind": row.get::<_, String>(4)?,
+        "hypothesis": row.get::<_, Option<String>>(5)?,
+        "approach_summary": row.get::<_, String>(6)?,
+        "expected_outcome": row.get::<_, Option<String>>(7)?,
+        "actual_outcome": row.get::<_, Option<String>>(8)?,
+        "lesson_learned": row.get::<_, Option<String>>(9)?,
+        "confidence": row.get::<_, Option<String>>(10)?,
+        "author": row.get::<_, String>(11)?,
+        "created_at": row.get::<_, String>(12)?,
+        "is_kernel_verified": false,
+        "is_proof": false,
+    }))
+}
+
+fn reasoning_log_json(conn: &Connection, reasoning_log_id: &str) -> Result<serde_json::Value, McpError> {
+    let sql = format!("{} WHERE id = ?1", REASONING_LOG_SELECT);
+    conn.query_row(&sql, [reasoning_log_id], map_reasoning_log_row)
+        .optional()
+        .map_err(rs)?
+        .ok_or_else(|| mcp_invalid_params(format!("unknown reasoning_log_id: {}", reasoning_log_id)))
 }
 
 const SEMANTIC_SKELETON_REVIEW_SCOPES: &[&str] = &[
@@ -7566,6 +7675,73 @@ impl ChatDbMcp {
             .map_err(|e| mcp_invalid_params(format!("Invalid attempt Uuid: {}", e)))?;
 
         let mut conn = self.conn.lock().await;
+
+        // SOP hard gate. Exclude the just-claimed current attempt from the
+        // count: attempt_claim necessarily creates that row before the caller
+        // can file a log or submit episode_step. Ordinary work gets two attempts
+        // between checkpoints; GiveUp always needs a fresh, detailed log.
+        let attempt_episode_id: Option<String> = conn
+            .query_row(
+                "SELECT episode_id FROM action_attempts WHERE id = ?1",
+                [&args.action_attempt_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(rs)?;
+        // Do not let the SOP gate mask the foundational attempt/claim/CAS
+        // diagnostics. Fabricated or cross-episode attempt ids continue into
+        // attempt_prepare, which records/returns the established invalid_response
+        // shape. The gate applies only to a real attempt for this episode.
+        if attempt_episode_id.as_deref() == Some(args.episode_id.as_str()) {
+            let latest_log: Option<(String, Option<String>, Option<String>)> = conn
+                .query_row(
+                    "SELECT created_at, actual_outcome, lesson_learned
+                     FROM reasoning_logs WHERE episode_id = ?1
+                     ORDER BY created_at DESC, id DESC LIMIT 1",
+                    [&args.episode_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()
+                .map_err(rs)?;
+            let latest_log_at = latest_log
+                .as_ref()
+                .map(|(created_at, _, _)| created_at.as_str());
+            let attempts_since_log: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM action_attempts
+                     WHERE episode_id = ?1 AND id <> ?2
+                       AND (?3 IS NULL OR COALESCE(execution_completed_at, execution_started_at, claimed_at) > ?3)",
+                    rusqlite::params![&args.episode_id, &args.action_attempt_id, latest_log_at],
+                    |row| row.get(0),
+                )
+                .map_err(rs)?;
+            let is_give_up = matches!(&args.action, TypedAction::GiveUp);
+            if attempts_since_log >= REASONING_LOG_GATE_THRESHOLD && !is_give_up {
+                return Err(mcp_invalid_params(format!(
+                    "reasoning_log required before episode_step: {} prior attempt(s) on episode {} are newer than the latest reasoning log (limit {}). File reasoning_log action=add documenting what was tried, the actual outcome, and what the result taught you, then retry this step. Keep scratch work inside the tracked workspace workflow; see docs/sop-reasoning-logs.md.",
+                    attempts_since_log, args.episode_id, REASONING_LOG_GATE_THRESHOLD
+                )));
+            }
+            if is_give_up {
+                let detailed_fresh_log = latest_log.as_ref().is_some_and(
+                    |(_, actual_outcome, lesson_learned)| {
+                        attempts_since_log == 0
+                            && actual_outcome
+                                .as_deref()
+                                .is_some_and(|v| !v.trim().is_empty())
+                            && lesson_learned
+                                .as_deref()
+                                .is_some_and(|v| !v.trim().is_empty())
+                    },
+                );
+                if !detailed_fresh_log {
+                    return Err(mcp_invalid_params(format!(
+                        "detailed reasoning_log required before give_up on episode {}: file a fresh log after the latest attempt with non-empty actual_outcome and lesson_learned fields explaining the blocker, what was tried, and what a future attempt should retain. Giving up is the most detailed gate; see docs/sop-reasoning-logs.md.",
+                        args.episode_id
+                    )));
+                }
+            }
+        }
 
         // Everything that touches `tx1` lives in this block and the block ends
         // (dropping `tx1`) before any `.await` — a `Transaction` borrows from
@@ -10959,6 +11135,105 @@ impl ChatDbMcp {
 
     // -----------------------------------------------------------------
 
+    async fn do_reasoning_log(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ReasoningLogArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize reasoning_log action: {}", e)))?;
+        match &args.action {
+            ReasoningLogAction::Add { .. } => self.do_reasoning_log_add(inner).await,
+            ReasoningLogAction::Observe { .. } => self.do_reasoning_log_observe(inner).await,
+        }
+    }
+
+    async fn do_reasoning_log_add(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ReasoningLogAddArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("reasoning_kind", &args.reasoning_kind, REASONING_KINDS)?;
+        if let Some(confidence) = &args.confidence {
+            validate_one_of("confidence", confidence, REASONING_CONFIDENCE_LEVELS)?;
+        }
+        if args.episode_revision < 0 {
+            return Err(mcp_invalid_params("episode_revision must be >= 0"));
+        }
+        if args.approach_summary.trim().is_empty() {
+            return Err(mcp_invalid_params("approach_summary must be non-empty"));
+        }
+        if args.author.trim().is_empty() {
+            return Err(mcp_invalid_params("author must be non-empty"));
+        }
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        require_row_exists(&tx, "episodes", &args.episode_id, "episode_id")?;
+        if let Some(attempt_id) = &args.action_attempt_id {
+            let attempt_episode_id: Option<String> = tx.query_row(
+                "SELECT episode_id FROM action_attempts WHERE id = ?1",
+                [attempt_id],
+                |row| row.get(0),
+            ).optional().map_err(rs)?;
+            match attempt_episode_id {
+                None => return Err(mcp_invalid_params(format!("unknown action_attempt_id: {}", attempt_id))),
+                Some(ref episode_id) if episode_id != &args.episode_id => {
+                    return Err(mcp_invalid_params(format!(
+                        "action_attempt_id {} belongs to episode {}, not {}",
+                        attempt_id, episode_id, args.episode_id
+                    )));
+                }
+                Some(_) => {}
+            }
+        }
+
+        let reasoning_log_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO reasoning_logs (
+                id, episode_id, episode_revision, action_attempt_id, reasoning_kind, hypothesis,
+                approach_summary, expected_outcome, actual_outcome, lesson_learned, confidence, author, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            rusqlite::params![
+                &reasoning_log_id,
+                &args.episode_id,
+                args.episode_revision,
+                args.action_attempt_id.as_deref(),
+                &args.reasoning_kind,
+                args.hypothesis.as_deref().map(str::trim),
+                args.approach_summary.trim(),
+                args.expected_outcome.as_deref().map(str::trim),
+                args.actual_outcome.as_deref().map(str::trim),
+                args.lesson_learned.as_deref().map(str::trim),
+                args.confidence.as_deref(),
+                args.author.trim(),
+                &now,
+            ],
+        ).map_err(rs)?;
+        let reasoning_log = reasoning_log_json(&tx, &reasoning_log_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "reasoning_log_id": reasoning_log_id,
+            "reasoning_log": reasoning_log,
+            "policy": "Reasoning logs are append-only process metadata. They satisfy the episode_step process gate but are never proof, never change an episode outcome or obligation status, and never grant certification or training eligibility.",
+        })).unwrap())]))
+    }
+
+    async fn do_reasoning_log_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ReasoningLogObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        require_row_exists(&tx, "episodes", &args.episode_id, "episode_id")?;
+        let sql = format!("{} WHERE episode_id = ?1 ORDER BY created_at ASC, id ASC", REASONING_LOG_SELECT);
+        let mut stmt = tx.prepare(&sql).map_err(rs)?;
+        let reasoning_logs = stmt.query_map([&args.episode_id], map_reasoning_log_row)
+            .map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "reasoning_logs": reasoning_logs,
+            "policy": "Reasoning logs are append-only process metadata. They are never proof and never change outcomes, obligation status, certification, or training eligibility.",
+        })).unwrap())]))
+    }
+
+    // -----------------------------------------------------------------
+
     /// Issue #199 (epic #182, 17th consolidation): the single
     /// `semantic_skeleton` tool's dispatcher. Deserializes
     /// `SemanticSkeletonArgs`, matches on the internally-tagged action, and
@@ -13280,7 +13555,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EpisodeResetArgs>("episode_reset", "Nondestructive: creates new episode from existing config, sets parent_episode_id"),
             make_tool::<EpisodeObserveArgs>("episode_observe", "Get the active observation and pending action request"),
             make_tool::<AttemptClaimArgs>("attempt_claim", "Claim a pending action request to obtain the action_attempt_id + claim_token required by episode_step. Idempotent on idempotency_key. Claims expire ~5 min after issue (see claim_expiration in the response), but an expired claim whose request is still untaken is revived automatically — by episode_step itself, or by re-calling attempt_claim with the SAME idempotency_key — so burst-parallel claim/step batches need no client-side throttling; only a claim whose request was taken by ANOTHER attempt must be re-claimed with a fresh key"),
-            make_tool::<EpisodeStepArgs>("episode_step", "Submit a typed action against a claimed attempt. `action` is internally tagged — exactly one of: {\"type\":\"solve\",\"proof_term\":\"  norm_num\"} (Lean tactic block proving the target obligation), {\"type\":\"decompose\",\"sub_lemmas\":[\"<lean statement>\", ...]} (split the obligation into child lemmas), {\"type\":\"give_up\"} (terminate the episode). `expected_revision` must equal the episode_revision advertised on the action_request. Settles any lease attached to the attempt atomically. FLATTENED-SEQUENCE TRAP (issue #67): in a flat_tactic_sequence chain, an inline `by` consumes EVERYTHING after it on the line — `have h : T := by omega; have h2 : U := ...` parses the second `have` INSIDE h's completed by-block and dies with 'No goals to be solved' while the outer goal stays unsolved. Always parenthesize an inline by-block that is followed by more tactics: `have h : T := (by omega); have h2 : U := (by omega); linarith`"),
+            make_tool::<EpisodeStepArgs>("episode_step", "Submit a typed action against a claimed attempt. HARD SOP GATE: ordinary work gets at most 2 submissions between `reasoning_log` checkpoints; give_up always requires a fresh detailed log with actual_outcome + lesson_learned. Calls are rejected when the checkpoint is missing; see docs/sop-reasoning-logs.md. `action` is internally tagged — exactly one of: {\"type\":\"solve\",\"proof_term\":\"  norm_num\"} (Lean tactic block proving the target obligation), {\"type\":\"decompose\",\"sub_lemmas\":[\"<lean statement>\", ...]} (split the obligation into child lemmas), {\"type\":\"give_up\"} (terminate the episode). `expected_revision` must equal the episode_revision advertised on the action_request. Settles any lease attached to the attempt atomically. FLATTENED-SEQUENCE TRAP (issue #67): in a flat_tactic_sequence chain, an inline `by` consumes EVERYTHING after it on the line — `have h : T := by omega; have h2 : U := ...` parses the second `have` INSIDE h's completed by-block and dies with 'No goals to be solved' while the outer goal stays unsolved. Always parenthesize an inline by-block that is followed by more tactics: `have h : T := (by omega); have h2 : U := (by omega); linarith`. INDENTATION TRANSPORT: if a multi-line tactic proof intentionally relies on bullets or case-block indentation, use proof_format=raw_lean_block; otherwise flatten it to one physical line with semicolons and parenthesize inline by-blocks"),
             make_tool::<EpisodeStatusArgs>("episode_status", "Retrieve current episode state, revision, budget, step count"),
             make_tool::<EpisodeCloseArgs>("episode_close", "Gracefully truncate an episode"),
             make_tool::<ProofSessionArgs>("proof_session", "Issue #183: ONE tool for the entire interactive (tactic-by-tactic, Pantograph-style) proof-session family (issues #159/#161-#164/#166) — work ONE existing episode obligation's goal state live instead of only submitting a complete Solve/SubmitModule and finding out afterward whether it checked; see readme_first's interactive_sessions for when to prefer this over episode_step's Solve/SubmitModule. `action` is internally tagged — exactly one of: {\"type\":\"start\",\"episode_id\":\"..\",\"obligation_id\":\"..\",\"expected_revision\":N} (+ optional expected_observation_hash, backend \"mock\"|\"pantograph\" — \"mock\" is the deterministic default with NO real elaborator behind it (every nonempty tactic closes the first open goal); \"pantograph\" (issue #166) is recognized but fails closed today, see environment_describe's pantograph_available. Requires obligation_id to be a real episode_obligations row already belonging to episode_id and expected_revision to match the episode's current_revision; returns session_id + the root node_id every later action needs) | {\"type\":\"observe\",\"session_id\":\"..\"} (read-only: the selected node's goals/local context/target/proof_state_hash, a branch summary, and this session's reconstructed scripts with their verified_attempt_id/verification_outcome) | {\"type\":\"tactic_step\",\"session_id\":\"..\",\"parent_node_id\":\"..\",\"tactic\":\"..\"} (records evidence: a new child node + selected-node advance on success; a structured diagnostic step row on failure, never erased or reduced to a bare error string; a stable step_id either way) | {\"type\":\"branch\",\"session_id\":\"..\",\"parent_node_id\":\"..\",\"branch_name\":\"..\",\"tactic\":\"..\"} (same mechanics as tactic_step, explicitly starting a NAMED branch from ANY existing node — prior branches from the same parent are never deleted or overwritten; branch_name is a free-text label, not interpreted) | {\"type\":\"select_node\",\"session_id\":\"..\",\"node_id\":\"..\"} (CONVENIENCE WORKING STATE ONLY — moves the session's selected-node pointer; applies no tactic, verifies nothing, records no new evidence) | {\"type\":\"reconstruct\",\"session_id\":\"..\",\"selected_node_id\":\"..\"} (builds the root-to-node tactic script, records its source hash, and returns tactic_block verbatim — the ONE place raw tactic text comes back, since only hashes are durably stored server-side; reports_complete is the session's OWN is_solved claim, still search evidence) | {\"type\":\"promote_to_attempt\",\"session_id\":\"..\",\"reconstructed_script_id\":\"..\",\"tactic_block\":\"<EXACT text reconstruct returned>\",\"episode_id\":\"..\",\"action_request_id\":\"..\",\"idempotency_key\":\"..\",\"expected_revision\":N,\"cost_micros\":N} (THE ONLY action that can affect an obligation's status: tactic_block is checked against the script's recorded proof_source_hash — a caller cannot promote text that wasn't actually reconstructed from this session — then submitted through the EXACT SAME internal attempt_claim + episode_step(Solve) path a normal round trip uses, so the real Lean kernel decides; the response's verification_outcome and episode_step_result carry that verdict) | {\"type\":\"close\",\"session_id\":\"..\",\"reason\":\"closed\"|\"abandoned\"|\"superseded\"} (session lifecycle only — records no evidence and cannot affect an obligation's status; the full trace including failed tactics stays queryable, closing never deletes anything) | {\"type\":\"export\",\"session_id\":\"..\"} (+ optional format, allow_putnambench_proof_export — read-only render of ONE persisted session: \"public_summary\" default (counts/backend/outcome/high-level failure categories; never tactic or goal text, never gated), \"audit_archive\" (full node/step trace, hashes, reconstructed-script linkage to the final verification attempt, real tactic text for FAILED steps), \"training_export\" (per-step records including negative-space failed routes, plus the reconstructed script's real verified proof text ONLY when promoted). audit_archive/training_export on a benchmark-linked episode require allow_putnambench_proof_export=true — the same issue-#33 contamination gate proof_export/trajectory_export enforce; whole-episode formats like \"markdown\"/\"lean\" are rejected — use proof_export for those) | {\"type\":\"replay\",\"session_id\":\"..\",\"mode\":\"trace_only\"|\"backend\"|\"final_proof\"} (replay from PERSISTED DB state — interactive_proof_sessions/_nodes/_steps/_reconstructed_scripts — so a closed/historical session stays replayable: \"trace_only\" is a pure DB-record consistency check (no backend/kernel call; parent links, per-step hash integrity, session-state consistency, and a branch_report that surfaces failed steps and abandoned still-open leaves rather than hiding them); \"backend\" re-runs the root-to-node tactic path against a FRESH interactive-backend session and compares outcomes/hashes to what was recorded (reports backend_mismatch, or backend_replay_available:false when the live backend can no longer supply the path, e.g. after close or a process restart); \"final_proof\" is THE TRUST GATE — reconstructs the selected node's script (selected_node_id, defaulting to the session's selected node) or re-verifies an existing not-yet-promoted script (reconstructed_script_id + tactic_block, same hash-integrity check as promote_to_attempt) and resubmits it through promote_to_attempt's own internal path, not a second parallel verification path; final_proof requires episode_id/action_request_id/idempotency_key/expected_revision/cost_micros together). TRUST BOUNDARY: every action here is SEARCH EVIDENCE ONLY, never proof authority — an is_solved:true node is the session's own internal claim, not a kernel verdict — EXCEPT promote_to_attempt (and replay mode=\"final_proof\", which routes into it): those resubmit the reconstructed script through the existing attempt_claim + episode_step Solve path, and only that real Lean kernel verdict can affect an obligation's status"),
@@ -13303,6 +13578,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<DistilledStrategyAddArgs>("distilled_strategy_add", "Store a reusable distilled strategy artifact (strategy_cheat_sheet/failed_attempt_summary/heuristic_rule/counterexample_pattern/construction_recipe/formalization_hint/review_checklist). A distilled strategy is NOT a proof; trust_status tops out at human_reviewed"),
             make_tool::<PaperIngestArgs>("paper_ingest", "Issue #187: ONE tool for the entire paper/PDF ingestion family (issue #27) — ingest a source document, append extracted claim nodes, read it back, attach it to a dossier, mark review/trust statuses, and promote extracted nodes to real dossier artifacts. EVERY ACTION HANDLES UNTRUSTED EXTRACTION, NEVER PROOF: LLM-Driven Proof Search Environment does no OCR/LLM extraction — the host records its own extraction result, untrusted by construction; an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT an accepted assumption; no field can hold kernel evidence and no status confers proof, kernel verification, statement fidelity, or citation validation. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\",\"source_kind\":\"pdf\"|\"manuscript\"|\"proof_sketch\"|\"exposition\"|..,\"created_by\":\"..\"} (+ optional dossier_id, source_ref, source_content_hash, ingest_status, extraction_trust_status, notes — ingest a paper/manuscript/proof_sketch/exposition as a reviewable source document, optionally linked to a dossier. Records the host's UNTRUSTED extraction; ingestion is not proof) | {\"type\":\"extract_claims\",\"document_id\":\"..\",\"nodes\":[{\"node_kind\":\"main_theorem\",\"natural_language_text\":\"..\",\"source_span\":\"p.1 Thm 1\"},..]} (append extracted nodes (abstract/main_theorem/definition/proposition/lemma/proof_step/construction/remark/appendix_fact/reference/open_gap) with source_span, confidence, and status labels to an ingested document, all-or-nothing; every node REQUIRES a non-empty source_span tracing it back to the paper. Each node is UNTRUSTED EXTRACTION — an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT accepted) | {\"type\":\"observe\",\"document_id\":\"..\"} (read an ingested document with all its extracted nodes and their trust labels. Read-only; nothing here is proof or kernel evidence) | {\"type\":\"link_to_dossier\",\"document_id\":\"..\",\"dossier_id\":\"..\"} (attach an ingested document and its extracted nodes to a research dossier so they surface in research_dossier observe's ingestion bucket, separate from proof authority) | {\"type\":\"mark_review_status\",\"document_id\":\"..\"} (+ optional node_id; document-level ingest_status/extraction_trust_status, or node-level review_status/formalization_status/citation_status with node_id — rejected_extraction stays visible, never deleted. None of these statuses confers proof, kernel verification, statement fidelity, or citation validation) | {\"type\":\"link_node\",\"document_id\":\"..\",\"node_id\":\"..\",\"target_kind\":\"external_reference\"|\"external_theorem_claim\"|\"research_node\"|\"formalization_plan_item\",\"target_id\":\"..\"} (promote/attach an extracted node to a real dossier artifact — external_reference / external_theorem_claim set citation_status=citation_recorded, research_node / formalization_plan_item set formalization_status=formalization_target_linked. Records provenance and marks review_status=linked_to_dossier_artifact; the linked artifact keeps its own trust and the node NEVER gains proof/kernel authority)"),
             make_tool::<ExpositionArgs>("exposition", "Issue #198: ONE tool for the exposition-artifact family (issue #7), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, obligation_id, verified_module_id, verified_lemma_id, dossier_id, prose_status, title) records a human-readable mathematical exposition section (section_kind: problem_summary/formalization_explanation/construction_intuition/key_lemmas/proof_strategy/verified_claim/unverified_bridges/reviewer_notes/next_formalization_targets) linked to a problem, episode, obligation, verified module, verified lemma, and/or dossier — prose_status (prose/reviewed_prose/formalized) marks epistemic weight: prose is never proof and never changes certification or training eligibility; `observe` (+ one of problem_version_id, episode_id, dossier_id) lists exposition artifacts for that scope — read-only prose, explicitly separate from kernel-verified proof"),
+            make_tool::<ReasoningLogArgs>("reasoning_log", "SOP-mandated append-only process ledger and hard gate for episode_step; see docs/sop-reasoning-logs.md. `action` is internally tagged: `add` records episode_id, episode_revision, optional action_attempt_id, reasoning_kind (initial_plan/retry_after_failure/strategy_pivot/error_diagnosis/success_retrospective/other), optional hypothesis, required approach_summary, optional expected_outcome/actual_outcome/lesson_learned/confidence (low/medium/high), and author; `observe` lists one episode's logs in chronological order. Ordinary work gets at most 2 submissions between logs; give_up always requires a fresh log with actual_outcome plus lesson_learned. This is process metadata only: never proof and never changes outcomes, certification, or training eligibility"),
             make_tool::<SemanticSkeletonArgs>("semantic_skeleton", "Issue #199: ONE tool for the semantic-skeleton / module-aware-fidelity family (issue #6), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, root_obligation_id, module_id, module_item_id, verified_lemma_id, dossier_id, node_id, root_fidelity_review_id — all links optional) attaches a semantic statement skeleton / module-aware fidelity note: a structured reading of a root statement, verified module, or source-aligned solution — quantifiers, hypotheses, conclusion, helper definitions, construction/final-answer map, back-translation, and fidelity risk_flags — scoped by review_scope (root_statement_only/module_artifact/source_aligned_solution/computational_check_only/structural_proof). semantic_fingerprint_hash is server-computed. Metadata only: never marks anything proved, never sets fidelity_status, never substitutes for problem_submit_fidelity_review; `observe` (semantic_skeleton_id, observation, finding, + optional risk_flags_json, details_json, observed_by) appends one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive, optional risk_flags) to a semantic skeleton's review_notes history and reads it back. Never changes proof/fidelity/budget/benchmark status; 'confirms_faithful' is not the root fidelity gate"),
             make_tool::<ExpertReviewArgs>("expert_review", "Issue #200: ONE tool for the expert-review ledger family (issue #14), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (dossier_id optional, reviewer_id, reviewer_role: proposer/construction_searcher/formalizer/prover/reviewer/domain_expert/refuter/editor/librarian, review_target_kind: source_problem/formal_statement/construction_artifact/module_artifact/external_citation/asymptotic_extraction/exposition/full_dossier, review_target_id, decision: approved/approved_with_changes/needs_changes/rejected/abstain, + optional expertise_tags, confidence: low/medium/high, notes, requested_changes_json, risk_flags_json) records one role-separated expert-review ledger entry against a polymorphic target. ADDITIVE metadata only: a pure insert that never marks anything proved and never changes proof, certification, obligation, budget, or benchmark state. reviewer_id is free text, not an authenticated principal; a human decision stays distinct from Lean kernel verification; `observe` (+ optional dossier_id, review_target_kind + review_target_id together, reviewer_role, include_revoked) reads expert-review ledger entries back, filtered by dossier, polymorphic target (kind+id together), and/or reviewer role. Revoked reviews are omitted unless include_revoked=true. Read-only. Across both actions: expert reviews are a role-separated ledger of who reviewed what, not a substitute for kernel verification"),
             make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
@@ -13363,6 +13639,12 @@ impl ServerHandler for ChatDbMcp {
                     "what_this_is": "LLM-Driven Proof Search Environment is a verifier-backed RL ENVIRONMENT, not a prover. It contains no provider SDKs, no API keys, no model routing, no inference calls. The external agent host (you, or whatever is calling this tool) IS the policy — you choose what to try. LLM-Driven Proof Search Environment assembles Lean source under a strict trust boundary, the real Lean 4 kernel verifies it, and the ledger records what happened. If you have not read anything else in this environment, read this response before calling problem_create or episode_create.",
                     "trust_boundary": "Tracked MCP actions and Lean kernel verdicts are evidence. Your own hidden reasoning, a prior session's transcript, a paper's claim, or a candidate proof you evaluated some OTHER way is NOT evidence — it is a candidate, until this pinned verifier checks it through episode_step. Do not report an obligation as proved, or a problem as solved, based on anything other than an outcome this environment actually recorded (kernel_verified or certified).",
                     "the_loop": "problem_create -> problem_submit_fidelity_review (or unsafe_dev_attestation=true for dev/benchmark use, which caps the result at kernel_verified, never certified) -> episode_create -> episode_observe -> attempt_claim -> episode_step(action, expected_revision = action_request.episode_revision) -> repeat episode_observe/attempt_claim/episode_step until the episode's outcome is set. Call episode_observe before acting (it tells you the current obligation and action_request) and attempt_claim before every episode_step (it hands you the action_attempt_id + claim_token that step requires).",
+                    "reasoning_log_sop": {
+                        "rule": "Keep the problem-solving trail inside this workspace's durable ledger. Ordinary proof search gets at most 2 episode_step submissions between reasoning_log checkpoints; give_up always needs a fresh detailed log. Log plans, failures, retries, pivots, and retrospectives promptly. Untracked scratch files, external REPL work, and hidden side-channel checks are not a substitute because their error-recovery trail is invisible to the environment.",
+                        "first_attempt": "File reasoning_kind=initial_plan before beginning whenever possible; the hard gate permits two ordinary submissions before it refuses further work so a malformed or failed opening move cannot strand the episode.",
+                        "give_up": "GiveUp is the most detailed gate: the latest fresh reasoning_log must include non-empty actual_outcome and lesson_learned explaining the blocker, what was tried, and what a future attempt should retain.",
+                        "reference": "docs/sop-reasoning-logs.md"
+                    },
                     "proof_attempts": {
                         "rule": "Every candidate proof attempt that should count as real proof-search activity MUST go through episode_step, not a side channel.",
                         "solve": "Use the Solve action for a single self-contained tactic/term proof of the current obligation.",
@@ -13455,12 +13737,13 @@ impl ServerHandler for ChatDbMcp {
                     "epistemic_rules": [
                         "An 'unknown_declaration'/'unknown identifier' result under the active import manifest establishes ONLY that the name didn't resolve under that exact import closure. It does NOT establish that the declaration is absent from the pinned library. Before concluding an API is unavailable, call lean_declaration_lookup — do not infer a global capability limit from one local elaboration failure.",
                         "lean_declaration_lookup defaults to a fast (few-second) check against only the problem's own import manifest, returning 'not_available_under_current_manifest' on failure — that status by itself does not prove absence from the library. Pass deep_check=true (15-40+ seconds, loads the full Mathlib umbrella) to get a conclusive 'not_in_current_import_scope' vs 'unknown_declaration' verdict before concluding a declaration is genuinely unavailable.",
-                        "A prior model's proof (from another session, another model, a paper, etc.) is a candidate artifact, not evidence of correctness, until it passes THIS pinned verifier. Do not skip verification because a candidate 'looks complete'."
+                        "A prior model's proof (from another session, another model, a paper, etc.) is a candidate artifact, not evidence of correctness, until it passes THIS pinned verifier. Do not skip verification because a candidate 'looks complete'.",
+                        "Reasoning logs are mandatory process metadata, not proof authority. Their hard gate ensures the plan/failure/retry/pivot trail is durable; it never upgrades an episode outcome, obligation, certification, or training eligibility."
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 41,
-                        "total_tool_count": 41,
+                        "classified_tool_count": 42,
+                        "total_tool_count": 42,
                         "tools": {
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -13471,6 +13754,16 @@ impl ServerHandler for ChatDbMcp {
                                 "source_code_impact": "no_source_change — no MCP tool edits LLM-Driven Proof Search Environment's own source files; assembled Lean text is ephemeral verifier input, never a repo mutation",
                                 "artifact_risk": "proof_body",
                                 "required_run_mode": "any — enforcement belongs at export time, not attempt time"
+                            },
+                            "reasoning_log": {
+                                "side_effect": "mixed by action: add is append_only — inserts one reasoning_logs row and never updates/deletes a prior log; observe is read_only. The presence and freshness of these rows gates whether episode_step accepts another submission, but logging itself never mutates proof state",
+                                "trust_level": "untrusted_input process metadata — the client declares its own hypothesis, approach, outcomes, and lessons; the server validates vocabulary and links but does not infer or endorse the reasoning",
+                                "cost_surface": "none",
+                                "benchmark_safety": "private_artifact/process_trace — may contain detailed failed and successful strategy information useful for training; it is not included in public proof exports by this tool",
+                                "replayability": "deterministic given current append-only DB state; observe returns chronological rows",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "reasoning_trace_metadata",
+                                "required_run_mode": "any — ordinary episode_step work is limited to two submissions between logs; give_up always requires a fresh detailed log"
                             },
                             "proof_export": {
                                 "side_effect": "read_only — renders a document from already-recorded state, writes nothing (confirmed by reading the handler: no INSERT/UPDATE anywhere in this path)",
@@ -14903,6 +15196,7 @@ impl ServerHandler for ChatDbMcp {
             }
             "paper_ingest" => self.do_paper_ingest(args_val).await,
             "exposition" => self.do_exposition(args_val).await,
+            "reasoning_log" => self.do_reasoning_log(args_val).await,
             "semantic_skeleton" => self.do_semantic_skeleton(args_val).await,
             "expert_review" => self.do_expert_review(args_val).await,
             "mathlib_search_declarations" => {
@@ -15208,6 +15502,7 @@ mod tests {
         let res = tool_json(&client.peer().call_tool(CallToolRequestParams::new("readme_first")).await.unwrap());
         assert!(res["the_loop"].as_str().unwrap().contains("episode_step"), "{:?}", res);
         assert!(res["trust_boundary"].as_str().unwrap().contains("evidence"), "{:?}", res);
+        assert!(res["reasoning_log_sop"]["rule"].as_str().unwrap().contains("at most 2 episode_step"), "{:?}", res);
         assert!(res["proof_attempts"]["rule"].as_str().unwrap().contains("episode_step"), "{:?}", res);
         assert!(res["cost_boundary"].as_str().unwrap().to_lowercase().contains("cost"), "{:?}", res);
         assert!(res["benchmark_mode"].as_str().unwrap().to_lowercase().contains("benchmark"), "{:?}", res);
@@ -15278,7 +15573,8 @@ mod tests {
         // tools consolidated into the ONE `expert_review` tool — epic #182's
         // 18th and FINAL consolidation; every family in the epic's sprint
         // order is now a single action-enum tool) = 41.
-        assert_eq!(list_res.tools.len(), 41);
+        // + 1 reasoning_log (SOP-mandated add/observe process ledger) = 42.
+        assert_eq!(list_res.tools.len(), 42);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -15400,6 +15696,15 @@ mod tests {
         assert_eq!(next_revision, 1, "revision must have incremented by exactly one");
 
         // GiveUp on the child obligation should terminate the episode.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("reasoning_log").with_arguments(serde_json::json!({
+            "action": {
+                "type": "add", "episode_id": episode_id, "episode_revision": next_revision,
+                "reasoning_kind": "other", "approach_summary": "Terminate after validating the child-obligation lifecycle",
+                "actual_outcome": "Decompose succeeded and the test intentionally has no proof for the synthetic helper lemma",
+                "lesson_learned": "The child request and revision transition are preserved; future work would need a real helper statement",
+                "confidence": "high", "author": "test"
+            }
+        }).as_object().unwrap().clone())).await.unwrap());
         let request_id_2 = next_req["id"].as_str().unwrap().to_string();
         let claim2 = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
             "episode_id": episode_id, "action_request_id": request_id_2,
@@ -15439,6 +15744,98 @@ mod tests {
             "episode_id": episode_id,
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(replay["audit_passed"], true);
+    }
+
+    #[tokio::test]
+    async fn test_reasoning_log_roundtrip_threshold_gate_and_detailed_giveup_gate() {
+        let client = connected_client(test_handler()).await;
+        let peer = client.peer();
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "reasoning gate fixture", "root_formal_statement": "True", "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": create["problem_version_id"], "max_steps": 10,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let mut req = ep["next_action_request"].clone();
+
+        let invalid_kind = peer.call_tool(CallToolRequestParams::new("reasoning_log").with_arguments(serde_json::json!({
+            "action": {"type": "add", "episode_id": episode_id, "episode_revision": 0,
+                "reasoning_kind": "invented", "approach_summary": "x", "author": "test"}
+        }).as_object().unwrap().clone())).await;
+        assert!(invalid_kind.is_err(), "closed-vocabulary reasoning_kind must fail");
+
+        // Two ordinary submissions are permitted as the bounded grace window.
+        for (i, lemma) in ["True", "1 = 1"].iter().enumerate() {
+            let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+                "episode_id": episode_id, "action_request_id": req["id"],
+                "idempotency_key": format!("reasoning-gate-{i}"), "expected_revision": req["episode_revision"],
+            }).as_object().unwrap().clone())).await.unwrap());
+            let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+                "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"],
+                "expected_revision": req["episode_revision"], "claim_token": claim["claim_token"],
+                "action": {"type": "decompose", "sub_lemmas": [lemma]}, "cost_micros": 1,
+            }).as_object().unwrap().clone())).await.unwrap());
+            req = step["next_action_request"].clone();
+        }
+
+        // The third is refused before mutation. The same claimed attempt remains
+        // retryable after a valid checkpoint is appended.
+        let third_claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "reasoning-gate-2",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let third_args = serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": third_claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": third_claim["claim_token"],
+            "action": {"type": "decompose", "sub_lemmas": ["2 = 2"]}, "cost_micros": 1,
+        });
+        let gated = peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(third_args.as_object().unwrap().clone())).await;
+        assert!(gated.is_err(), "third unlogged ordinary submission must be gated");
+
+        let status_before_log = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_status").with_arguments(
+            serde_json::json!({"episode_id": episode_id}).as_object().unwrap().clone())).await.unwrap());
+        let log = tool_json(&peer.call_tool(CallToolRequestParams::new("reasoning_log").with_arguments(serde_json::json!({
+            "action": {"type": "add", "episode_id": episode_id, "episode_revision": req["episode_revision"],
+                "action_attempt_id": third_claim["action_attempt_id"], "reasoning_kind": "retry_after_failure",
+                "hypothesis": "A checkpoint will unlock the bounded retry", "approach_summary": "Persist the result of the two exploratory decompositions before continuing",
+                "expected_outcome": "The same claimed third attempt remains valid", "actual_outcome": "The gate refused the third unlogged submission",
+                "lesson_learned": "Checkpoint before exceeding the two-attempt grace window", "confidence": "high", "author": "test"}
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(log["reasoning_log"]["is_proof"], false);
+        let status_after_log = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_status").with_arguments(
+            serde_json::json!({"episode_id": episode_id}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(status_before_log, status_after_log, "reasoning metadata must not change episode proof state");
+        let step3 = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(
+            third_args.as_object().unwrap().clone())).await.unwrap());
+        req = step3["next_action_request"].clone();
+
+        let giveup_claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "reasoning-giveup",
+            "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let giveup_args = serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": giveup_claim["action_attempt_id"],
+            "expected_revision": req["episode_revision"], "claim_token": giveup_claim["claim_token"],
+            "action": {"type": "give_up"}, "cost_micros": 1,
+        });
+        let undetailed = peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(giveup_args.as_object().unwrap().clone())).await;
+        assert!(undetailed.is_err(), "give_up always needs a fresh detailed log");
+        tool_json(&peer.call_tool(CallToolRequestParams::new("reasoning_log").with_arguments(serde_json::json!({
+            "action": {"type": "add", "episode_id": episode_id, "episode_revision": req["episode_revision"],
+                "action_attempt_id": giveup_claim["action_attempt_id"], "reasoning_kind": "other",
+                "approach_summary": "End the synthetic gate test after all acceptance paths are exercised",
+                "actual_outcome": "Two grace attempts, one gated retry, and one logged retry behaved as designed",
+                "lesson_learned": "GiveUp must preserve the blocker and reusable lesson before termination", "confidence": "high", "author": "test"}
+        }).as_object().unwrap().clone())).await.unwrap());
+        let gave_up = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(
+            giveup_args.as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(gave_up["outcome"], "gave_up");
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("reasoning_log").with_arguments(serde_json::json!({
+            "action": {"type": "observe", "episode_id": episode_id}
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["reasoning_logs"].as_array().unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -22169,6 +22566,15 @@ mod tests {
         // Conclude the episode with GiveUp (outcome = gave_up), then claim
         // kernel_verified anyway — must be rejected as a mismatch.
         let req = &ep["next_action_request"];
+        tool_json(&peer.call_tool(CallToolRequestParams::new("reasoning_log").with_arguments(serde_json::json!({
+            "action": {
+                "type": "add", "episode_id": episode_id, "episode_revision": req["episode_revision"],
+                "reasoning_kind": "other", "approach_summary": "Intentionally terminate to test benchmark outcome cross-checking",
+                "actual_outcome": "The episode is unconcluded and this test needs a non-proof terminal outcome",
+                "lesson_learned": "A gave_up episode must never satisfy a later kernel_verified benchmark claim",
+                "confidence": "high", "author": "test"
+            }
+        }).as_object().unwrap().clone())).await.unwrap());
         let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
             "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "bench-1",
             "expected_revision": req["episode_revision"],

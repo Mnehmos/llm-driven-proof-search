@@ -61,3 +61,8 @@ tunnel_client_dir/
 .kilo/
 docs/playtests/exports/
 formal-conjectures/
+
+# Local backups and temps
+dev environment.zip
+.approval_tests_temp/
+.claude/

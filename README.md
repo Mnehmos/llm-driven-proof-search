@@ -64,7 +64,7 @@ Antigravity, or a custom script — should call this first.
 
 | Tool | Description |
 |---|---|
-| `readme_first` | Call this first. The proof-search protocol: the loop, trust boundary, Solve/SubmitModule guidance, untracked-attempt warning, cost and benchmark-mode boundary |
+| `readme_first` | Call this first. The proof-search protocol: the loop, trust boundary, mandatory reasoning-log SOP, Solve/SubmitModule guidance, untracked-attempt warning, cost and benchmark-mode boundary |
 | `environment_describe` | Protocol version, capabilities, tool schemas, Lean gateway readiness |
 | `problem_create` | Register a new problem version (source text + root formal statement). `fidelity_status` starts `unreviewed` |
 | `problem_submit_fidelity_review` | Record an evidence-backed determination that a problem's formal statement represents its source text. The ONLY path to `fidelity_status='verified'` — required for `outcome='certified'` |
@@ -74,7 +74,8 @@ Antigravity, or a custom script — should call this first.
 | `episode_reset` | Nondestructive reset — creates a new episode with `parent_episode_id` |
 | `episode_observe` | Get the current observation and pending action request |
 | `attempt_claim` | Claim a pending action request to obtain the `action_attempt_id` + `claim_token` required by `episode_step` |
-| `episode_step` | Submit a typed action (`Solve` / `SubmitModule` / `Decompose` / `GiveUp`) with CAS revision check |
+| `episode_step` | Submit a typed action (`Solve` / `SubmitModule` / `Decompose` / `GiveUp`) with CAS revision check. Hard-gated by the fresh-log cadence in [the reasoning-log SOP](docs/sop-reasoning-logs.md) |
+| `reasoning_log` | Add or observe SOP-mandated, append-only problem-solving checkpoints. Ordinary work gets at most two `episode_step` submissions between logs; `GiveUp` always requires a fresh log with detailed actual outcome and lesson fields. Process metadata only, never proof |
 | `episode_status` | Episode state, revision, budget, step count, outcome |
 | `episode_close` | Gracefully terminate an active episode |
 | `model_call_reserve` | Reserve a budget lease before calling an external model |
