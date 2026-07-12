@@ -33,6 +33,12 @@ pub mod interactive;
 /// reminder (still search evidence, never proof authority).
 pub mod observation;
 
+/// Interactive-independent: issue #220's asynchronous verifier-job engine. It is
+/// pure transport over the SAME `verify_exact` this trait already exposes — a
+/// submitted job produces exactly the result the synchronous path would. See the
+/// module doc for the file-based persistence and trust-boundary rules.
+pub mod verification;
+
 pub trait LeanGateway {
     fn verify_exact(
         &self,
@@ -104,6 +110,48 @@ pub trait LeanGateway {
 
     fn durability_job_retry(&self, _job_id: &str) -> Result<DurabilityJobReceipt, String> {
         Err("this gateway does not support durability jobs".to_string())
+    }
+
+    // -- Issue #220: asynchronous verifier jobs ---------------------------
+    //
+    // An ADDITIVE transport path over this same trait's `verify_exact`: submit
+    // returns a durable job id immediately, then status/result/cancel/events run
+    // across separate requests while the verifier works on its own thread.
+    // Defaults fail closed for the same reason the durability ones do — a
+    // gateway that cannot actually run Lean must never pretend to run a job.
+
+    /// Launches an asynchronous verification job and returns immediately with a
+    /// durable receipt (job id + source/environment hashes + queued state), never
+    /// a verdict. Reuses an identical completed job when one already exists.
+    fn verification_submit(
+        &self,
+        _request: verification::VerificationJobRequest,
+    ) -> Result<crate::models::VerificationJobReceipt, String> {
+        Err("this gateway does not support asynchronous verification jobs".to_string())
+    }
+
+    /// Lightweight polling metadata for a job — phase, timestamps, heartbeat,
+    /// hashes, cancellation state, and `result_artifact_hash` once complete —
+    /// never the full result payload.
+    fn verification_status(&self, _job_id: &str) -> Result<serde_json::Value, String> {
+        Err("this gateway does not support asynchronous verification jobs".to_string())
+    }
+
+    /// The full verification payload for a completed/failed job. The only action
+    /// that returns the heavy result; `verification_status` never does.
+    fn verification_result(&self, _job_id: &str) -> Result<serde_json::Value, String> {
+        Err("this gateway does not support asynchronous verification jobs".to_string())
+    }
+
+    /// Cancels a job and terminates the complete subprocess tree of any live
+    /// verifier run for it; a terminal job is a no-op.
+    fn verification_cancel(&self, _job_id: &str) -> Result<serde_json::Value, String> {
+        Err("this gateway does not support asynchronous verification jobs".to_string())
+    }
+
+    /// The ordered phase-transition history for a job.
+    fn verification_events(&self, _job_id: &str) -> Result<serde_json::Value, String> {
+        Err("this gateway does not support asynchronous verification jobs".to_string())
     }
 }
 
@@ -227,6 +275,24 @@ fn wait_for_status_with_timeout(
         }
     }
     let _active = ActivePidGuard(pid);
+    // Issue #220: if this verifier subprocess is running under an asynchronous
+    // verification job (thread-local set by that job's worker), attribute its pid
+    // to the job so `verification_cancel` can kill exactly this job's process
+    // tree — never another job's. This is None on the synchronous `episode_step`
+    // path, which is therefore entirely unaffected.
+    struct JobPidGuard(Option<String>, u32);
+    impl Drop for JobPidGuard {
+        fn drop(&mut self) {
+            if let Some(job) = &self.0 {
+                verification::deregister_job_pid(job, self.1);
+            }
+        }
+    }
+    let job_ctx = verification::current_job();
+    if let Some(job) = &job_ctx {
+        verification::register_job_pid(job, pid);
+    }
+    let _job_pid = JobPidGuard(job_ctx, pid);
     std::thread::spawn(move || {
         let res = child.wait();
         let _ = tx.send(res);
@@ -289,6 +355,14 @@ fn terminate_process_tree(pid: u32, force: bool) -> String {
         .stdout(Stdio::null()).stderr(Stdio::null()).status();
     format!("process_group_{signal}({})",
         status.map(|s| s.to_string()).unwrap_or_else(|e| format!("spawn_error:{e}")))
+}
+
+/// Issue #220: crate-internal accessor so `verification::cancel` can kill the
+/// complete process tree of a job's live verifier subprocess, reusing the exact
+/// same `taskkill /F /T` (Windows) / process-group signal (unix) mechanism the
+/// timeout path uses — never a second, divergent kill implementation.
+pub(crate) fn kill_verifier_process_tree(pid: u32, force: bool) -> String {
+    terminate_process_tree(pid, force)
 }
 
 /// Terminates all registered verifier trees during server shutdown and waits
@@ -579,6 +653,13 @@ impl RealLeanGateway {
         self.lean_project_path.join(".proofsearch").join("durability-jobs")
     }
 
+    /// Issue #220: sibling of `durability_job_dir` — where asynchronous
+    /// verification job state (and result artifacts) live. On disk under the same
+    /// `.proofsearch` root, so jobs survive a restart for free.
+    fn verification_job_dir(&self) -> PathBuf {
+        self.lean_project_path.join(".proofsearch").join("verification-jobs")
+    }
+
     fn write_durability_state(&self, job_id: &str, state: &serde_json::Value) -> Result<(), String> {
         let _state_lock = DURABILITY_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = self.durability_job_dir();
@@ -782,6 +863,50 @@ impl LeanGateway for RealLeanGateway {
         }
         let target = state["target"].as_str().ok_or_else(|| format!("durability job {job_id} has no target"))?;
         self.enqueue_durability_build(target.to_string(), Some(job_id.to_string()))
+    }
+
+    fn verification_submit(
+        &self,
+        request: verification::VerificationJobRequest,
+    ) -> Result<crate::models::VerificationJobReceipt, String> {
+        let dir = self.verification_job_dir();
+        // The worker runs on a background thread, so the runner must own an
+        // independent gateway — clone this one, exactly as `enqueue_durability_build`
+        // clones itself into its own build thread.
+        let gateway = RealLeanGateway::with_resource_policy(
+            self.lean_project_path.clone(),
+            self.elan_bin_path.clone(),
+            self.resource_policy.clone(),
+        );
+        let runner: verification::VerificationRunner = Box::new(move |req: &verification::VerificationJobRequest| {
+            // The SAME `verify_exact` the synchronous `episode_step` path uses —
+            // this async path changes nothing about proof authority.
+            gateway.verify_exact(
+                &req.obligation,
+                &req.candidate_source,
+                &req.approved_dependency_ids,
+                &req.environment,
+                &req.import_manifest,
+                req.proof_format,
+            )
+        });
+        verification::submit(&dir, &self.resource_policy, request, runner)
+    }
+
+    fn verification_status(&self, job_id: &str) -> Result<serde_json::Value, String> {
+        verification::status(&self.verification_job_dir(), job_id)
+    }
+
+    fn verification_result(&self, job_id: &str) -> Result<serde_json::Value, String> {
+        verification::result(&self.verification_job_dir(), job_id)
+    }
+
+    fn verification_cancel(&self, job_id: &str) -> Result<serde_json::Value, String> {
+        verification::cancel(&self.verification_job_dir(), job_id)
+    }
+
+    fn verification_events(&self, job_id: &str) -> Result<serde_json::Value, String> {
+        verification::events(&self.verification_job_dir(), job_id)
     }
 
     fn verify_exact(
@@ -1608,6 +1733,81 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// Issue #220's core invariant: an asynchronous verification job runs the
+    /// EXACT SAME `verify_exact`, so its result must equal what the synchronous
+    /// path produces for the SAME input — whatever that verdict is. This asserts
+    /// that equality directly rather than assuming the environment proves the
+    /// goal, so it validates the real claim ("async == sync") and stays honest in
+    /// any real-Lean environment. Lean-guarded exactly like the other
+    /// RealLeanGateway integration tests; the deadline is tied to the gateway's
+    /// own proof timeout so a slow-but-working verifier never false-fails.
+    #[test]
+    fn async_verification_job_result_matches_synchronous_verify_exact() {
+        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+        let elan_bin_path = PathBuf::from(home).join(".elan").join("bin");
+        let lean_project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("lean-checker");
+        if !elan_bin_path.join("lake.exe").exists() || !lean_project_path.join("lakefile.toml").exists() { return }
+        let gateway = RealLeanGateway::new(lean_project_path, elan_bin_path);
+        let obligation = Obligation {
+            id: Uuid::new_v4(), problem_version_id: Uuid::new_v4(), kind: ObligationKind::Root,
+            theorem_name: "async_match".into(), lean_statement: "True".into(), statement_hash: "hash".into(),
+            natural_description: "test".into(), status: ObligationStatus::Open, depth_from_root: 0,
+            created_by: ObligationCreator::InitialSketch, created_by_epoch_id: None,
+            superseded_by_id: None, proved_lemma_id: None, refutation_lemma_id: None,
+            failure_lesson: None, attempt_count: 0, created_at: Utc::now(), closed_at: None,
+        };
+        // A run-unique candidate source (trailing line comment, ignored by Lean)
+        // so this test never deduplicates against a completed job a PRIOR run
+        // persisted in the shared `.proofsearch/verification-jobs` dir — sync and
+        // async are then computed fresh, together, on identical input.
+        let candidate_source = format!("trivial -- {}", Uuid::new_v4());
+
+        // Synchronous baseline — the source of truth this async run must match.
+        let sync = gateway.verify_exact(&obligation, &candidate_source, &[], "env", &default_manifest(), ProofFormat::FlatTacticSequence).unwrap();
+
+        // Same inputs, submitted asynchronously.
+        let request = verification::VerificationJobRequest {
+            obligation: obligation.clone(),
+            candidate_source: candidate_source.clone(),
+            approved_dependency_ids: vec![],
+            environment: "env".into(),
+            import_manifest: default_manifest(),
+            proof_format: ProofFormat::FlatTacticSequence,
+        };
+        let receipt = gateway.verification_submit(request).unwrap();
+        assert!(!receipt.job_id.is_empty());
+        assert!(!receipt.reused);
+
+        // Any terminal phase is acceptable (complete/failed/timed_out) — the
+        // point is that whatever the sync path decided, the async path decides
+        // identically. Deadline covers a full cold verify plus a generous margin.
+        let deadline = Instant::now()
+            + Duration::from_millis(gateway.resource_policy.proof_timeout_ms)
+            + Duration::from_secs(120);
+        let final_state = loop {
+            let state = gateway.verification_status(&receipt.job_id).unwrap();
+            match state["phase"].as_str() {
+                Some("complete") | Some("failed") | Some("timed_out") => break state,
+                Some("cancelled") | Some("interrupted") =>
+                    panic!("async verify reached an unexpected terminal phase: {state}"),
+                _ => assert!(Instant::now() < deadline, "async verify did not settle in time: {state}"),
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        // Status is lightweight: no full payload, but carries the artifact hash.
+        assert!(final_state.get("all_diagnostics").is_none());
+        assert!(final_state["result_artifact_hash"].as_str().is_some());
+
+        // The async result payload matches the synchronous verdict exactly on the
+        // load-bearing fields (attempt_id/wall-time are expected to differ).
+        let full = gateway.verification_result(&receipt.job_id).unwrap();
+        assert_eq!(full["available"], true);
+        let async_result: LeanVerificationResult = serde_json::from_value(full["result"].clone()).unwrap();
+        assert_eq!(async_result.outcome, sync.outcome, "async outcome must equal the synchronous verify_exact outcome");
+        assert_eq!(async_result.theorem_name, sync.theorem_name);
+        assert_eq!(async_result.expected_statement_hash, sync.expected_statement_hash);
     }
 
     /// THE CORE OF THE FIX: an unresolved name must categorize as

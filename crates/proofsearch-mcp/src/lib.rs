@@ -25,6 +25,8 @@ use proofsearch_core::db::schema_v1;
 use proofsearch_core::db::interactive as idb;
 use proofsearch_core::orchestrator::{lifecycle, attempts, step, trajectories, dataset};
 use proofsearch_core::lean::{LeanGateway, RealLeanGateway};
+use proofsearch_core::lean::verification::VerificationJobRequest;
+use proofsearch_core::models::{Obligation, ObligationKind, ObligationStatus, ObligationCreator};
 use proofsearch_core::lean::interactive::{
     InteractiveProofGateway, MockInteractiveGateway, InteractiveSessionHandle, ProofStateNodeId,
     InteractiveSessionRequest, TacticOutcome, InteractiveSessionTrace, InteractiveTraceStep,
@@ -394,6 +396,37 @@ pub struct DurabilityArgs { pub action: DurabilityAction }
 pub enum DurabilityAction {
     Status { job_id: String },
     Retry { job_id: String },
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct VerificationArgs { pub action: VerificationAction }
+
+/// Issue #220: asynchronous verifier jobs. Internally-tagged `action`, exactly
+/// like `durability`/`artifact`. `submit` runs the SAME `verify_exact` the
+/// synchronous `episode_step` path uses, off the request thread; the other four
+/// actions observe/steer that job across separate requests.
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VerificationAction {
+    Submit {
+        /// The Lean statement to prove (the obligation's `theorem ... :` body).
+        lean_statement: String,
+        /// The candidate proof body spliced under `:= by`.
+        candidate_source: String,
+        /// Import manifest (Lean module paths and/or `open` directives).
+        #[serde(default)]
+        import_manifest: Vec<String>,
+        /// Optional approved dependency lemma ids (verified-lemma UUIDs).
+        #[serde(default)]
+        approved_dependency_ids: Vec<String>,
+        /// Transport format for `candidate_source`'s leading whitespace.
+        #[serde(default)]
+        proof_format: ProofFormat,
+    },
+    Status { job_id: String },
+    Result { job_id: String },
+    Cancel { job_id: String },
+    Events { job_id: String },
 }
 
 /// Issue #35's dedicated read-me-first tool — no args, matching
@@ -13855,6 +13888,65 @@ impl ChatDbMcp {
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&response).unwrap())]))
     }
 
+    async fn do_verification(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: VerificationArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid verification params: {e}")))?;
+        let response = match args.action {
+            VerificationAction::Submit { lean_statement, candidate_source, import_manifest, approved_dependency_ids, proof_format } => {
+                let dep_ids = approved_dependency_ids.iter()
+                    .map(|s| Uuid::parse_str(s).map_err(|e| format!("invalid approved_dependency_id {s:?}: {e}")))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(mcp_invalid_params)?;
+                let statement_hash = canonical_hash(&lean_statement).map_err(mcp_internal_error)?;
+                // The verification environment is server-owned truth (issue #220
+                // keeps the same invariant the rest of the code enforces): read
+                // it from the server's own detected toolchain, never a
+                // client-supplied placeholder. Absent a lean-checker, it is
+                // honestly labeled as undetected rather than faked.
+                let environment = self.lean_environment.as_ref().map(|e| e.hash.clone())
+                    .unwrap_or_else(|| "no-lean-environment-detected".to_string());
+                // A self-contained obligation for this standalone verify. The
+                // synthesized ids only feed the generated namespace/theorem name;
+                // nothing about episode state, budgets, or the DB is touched.
+                let obligation = Obligation {
+                    id: Uuid::new_v4(),
+                    problem_version_id: Uuid::new_v4(),
+                    kind: ObligationKind::Root,
+                    theorem_name: "async_verification".to_string(),
+                    lean_statement,
+                    statement_hash,
+                    natural_description: String::new(),
+                    status: ObligationStatus::Open,
+                    depth_from_root: 0,
+                    created_by: ObligationCreator::InitialSketch,
+                    created_by_epoch_id: None,
+                    superseded_by_id: None,
+                    proved_lemma_id: None,
+                    refutation_lemma_id: None,
+                    failure_lesson: None,
+                    attempt_count: 0,
+                    created_at: Utc::now(),
+                    closed_at: None,
+                };
+                let request = VerificationJobRequest {
+                    obligation,
+                    candidate_source,
+                    approved_dependency_ids: dep_ids,
+                    environment,
+                    import_manifest,
+                    proof_format,
+                };
+                self.gateway.verification_submit(request)
+                    .and_then(|receipt| serde_json::to_value(receipt).map_err(|e| e.to_string()))
+            }
+            VerificationAction::Status { job_id } => self.gateway.verification_status(&job_id),
+            VerificationAction::Result { job_id } => self.gateway.verification_result(&job_id),
+            VerificationAction::Cancel { job_id } => self.gateway.verification_cancel(&job_id),
+            VerificationAction::Events { job_id } => self.gateway.verification_events(&job_id),
+        }.map_err(mcp_invalid_params)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&response).unwrap())]))
+    }
+
 }
 
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
@@ -13877,6 +13969,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<EnvironmentDescribeArgs>("environment_describe", "Return environment version, supported protocol, tool schemas, capabilities"),
             make_tool::<ArtifactArgs>("artifact", "Issue #222: content-addressed binary artifact transport. `action` is one of put_begin, put_chunk, put_commit, get_metadata, find_by_hash, or get_range. Upload chunks are base64, ordered by exact byte offset, integrity-checked at commit, and deduplicated by SHA-256. get_range supports bounded byte ranges or line ranges; small payloads remain inline in their owning tools."),
             make_tool::<DurabilityArgs>("durability", "Issue #227: observe or retry the bounded background `lake build` job queued after a theorem/module kernel pass. Kernel validity and durability status are independent: a failed build never revokes a valid kernel result. Actions: {\"type\":\"status\",\"job_id\":\"..\"} or {\"type\":\"retry\",\"job_id\":\"..\"}."),
+            make_tool::<VerificationArgs>("verification", "Issue #220: asynchronous verifier jobs — run the SAME Lean verification `episode_step` runs, but off the request thread so a large proof no longer inherits client/transport/proxy/request timeouts. THIS IS PURE TRANSPORT: it changes NOTHING about proof authority — a submitted job reaches the same pinned Lean kernel and produces exactly the result the synchronous verify would; the job's phase/timestamps are bookkeeping, never a verdict. Internally-tagged `action`, exactly one of: {\"type\":\"submit\",\"lean_statement\":\"..\",\"candidate_source\":\"..\"} (+ optional import_manifest, approved_dependency_ids, proof_format — returns immediately with a durable job_id, source_hash, environment_hash, and queued state; the verifier then works in the background. An identical completed job (same source+environment hash) is REUSED, returning reused=true rather than launching a second run. environment is server-owned, never client-supplied) | {\"type\":\"status\",\"job_id\":\"..\"} (LIGHTWEIGHT polling metadata only — phase, timestamps, heartbeat, hashes, cancellation state, and result_artifact_hash once complete; NEVER the full result payload. A job left mid-run by a crashed/restarted process is honestly reported phase=\"interrupted\", never as still-running or complete) | {\"type\":\"result\",\"job_id\":\"..\"} (the ONLY action returning the full LeanVerificationResult payload) | {\"type\":\"cancel\",\"job_id\":\"..\"} (records cancellation and terminates the COMPLETE subprocess tree of the job's live verifier run; a terminal job is a no-op) | {\"type\":\"events\",\"job_id\":\"..\"} (the ordered phase-transition history — progress without a streaming transport). Client disconnect does not destroy a job; jobs survive restart on disk. Suggested phases: queued, staging, elaborating, persisting_artifact, complete, failed, timed_out, cancelled, interrupted."),
             make_tool::<ProblemCreateArgs>("problem_create", "Register a new problem version (source text + root formal statement). fidelity_status starts 'unreviewed' — proving requires either a real problem_submit_fidelity_review or the honestly-named unsafe_dev_attestation=true (which can reach outcome=kernel_verified but never 'certified'). Import manifest: omitted or empty problem_imports uses the fast Ring+NormNum base manifest; opt into the full umbrella with problem_imports=[\"Mathlib\"] when a statement needs broad Mathlib notation or declarations. problem_imports entries may be Lean module paths AND `open [scoped] <Namespace> ...` directives (issue #62): a statement that relies on scoped notation (ℤ[X], ∠, π) or unqualified names (derivative, volume, ball) needs the corresponding module/open context registered here, or it will not elaborate to the intended mathematics"),
             make_tool::<ProblemSubmitFidelityReviewArgs>("problem_submit_fidelity_review", "Record an evidence-backed determination of whether a problem's formal statement represents its source text. Requires the CURRENT source/statement/rendering hashes (recomputed server-side; mismatches are rejected as stale). decision='verified' is the ONLY path to outcome='certified' and problem state COMPLETE; 'rejected' blocks it. This is a review record, not a flag flip — proof soundness (Lean kernel) and statement fidelity (this tool) are independent claims"),
             make_tool::<ProblemRecordBenchmarkAlignmentArgs>("problem_record_benchmark_alignment", "Record a formal_benchmark_hash_alignment fidelity basis (issue #43) for a benchmark-imported problem: the server verifies the problem_version's root_statement_hash equals the registered benchmark target hash — COALESCE(prover_ready_statement_hash, root_statement_hash) — on a trusted_canonical_source suite, then sets fidelity_status='benchmark_aligned' and unlocks proving WITHOUT unsafe_dev_attestation. This is hash alignment to a curated benchmark target, NOT independent natural-language review: it can reach outcome=kernel_verified but NEVER 'certified'/COMPLETE. An untrusted/custom suite is rejected and directed to problem_submit_fidelity_review"),
@@ -13966,6 +14059,7 @@ impl ServerHandler for ChatDbMcp {
             match request.name.as_ref() {
             "artifact" => self.do_artifact(args_val).await,
             "durability" => self.do_durability(args_val).await,
+            "verification" => self.do_verification(args_val).await,
             "readme_first" => {
                 let res = serde_json::json!({
                     "what_this_is": "LLM-Driven Proof Search Environment is a verifier-backed RL ENVIRONMENT, not a prover. It contains no provider SDKs, no API keys, no model routing, no inference calls. The external agent host (you, or whatever is calling this tool) IS the policy — you choose what to try. LLM-Driven Proof Search Environment assembles Lean source under a strict trust boundary, the real Lean 4 kernel verifies it, and the ledger records what happened. If you have not read anything else in this environment, read this response before calling problem_create or episode_create.",
@@ -14090,8 +14184,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 44,
-                        "total_tool_count": 44,
+                        "classified_tool_count": 45,
+                        "total_tool_count": 45,
                         "tools": {
                             "artifact": {
                                 "side_effect": "mixed by action: put_begin/put_chunk/put_commit stage and commit immutable content-addressed bytes; get_metadata/find_by_hash/get_range are read_only",
@@ -14112,6 +14206,16 @@ impl ServerHandler for ChatDbMcp {
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "build_log",
                                 "required_run_mode": "any"
+                            },
+                            "verification": {
+                                "side_effect": "mixed by action (issue #220): submit launches a background verifier job and writes its file-based state; cancel writes the cancelled state and kills the job's subprocess tree; status/result/events are read_only",
+                                "trust_level": "mixed: the submitted lean_statement/candidate_source are untrusted_input (client-authored, adversarial by default), but the recorded result is verifier_backed — the SAME real Lean kernel the synchronous episode_step path uses decides it. The job's phase/timestamps are transport bookkeeping, never a verdict; this async path changes nothing about proof authority",
+                                "cost_surface": "verifier_side (a real Lean invocation per job, same as episode_step) plus small storage_side for the job state and result artifact files",
+                                "benchmark_safety": "contamination_risk at result: the result payload carries the same completed proof content episode_step produces and proof_export/trajectory_export gate — result is a private artifact, not a public export. status/events surface only phases/hashes/metadata, never a proof body",
+                                "replayability": "deterministic by (source_hash, environment_hash): an identical completed job is reused rather than re-run; jobs are persisted on disk and survive restart, with a mid-run job from a dead process reported interrupted rather than falsely running/complete",
+                                "source_code_impact": "no_source_change — assembled Lean text is ephemeral verifier input exactly as in episode_step",
+                                "artifact_risk": "proof_body (result action) or diagnostic_only/metadata (status/events)",
+                                "required_run_mode": "any — this is transport for the same verifier; export-time contamination gates remain the responsibility of proof_export/trajectory_export"
                             },
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
@@ -15851,6 +15955,225 @@ mod tests {
         serde_json::from_str(res.content[0].as_text().unwrap().text.as_str()).unwrap()
     }
 
+    /// Issue #220: a test double that runs the real file-based verification-job
+    /// engine (`proofsearch_core::lean::verification`) with a CANNED runner, so
+    /// the async submit/status/result/cancel lifecycle can be driven end-to-end
+    /// through the MCP handler without a real Lean toolchain. A runner whose
+    /// candidate_source contains "BLOCK" waits on a release flag so `cancel` can
+    /// be tested deterministically against a mid-run job.
+    struct AsyncVerifyTestGateway {
+        _tmp: tempfile::TempDir,
+        dir: PathBuf,
+        policy: proofsearch_core::models::VerifierResourcePolicy,
+        release: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl AsyncVerifyTestGateway {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path().join("verification-jobs");
+            Self {
+                _tmp: tmp,
+                dir,
+                policy: proofsearch_core::models::VerifierResourcePolicy::default(),
+                release: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }
+        }
+    }
+
+    fn canned_kernel_pass(req: &VerificationJobRequest) -> LeanVerificationResult {
+        LeanVerificationResult {
+            outcome: LeanVerificationOutcome::KernelPass,
+            attempt_id: Uuid::new_v4(),
+            obligation_id: req.obligation.id,
+            theorem_name: req.obligation.theorem_name.clone(),
+            expected_statement_hash: req.obligation.statement_hash.clone(),
+            elaborated_statement_hash: None,
+            environment_hash: req.environment.clone(),
+            proof_source_hash: String::new(),
+            compiled_artifact_hash: None,
+            proof_term_hash: None,
+            diagnostic: None,
+            all_diagnostics: vec![],
+            dependency_use_report: None,
+            resource_policy: None,
+            output_receipt: None,
+            durability_job: None,
+            wall_time_ms: 1,
+            lean_cpu_time_ms: 1,
+        }
+    }
+
+    impl LeanGateway for AsyncVerifyTestGateway {
+        fn verify_exact(
+            &self,
+            obligation: &Obligation,
+            _candidate_source: &str,
+            _approved_dependency_ids: &[Uuid],
+            environment: &str,
+            _import_manifest: &[String],
+            _proof_format: ProofFormat,
+        ) -> Result<LeanVerificationResult, String> {
+            let mut r = canned_kernel_pass(&VerificationJobRequest {
+                obligation: obligation.clone(),
+                candidate_source: String::new(),
+                approved_dependency_ids: vec![],
+                environment: environment.to_string(),
+                import_manifest: vec![],
+                proof_format: ProofFormat::FlatTacticSequence,
+            });
+            r.environment_hash = environment.to_string();
+            Ok(r)
+        }
+
+        fn verification_submit(
+            &self,
+            request: VerificationJobRequest,
+        ) -> Result<proofsearch_core::models::VerificationJobReceipt, String> {
+            use std::sync::atomic::Ordering;
+            let release = self.release.clone();
+            let runner: proofsearch_core::lean::verification::VerificationRunner =
+                Box::new(move |req: &VerificationJobRequest| {
+                    if req.candidate_source.contains("BLOCK") {
+                        for _ in 0..400 {
+                            if release.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                    }
+                    Ok(canned_kernel_pass(req))
+                });
+            proofsearch_core::lean::verification::submit(&self.dir, &self.policy, request, runner)
+        }
+
+        fn verification_status(&self, job_id: &str) -> Result<serde_json::Value, String> {
+            proofsearch_core::lean::verification::status(&self.dir, job_id)
+        }
+        fn verification_result(&self, job_id: &str) -> Result<serde_json::Value, String> {
+            proofsearch_core::lean::verification::result(&self.dir, job_id)
+        }
+        fn verification_cancel(&self, job_id: &str) -> Result<serde_json::Value, String> {
+            proofsearch_core::lean::verification::cancel(&self.dir, job_id)
+        }
+        fn verification_events(&self, job_id: &str) -> Result<serde_json::Value, String> {
+            proofsearch_core::lean::verification::events(&self.dir, job_id)
+        }
+    }
+
+    fn async_verify_handler(gateway: AsyncVerifyTestGateway) -> ChatDbMcp {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        ChatDbMcp {
+            conn: Arc::new(Mutex::new(conn)),
+            gateway: Box::new(gateway),
+            lean_available: true,
+            // Server-owned environment identity so the handler produces a real
+            // env hash rather than the undetected placeholder.
+            lean_environment: Some(proofsearch_core::lean::LeanEnvironmentInfo {
+                toolchain: "leanprover/lean4:test".to_string(),
+                mathlib_rev: "deadbeef".to_string(),
+                descriptor: "test-env".to_string(),
+                hash: "test-env-hash".to_string(),
+            }),
+            lean_project_path: PathBuf::from("dummy"),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        }
+    }
+
+    /// Issue #220 acceptance, end-to-end through the MCP handler: submit returns a
+    /// durable job_id WITHOUT blocking on Lean; status is lightweight (never the
+    /// full payload); result returns the payload; identical jobs are reused; and
+    /// cancel marks a mid-run job cancelled.
+    #[tokio::test]
+    async fn test_verification_async_submit_status_result_cancel_lifecycle() {
+        let handler = async_verify_handler(AsyncVerifyTestGateway::new());
+
+        // 1. submit returns immediately with job_id + hashes + queued state.
+        let submitted = tool_json(&handler.do_verification(serde_json::json!({"action": {
+            "type": "submit", "lean_statement": "True", "candidate_source": "trivial",
+            "import_manifest": ["Mathlib"]
+        }})).await.unwrap());
+        let job_id = submitted["job_id"].as_str().unwrap().to_string();
+        assert!(!job_id.is_empty());
+        assert!(submitted["source_hash"].as_str().is_some_and(|h| !h.is_empty()));
+        assert_eq!(submitted["environment_hash"], "test-env-hash");
+        assert_eq!(submitted["reused"], false);
+
+        // 2. poll status to completion; status is lightweight only.
+        let mut final_status = serde_json::Value::Null;
+        for _ in 0..200 {
+            let s = tool_json(&handler.do_verification(serde_json::json!({
+                "action": {"type": "status", "job_id": job_id}
+            })).await.unwrap());
+            if s["phase"] == "complete" {
+                final_status = s;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(final_status["phase"], "complete", "job never completed: {final_status}");
+        assert!(final_status.get("all_diagnostics").is_none(), "status must not carry the full result payload");
+        assert!(final_status.get("resource_policy").is_none(), "status must not carry the full result payload");
+        assert!(final_status.get("phases").is_none(), "status is lean; the phase log belongs to events");
+        assert!(final_status["result_artifact_hash"].as_str().is_some_and(|h| !h.is_empty()));
+        assert_eq!(final_status["outcome"], "kernel_pass");
+
+        // 3. result returns the full payload (the ONLY action that does).
+        let full = tool_json(&handler.do_verification(serde_json::json!({
+            "action": {"type": "result", "job_id": job_id}
+        })).await.unwrap());
+        assert_eq!(full["available"], true);
+        assert_eq!(full["result"]["outcome"], "kernel_pass");
+        assert!(full["result"]["all_diagnostics"].is_array());
+
+        // 4. events returns the ordered phase history.
+        let events = tool_json(&handler.do_verification(serde_json::json!({
+            "action": {"type": "events", "job_id": job_id}
+        })).await.unwrap());
+        let phases: Vec<String> = events["phases"].as_array().unwrap().iter()
+            .map(|p| p["phase"].as_str().unwrap().to_string()).collect();
+        assert_eq!(phases.first().unwrap(), "queued");
+        assert_eq!(phases.last().unwrap(), "complete");
+
+        // 5. an identical submit reuses the completed job.
+        let reused = tool_json(&handler.do_verification(serde_json::json!({"action": {
+            "type": "submit", "lean_statement": "True", "candidate_source": "trivial",
+            "import_manifest": ["Mathlib"]
+        }})).await.unwrap());
+        assert_eq!(reused["reused"], true);
+        assert_eq!(reused["job_id"], job_id);
+    }
+
+    #[tokio::test]
+    async fn test_verification_cancel_marks_job_cancelled() {
+        let gateway = AsyncVerifyTestGateway::new();
+        let release = gateway.release.clone();
+        let handler = async_verify_handler(gateway);
+
+        // A blocking job so cancel reliably catches it mid-run.
+        let submitted = tool_json(&handler.do_verification(serde_json::json!({"action": {
+            "type": "submit", "lean_statement": "True", "candidate_source": "BLOCK trivial"
+        }})).await.unwrap());
+        let job_id = submitted["job_id"].as_str().unwrap().to_string();
+
+        let cancelled = tool_json(&handler.do_verification(serde_json::json!({
+            "action": {"type": "cancel", "job_id": job_id}
+        })).await.unwrap());
+        assert_eq!(cancelled["cancelled"], true);
+        assert_eq!(cancelled["phase"], "cancelled");
+
+        // Release the blocked runner; its late completion must NOT overwrite the
+        // cancelled state.
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let s = tool_json(&handler.do_verification(serde_json::json!({
+            "action": {"type": "status", "job_id": job_id}
+        })).await.unwrap());
+        assert_eq!(s["phase"], "cancelled");
+        assert_eq!(s["cancellation_requested"], true);
+    }
+
     #[tokio::test]
     async fn test_artifact_chunk_integrity_dedup_and_ranged_retrieval() {
         let handler = test_handler();
@@ -16050,7 +16373,9 @@ mod tests {
         // + 1 reasoning_log (SOP-mandated add/observe process ledger) = 42.
         // + 1 content-addressed artifact family (issue #222) = 43.
         // + 1 durability job status/retry family (issue #227) = 44.
-        assert_eq!(list_res.tools.len(), 44);
+        // + 1 asynchronous verification job family (issue #220:
+        // submit/status/result/cancel/events) = 45.
+        assert_eq!(list_res.tools.len(), 45);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the

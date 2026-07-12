@@ -571,6 +571,27 @@ pub struct DurabilityJobReceipt {
     pub error: Option<String>,
 }
 
+/// Issue #220: the immediate receipt an asynchronous verification `submit`
+/// returns. It carries the durable `job_id` plus the source and environment
+/// hashes the job is keyed on, and the queued (or, for a deduplicated reuse, an
+/// already-terminal) phase — never a verification verdict. The verdict lives in
+/// the job's own persisted state and result artifact, reached later through the
+/// status/result actions; this receipt is transport bookkeeping, not proof
+/// authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationJobReceipt {
+    pub job_id: String,
+    pub source_hash: String,
+    pub environment_hash: String,
+    /// The job's phase at receipt time: `queued` for a freshly launched job, or
+    /// the terminal phase (`complete`/`failed`/...) of an existing identical job
+    /// when `reused` is true.
+    pub phase: String,
+    /// True when an identical completed job (same source and environment hash)
+    /// already existed and was returned instead of launching a new run.
+    pub reused: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeanVerificationResult {
     pub outcome: LeanVerificationOutcome,
