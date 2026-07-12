@@ -25,6 +25,7 @@ use proofsearch_core::db::schema_v1;
 use proofsearch_core::db::interactive as idb;
 use proofsearch_core::orchestrator::{lifecycle, attempts, step, trajectories, dataset};
 use proofsearch_core::orchestrator::context::{CompactContextBuilder, ObservationField};
+use proofsearch_core::orchestrator::module_closure::{order_closure, ClosureError, OrderedClosure};
 use proofsearch_core::lean::{LeanGateway, RealLeanGateway};
 use proofsearch_core::lean::verification::VerificationJobRequest;
 use proofsearch_core::models::{Obligation, ObligationKind, ObligationStatus, ObligationCreator};
@@ -409,6 +410,45 @@ pub struct ObservationExpandArgs {
     #[serde(default)]
     pub offset: usize,
     pub limit: Option<usize>,
+}
+
+/// Issue #224: server-side assembly and kernel-verification of a
+/// dependency-closed Lean module. Internally-tagged `action`, exactly like
+/// `verification`/`artifact`. All three actions traverse the verified obligation
+/// graph rooted at `root_obligation_id`, resolve each declaration's real
+/// kernel-submitted proof, and reuse the proven SubmitModule assembly path.
+#[derive(JsonSchema, Deserialize)]
+pub struct ModuleArgs {
+    pub action: ModuleAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ModuleAction {
+    /// Order + render the dependency-closed module (no kernel run).
+    Assemble {
+        episode_id: String,
+        root_obligation_id: String,
+    },
+    /// Assemble, then kernel-check the whole closure as one module.
+    Verify {
+        episode_id: String,
+        root_obligation_id: String,
+    },
+    /// Verify, then persist the verified module and return an export bundle
+    /// (source, declaration manifest, environment hash, replay command).
+    Export {
+        episode_id: String,
+        root_obligation_id: String,
+    },
+}
+
+/// Map a structured `ClosureError` (#224) to an MCP invalid-params error whose
+/// message is the serde-tagged JSON, so a client can branch on `error` (cycle,
+/// unverified_dependency, incompatible_interface, …) rather than parse prose.
+fn closure_err_to_mcp(err: ClosureError) -> McpError {
+    let payload = serde_json::to_string(&err).unwrap_or_else(|_| err.to_string());
+    mcp_invalid_params(payload)
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -11328,6 +11368,169 @@ impl ChatDbMcp {
 
     // -----------------------------------------------------------------
 
+    /// Issue #224: assemble/verify/export a dependency-closed Lean module from
+    /// the verified obligation graph, reusing the proven SubmitModule path.
+    async fn do_module(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ModuleArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let (episode_id_s, root_id_s, want_kernel, want_persist) = match &args.action {
+            ModuleAction::Assemble { episode_id, root_obligation_id } => (episode_id, root_obligation_id, false, false),
+            ModuleAction::Verify { episode_id, root_obligation_id } => (episode_id, root_obligation_id, true, false),
+            ModuleAction::Export { episode_id, root_obligation_id } => (episode_id, root_obligation_id, true, true),
+        };
+        let episode_id = Uuid::parse_str(episode_id_s)
+            .map_err(|_| mcp_invalid_params(format!("episode_id is not a valid UUID: {}", episode_id_s)))?;
+        let root_obligation_id = Uuid::parse_str(root_id_s)
+            .map_err(|_| mcp_invalid_params(format!("root_obligation_id is not a valid UUID: {}", root_id_s)))?;
+
+        let conn = self.conn.lock().await;
+
+        // 1. Validate + topologically order the verified closure.
+        let closure: OrderedClosure = order_closure(&conn, episode_id, root_obligation_id)
+            .map_err(closure_err_to_mcp)?;
+
+        // 2. Problem-scoped assembly context (namespace, env, import manifest).
+        let (pv_id, environment_hash, import_manifest_json, import_manifest_hash): (String, String, String, String) = conn
+            .query_row(
+                "SELECT pv.id, pv.environment_hash, pv.import_manifest_json, pv.import_manifest_hash
+                 FROM episodes e JOIN problem_versions pv ON e.problem_version_id = pv.id
+                 WHERE e.id = ?1",
+                [episode_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(rs)?;
+        let import_manifest: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
+        let ns16 = pv_id.replace('-', "");
+        let problem_namespace = format!("ProofSearch.P_{}", &ns16[..16.min(ns16.len())]);
+
+        // 3. Resolve each declaration's real kernel-submitted proof and map it
+        //    to a module item (helpers) / the root theorem.
+        let mut module_items: Vec<LeanModuleItem> = Vec::new();
+        let mut root_theorem: Option<ModuleTheorem> = None;
+        for decl in &closure.declarations {
+            let obl = Uuid::parse_str(&decl.obligation_id).map_err(|_| {
+                mcp_internal_error(format!("closure declaration has invalid obligation_id: {}", decl.obligation_id))
+            })?;
+            let proof = interactive_verified_proof_text_for_obligation(&conn, episode_id, obl)?;
+            let proof_term = match proof {
+                Some(p) => p,
+                None => {
+                    return Err(mcp_invalid_params(serde_json::to_string(&serde_json::json!({
+                        "error": "unresolvable_proof_source",
+                        "theorem_name": decl.theorem_name,
+                        "obligation_id": decl.obligation_id,
+                        "detail": "no committed kernel_pass proof body found for this declaration (proved outside the tracked Solve/SubmitModule commit path, so it cannot be composed into a module)",
+                    })).unwrap_or_default()));
+                }
+            };
+            if decl.is_root {
+                root_theorem = Some(ModuleTheorem {
+                    name: decl.theorem_name.clone(),
+                    statement: decl.lean_statement.clone(),
+                    proof_term,
+                    proof_format: ProofFormat::default(),
+                });
+            } else {
+                module_items.push(LeanModuleItem::Theorem {
+                    name: decl.theorem_name.clone(),
+                    statement: decl.lean_statement.clone(),
+                    proof_term,
+                });
+            }
+        }
+        let root_theorem = root_theorem.ok_or_else(|| {
+            mcp_internal_error("closure had no root declaration".to_string())
+        })?;
+
+        // 4. Reuse the proven SubmitModule assembly (names, namespace, shadowing).
+        let assembled = assemble_module(
+            &problem_namespace,
+            &closure.root_statement_hash,
+            &module_items,
+            &root_theorem,
+            &import_manifest,
+        )
+        .map_err(|e| mcp_invalid_params(serde_json::to_string(&serde_json::json!({
+            "error": "assembly_policy_rejected",
+            "detail": e.to_string(),
+        })).unwrap_or_default()))?;
+
+        let declaration_count = closure.declarations.len();
+        let mut result = serde_json::json!({
+            "action": match &args.action {
+                ModuleAction::Assemble { .. } => "assemble",
+                ModuleAction::Verify { .. } => "verify",
+                ModuleAction::Export { .. } => "export",
+            },
+            "episode_id": episode_id.to_string(),
+            "root_obligation_id": root_obligation_id.to_string(),
+            "root_theorem_name": closure.root_theorem_name,
+            "namespace": assembled.namespace,
+            "environment_hash": environment_hash,
+            "declaration_count": declaration_count,
+            "module_source_hash": assembled.module_source_hash,
+            "declaration_manifest_hash": assembled.declaration_manifest_hash,
+            "closure_manifest": closure.declaration_manifest,
+            "source": assembled.source,
+        });
+
+        if !want_kernel {
+            result["note"] = serde_json::json!(
+                "assemble only: the closure was ordered and rendered but NOT kernel-checked. Producer/consumer types are checked by Lean only under the verify/export actions."
+            );
+            return Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&result).unwrap())]));
+        }
+
+        // 5. Kernel-check the whole closure as one module.
+        let verdict = self
+            .gateway
+            .verify_module(&assembled, &environment_hash)
+            .map_err(|e| mcp_internal_error(format!("module verification infrastructure error: {}", e)))?;
+        let passed = matches!(verdict.outcome, proofsearch_core::models::LeanVerificationOutcome::KernelPass);
+        result["kernel_outcome"] = serde_json::to_value(&verdict.outcome).unwrap_or(serde_json::Value::Null);
+        result["kernel_result_hash"] = serde_json::json!(verdict.kernel_result_hash);
+        result["diagnostic"] = serde_json::to_value(&verdict.diagnostic).unwrap_or(serde_json::Value::Null);
+        if !passed {
+            result["note"] = serde_json::json!(
+                "closure did NOT kernel-check as one module. A common cause is a proof written against a dependency passed as a hypothesis rather than referencing the named prior declaration — the dependency-closed check exists precisely to catch that. See diagnostic."
+            );
+        }
+
+        // 6. Export: persist the verified module + emit a replay bundle.
+        if want_persist && passed {
+            let module_id = Uuid::new_v4();
+            let stored = serde_json::json!({ "module_items": module_items, "root_theorem": root_theorem });
+            conn.execute(
+                "INSERT OR IGNORE INTO episode_verified_modules (
+                    id, episode_id, problem_version_id, root_obligation_id, root_statement_hash,
+                    import_manifest_hash, environment_hash, module_source_hash, module_items_json,
+                    declaration_manifest_hash, kernel_result_hash, verified_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                rusqlite::params![
+                    module_id.to_string(), episode_id.to_string(), pv_id, root_obligation_id.to_string(),
+                    closure.root_statement_hash, import_manifest_hash, environment_hash,
+                    assembled.module_source_hash, serde_json::to_string(&stored).unwrap(),
+                    assembled.declaration_manifest_hash, verdict.kernel_result_hash, Utc::now().to_rfc3339(),
+                ],
+            ).map_err(rs)?;
+            result["verified_module_id"] = serde_json::json!(module_id.to_string());
+            result["export"] = serde_json::json!({
+                "module_source_hash": assembled.module_source_hash,
+                "declaration_manifest_hash": assembled.declaration_manifest_hash,
+                "environment_hash": environment_hash,
+                "import_manifest_hash": import_manifest_hash,
+                "replay_command": format!(
+                    "module verify episode_id={} root_obligation_id={}",
+                    episode_id, root_obligation_id
+                ),
+                "axiom_report": serde_json::Value::Null,
+                "axiom_report_note": "not yet computed — a follow-up runs `#print axioms` on the root through the gateway",
+            });
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&result).unwrap())]))
+    }
+
     /// Issue #223: deterministically page observation material that did not fit
     /// the negotiated budget. Read-only: re-derives the exact full content a
     /// budgeted observation truncated/omitted and returns the requested byte
@@ -14069,6 +14272,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<PaperIngestArgs>("paper_ingest", "Issue #187: ONE tool for the entire paper/PDF ingestion family (issue #27) — ingest a source document, append extracted claim nodes, read it back, attach it to a dossier, mark review/trust statuses, and promote extracted nodes to real dossier artifacts. EVERY ACTION HANDLES UNTRUSTED EXTRACTION, NEVER PROOF: LLM-Driven Proof Search Environment does no OCR/LLM extraction — the host records its own extraction result, untrusted by construction; an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT an accepted assumption; no field can hold kernel evidence and no status confers proof, kernel verification, statement fidelity, or citation validation. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\",\"source_kind\":\"pdf\"|\"manuscript\"|\"proof_sketch\"|\"exposition\"|..,\"created_by\":\"..\"} (+ optional dossier_id, source_ref, source_content_hash, ingest_status, extraction_trust_status, notes — ingest a paper/manuscript/proof_sketch/exposition as a reviewable source document, optionally linked to a dossier. Records the host's UNTRUSTED extraction; ingestion is not proof) | {\"type\":\"extract_claims\",\"document_id\":\"..\",\"nodes\":[{\"node_kind\":\"main_theorem\",\"natural_language_text\":\"..\",\"source_span\":\"p.1 Thm 1\"},..]} (append extracted nodes (abstract/main_theorem/definition/proposition/lemma/proof_step/construction/remark/appendix_fact/reference/open_gap) with source_span, confidence, and status labels to an ingested document, all-or-nothing; every node REQUIRES a non-empty source_span tracing it back to the paper. Each node is UNTRUSTED EXTRACTION — an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT accepted) | {\"type\":\"observe\",\"document_id\":\"..\"} (read an ingested document with all its extracted nodes and their trust labels. Read-only; nothing here is proof or kernel evidence) | {\"type\":\"link_to_dossier\",\"document_id\":\"..\",\"dossier_id\":\"..\"} (attach an ingested document and its extracted nodes to a research dossier so they surface in research_dossier observe's ingestion bucket, separate from proof authority) | {\"type\":\"mark_review_status\",\"document_id\":\"..\"} (+ optional node_id; document-level ingest_status/extraction_trust_status, or node-level review_status/formalization_status/citation_status with node_id — rejected_extraction stays visible, never deleted. None of these statuses confers proof, kernel verification, statement fidelity, or citation validation) | {\"type\":\"link_node\",\"document_id\":\"..\",\"node_id\":\"..\",\"target_kind\":\"external_reference\"|\"external_theorem_claim\"|\"research_node\"|\"formalization_plan_item\",\"target_id\":\"..\"} (promote/attach an extracted node to a real dossier artifact — external_reference / external_theorem_claim set citation_status=citation_recorded, research_node / formalization_plan_item set formalization_status=formalization_target_linked. Records provenance and marks review_status=linked_to_dossier_artifact; the linked artifact keeps its own trust and the node NEVER gains proof/kernel authority)"),
             make_tool::<ExpositionArgs>("exposition", "Issue #198: ONE tool for the exposition-artifact family (issue #7), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, obligation_id, verified_module_id, verified_lemma_id, dossier_id, prose_status, title) records a human-readable mathematical exposition section (section_kind: problem_summary/formalization_explanation/construction_intuition/key_lemmas/proof_strategy/verified_claim/unverified_bridges/reviewer_notes/next_formalization_targets) linked to a problem, episode, obligation, verified module, verified lemma, and/or dossier — prose_status (prose/reviewed_prose/formalized) marks epistemic weight: prose is never proof and never changes certification or training eligibility; `observe` (+ one of problem_version_id, episode_id, dossier_id) lists exposition artifacts for that scope — read-only prose, explicitly separate from kernel-verified proof"),
             make_tool::<ReasoningLogArgs>("reasoning_log", "SOP-mandated append-only process ledger and hard gate for episode_step; see docs/sop-reasoning-logs.md. `action` is internally tagged: `add` records episode_id, episode_revision, optional action_attempt_id, reasoning_kind (initial_plan/retry_after_failure/strategy_pivot/error_diagnosis/success_retrospective/other), optional hypothesis, required approach_summary, optional expected_outcome/actual_outcome/lesson_learned/confidence (low/medium/high), and author; `observe` lists one episode's logs in chronological order. Ordinary work gets at most 2 submissions between logs; give_up always requires a fresh log with actual_outcome plus lesson_learned. This is process metadata only: never proof and never changes outcomes, certification, or training eligibility"),
+            make_tool::<ModuleArgs>("module", "Issue #224: assemble and kernel-verify a dependency-closed Lean module from the VERIFIED obligation graph, server-side — no resubmitting every step source through MCP. Internally-tagged `action`, exactly one of: {\"type\":\"assemble\",\"episode_id\":\"..\",\"root_obligation_id\":\"..\"} (traverse the obligation-edge DAG from the root, require a positive verified lemma per node, topologically order dependencies-before-dependents, resolve each declaration's REAL kernel-submitted proof from the tracked commit trail, and render one combined module via the proven SubmitModule assembly — returns source + declaration manifest + hashes, NO kernel run) | {\"type\":\"verify\",..} (assemble, then kernel-check the WHOLE closure as one module in the pinned Lean environment: producer/consumer theorem types are checked by Lean, not just ledger bookkeeping — returns kernel_outcome + diagnostic. A proof written against a dependency as a hypothesis instead of the named prior declaration fails HERE, which is the point) | {\"type\":\"export\",..} (verify, then persist the verified module and return an export bundle: source, declaration manifest, environment hash, module_source_hash, and a replay command). Missing/unverified/cyclic/incompatible/environment-mismatched dependencies fail with a structured graph error (error: root_not_found | unverified_dependency | cycle | incompatible_interface | environment_mismatch). Assembly is deterministic for the same graph. Trust: reuses the SAME assemble_module + verify_module the SubmitModule path uses; nothing here changes proof authority — only the pinned kernel decides."),
             make_tool::<ObservationExpandArgs>("observation_expand", "Issue #223: paginate observation material that did not fit the negotiated budget. A budgeted observation always includes the current obligation and its statement hash, the environment and import-manifest hashes, dependency summaries (name/status/hash), and a head of the latest primary diagnostic; larger material is replaced by a `references` entry carrying a byte-exact `content_hash`, `total_bytes`, `included_bytes`, and `next_offset`, and a `budget` block reports included/omitted/referenced byte counts. Call this with `episode_id`, `field` (root_theorem | dependency_signatures | diagnostics | proof_history), optional `obligation_id` (defaults to the episode's current target obligation), `offset` (start byte, default 0), and optional `limit` (max bytes, default 8192; 0 = whole tail). Returns {field, content_hash, total_bytes, offset, bytes, next_offset}; page until next_offset is null. Content is re-derived deterministically from recorded state and matches the omitted material byte-for-byte. Pure read path: never proof, never mutates state."),
             make_tool::<SemanticSkeletonArgs>("semantic_skeleton", "Issue #199: ONE tool for the semantic-skeleton / module-aware-fidelity family (issue #6), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, root_obligation_id, module_id, module_item_id, verified_lemma_id, dossier_id, node_id, root_fidelity_review_id — all links optional) attaches a semantic statement skeleton / module-aware fidelity note: a structured reading of a root statement, verified module, or source-aligned solution — quantifiers, hypotheses, conclusion, helper definitions, construction/final-answer map, back-translation, and fidelity risk_flags — scoped by review_scope (root_statement_only/module_artifact/source_aligned_solution/computational_check_only/structural_proof). semantic_fingerprint_hash is server-computed. Metadata only: never marks anything proved, never sets fidelity_status, never substitutes for problem_submit_fidelity_review; `observe` (semantic_skeleton_id, observation, finding, + optional risk_flags_json, details_json, observed_by) appends one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive, optional risk_flags) to a semantic skeleton's review_notes history and reads it back. Never changes proof/fidelity/budget/benchmark status; 'confirms_faithful' is not the root fidelity gate"),
             make_tool::<ExpertReviewArgs>("expert_review", "Issue #200: ONE tool for the expert-review ledger family (issue #14), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (dossier_id optional, reviewer_id, reviewer_role: proposer/construction_searcher/formalizer/prover/reviewer/domain_expert/refuter/editor/librarian, review_target_kind: source_problem/formal_statement/construction_artifact/module_artifact/external_citation/asymptotic_extraction/exposition/full_dossier, review_target_id, decision: approved/approved_with_changes/needs_changes/rejected/abstain, + optional expertise_tags, confidence: low/medium/high, notes, requested_changes_json, risk_flags_json) records one role-separated expert-review ledger entry against a polymorphic target. ADDITIVE metadata only: a pure insert that never marks anything proved and never changes proof, certification, obligation, budget, or benchmark state. reviewer_id is free text, not an authenticated principal; a human decision stays distinct from Lean kernel verification; `observe` (+ optional dossier_id, review_target_kind + review_target_id together, reviewer_role, include_revoked) reads expert-review ledger entries back, filtered by dossier, polymorphic target (kind+id together), and/or reviewer role. Revoked reviews are omitted unless include_revoked=true. Read-only. Across both actions: expert reviews are a role-separated ledger of who reviewed what, not a substitute for kernel verification"),
@@ -14252,9 +14456,19 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 46,
-                        "total_tool_count": 46,
+                        "classified_tool_count": 47,
+                        "total_tool_count": 47,
                         "tools": {
+                            "module": {
+                                "side_effect": "mixed by action (issue #224): assemble/verify are read_only (traverse the verified graph, render + kernel-check, write nothing); export additionally persists one episode_verified_modules row for the composed module",
+                                "trust_level": "verifier_backed — the kernel verdict comes from the SAME pinned Lean verify_module the SubmitModule path uses; the graph, ordering, and resolved proofs are all recorded verified state, never client-authored. Nothing here can mark anything proved that the kernel did not",
+                                "cost_surface": "verifier_side on verify/export (one real Lean invocation over the whole closure) plus small storage_side on export",
+                                "benchmark_safety": "contamination_risk — the assembled source and export bundle carry composed proof bodies, the same content proof_export/trajectory_export gate; private_artifact by default, not a public export",
+                                "replayability": "deterministic — the closure ordering is stable per graph (manifest hash), and the export carries a replay command re-running the same verify",
+                                "source_code_impact": "no_source_change — the assembled Lean is ephemeral verifier input, exactly as SubmitModule",
+                                "artifact_risk": "proof_body",
+                                "required_run_mode": "any — export-time contamination gates remain proof_export/trajectory_export's responsibility"
+                            },
                             "observation_expand": {
                                 "side_effect": "read_only — re-derives and pages already-recorded observation material (root theorem, dependency signatures, diagnostics, failure lessons); writes nothing",
                                 "trust_level": "verifier_backed for its factual content (every field is re-derived from recorded episode/problem state) — but the material is transport, never proof authority; paging content never changes an obligation's status",
@@ -15736,6 +15950,7 @@ impl ServerHandler for ChatDbMcp {
             "exposition" => self.do_exposition(args_val).await,
             "reasoning_log" => self.do_reasoning_log(args_val).await,
             "observation_expand" => self.do_observation_expand(args_val).await,
+            "module" => self.do_module(args_val).await,
             "semantic_skeleton" => self.do_semantic_skeleton(args_val).await,
             "expert_review" => self.do_expert_review(args_val).await,
             "mathlib_search_declarations" => {
@@ -16456,7 +16671,9 @@ mod tests {
         // submit/status/result/cancel/events) = 45.
         // + 1 observation_expand (issue #223: paginate budgeted-observation
         // material omitted under the byte budget) = 46.
-        assert_eq!(list_res.tools.len(), 46);
+        // + 1 module (issue #224: assemble/verify/export a dependency-closed
+        // Lean module from the verified obligation graph) = 47.
+        assert_eq!(list_res.tools.len(), 47);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
