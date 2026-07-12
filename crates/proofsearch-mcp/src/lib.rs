@@ -24,6 +24,7 @@ pub use rmcp::ErrorData as McpError;
 use proofsearch_core::db::schema_v1;
 use proofsearch_core::db::interactive as idb;
 use proofsearch_core::orchestrator::{lifecycle, attempts, step, trajectories, dataset};
+use proofsearch_core::orchestrator::context::{CompactContextBuilder, ObservationField};
 use proofsearch_core::lean::{LeanGateway, RealLeanGateway};
 use proofsearch_core::lean::verification::VerificationJobRequest;
 use proofsearch_core::models::{Obligation, ObligationKind, ObligationStatus, ObligationCreator};
@@ -61,6 +62,13 @@ const INTERACTIVE_TRUST_BOUNDARY_NOTICE: &str = "interactive proof-session state
 const BASE_IMPORT_MANIFEST: &[&str] = &["Mathlib.Tactic.Ring", "Mathlib.Tactic.NormNum"];
 const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 const ARTIFACT_CHUNK_BYTES: usize = 256 * 1024;
+/// Issue #223: token budget the observation builder assembles against — must
+/// match the value used by `lifecycle::advance` so pagination re-derives the
+/// same material the observation truncated.
+const OBSERVATION_BUDGET_TOKENS: usize = 4000;
+/// Issue #223: default `observation_expand` page size in bytes when the caller
+/// omits `limit` (0 would mean "whole tail").
+const DEFAULT_OBSERVATION_PAGE_BYTES: usize = 8192;
 
 #[cfg(test)]
 fn artifact_hash(bytes: &[u8]) -> String {
@@ -386,6 +394,21 @@ pub enum ArtifactAction {
         start_line: Option<u64>,
         line_count: Option<u64>,
     },
+}
+
+/// Issue #223: paginate observation material omitted from a budgeted
+/// observation. `field` selects which omitted field to retrieve; `obligation_id`
+/// is optional — when omitted the current target obligation is resolved from the
+/// episode's latest action_request.
+#[derive(JsonSchema, Deserialize)]
+pub struct ObservationExpandArgs {
+    pub episode_id: String,
+    #[serde(default)]
+    pub obligation_id: Option<String>,
+    pub field: ObservationField,
+    #[serde(default)]
+    pub offset: usize,
+    pub limit: Option<usize>,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -11305,6 +11328,50 @@ impl ChatDbMcp {
 
     // -----------------------------------------------------------------
 
+    /// Issue #223: deterministically page observation material that did not fit
+    /// the negotiated budget. Read-only: re-derives the exact full content a
+    /// budgeted observation truncated/omitted and returns the requested byte
+    /// slice plus a continuation offset. Never proof, never mutates state.
+    async fn do_observation_expand(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ObservationExpandArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let episode_id = Uuid::parse_str(&args.episode_id)
+            .map_err(|_| mcp_invalid_params(format!("episode_id is not a valid UUID: {}", args.episode_id)))?;
+        // Default page size; 0 means "return the whole remaining tail".
+        let limit = args.limit.unwrap_or(DEFAULT_OBSERVATION_PAGE_BYTES);
+
+        let conn = self.conn.lock().await;
+        let obligation_id = match &args.obligation_id {
+            Some(s) => Uuid::parse_str(s)
+                .map_err(|_| mcp_invalid_params(format!("obligation_id is not a valid UUID: {}", s)))?,
+            None => {
+                // Resolve the current target obligation from the episode's most
+                // recent action_request, so a client can page with just episode_id.
+                let resolved: Option<String> = conn.query_row(
+                    "SELECT target_obligation_id FROM action_requests
+                     WHERE episode_id = ?1 AND target_obligation_id IS NOT NULL
+                     ORDER BY request_sequence_number DESC LIMIT 1",
+                    [episode_id.to_string()],
+                    |row| row.get(0),
+                ).optional().map_err(rs)?;
+                match resolved {
+                    Some(s) => Uuid::parse_str(&s)
+                        .map_err(|_| mcp_internal_error(format!("stored target_obligation_id is not a valid UUID: {}", s)))?,
+                    None => return Err(mcp_invalid_params(format!(
+                        "no action_request with a target obligation for episode {}; pass obligation_id explicitly",
+                        args.episode_id
+                    ))),
+                }
+            }
+        };
+
+        let builder = CompactContextBuilder::new(OBSERVATION_BUDGET_TOKENS);
+        let page = builder
+            .expand_observation_field(&conn, episode_id, obligation_id, args.field, args.offset, limit)
+            .map_err(mcp_invalid_params)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&page).unwrap())]))
+    }
+
     async fn do_reasoning_log(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
         let args: ReasoningLogArgs = serde_json::from_value(args_val)
             .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
@@ -14002,6 +14069,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<PaperIngestArgs>("paper_ingest", "Issue #187: ONE tool for the entire paper/PDF ingestion family (issue #27) — ingest a source document, append extracted claim nodes, read it back, attach it to a dossier, mark review/trust statuses, and promote extracted nodes to real dossier artifacts. EVERY ACTION HANDLES UNTRUSTED EXTRACTION, NEVER PROOF: LLM-Driven Proof Search Environment does no OCR/LLM extraction — the host records its own extraction result, untrusted by construction; an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT an accepted assumption; no field can hold kernel evidence and no status confers proof, kernel verification, statement fidelity, or citation validation. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\",\"source_kind\":\"pdf\"|\"manuscript\"|\"proof_sketch\"|\"exposition\"|..,\"created_by\":\"..\"} (+ optional dossier_id, source_ref, source_content_hash, ingest_status, extraction_trust_status, notes — ingest a paper/manuscript/proof_sketch/exposition as a reviewable source document, optionally linked to a dossier. Records the host's UNTRUSTED extraction; ingestion is not proof) | {\"type\":\"extract_claims\",\"document_id\":\"..\",\"nodes\":[{\"node_kind\":\"main_theorem\",\"natural_language_text\":\"..\",\"source_span\":\"p.1 Thm 1\"},..]} (append extracted nodes (abstract/main_theorem/definition/proposition/lemma/proof_step/construction/remark/appendix_fact/reference/open_gap) with source_span, confidence, and status labels to an ingested document, all-or-nothing; every node REQUIRES a non-empty source_span tracing it back to the paper. Each node is UNTRUSTED EXTRACTION — an extracted theorem is NOT statement-fidelity approval, an extracted citation is NOT citation validation, an extracted assumption is NOT accepted) | {\"type\":\"observe\",\"document_id\":\"..\"} (read an ingested document with all its extracted nodes and their trust labels. Read-only; nothing here is proof or kernel evidence) | {\"type\":\"link_to_dossier\",\"document_id\":\"..\",\"dossier_id\":\"..\"} (attach an ingested document and its extracted nodes to a research dossier so they surface in research_dossier observe's ingestion bucket, separate from proof authority) | {\"type\":\"mark_review_status\",\"document_id\":\"..\"} (+ optional node_id; document-level ingest_status/extraction_trust_status, or node-level review_status/formalization_status/citation_status with node_id — rejected_extraction stays visible, never deleted. None of these statuses confers proof, kernel verification, statement fidelity, or citation validation) | {\"type\":\"link_node\",\"document_id\":\"..\",\"node_id\":\"..\",\"target_kind\":\"external_reference\"|\"external_theorem_claim\"|\"research_node\"|\"formalization_plan_item\",\"target_id\":\"..\"} (promote/attach an extracted node to a real dossier artifact — external_reference / external_theorem_claim set citation_status=citation_recorded, research_node / formalization_plan_item set formalization_status=formalization_target_linked. Records provenance and marks review_status=linked_to_dossier_artifact; the linked artifact keeps its own trust and the node NEVER gains proof/kernel authority)"),
             make_tool::<ExpositionArgs>("exposition", "Issue #198: ONE tool for the exposition-artifact family (issue #7), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, obligation_id, verified_module_id, verified_lemma_id, dossier_id, prose_status, title) records a human-readable mathematical exposition section (section_kind: problem_summary/formalization_explanation/construction_intuition/key_lemmas/proof_strategy/verified_claim/unverified_bridges/reviewer_notes/next_formalization_targets) linked to a problem, episode, obligation, verified module, verified lemma, and/or dossier — prose_status (prose/reviewed_prose/formalized) marks epistemic weight: prose is never proof and never changes certification or training eligibility; `observe` (+ one of problem_version_id, episode_id, dossier_id) lists exposition artifacts for that scope — read-only prose, explicitly separate from kernel-verified proof"),
             make_tool::<ReasoningLogArgs>("reasoning_log", "SOP-mandated append-only process ledger and hard gate for episode_step; see docs/sop-reasoning-logs.md. `action` is internally tagged: `add` records episode_id, episode_revision, optional action_attempt_id, reasoning_kind (initial_plan/retry_after_failure/strategy_pivot/error_diagnosis/success_retrospective/other), optional hypothesis, required approach_summary, optional expected_outcome/actual_outcome/lesson_learned/confidence (low/medium/high), and author; `observe` lists one episode's logs in chronological order. Ordinary work gets at most 2 submissions between logs; give_up always requires a fresh log with actual_outcome plus lesson_learned. This is process metadata only: never proof and never changes outcomes, certification, or training eligibility"),
+            make_tool::<ObservationExpandArgs>("observation_expand", "Issue #223: paginate observation material that did not fit the negotiated budget. A budgeted observation always includes the current obligation and its statement hash, the environment and import-manifest hashes, dependency summaries (name/status/hash), and a head of the latest primary diagnostic; larger material is replaced by a `references` entry carrying a byte-exact `content_hash`, `total_bytes`, `included_bytes`, and `next_offset`, and a `budget` block reports included/omitted/referenced byte counts. Call this with `episode_id`, `field` (root_theorem | dependency_signatures | diagnostics | proof_history), optional `obligation_id` (defaults to the episode's current target obligation), `offset` (start byte, default 0), and optional `limit` (max bytes, default 8192; 0 = whole tail). Returns {field, content_hash, total_bytes, offset, bytes, next_offset}; page until next_offset is null. Content is re-derived deterministically from recorded state and matches the omitted material byte-for-byte. Pure read path: never proof, never mutates state."),
             make_tool::<SemanticSkeletonArgs>("semantic_skeleton", "Issue #199: ONE tool for the semantic-skeleton / module-aware-fidelity family (issue #6), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, root_obligation_id, module_id, module_item_id, verified_lemma_id, dossier_id, node_id, root_fidelity_review_id — all links optional) attaches a semantic statement skeleton / module-aware fidelity note: a structured reading of a root statement, verified module, or source-aligned solution — quantifiers, hypotheses, conclusion, helper definitions, construction/final-answer map, back-translation, and fidelity risk_flags — scoped by review_scope (root_statement_only/module_artifact/source_aligned_solution/computational_check_only/structural_proof). semantic_fingerprint_hash is server-computed. Metadata only: never marks anything proved, never sets fidelity_status, never substitutes for problem_submit_fidelity_review; `observe` (semantic_skeleton_id, observation, finding, + optional risk_flags_json, details_json, observed_by) appends one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive, optional risk_flags) to a semantic skeleton's review_notes history and reads it back. Never changes proof/fidelity/budget/benchmark status; 'confirms_faithful' is not the root fidelity gate"),
             make_tool::<ExpertReviewArgs>("expert_review", "Issue #200: ONE tool for the expert-review ledger family (issue #14), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (dossier_id optional, reviewer_id, reviewer_role: proposer/construction_searcher/formalizer/prover/reviewer/domain_expert/refuter/editor/librarian, review_target_kind: source_problem/formal_statement/construction_artifact/module_artifact/external_citation/asymptotic_extraction/exposition/full_dossier, review_target_id, decision: approved/approved_with_changes/needs_changes/rejected/abstain, + optional expertise_tags, confidence: low/medium/high, notes, requested_changes_json, risk_flags_json) records one role-separated expert-review ledger entry against a polymorphic target. ADDITIVE metadata only: a pure insert that never marks anything proved and never changes proof, certification, obligation, budget, or benchmark state. reviewer_id is free text, not an authenticated principal; a human decision stays distinct from Lean kernel verification; `observe` (+ optional dossier_id, review_target_kind + review_target_id together, reviewer_role, include_revoked) reads expert-review ledger entries back, filtered by dossier, polymorphic target (kind+id together), and/or reviewer role. Revoked reviews are omitted unless include_revoked=true. Read-only. Across both actions: expert reviews are a role-separated ledger of who reviewed what, not a substitute for kernel verification"),
             make_tool::<MathlibSearchDeclarationsArgs>("mathlib_search_declarations", "Search the REAL pinned Mathlib source tree (issue #25 librarian) for declaration names containing a substring — beyond exact-name lookup, for when the exact name isn't known. A dotted query like \"Nat.factorization\" is matched on its last segment, since results are reported by file-local name only. Returns declaration name, keyword, derived import module, file path, and a signature snippet, with confidence exact_match/nearby_name. Advisory only: a hit can never mark anything proved. Unavailable (empty results, mathlib_available=false) if lean-checker isn't set up"),
@@ -14184,9 +14252,19 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 45,
-                        "total_tool_count": 45,
+                        "classified_tool_count": 46,
+                        "total_tool_count": 46,
                         "tools": {
+                            "observation_expand": {
+                                "side_effect": "read_only — re-derives and pages already-recorded observation material (root theorem, dependency signatures, diagnostics, failure lessons); writes nothing",
+                                "trust_level": "verifier_backed for its factual content (every field is re-derived from recorded episode/problem state) — but the material is transport, never proof authority; paging content never changes an obligation's status",
+                                "cost_surface": "none directly; bounded MCP transfer per page (default 8192 bytes)",
+                                "benchmark_safety": "contamination_risk by field: the diagnostics/proof_history pages can carry the same failure detail episode_step records, and dependency signatures are proved-lemma statements — private_artifact by default, never a public export",
+                                "replayability": "deterministic by (episode, obligation, field, offset, limit); a stable content_hash lets a client detect underlying change across pages",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "diagnostic_only or proof_body_fragment depending on field",
+                                "required_run_mode": "any — this only re-serves material the observation already implied; export-time contamination gates remain proof_export/trajectory_export's responsibility"
+                            },
                             "artifact": {
                                 "side_effect": "mixed by action: put_begin/put_chunk/put_commit stage and commit immutable content-addressed bytes; get_metadata/find_by_hash/get_range are read_only",
                                 "trust_level": "untrusted_input storage — hashes and lengths are verified server-side, but artifact content is never proof authority",
@@ -15657,6 +15735,7 @@ impl ServerHandler for ChatDbMcp {
             "paper_ingest" => self.do_paper_ingest(args_val).await,
             "exposition" => self.do_exposition(args_val).await,
             "reasoning_log" => self.do_reasoning_log(args_val).await,
+            "observation_expand" => self.do_observation_expand(args_val).await,
             "semantic_skeleton" => self.do_semantic_skeleton(args_val).await,
             "expert_review" => self.do_expert_review(args_val).await,
             "mathlib_search_declarations" => {
@@ -16375,7 +16454,9 @@ mod tests {
         // + 1 durability job status/retry family (issue #227) = 44.
         // + 1 asynchronous verification job family (issue #220:
         // submit/status/result/cancel/events) = 45.
-        assert_eq!(list_res.tools.len(), 45);
+        // + 1 observation_expand (issue #223: paginate budgeted-observation
+        // material omitted under the byte budget) = 46.
+        assert_eq!(list_res.tools.len(), 46);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -16675,6 +16756,45 @@ mod tests {
             "episode_id": episode_id,
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(status["current_revision"], 0, "a rejected fabricated claim must not mutate episode state");
+    }
+
+    /// Issue #223: the `observation_expand` tool is wired end-to-end (dispatch →
+    /// handler → core `expand_observation_field` → JSON page) and returns the
+    /// full omitted field, resolving the target obligation from the episode alone.
+    #[tokio::test]
+    async fn test_observation_expand_returns_full_field() {
+        let client = connected_client(test_handler()).await;
+        let peer = client.peer();
+
+        let create = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "Prove that 1 + 1 = 2 in the natural numbers.",
+            "root_formal_statement": "1 + 1 = 2",
+            "unsafe_dev_attestation": true,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let pv_id = create["problem_version_id"].as_str().unwrap().to_string();
+
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        // Page the root theorem with only episode_id + field (obligation resolved).
+        let page = tool_json(&peer.call_tool(CallToolRequestParams::new("observation_expand").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+            "field": "root_theorem",
+        }).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(page["field"], "root_theorem");
+        assert_eq!(page["bytes"], "1 + 1 = 2");
+        assert_eq!(page["total_bytes"].as_u64().unwrap(), "1 + 1 = 2".len() as u64);
+        assert!(page["next_offset"].is_null(), "small field fits in one page: {page}");
+        assert!(page["content_hash"].as_str().is_some_and(|h| !h.is_empty()));
+
+        // An unknown episode is a clean invalid-params error, not a panic.
+        let missing = peer.call_tool(CallToolRequestParams::new("observation_expand").with_arguments(serde_json::json!({
+            "episode_id": Uuid::new_v4().to_string(),
+            "field": "root_theorem",
+        }).as_object().unwrap().clone())).await;
+        assert!(missing.is_err(), "expanding an episode with no action_request must error");
     }
 
     /// The scenario the fix plan calls the definition of done: create → observe →
