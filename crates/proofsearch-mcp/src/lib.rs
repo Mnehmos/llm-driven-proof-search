@@ -70,6 +70,16 @@ const OBSERVATION_BUDGET_TOKENS: usize = 4000;
 /// Issue #223: default `observation_expand` page size in bytes when the caller
 /// omits `limit` (0 would mean "whole tail").
 const DEFAULT_OBSERVATION_PAGE_BYTES: usize = 8192;
+/// Issue #228: advisory inline transport ceilings. Above these a client should
+/// prefer the content-addressed `artifact` path over inline fields. Advisory,
+/// not a hard gate — the ENFORCED verifier ceiling is `max_source_bytes`
+/// (rejected before any Lean work). Kept at the artifact-friendly 1 MiB the
+/// capability schema documents.
+const MAX_INLINE_REQUEST_BYTES: u64 = 1024 * 1024;
+const MAX_INLINE_RESPONSE_BYTES: u64 = 1024 * 1024;
+/// Issue #228: capability-document schema version (independent of the MCP
+/// protocol version). Bump on a breaking change to the capability shape.
+const CAPABILITY_SCHEMA_VERSION: &str = "1.0";
 
 #[cfg(test)]
 fn artifact_hash(bytes: &[u8]) -> String {
@@ -441,6 +451,79 @@ pub enum ModuleAction {
         episode_id: String,
         root_obligation_id: String,
     },
+}
+
+/// Issue #228: build the versioned capability document a client inspects
+/// BEFORE creating a problem/episode — effective transport, observation, and
+/// verifier limits, with a value-class map distinguishing administrator
+/// ceilings from defaults and advisory thresholds, plus a hash over the
+/// effective configuration. Both transports call this with their real mode, so
+/// the advertised capabilities always reflect what this instance actually
+/// serves. Pure/free so it is unit-testable without a live server.
+fn build_capability_document(
+    transport_mode: Option<&str>,
+    policy: Option<&proofsearch_core::models::VerifierResourcePolicy>,
+) -> serde_json::Value {
+    let verifier = match policy {
+        Some(p) => serde_json::json!({
+            "proof_timeout_seconds": p.proof_timeout_ms / 1000,
+            "module_timeout_seconds": p.module_timeout_ms / 1000,
+            "max_source_bytes": p.max_source_bytes,
+            "max_output_bytes": p.max_output_bytes,
+            "max_concurrent_processes": p.max_concurrent_processes,
+            "async_jobs": true,
+            "async_jobs_tool": "verification",
+        }),
+        None => serde_json::json!({
+            "available": false,
+            "async_jobs": true,
+            "async_jobs_tool": "verification",
+            "detail": "verifier resource policy unavailable (lean gateway not ready)",
+        }),
+    };
+    let transport = serde_json::json!({
+        "mode": transport_mode.unwrap_or("unknown"),
+        "reports_actual_effective": transport_mode.is_some(),
+        "max_inline_request_bytes": MAX_INLINE_REQUEST_BYTES,
+        "max_inline_response_bytes": MAX_INLINE_RESPONSE_BYTES,
+        "artifact_chunk_bytes": ARTIFACT_CHUNK_BYTES,
+        "max_artifact_bytes": MAX_ARTIFACT_BYTES,
+        "hash_algorithm": "sha256",
+        "inline_ceiling_enforcement":
+            "advisory — prefer the `artifact` tool above these; the ENFORCED source ceiling is verifier.max_source_bytes (oversized inline requests are rejected before any Lean work begins)",
+    });
+    let observations = serde_json::json!({
+        "default_token_budget": OBSERVATION_BUDGET_TOKENS,
+        "supports_pagination": true,
+        "pagination_tool": "observation_expand",
+        "negotiable": false,
+    });
+    // The effective configuration (the values a replay must pin), hashed.
+    let effective = serde_json::json!({
+        "transport": &transport,
+        "observations": &observations,
+        "verifier": &verifier,
+    });
+    let capability_hash = proofsearch_core::hashing::canonical_hash(&effective).unwrap_or_default();
+    serde_json::json!({
+        "capability_schema_version": CAPABILITY_SCHEMA_VERSION,
+        "protocol_version": "2025-11-25",
+        "transport": transport,
+        "observations": observations,
+        "verifier": verifier,
+        "value_classes": {
+            "administrator_ceiling": [
+                "verifier.proof_timeout_seconds", "verifier.module_timeout_seconds",
+                "verifier.max_source_bytes", "verifier.max_output_bytes",
+                "verifier.max_concurrent_processes"
+            ],
+            "default": ["observations.default_token_budget"],
+            "advisory": ["transport.max_inline_request_bytes", "transport.max_inline_response_bytes"],
+            "per_request_negotiable": [],
+        },
+        "capability_hash": capability_hash,
+        "backward_compatible": "additive fields only within a capability_schema_version; a breaking change bumps capability_schema_version",
+    })
 }
 
 /// Map a structured `ClosureError` (#224) to an MCP invalid-params error whose
@@ -7734,6 +7817,11 @@ pub struct ChatDbMcp {
     /// `crate::lean::interactive`; `MockInteractiveGateway` is what
     /// `ChatDbMcp::new` installs today.
     pub interactive_gateway: Arc<dyn InteractiveProofGateway + Send + Sync>,
+    /// Issue #228: the actual transport this instance serves ("stdio" | "http"),
+    /// set by `main` at launch so `environment_describe`'s capability document
+    /// reports the real transport mode rather than guessing. `None` in tests /
+    /// when constructed without a declared transport.
+    pub transport_mode: Option<String>,
 }
 
 impl ChatDbMcp {
@@ -7769,7 +7857,15 @@ impl ChatDbMcp {
             lean_environment,
             lean_project_path: stored_lean_project_path,
             interactive_gateway,
+            transport_mode: None,
         }
+    }
+
+    /// Issue #228: declare the transport this instance serves so the capability
+    /// document reports the real mode. Builder-style; call at launch.
+    pub fn with_transport_mode(mut self, mode: &str) -> Self {
+        self.transport_mode = Some(mode.to_string());
+        self
     }
 
     // -----------------------------------------------------------------
@@ -14386,8 +14482,13 @@ impl ServerHandler for ChatDbMcp {
                 // "pantograph_available" and "pantograph_reason" can never
                 // disagree with each other.
                 let pantograph_status = detect_pantograph_status(&self.lean_project_path);
+                let capabilities = build_capability_document(
+                    self.transport_mode.as_deref(),
+                    self.gateway.resource_policy().as_ref(),
+                );
                 let res = serde_json::json!({
                     "environment_version": "0.3.27",
+                    "capabilities": capabilities,
                     "kit_registry": kit_registry,
                     "protocol_version": "2025-11-25",
                     "supported_roles": ["prover"],
@@ -16221,6 +16322,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         }
     }
 
@@ -16372,6 +16474,7 @@ mod tests {
             }),
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         }
     }
 
@@ -16568,6 +16671,7 @@ mod tests {
             conn: Arc::new(Mutex::new(conn)), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: root.path().to_path_buf(),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let metadata = tool_json(&handler.do_artifact(serde_json::json!({"action": {
             "type": "get_metadata", "artifact_hash": hash
@@ -17014,6 +17118,59 @@ mod tests {
         assert!(missing.is_err(), "expanding an episode with no action_request must error");
     }
 
+    /// Issue #228: the capability document has the negotiated shape, real
+    /// effective values, value-class distinctions, a stable hash, and honestly
+    /// reports transport mode (declared vs unknown).
+    #[test]
+    fn test_capability_document_shape_and_value_classes() {
+        use proofsearch_core::models::VerifierResourcePolicy;
+        let policy = VerifierResourcePolicy::default();
+        let doc = build_capability_document(Some("http"), Some(&policy));
+
+        assert_eq!(doc["capability_schema_version"], CAPABILITY_SCHEMA_VERSION);
+        assert_eq!(doc["transport"]["mode"], "http");
+        assert_eq!(doc["transport"]["reports_actual_effective"], true);
+        assert_eq!(doc["transport"]["artifact_chunk_bytes"].as_u64().unwrap(), ARTIFACT_CHUNK_BYTES as u64);
+        assert_eq!(doc["observations"]["default_token_budget"].as_u64().unwrap(), OBSERVATION_BUDGET_TOKENS as u64);
+        assert_eq!(doc["observations"]["supports_pagination"], true);
+        assert_eq!(doc["verifier"]["async_jobs"], true);
+        assert_eq!(doc["verifier"]["proof_timeout_seconds"].as_u64().unwrap(), policy.proof_timeout_ms / 1000);
+        assert_eq!(doc["verifier"]["max_source_bytes"].as_u64().unwrap(), policy.max_source_bytes as u64);
+
+        let vc = &doc["value_classes"];
+        assert!(vc["administrator_ceiling"].as_array().unwrap().iter().any(|v| v == "verifier.max_source_bytes"));
+        assert!(vc["default"].as_array().unwrap().iter().any(|v| v == "observations.default_token_budget"));
+        assert!(vc["per_request_negotiable"].as_array().unwrap().is_empty(), "clients cannot raise any limit");
+
+        // Hash present and deterministic for the same effective config.
+        let h = doc["capability_hash"].as_str().unwrap();
+        assert!(!h.is_empty());
+        assert_eq!(build_capability_document(Some("http"), Some(&policy))["capability_hash"], h);
+
+        // Undeclared transport is reported honestly as unknown, not guessed.
+        let undeclared = build_capability_document(None, Some(&policy));
+        assert_eq!(undeclared["transport"]["mode"], "unknown");
+        assert_eq!(undeclared["transport"]["reports_actual_effective"], false);
+    }
+
+    /// Issue #228: environment_describe carries the capability document so a
+    /// client can inspect limits before creating a problem or episode.
+    #[tokio::test]
+    async fn test_environment_describe_exposes_capabilities() {
+        let client = connected_client(test_handler()).await;
+        let peer = client.peer();
+        let d = tool_json(&peer.call_tool(CallToolRequestParams::new("environment_describe")
+            .with_arguments(serde_json::json!({}).as_object().unwrap().clone())).await.unwrap());
+        let cap = &d["capabilities"];
+        assert_eq!(cap["capability_schema_version"], CAPABILITY_SCHEMA_VERSION);
+        assert!(cap["transport"]["artifact_chunk_bytes"].as_u64().is_some());
+        assert!(cap["transport"]["max_inline_request_bytes"].as_u64().is_some());
+        assert_eq!(cap["observations"]["supports_pagination"], true);
+        assert_eq!(cap["verifier"]["async_jobs"], true);
+        assert!(cap["capability_hash"].as_str().is_some_and(|h| !h.is_empty()));
+        assert!(cap["value_classes"]["administrator_ceiling"].as_array().is_some());
+    }
+
     /// The scenario the fix plan calls the definition of done: create → observe →
     /// claim → solve → certified, with a non-empty audited trajectory. This never
     /// passed against the release binary (attempt_claim didn't exist, and even
@@ -17225,6 +17382,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -17278,6 +17436,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -17712,6 +17871,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -17934,6 +18094,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18029,6 +18190,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18108,6 +18270,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18214,6 +18377,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18367,6 +18531,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18403,6 +18568,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18440,6 +18606,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18485,6 +18652,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18524,6 +18692,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18553,6 +18722,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18589,6 +18759,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18618,6 +18789,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18654,6 +18826,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18690,6 +18863,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -18725,6 +18899,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -19235,7 +19410,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -19614,6 +19789,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -19683,6 +19859,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -19859,6 +20036,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -20153,7 +20331,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -20345,7 +20523,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -20533,7 +20711,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -20617,7 +20795,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -20890,6 +21068,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -21000,6 +21179,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -21320,7 +21500,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -21520,7 +21700,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -21637,7 +21817,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -21821,6 +22001,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: synthetic.root.clone(),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -21879,6 +22060,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: synthetic.root.clone(),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -21916,6 +22098,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: synthetic.root.clone(),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -22029,7 +22212,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -22085,7 +22268,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -22526,7 +22709,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -22646,7 +22829,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         let conn_arc = Arc::new(Mutex::new(conn));
-        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()) };
+        let handler = ChatDbMcp { conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false, lean_environment: None, lean_project_path: PathBuf::from("dummy"), interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None };
         let client = connected_client(handler).await;
         let peer = client.peer();
 
@@ -23048,6 +23231,7 @@ mod tests {
             }),
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -23414,6 +23598,7 @@ mod tests {
             lean_environment: None,
             lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -24952,6 +25137,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25059,6 +25245,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25118,6 +25305,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25209,6 +25397,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25260,6 +25449,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25316,6 +25506,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25363,6 +25554,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25418,6 +25610,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25474,6 +25667,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25555,6 +25749,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25640,6 +25835,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25728,6 +25924,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25810,6 +26007,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25938,6 +26136,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(FallbackInteractiveGateway),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -25985,6 +26184,7 @@ mod tests {
             conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         };
         let client = connected_client(handler).await;
         let peer = client.peer();
@@ -26076,6 +26276,7 @@ mod tests {
             conn: conn_arc, gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: PathBuf::from("dummy"),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+            transport_mode: None,
         }
     }
 

@@ -72,7 +72,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 lean_project_path,
                 elan_bin_path,
                 verifier_resource_policy,
-            );
+            )
+            .with_transport_mode("stdio");
             if !handler.lean_available {
                 eprintln!(
                     "WARNING: Lean gateway unavailable (looked for lakefile under {:?} and lake.exe under {:?}). \
@@ -114,7 +115,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         lean_for_factory.clone(),
                         elan_for_factory.clone(),
                         policy_for_factory.clone(),
-                    ))
+                    )
+                    .with_transport_mode("http"))
                 },
                 LocalSessionManager::default().into(),
                 Default::default(),
