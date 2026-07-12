@@ -64,7 +64,7 @@ Antigravity, or a custom script — should call this first.
 
 | Tool | Description |
 |---|---|
-| `readme_first` | Call this first. The proof-search protocol: the loop, trust boundary, Solve/SubmitModule guidance, untracked-attempt warning, cost and benchmark-mode boundary |
+| `readme_first` | Call this first. The proof-search protocol: the loop, trust boundary, mandatory reasoning-log SOP, Solve/SubmitModule guidance, untracked-attempt warning, cost and benchmark-mode boundary |
 | `environment_describe` | Protocol version, capabilities, tool schemas, Lean gateway readiness |
 | `problem_create` | Register a new problem version (source text + root formal statement). `fidelity_status` starts `unreviewed` |
 | `problem_submit_fidelity_review` | Record an evidence-backed determination that a problem's formal statement represents its source text. The ONLY path to `fidelity_status='verified'` — required for `outcome='certified'` |
@@ -74,7 +74,8 @@ Antigravity, or a custom script — should call this first.
 | `episode_reset` | Nondestructive reset — creates a new episode with `parent_episode_id` |
 | `episode_observe` | Get the current observation and pending action request |
 | `attempt_claim` | Claim a pending action request to obtain the `action_attempt_id` + `claim_token` required by `episode_step` |
-| `episode_step` | Submit a typed action (`Solve` / `SubmitModule` / `Decompose` / `GiveUp`) with CAS revision check |
+| `episode_step` | Submit a typed action (`Solve` / `SubmitModule` / `Decompose` / `GiveUp`) with CAS revision check. Hard-gated by the fresh-log cadence in [the reasoning-log SOP](docs/sop-reasoning-logs.md) |
+| `reasoning_log` | Add or observe SOP-mandated, append-only problem-solving checkpoints. Ordinary work gets at most two `episode_step` submissions between logs; `GiveUp` always requires a fresh log with detailed actual outcome and lesson fields. Process metadata only, never proof |
 | `episode_status` | Episode state, revision, budget, step count, outcome |
 | `episode_close` | Gracefully terminate an active episode |
 | `model_call_reserve` | Reserve a budget lease before calling an external model |
@@ -83,83 +84,28 @@ Antigravity, or a custom script — should call this first.
 | `episode_replay` | Re-execute typed actions (`Solve` or `SubmitModule`) through Lean and verify trajectory integrity |
 | `proof_export` | Proof dossier in one of 7 modes: `markdown` (default), `lean`, `public_summary` (redacted, never includes the proof body), `audit_archive`, `training_export` (structured JSON for SFT/RL/DPO), `paper_dossier` (adds a written narrative), `maintainer_submission`. Modes exposing the proof body require `allow_putnambench_proof_export=true` when the episode is linked to a tracked benchmark suite — see [docs/benchmarks/putnambench.md](docs/benchmarks/putnambench.md) |
 | `lean_declaration_lookup` | Checks whether names resolve under a problem's import manifest (fast, default). Pass `deep_check=true` to also check under the full Mathlib umbrella and distinguish "not imported here" from "genuinely absent" (slow — loads all of Mathlib). Call this before concluding an API is unavailable |
-| `proof_pattern_create` | Register a reusable proof-pattern lesson (failure signature + recommended repair). Advisory only — never marks anything proved |
-| `proof_pattern_search` | Free-text search over the proof-pattern library, or list it whole. Call before repeating a failure another attempt already diagnosed |
-| `proof_pattern_record_application` | Record that a pattern was relevant to a real episode/attempt (failed example, repair example, or suggested hint). Insert-only metadata — never touches proof/fidelity/certification status |
-| `draft_create` | Register an informal Draft artifact — untrusted planning/reasoning content. A draft can never mark anything proved |
-| `draft_observe` | Read back a draft's content and any moves recorded against it |
-| `draft_extract_moves` | Record structured moves (construction, auxiliary_lemma, case_split, ...) the external agent identified in a draft. Metadata only |
-| `formalization_plan_create` | Create a formalization plan for a problem, optionally seeded from selected moves of an existing draft |
-| `formalization_plan_observe` | Read back a formalization plan and all its items |
-| `formalization_plan_update` | Update a plan's title, status, or risk flags |
-| `formalization_plan_add_item` | Add a planning item (concept, missing_definition, missing_lemma, planned_module, or external_citation) to a plan |
-| `formalization_plan_attach_lookup` | Attach a `lean_declaration_lookup` result to a plan item, updating its Mathlib coverage status |
-| `formalization_plan_promote_item_to_obligation` | Link a plan item to an episode_obligation that already exists (created via a normal `Decompose` action). Never creates the obligation itself |
-| `research_dossier_create` | Create a Level 4 research dossier, optionally linked to a problem version, an episode, or neither. Metadata only |
-| `research_dossier_observe` | Read a dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets |
-| `research_node_add` | Add a typed research node (`definition`, `proposition`, `lemma`, `theorem`, `remark`, `reference`, `open_gap`) with explicit trust status |
-| `external_reference_add` | Add an external reference and optionally one theorem claim. Citations are never kernel verification |
-| `assumption_boundary_add` | Add an unformalized or rejected unsafe assumption boundary |
-| `citation_review_add` | Record human review of an external theorem claim. Human review remains distinct from Lean verification |
-| `verification_layer_set` | Set an independent verification layer (`blocked`, `failed`, `cited`, `human_reviewed`, etc.) for a dossier target |
-| `candidate_construction_add` | Propose a candidate mathematical construction (`graph_family`, `counterexample`, `coloring`, etc.). Can exist before a dossier, node, Lean theorem, or episode. A research artifact, not a proof certificate |
-| `candidate_construction_observe` | Record one empirical check (`supports`/`refutes`/`inconclusive`) against a candidate construction. Never changes proof status |
-| `candidate_construction_update_status` | Update a candidate construction's status/trust_status/claimed_properties/known_failures. `kernel_verified_claim_linked` is rejected unless a real kernel-verified layer is already linked |
-| `candidate_construction_link_node` | Attach a candidate construction to a research node, adopting the node's dossier if the construction has none yet |
-| `candidate_construction_link_verification_layer` | Attach a candidate construction to an existing verification layer, adopting the layer's dossier if the construction has none yet |
-| `empirical_search_add` | Record an empirical math-lab search (small-case, counterexample, construction, parameter sweep, finite check, candidate ranking, external tool run, …). Experimental **evidence, never proof** — no field carries kernel evidence, no status certifies an asymptotic/universal theorem |
-| `empirical_search_observe` | Append one search observation (supports/refutes/counterexample_found/no_counterexample/inconclusive), optionally a counterexample witness, to a search's history |
-| `empirical_search_update_status` | Update a search's status/trust_status/results/linked candidates. Counterexamples are **not** updatable here (a recorded witness stays visible — add via `empirical_search_observe`). Falsified/failed/timed-out searches stay visible |
-| `empirical_search_link_candidate` | Link an empirical search to a candidate construction (adopting its dossier). Support ≠ proof of claimed properties |
-| `empirical_search_link_verification_layer` | Link an empirical search to a verification layer (adopting its dossier). The link never makes the layer kernel_verified |
-| `challenge_create` | Define a challenge in a dossier (issue #53): a bounded, scored, reviewable competition frame for AI-generated math. Never proof |
-| `challenge_observe` | Read a challenge with its tasks → submissions → scores/reviews, plus the export grouping (accepted/rejected/superseded/open separated). Read-only |
-| `challenge_update_status` | Update a challenge's status (open/closed/archived/superseded). Never touches proof/fidelity/benchmark state |
+| `proof_pattern` | ONE tool for the proof-pattern-library family (issue #24 proof-pattern memory), dispatching on an internally-tagged `action` (`create` / `search` / `record_application`) — exactly like `episode_step`'s typed `action`. The pattern library is **purely advisory**: no action here can ever mark anything proved or change fidelity/certification status. `create` registers a reusable proof-pattern lesson (failure signature + recommended repair), rejecting a duplicate `pattern_key` rather than overwriting it; `search` free-text searches the library, or lists it whole — call before repeating a failure another attempt already diagnosed; `record_application` records that a pattern was relevant to a real episode/attempt (failed example, repair example, or suggested hint) — insert-only metadata that never touches proof/fidelity/certification status. `distilled_strategy_add` is dossier-scoped, not pattern-library-scoped, and remains its own tool below rather than folding into this one |
+| `draft` | ONE tool for the draft artifact lifecycle (issue #23), dispatching on an internally-tagged `action` (`create` / `observe` / `extract_moves`) — exactly like `episode_step`'s typed `action`. `create` registers an informal Draft artifact — untrusted planning/reasoning content preserved before formalization begins; a draft can **never** mark anything proved; `observe` reads back a draft's content and any moves recorded against it; `extract_moves` records structured moves (construction, auxiliary_lemma, case_split, induction, reduction, bijection, counterexample_search, asymptotic_step, external_citation, unknown) the external agent identified in a draft — metadata only, moves are not obligations until explicitly promoted into a formalization plan item |
+| `formalization_plan` | ONE tool for the whole Level 3 formalization-plan family, dispatching on an internally-tagged `action` (`create` / `observe` / `update` / `add_item` / `attach_lookup` / `promote_item_to_obligation` / `attach_librarian_result`) — exactly like `episode_step`'s typed `action`. Advisory scaffolding, never proof authority: `promote_item_to_obligation` links a plan item to an episode_obligation that **already exists** (created via a normal `Decompose` action) and never creates one; `attach_lookup` / `attach_librarian_result` attach `lean_declaration_lookup` / Mathlib-librarian search results to a plan item as hints, updating its Mathlib coverage status but never proof status |
+| `research_dossier` | ONE tool for the whole Level 4 research-dossier family, dispatching on an internally-tagged `action` (`create` / `observe` / `node_add` / `external_reference_add` / `assumption_boundary_add` / `citation_review_add` / `verification_layer_set`) — exactly like `episode_step`'s typed `action`. Explicit trust-boundary metadata, never proof authority: `external_reference_add` records citations as **tracked assumptions**, never proof; `citation_review_add` records human review, which remains distinct from Lean verification; `verification_layer_set` is the **only path** to a `kernel_verified` layer and accepts that status only where kernel evidence already exists (e.g. a node whose `trust_status` is already `proved_in_episode`, backed by a verified lemma from **this dossier's own** episode/problem context) |
+| `candidate_construction` | ONE tool for the whole candidate-construction family (issue #8), dispatching on an internally-tagged `action` (`add` / `observe` / `update_status` / `link_node` / `link_verification_layer`) — exactly like `episode_step`'s typed `action`. A candidate construction is a **proposed mathematical object, not a proof certificate**: its `trust_status` never certifies anything, and empirical support, human review, citation, and "a formal statement exists" all remain distinct from kernel verification. `add` proposes a construction (`graph_family`, `counterexample`, `coloring`, etc.) with motivated-discovery metadata — it can exist before a dossier, node, Lean theorem, or episode; `observe` records one empirical check (`supports`/`refutes`/`inconclusive`) against it, and never changes proof status; `update_status` updates status/trust_status/claimed_properties/known_failures/next_check (`kernel_verified_claim_linked` is rejected unless a real kernel-verified layer is already linked); `link_node` attaches it to a research node, adopting the node's dossier if the construction has none yet; `link_verification_layer` attaches it to an existing verification layer, adopting the layer's dossier if the construction has none yet — provenance, never promotion |
+| `empirical_search` | ONE tool for the whole empirical math-lab family (issue #26), dispatching on an internally-tagged `action` (`add` / `observe` / `update_status` / `link_candidate` / `link_verification_layer`) — exactly like `episode_step`'s typed `action`. Every result is experimental **evidence, never proof**: no field carries kernel evidence, no status certifies an asymptotic/universal theorem, and even the strongest trust status only links to a formal target. `add` records a small-case/counterexample/construction search, parameter sweep, finite check, candidate ranking, or external-tool run; `observe` appends a finding and optional counterexample witness (`no_counterexample` never certifies a universal claim); `update_status` revises status/trust/results/candidate ids but cannot erase counterexamples, so falsified/failed/timed-out searches and witnesses stay visible; `link_candidate` and `link_verification_layer` attach existing dossier artifacts as provenance only — empirical support never proves a candidate, and a link never makes a layer kernel-verified |
+| `challenge` | ONE tool for the challenge lifecycle (issue #53), dispatching on an internally-tagged `action` (`create` / `observe` / `update_status`) — exactly like `episode_step`'s typed `action`. A bounded, scored, reviewable competition frame for AI-generated math — never proof. `create` defines a challenge in an existing dossier, optionally linked to a problem_version/episode; `observe` reads it back with its tasks → submissions → scores/reviews, plus the export grouping (accepted/rejected/superseded/open separated), read-only; `update_status` sets open/closed/archived/superseded, never touching proof/fidelity/benchmark state. `validation_protocol_create` is dossier-scoped, not challenge-scoped, and remains its own tool below rather than folding into this one |
 | `validation_protocol_create` | Register a validation protocol a task's submissions can be checked against. A protocol describes a check; it is never itself proof |
-| `task_create` | Add a bounded task to a challenge (find_candidate_object, improve_bound, find_counterexample, …). `bounds_json` keeps it small and reviewable |
-| `task_update_status` | Update a task's status (open/closed/superseded). A superseded task stays visible |
-| `task_submission_create` | Submit a contribution to a task. `content_json` is the **untrusted** payload; starts `submitted`, never proof |
-| `task_submission_validate` | Mark a submission `validated` (passed) or `validation_failed`. `validated` means it passed its declared check, **never** kernel verification. Failed stays visible |
-| `task_submission_score` | Record a score (value/units/rule, reproducibility/novelty notes, optional `cost_summary_id`) and advance to `scored`. A score is a measurement, never proof; a rank is not proof authority; a score never confers training eligibility |
-| `task_submission_review` | Record a human review (accepted/rejected/needs_changes/superseded). Human review ≠ kernel verification — `accepted` means accepted into the dossier as a contribution, never proved. Rejected/superseded stay visible |
-| `task_submission_link` | Link a submission to a candidate_construction / empirical_result / verification_layer in its dossier as **provenance**. Even linking to a kernel_verified layer never makes the submission a proof |
-| `task_submission_update_status` | Set a submission's outcome (accepted/rejected/superseded/merged_into_dossier) without a review row. Rejected/superseded stay visible |
+| `task` | ONE tool for the bounded-task lifecycle within a challenge (issue #53), dispatching on an internally-tagged `action` (`create` / `update_status`) — exactly like `episode_step`'s typed `action`. `create` adds a bounded task to a challenge (find_candidate_object, improve_bound, find_counterexample, classify_small_cases, produce_witness, minimize_example, maximize_parameter, verify_property, compress_strategy, distill_method, formalize_claim) — `bounds_json` keeps it small and reviewable; `update_status` updates a task's status (open/closed/superseded). A superseded task stays visible. Kept deliberately separate from `task_submission` (below) — a task is a bounded challenge assignment, a task_submission is a contribution submitted against a task |
+| `task_submission` | ONE tool for the whole challenge-submission family, dispatching on an internally-tagged `action` (`create` / `validate` / `score` / `review` / `link` / `update_status`) — exactly like `episode_step`'s typed `action`. The variants carry **distinct trust profiles** and none is proof: `create` records an **untrusted** `content_json` payload (starts `submitted`); `validate` records an automated declared-check result (`validated`/`validation_failed` — **never** kernel verification; failed stays visible); `score` records a measurement (never proof; a rank is not proof authority; never confers training eligibility); `review` records a role-separated **human** decision (accepted/rejected/needs_changes/superseded — human review ≠ kernel verification, `accepted` means accepted into the dossier as a contribution, never proved); `link` records **provenance** to a candidate_construction / empirical_result / verification_layer in the submission's dossier (even a kernel_verified layer never makes the submission a proof); `update_status` sets the outcome (accepted/rejected/superseded/merged_into_dossier) without a review row. Rejected/superseded stay visible |
 | `distilled_strategy_add` | Store a reusable distilled strategy artifact (cheat_sheet, heuristic_rule, counterexample_pattern, construction_recipe, …). A distilled strategy is **not** a proof; trust_status tops out at human_reviewed |
-| `paper_ingest_create` | Ingest a paper/manuscript/proof-sketch/exposition as a reviewable source document (issue #27), optionally linked to a dossier. LLM-Driven Proof Search Environment does no OCR/LLM extraction — this records the host's **untrusted** extraction. Ingestion is not proof |
-| `paper_ingest_extract_claims` | Append extracted nodes (main_theorem, definition, lemma, construction, reference, open_gap, …). Each node **requires** a non-empty `source_span` so it stays traceable to the source; also carries confidence/status labels. An extracted theorem is **not** statement-fidelity approval; a citation is **not** validation |
-| `paper_ingest_observe` | Read an ingested document with all extracted nodes and their trust labels. Read-only; nothing here is proof |
-| `paper_ingest_link_to_dossier` | Attach an ingested document (and its nodes) to a dossier, so it surfaces in `research_dossier_observe`'s ingestion bucket |
-| `paper_ingest_link_node` | Promote/attach an extracted node to a real dossier artifact — `external_reference` / `external_theorem_claim` (sets `citation_status=citation_recorded`), `research_node` / `formalization_plan_item` (sets `formalization_status=formalization_target_linked`). Records provenance in the matching forward-link column and marks `review_status=linked_to_dossier_artifact`; the linked artifact keeps its own trust and the node **never** gains proof/kernel authority |
-| `paper_ingest_mark_review_status` | Update a document's ingest/trust status, or (with `node_id`) a node's review/formalization/citation status. `rejected_extraction` stays visible; no status confers proof/fidelity/validation |
-| `exposition_add` | Add a human-readable exposition section (problem_summary, construction_intuition, key_lemmas, unverified_bridges, …) linked to a problem/episode/obligation/module/lemma/dossier. `prose_status` (prose/reviewed_prose/formalized) marks epistemic weight — never proof |
-| `exposition_observe` | List exposition artifacts for a problem_version, episode, or dossier. Read-only prose, separate from verified proof |
-| `semantic_skeleton_add` | Attach a structured reading of a statement/module/solution (quantifiers, hypotheses, conclusion, definitions, construction map, back-translation, fidelity `risk_flags`) scoped by `review_scope`. Metadata only — never sets `fidelity_status` or substitutes for `problem_submit_fidelity_review` |
-| `semantic_skeleton_observe` | Append one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive) to a skeleton's review history. `confirms_faithful` is not the root fidelity gate |
-| `expert_review_add` | Record one role-separated review-ledger entry (proposer/formalizer/prover/reviewer/domain_expert/refuter/editor/…) against a polymorphic target (source_problem, formal_statement, construction_artifact, module_artifact, external_citation, exposition, full_dossier, …). Pure insert — never marks anything proved; a human decision stays distinct from kernel verification |
-| `expert_review_observe` | Read review-ledger entries filtered by dossier, target (kind+id), and/or reviewer role. Read-only |
+| `paper_ingest` | ONE tool for the whole paper/PDF ingestion family (issue #27), dispatching on an internally-tagged `action` (`create` / `extract_claims` / `observe` / `link_to_dossier` / `mark_review_status` / `link_node`) — exactly like `episode_step`'s typed `action`. Every action handles **untrusted extraction**, never proof: LLM-Driven Proof Search Environment does no OCR/LLM extraction — the host records its own extraction result, untrusted by construction, and **an extracted theorem is not statement-fidelity approval, an extracted citation is not citation validation, an extracted assumption is not an accepted assumption**. `create` ingests a paper/manuscript/proof-sketch/exposition as a reviewable source document, optionally linked to a dossier; `extract_claims` appends extracted nodes (main_theorem, definition, lemma, construction, reference, open_gap, …) — each node **requires** a non-empty `source_span` so it stays traceable to the source, plus confidence/status labels; `observe` reads a document with all extracted nodes and their trust labels (read-only); `link_to_dossier` attaches a document (and its nodes) to a dossier, so it surfaces in `research_dossier` `observe`'s ingestion bucket; `mark_review_status` updates a document's ingest/trust status, or (with `node_id`) a node's review/formalization/citation status (`rejected_extraction` stays visible; no status confers proof/fidelity/validation); `link_node` promotes/attaches an extracted node to a real dossier artifact — `external_reference` / `external_theorem_claim` (sets `citation_status=citation_recorded`), `research_node` / `formalization_plan_item` (sets `formalization_status=formalization_target_linked`) — recording provenance in the matching forward-link column and marking `review_status=linked_to_dossier_artifact`; the linked artifact keeps its own trust and the node **never** gains proof/kernel authority |
+| `exposition` | ONE tool for the exposition-artifact family (issue #7), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` records a human-readable exposition section (problem_summary, construction_intuition, key_lemmas, unverified_bridges, …) linked to a problem/episode/obligation/module/lemma/dossier — `prose_status` (prose/reviewed_prose/formalized) marks epistemic weight; prose is never proof and never changes certification or training eligibility; `observe` lists exposition artifacts for a problem_version, episode, or dossier — read-only prose, explicitly separate from kernel-verified proof |
+| `semantic_skeleton` | ONE tool for the semantic-skeleton / module-aware-fidelity family (issue #6), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` attaches a structured reading of a statement/module/solution (quantifiers, hypotheses, conclusion, definitions, construction map, back-translation, fidelity `risk_flags`) scoped by `review_scope`. Metadata only — never sets `fidelity_status` or substitutes for `problem_submit_fidelity_review`; `observe` appends one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive) to a skeleton's review history. `confirms_faithful` is not the root fidelity gate |
+| `expert_review` | ONE tool for the expert-review ledger family (issue #14), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. Expert reviews are a **role-separated ledger of who reviewed what, not a substitute for kernel verification**. `add` records one review-ledger entry (proposer/construction_searcher/formalizer/prover/reviewer/domain_expert/refuter/editor/librarian) against a polymorphic target (source_problem, formal_statement, construction_artifact, module_artifact, external_citation, asymptotic_extraction, exposition, full_dossier) — a pure insert that never marks anything proved; `reviewer_id` is free text, not an authenticated principal; `observe` reads review-ledger entries back, filtered by dossier, target (kind+id), and/or reviewer role — revoked reviews are omitted unless `include_revoked=true`. Read-only |
 | `mathlib_search_declarations` | Search the real pinned Mathlib source tree for declaration names containing a substring (beyond exact-name lookup). Advisory only |
 | `mathlib_search_local_artifacts` | Search this instance's own previously-verified theorem/def names for a substring match |
-| `formalization_plan_attach_librarian_result` | Attach a Mathlib librarian result to a formalization plan item, updating its coverage status |
-| `run_envelope_create` | Create a run envelope: host/model/mode (development/evaluation/benchmark/private_audit/public_report) and host-side cost accounting LLM-Driven Proof Search Environment cannot itself observe |
-| `run_envelope_update` | Update a run envelope's host-side cost fields or notes after the fact. Append-only (issue #46): a cost correction appends an auditable observation, so the prior value stays queryable |
-| `run_envelope_cost_observation_add` | Append an auditable, append-only host-side cost observation to a run envelope; prior observations stay queryable via `run_envelope_observe` |
-| `run_envelope_attach_episode` | Tag an episode with a run envelope. Metadata only — never changes the episode's outcome/state |
-| `run_envelope_observe` | Read back a run envelope and every episode tagged with it |
-| `benchmark_suite_create` | Register a benchmark suite (e.g. PutnamBench) — name, upstream URL/commit, language |
-| `benchmark_problem_register` | Register one problem from a suite. `root_statement_hash` is server-computed, never client-supplied |
-| `benchmark_run_create` | Create a run against a suite. `lean_version`/`mathlib_commit` are read from the server's OWN detected Lean environment, never accepted from the client |
-| `benchmark_result_record` | Record (or upsert, for pass@k) one problem's result within a run. If `episode_id` is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as the benchmark problem (issue #36) |
-| `benchmark_run_observe` | Read back a run, its results, and aggregate metrics — `solved_rate` (solved at all) vs `pass_at_1_rate` (genuine first-attempt success) are reported separately |
-| `proof_session_start` | Start a live, tactic-by-tactic interactive proof-state session for one existing episode obligation (`mock` or `pantograph` backend). Returns `session_id` + root node. See [Interactive Proof Sessions](#interactive-proof-sessions) |
-| `proof_session_observe` | Read back a session's currently selected node — goals, local context, hashes, branch summary. Read-only |
-| `proof_session_tactic_step` | Apply one tactic to a node. Records a new node on success or a structured diagnostic on failure — always evidence, never proof authority |
-| `proof_session_branch` | Like `proof_session_tactic_step`, explicitly starting a named branch. Prior branches are never deleted or overwritten |
-| `proof_session_select_node` | Move a session's "selected node" pointer. Convenience state only — never applies a tactic or verifies anything |
-| `proof_session_reconstruct` | Reconstruct a Lean tactic script from a session's root-to-node path. `reports_complete` is the session's own claim, still not a verified proof |
-| `proof_session_promote_to_attempt` | The only `proof_session_*` tool that can change an obligation's status — resubmits a reconstructed script through the real `attempt_claim` + `episode_step(Solve)` kernel-verification path |
-| `proof_session_close` | Mark a session `closed` / `abandoned` / `superseded`. The full trace, including failed tactics, stays visible afterward |
-| `proof_session_replay` | Replay a session from persisted DB state: `trace_only` (consistency check), `backend` (re-run against a fresh backend session), or `final_proof` (the trust gate — resubmits through real kernel verification) |
-| `proof_session_export` | Export one interactive session as `public_summary`, `audit_archive`, or `training_export` (includes negative-space failed tactic routes). Same benchmark-export gating as `proof_export`/`trajectory_export` |
+| `run_envelope` | ONE tool for the whole run-envelope family (issues #34/#38/#46), dispatching on an internally-tagged `action` (`create` / `update` / `cost_observation_add` / `attach_episode` / `observe`) — exactly like `episode_step`'s typed `action`. Purely descriptive metadata; **no action ever affects proof status**. `create` records host/model/mode (development/evaluation/benchmark/private_audit/public_report) and host-side cost accounting LLM-Driven Proof Search Environment cannot itself observe, plus an origin cost observation; `update` corrects an envelope's host-side cost fields or notes after the fact — append-only (issue #46): a correction appends an auditable observation, so the prior value stays queryable; `cost_observation_add` appends an auditable, append-only host-side cost observation, never overwriting a prior one; `attach_episode` tags an episode with a run envelope (metadata only — never changes the episode's outcome/state) and enforces the mode-enforcement policy: an `attested`/`unsafe_dev_attestation` episode is unconditionally rejected from a benchmark/evaluation/public_report-mode envelope (no override), always allowed for `development`, and requires `allow_dev_attested=true` for `private_audit`; `observe` reads back an envelope, every episode tagged with it, and its full append-only cost-observation history |
+| `benchmark_suite` | ONE tool for the benchmark-suite lifecycle (issues #29/#30/#65), dispatching on an internally-tagged `action` (`create` / `observe` / `set_trust`) — exactly like `episode_step`'s typed `action`. `create` registers a benchmark suite (e.g. PutnamBench) — name, upstream URL/commit, language, and a self-declared `trusted_canonical_source` flag (defaults false); `observe` reads back a suite by `suite_id`/`name` with its append-only trust-review history and (by default) every registered problem; `set_trust` changes `trusted_canonical_source` after creation — `approver_id` is required, raising trust to true **requires** non-empty `notes`, and every REAL change appends one audit row to `benchmark_suite_trust_reviews` (a same-value call is a recorded no-op). Never affects proof status of existing results — only the fidelity basis future `benchmark_result_record` calls can claim |
+| `benchmark_problem` | ONE tool for the benchmark-problem lifecycle (issues #29/#30/#62/#65), dispatching on an internally-tagged `action` (`register` / `observe`) — exactly like `episode_step`'s typed `action`. `register` records one problem from a suite — `root_statement_hash` is server-computed from `root_formal_statement`, never client-supplied, and a `prover_ready_statement` (+ its own hash) is derived automatically (never client-supplied) when the statement is a `theorem NAME (binders) : type` declaration; `import_manifest` entries may be Lean module paths and/or `open [scoped] <Namespace> ...` directives (issue #62). `observe` reads back one registered problem by `benchmark_problem_id` or by (`suite_id`, `upstream_problem_id`), returning the full row including both hashes and the server-derived `prover_ready_statement` |
+| `benchmark_run` | ONE tool for the whole benchmark-run family (issue #182's `benchmark_run_create`/`benchmark_result_record`/`benchmark_run_observe` consolidation), dispatching on an internally-tagged `action` (`create` / `result_record` / `observe`) — exactly like `episode_step`'s typed `action`. `create` starts a run against a suite; `lean_version`/`mathlib_commit` are read from the server's OWN detected Lean environment, never accepted from the client. `result_record` records (or upserts, for pass@k) one problem's result within a run — if `episode_id` is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as the benchmark problem (issue #36), and a `kernel_verified`/`certified` claim additionally requires the issue #38 fidelity-basis policy (a trusted suite's own canonical statement-hash match, or an independently `fidelity_status='verified'` problem) — this trust boundary is unchanged by the consolidation. `observe` reads back a run, its results, and aggregate metrics — `solved_rate` (solved at all) vs `pass_at_1_rate` (genuine first-attempt success) are reported separately |
+| `proof_session` | ONE tool for the whole interactive (tactic-by-tactic) proof-session family, dispatching on an internally-tagged `action` (`start` / `observe` / `tactic_step` / `branch` / `select_node` / `reconstruct` / `promote_to_attempt` / `close` / `export` / `replay`) — exactly like `episode_step`'s typed `action`. Search evidence only, except the `promote_to_attempt` action (and `replay` mode `final_proof`), which resubmits a reconstructed script through the real `attempt_claim` + `episode_step(Solve)` kernel-verification path. See [Interactive Proof Sessions](#interactive-proof-sessions) |
 
 ## Budget Accounting
 
@@ -269,8 +215,9 @@ makes that explicit:
 
 A candidate construction can attach to a dossier, a research node, and/or a
 verification layer, or exist attached to none of them. `falsified` and
-`rejected` constructions stay visible in `research_dossier_observe` rather
-than being deleted, since a documented dead end is itself research output.
+`rejected` constructions stay visible in `research_dossier`'s `observe` action
+rather than being deleted, since a documented dead end is itself research
+output.
 
 ### Exposition artifacts
 
@@ -310,10 +257,10 @@ the normalized content, never client-supplied.
 
 A skeleton is **descriptive metadata, never the fidelity gate**: it has no
 column that can hold kernel evidence, never sets `fidelity_status`, and never
-substitutes for `problem_submit_fidelity_review`. `semantic_skeleton_observe`
-appends module-aware review notes (`confirms_faithful`, `raises_concern`,
-`reports_mismatch`, `inconclusive`) — a `confirms_faithful` note is
-note-taking, not a proof.
+substitutes for `problem_submit_fidelity_review`. `semantic_skeleton`'s
+`observe` action appends module-aware review notes (`confirms_faithful`,
+`raises_concern`, `reports_mismatch`, `inconclusive`) — a `confirms_faithful`
+note is note-taking, not a proof.
 
 ### Expert reviews (role-separated ledger)
 
@@ -327,8 +274,9 @@ construction_artifact, module_artifact, external_citation,
 asymptotic_extraction, exposition, full_dossier), with a `decision`,
 `confidence`, `expertise_tags`, `requested_changes`, and `risk_flags`.
 
-`expert_review_add` is a **pure insert**: unlike `citation_review_add` (which
-updates a citation's `claim_status`), an expert review mutates no other table.
+`expert_review`'s `add` action is a **pure insert**: unlike `research_dossier`'s
+`citation_review_add` action (which updates a citation's `claim_status`), an
+expert review mutates no other table.
 `reviewer_id` is free text, not an authenticated principal, and a
 `domain_expert` "approved" decision is human-attested — it never marks
 anything kernel-verified, never changes an episode outcome, `fidelity_status`,
@@ -365,9 +313,10 @@ is optional, so a search can exist before any dossier, candidate, episode, or
 Lean proof. `counterexamples`, `failed`, and `timed_out` searches stay visible
 (a documented dead end is research output). `cost_summary`/`runtime_metadata`
 describe the *external* search run and are isolated from LLM-Driven Proof Search Environment's own cost
-surfaces. `research_dossier_observe` surfaces empirical searches in their own
-bucket, separate from proofs, citations, assumptions, candidate constructions,
-expert reviews, semantic skeletons, exposition, and verification layers.
+surfaces. `research_dossier`'s `observe` action surfaces empirical searches in
+their own bucket, separate from proofs, citations, assumptions, candidate
+constructions, expert reviews, semantic skeletons, exposition, and verification
+layers.
 
 ### Paper/PDF ingestion (issue #27)
 
@@ -403,15 +352,15 @@ proved/verified value. `extraction_trust_status` (unreviewed → machine_extract
 tops out at human review, never Lean verification. A `rejected_extraction` stays
 visible (never deleted). Extracted nodes are *candidates* that must go through
 the normal Lean / fidelity-review / citation / external-theorem paths to gain
-any authority. `paper_ingest_link_node` records that promotion explicitly:
+any authority. `paper_ingest`'s `link_node` action records that promotion explicitly:
 it attaches a node to an `external_reference`, `external_theorem_claim`,
 `research_node`, or `formalization_plan_item` that **already exists** (and, for
 dossier-scoped kinds, belongs to the document's dossier), setting the node's
 derived `citation_status` / `formalization_status` and stamping the matching
 forward-link column — but the linked artifact keeps its own independent trust
 and the node still gains no proof/kernel authority.
-`research_dossier_observe` shows ingested documents and their nodes in their own
-bucket, separate from every proof-bearing bucket.
+`research_dossier`'s `observe` action shows ingested documents and their nodes
+in their own bucket, separate from every proof-bearing bucket.
 
 **Benchmark contamination policy:** upstream benchmarks like PutnamBench ask
 that completed formal proofs not be published without first coordinating with
@@ -459,7 +408,7 @@ submission, score, and review; a challenge **score alone never confers training
 eligibility**; submission status can never reach a proof value; a link to a
 kernel-verified `verification_layer` records provenance only and never makes the
 submission a proof. A rejected or superseded submission stays visible (never
-deleted), and `challenge_observe` exports the work grouped by outcome
+deleted), and `challenge`'s `observe` action exports the work grouped by outcome
 (accepted / rejected / superseded / open shown separately). Only Lean / kernel
 verification creates proof authority; challenge state never gates `certified`.
 
@@ -508,11 +457,15 @@ this represents and what's still missing, see [`docs/roadmap.md`](docs/roadmap.m
 ## Interactive Proof Sessions
 
 Alongside the whole-proof-attempt actions above (`Solve`, `SubmitModule`,
-`Decompose` — all submitted through `episode_step`), the `proof_session_*`
-tool family (issue #161, part of the interactive-proof-session epic #158)
-lets a client work **one** obligation's goal state tactic-by-tactic —
-Pantograph-style live proof-state interaction — instead of only submitting a
-complete proof and finding out afterward whether it checked.
+`Decompose` — all submitted through `episode_step`), the single
+`proof_session` tool (issue #161's family, consolidated into one
+internally-tagged-action tool by issue #183; part of the
+interactive-proof-session epic #158) lets a client work **one** obligation's
+goal state tactic-by-tactic — Pantograph-style live proof-state interaction —
+instead of only submitting a complete proof and finding out afterward whether
+it checked. Every call has the shape
+`proof_session {"action": {"type": "<variant>", ...}}`, exactly like
+`episode_step`'s typed `action`.
 
 ### How this differs from `Solve` / `SubmitModule` / `Decompose`
 
@@ -523,71 +476,71 @@ complete proof and finding out afterward whether it checked.
 - **`Decompose`** splits the current obligation into child sub-lemma
   obligations — still a real, budget-accounted `episode_step` action with no
   session state involved.
-- **`proof_session_*`** tools sit *beside* `episode_step`, not on top of it:
-  they let you explore a goal state one tactic at a time, branch to try
+- **`proof_session`** sits *beside* `episode_step`, not on top of it: its
+  actions let you explore a goal state one tactic at a time, branch to try
   alternatives from an earlier point, and see whether a path closes
   (`is_solved: true`) before committing to a `Solve`/`SubmitModule`
   submission. Nothing in this family changes how `Solve` / `SubmitModule` /
   `Decompose` / `GiveUp` behave, and — with one deliberate exception below —
-  no `proof_session_*` call can change an obligation's status.
+  no `proof_session` action can change an obligation's status.
 
-### What each tool does
+### What each action does
 
-| Tool | What it does | Category |
+| Action (`{"action": {"type": ...}}`) | What it does | Category |
 |---|---|---|
-| `proof_session_start` | Starts a new session against one existing episode obligation, backed by an `InteractiveProofGateway` backend (`mock` or `pantograph`). Returns a `session_id` and the root proof-state node. | Starts a session, records initial evidence |
-| `proof_session_observe` | Reads back the session's currently selected node — goals, local context, proof-state hashes, branch summary. | Read-only, records nothing new |
-| `proof_session_tactic_step` | Applies one tactic to a node. Success records a new child node as evidence and moves the session's selected node forward; failure records a structured diagnostic — also evidence, never discarded, a first-class negative example. | Records evidence, advances working state |
-| `proof_session_branch` | Same mechanics as `proof_session_tactic_step`, framed explicitly as starting a *named* branch from any existing node. Prior branches from the same parent are never deleted or overwritten. | Records evidence, advances working state |
-| `proof_session_select_node` | Moves the session's "selected node" convenience pointer to any existing node in its tree (e.g. to switch which branch you're working). Applies no tactic and records no new evidence. | Working state only |
-| `proof_session_reconstruct` | Builds a Lean tactic script from the root-to-selected-node path and returns it verbatim (raw tactic text for a successful step is *not* durably stored server-side otherwise). `reports_complete` reflects the session's *own* `is_solved` claim — still not a verified proof. | Reconstructs a proof, still search evidence |
-| `proof_session_promote_to_attempt` | **The only tool in this family that can change an obligation's status.** Takes a reconstructed script and resubmits it through the exact same `attempt_claim` + `episode_step(Solve)` path a normal whole-proof submission uses — a real, from-scratch Lean kernel check. | Final verification |
-| `proof_session_close` | Marks a session `closed` / `abandoned` / `superseded`. The session's full trace (every node/step, including failed tactics) stays visible and queryable afterward — closing never deletes anything. | Session lifecycle only |
-| `proof_session_replay` | Replays a session from *persisted DB state* in one of three modes: `trace_only` (pure DB-consistency check, no kernel call), `backend` (re-runs the tactic path against a fresh backend session and compares outcomes/hashes), `final_proof` (resubmits through the real verification path). | `trace_only`/`backend`: evidence check only. `final_proof`: final verification |
-| `proof_session_export` | Exports one session's trace as `public_summary` (aggregate counts only, no tactic/goal text), `audit_archive` (full trace, hashes, reconstructed-script linkage), or `training_export` (per-step records including negative-space failed routes). | Read-only export of already-recorded evidence |
+| `start` | Starts a new session against one existing episode obligation, backed by an `InteractiveProofGateway` backend (`mock` or `pantograph`). Returns a `session_id` and the root proof-state node. | Starts a session, records initial evidence |
+| `observe` | Reads back the session's currently selected node — goals, local context, proof-state hashes, branch summary. | Read-only, records nothing new |
+| `tactic_step` | Applies one tactic to a node. Success records a new child node as evidence and moves the session's selected node forward; failure records a structured diagnostic — also evidence, never discarded, a first-class negative example. | Records evidence, advances working state |
+| `branch` | Same mechanics as `tactic_step`, framed explicitly as starting a *named* branch from any existing node. Prior branches from the same parent are never deleted or overwritten. | Records evidence, advances working state |
+| `select_node` | Moves the session's "selected node" convenience pointer to any existing node in its tree (e.g. to switch which branch you're working). Applies no tactic and records no new evidence. | Working state only |
+| `reconstruct` | Builds a Lean tactic script from the root-to-selected-node path and returns it verbatim (raw tactic text for a successful step is *not* durably stored server-side otherwise). `reports_complete` reflects the session's *own* `is_solved` claim — still not a verified proof. | Reconstructs a proof, still search evidence |
+| `promote_to_attempt` | **The only action in this family that can change an obligation's status.** Takes a reconstructed script and resubmits it through the exact same `attempt_claim` + `episode_step(Solve)` path a normal whole-proof submission uses — a real, from-scratch Lean kernel check. | Final verification |
+| `close` | Marks a session `closed` / `abandoned` / `superseded`. The session's full trace (every node/step, including failed tactics) stays visible and queryable afterward — closing never deletes anything. | Session lifecycle only |
+| `replay` | Replays a session from *persisted DB state* in one of three modes: `trace_only` (pure DB-consistency check, no kernel call), `backend` (re-runs the tactic path against a fresh backend session and compares outcomes/hashes), `final_proof` (resubmits through the real verification path). | `trace_only`/`backend`: evidence check only. `final_proof`: final verification |
+| `export` | Exports one session's trace as `public_summary` (aggregate counts only, no tactic/goal text), `audit_archive` (full trace, hashes, reconstructed-script linkage), or `training_export` (per-step records including negative-space failed routes). | Read-only export of already-recorded evidence |
 
 ### The loop
 
-```
-proof_session_start
+```text
+proof_session {"action": {"type": "start", ...}}
     │  (root node)
     ▼
-proof_session_tactic_step / proof_session_branch / proof_session_select_node   ← repeat, explore, branch
+proof_session {"action": {"type": "tactic_step" / "branch" / "select_node", ...}}   ← repeat, explore, branch
     │  (some node reports is_solved: true)
     ▼
-proof_session_reconstruct                        ← builds a tactic script from root → selected node
+proof_session {"action": {"type": "reconstruct", ...}}          ← builds a tactic script from root → selected node
     │
     ▼
-proof_session_promote_to_attempt                 ← the ONLY step that can change obligation status:
-                                                      attempt_claim + episode_step(Solve) through the
-                                                      real Lean kernel, exactly like a direct Solve call
+proof_session {"action": {"type": "promote_to_attempt", ...}}   ← the ONLY step that can change obligation status:
+                                                                     attempt_claim + episode_step(Solve) through the
+                                                                     real Lean kernel, exactly like a direct Solve call
 ```
 
-`proof_session_replay(mode="final_proof")` is an alternate route to the same
-trust gate for a closed or historical session — it reconstructs and resubmits
-through the same internal `attempt_claim` + `episode_step(Solve)` logic, not a
-second, parallel verification path.
+The `replay` action with `mode="final_proof"` is an alternate route to the
+same trust gate for a closed or historical session — it reconstructs and
+resubmits through the same internal `attempt_claim` + `episode_step(Solve)`
+logic, not a second, parallel verification path.
 
 ### The trust boundary
 
-**Every `proof_session_*` result — a session's state, a tactic-application
+**Every `proof_session` result — a session's state, a tactic-application
 outcome, a reconstructed script, a replay result — is search evidence, never
 proof authority.** A node reporting `is_solved: true` is only the session's
 own internal claim; the deterministic `mock` backend (the only backend that
 actually steps tactics today) closes the first open goal on every
 syntactically nonempty tactic string, without ever asking a real elaborator
 whether that tactic discharges the goal. The only way an interactive session
-can change an obligation's status is `proof_session_reconstruct` followed by
-`proof_session_promote_to_attempt` (or `proof_session_replay(mode=
-"final_proof")`) — both route through the exact same `attempt_claim` +
-`episode_step(Solve)` internal path, the real Lean kernel, that every direct
-`Solve` submission already uses. If a future backend's own elaborator ever
-disagrees with the kernel, the kernel wins, always.
+can change an obligation's status is the `reconstruct` action followed by
+`promote_to_attempt` (or `replay` with `mode="final_proof"`) — both route
+through the exact same `attempt_claim` + `episode_step(Solve)` internal path,
+the real Lean kernel, that every direct `Solve` submission already uses. If a
+future backend's own elaborator ever disagrees with the kernel, the kernel
+wins, always.
 
 Do not report a goal as proved, or an obligation as closer to done, based on
-`proof_session_tactic_step` / `observe` / `branch` / `select_node` /
-`reconstruct` output alone — only a `promote_to_attempt` (or
-`replay(mode="final_proof")`) result backed by a real kernel verdict counts.
+`tactic_step` / `observe` / `branch` / `select_node` / `reconstruct` output
+alone — only a `promote_to_attempt` (or `replay` `mode="final_proof"`) result
+backed by a real kernel verdict counts.
 
 ### Backend choices
 
@@ -621,22 +574,30 @@ negative-space training/export value.
 ## Drafts and formalization planning (Level 3)
 
 Before a `Solve`/`SubmitModule` attempt, a client can preserve informal
-reasoning as a **Draft** (`draft_create`) and record the moves it identifies
-within it (`draft_extract_moves` — construction, auxiliary_lemma, case_split,
+reasoning as a **Draft** (`draft {"action": {"type": "create", ...}}`) and
+record the moves it identifies within it (`draft {"action": {"type":
+"extract_moves", ...}}` — construction, auxiliary_lemma, case_split,
 induction, reduction, bijection, counterexample_search, asymptotic_step,
-external_citation, unknown). Selected moves can seed a **formalization
-plan** (`formalization_plan_create`), which tracks planned concepts,
+external_citation, unknown). Since issue #195 the whole draft family is the
+single `draft` tool, dispatching on an internally-tagged action
+(`create` / `observe` / `extract_moves`), exactly like `episode_step`.
+Selected moves can seed a **formalization plan** — since issue #184 the whole
+plan family is the single `formalization_plan` tool, dispatching on an
+internally-tagged action (`formalization_plan {"action": {"type": "create",
+...}}`, exactly like `episode_step`) — which tracks planned concepts,
 definitions, lemmas, and modules together with their Mathlib coverage status
-(`formalization_plan_attach_lookup`, using `lean_declaration_lookup`
-results).
+(the `attach_lookup`
+action, using `lean_declaration_lookup` results, or the
+`attach_librarian_result` action, using `mathlib_search_declarations` /
+`mathlib_search_local_artifacts` results).
 
 Both are strictly advisory, mirroring the trust boundary everywhere else in
 this environment: a Draft or a plan item can never mark anything proved.
 Real obligations are still created only through `Decompose`, via the normal
-budget-accounted `episode_step` flow —
-`formalization_plan_promote_item_to_obligation` only records a metadata
-*link* to an obligation that already exists that way; it never creates one
-itself. See `docs/roadmap.md`'s Level 3 section for the full design.
+budget-accounted `episode_step` flow — the `promote_item_to_obligation`
+action only records a metadata *link* to an obligation that already exists
+that way; it never creates one itself. See `docs/roadmap.md`'s Level 3
+section for the full design.
 
 ## Proof soundness vs. statement fidelity
 

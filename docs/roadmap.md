@@ -811,7 +811,7 @@ response text with no LLM-Driven Proof Search Environment-tracked artifact, no p
 `SubmitModule` skeleton, and no record of what Mathlib coverage was actually
 checked versus assumed.
 
-### Level 4 — research workbench
+### Level 4 — research workbench *(current: v0.3.27, substrate shipped)*
 
 **Definition:**
 
@@ -832,12 +832,15 @@ structured, reviewed, and partially formalized without losing provenance.
 drives the search; Level 4 makes sure that search leaves a durable, honest
 trail instead of disappearing into chat scrollback.
 
-**Required artifacts (not yet built):** research dossiers (#9), candidate
-construction artifacts (#8), external theorem/citation/assumption boundary
-records (#11), asymptotic statement support (#12), multi-layer verification
-status (#13), expert-review artifacts and a role-separated ledger (#14),
-empirical math lab for small-case/counterexample/construction search (#26),
-paper/PDF ingestion with citation and gap tracking (#27).
+**Required artifacts (shipped — see `README.md`'s "Level 4 Research
+Substrate" section for the live tool/table reference):** research dossiers
+(#9), candidate construction artifacts (#8), external theorem/citation/
+assumption boundary records (#11), asymptotic statement support (#12,
+`formalization_plan_items.asymptotic_role`), multi-layer verification status
+(#13, `verification_layer_set`), expert-review artifacts and a
+role-separated ledger (#14), empirical math lab for small-case/
+counterexample/construction search (#26), paper/PDF ingestion with citation
+and gap tracking (#27).
 
 **Required boundary:** an external citation is a tracked assumption, never a
 substitute for a Lean proof of the cited fact — Level 4 must make clear which
@@ -858,10 +861,20 @@ citations and partial results).
 **Serious research-grade version** (beyond MVP): #12 (asymptotics), #13
 (multi-layer verification), #14 (expert review).
 
-**Status:** Not started. Fully open, and blocked on Level 3's formalization
-planning existing first — a research dossier with no formalization-planning
-layer underneath it has no path from "candidate construction" to "checked
-module."
+**Status:** Substrate shipped (#8, #9, #11, #12, #13, #14, #26, #27 all have
+real, tested implementations in the current codebase — confirmed 2026-07-08
+by direct code inspection: `research_node_add`, `external_reference_add`,
+`verification_layer_set`, `ensure_proved_lemma_in_dossier_context`,
+`formalization_plan_items.asymptotic_role`, plus README.md's own "Level 4
+Research Substrate" section documenting the shipped tool surface). This
+entry previously read "Not started, fully open" — that was stale. Issue #54
+(an 8-phase tracker gating PutnamBench's unfreeze on more than just this
+substrate — including #39's still-unmet open-problem-campaign goal) has
+been closed by the project owner's own decision, NOT because every phase
+it defined is complete. **This status line does not mean the PutnamBench
+freeze is lifted** — re-read #54's closing comment and this section's own
+definition before treating Level 4 substrate as a green light for anything
+beyond what's actually built here.
 
 **Does NOT count:** a research dossier that only stores prose notes with no
 link to any Lean artifact, obligation, or formalization plan item — that's a
@@ -897,7 +910,7 @@ toward, not a near-term milestone.
 | 2 | #19 (closed) | #5, #6, #7 (open) |
 | 2.5 | #158 (epic), #159, #160, #161, #162, #163, #164, #165, #166, #167 (closed) | #168 (docs, shared with 2 and 3) |
 | 3 | #10, #23, #24, #25, #34, #35, #38 | #6 (shared with 2) |
-| 4 | #8, #9, #11, #12, #13, #14, #26, #27 | #7 (shared with 2) |
+| 4 | #8, #9, #11, #12, #13, #14, #26, #27 (all shipped; tracking issue #54 closed) | #7 (shared with 2) |
 | PutnamBench sprint | #28, #29, #30, #31, #32, #33, #36, #37 | #34, #38 (shared with 3) |
 | docs/roadmap | #20, #21, #22 | — |
 

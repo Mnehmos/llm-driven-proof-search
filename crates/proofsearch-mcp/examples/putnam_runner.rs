@@ -321,6 +321,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 serde_json::json!({"type": "solve", "proof_term": attempt.proof_term})
             };
 
+            // The runner keeps every automated attempt inside the durable SOP
+            // trail. This is deliberately before attempt_claim so an initial
+            // plan can be recorded even though no action_attempt_id exists yet.
+            call(&peer, "reasoning_log", serde_json::json!({
+                "action": {
+                    "type": "add",
+                    "episode_id": episode_id,
+                    "episode_revision": next_request["episode_revision"],
+                    "reasoning_kind": if i == 0 { "initial_plan" } else { "retry_after_failure" },
+                    "hypothesis": format!("Planned benchmark attempt {} can discharge the current obligation", i + 1),
+                    "approach_summary": format!("Automated Putnam runner submission for {} attempt {}; preserve the verifier result before choosing another attempt", planned.upstream_problem_id, i + 1),
+                    "expected_outcome": "The pinned Lean verifier will either verify the candidate or return a durable diagnostic for the next retry",
+                    "confidence": "medium",
+                    "author": "putnam_runner"
+                }
+            })).await?;
+
             let claim = call(&peer, "attempt_claim", serde_json::json!({
                 "episode_id": episode_id, "action_request_id": next_request["id"],
                 "idempotency_key": format!("{}-attempt-{}", planned.upstream_problem_id, i + 1),
@@ -350,6 +367,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // (or had none) without the episode itself terminating, close it out
         // honestly with GiveUp rather than leaving it dangling open.
         if final_outcome.is_none() && !next_request.is_null() {
+            call(&peer, "reasoning_log", serde_json::json!({
+                "action": {
+                    "type": "add",
+                    "episode_id": episode_id,
+                    "episode_revision": next_request["episode_revision"],
+                    "reasoning_kind": "other",
+                    "approach_summary": format!("Terminate {} after exhausting the configured automated attempt budget", planned.upstream_problem_id),
+                    "actual_outcome": format!("No planned candidate verified after {} attempted submission(s)", attempts_used),
+                    "lesson_learned": "Retain every verifier diagnostic from the logged attempts; a future run needs a new candidate or strategy rather than an untracked retry",
+                    "confidence": "high",
+                    "author": "putnam_runner"
+                }
+            })).await?;
             let claim = call(&peer, "attempt_claim", serde_json::json!({
                 "episode_id": episode_id, "action_request_id": next_request["id"],
                 "idempotency_key": format!("{}-giveup", planned.upstream_problem_id),

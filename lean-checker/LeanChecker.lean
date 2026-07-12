@@ -8,3 +8,5 @@ import LeanChecker.Kits.FiniteCertificateKit
 import LeanChecker.Kits.ExtremalCombinatoricsKit
 import LeanChecker.Kits.RecurrenceGeneratingFunctionKit
 import LeanChecker.Kits.InequalityEstimateKit
+import LeanChecker.Multigraph
+import LeanChecker.CycleDecomposition

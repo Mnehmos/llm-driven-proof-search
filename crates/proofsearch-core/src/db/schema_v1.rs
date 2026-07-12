@@ -1956,6 +1956,43 @@ CREATE TABLE IF NOT EXISTS interactive_proof_reconstructed_scripts (
 );
 CREATE INDEX IF NOT EXISTS idx_interactive_proof_reconstructed_scripts_session ON interactive_proof_reconstructed_scripts(session_id);
 CREATE INDEX IF NOT EXISTS idx_interactive_proof_reconstructed_scripts_verified_attempt ON interactive_proof_reconstructed_scripts(verified_attempt_id);
+
+-- Reconnaissance/reasoning trail (SOP, docs/sop-reasoning-logs.md): a
+-- standardized, append-only form an agent fills out documenting its own
+-- problem-solving process -- hypothesis, approach, expected vs actual
+-- outcome, lessons learned -- for EACH episode_step submission (plan,
+-- retry-after-failure, error diagnosis, or success retrospective). This is
+-- deliberately NOT exposition_artifacts: exposition is human-readable
+-- mathematical prose about the PROBLEM (proof strategy, key lemmas);
+-- reasoning_logs is about the AGENT'S OWN process across attempts,
+-- specifically so failed/dead-end iterations -- otherwise invisible outside
+-- this environment, e.g. local scratch-file compilation before submission --
+-- become real, permanent training data instead of being silently discarded.
+-- episode_revision is the revision this entry pertains to (matching the
+-- action_request/episode_step convention elsewhere); action_attempt_id is
+-- nullable because reasoning can precede an attempt's existence (initial
+-- planning before any submission at all). Append-only, like every other
+-- ledger in this schema: a lesson learned from a mistake is not overwritten,
+-- it is recorded alongside it.
+CREATE TABLE IF NOT EXISTS reasoning_logs (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    episode_revision INTEGER NOT NULL,
+    action_attempt_id TEXT REFERENCES action_attempts(id),
+    reasoning_kind TEXT NOT NULL,
+    hypothesis TEXT,
+    approach_summary TEXT NOT NULL,
+    expected_outcome TEXT,
+    actual_outcome TEXT,
+    lesson_learned TEXT,
+    confidence TEXT,
+    author TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK(reasoning_kind IN ('initial_plan', 'retry_after_failure', 'strategy_pivot', 'error_diagnosis', 'success_retrospective', 'other')),
+    CHECK(confidence IS NULL OR confidence IN ('low', 'medium', 'high'))
+);
+CREATE INDEX IF NOT EXISTS idx_reasoning_logs_episode ON reasoning_logs(episode_id, episode_revision);
+CREATE INDEX IF NOT EXISTS idx_reasoning_logs_attempt ON reasoning_logs(action_attempt_id);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
