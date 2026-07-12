@@ -6,6 +6,7 @@ pub mod attempts;
 pub mod step;
 pub mod trajectories;
 pub mod dataset;
+pub mod module_closure;
 
 use rusqlite::Connection;
 use uuid::Uuid;
