@@ -268,6 +268,206 @@ fn observation_for_hash(conn: &Connection, state_hash: &str) -> serde_json::Valu
     }
 }
 
+/// Issue #238: canonical RL transition schema version.
+pub const RL_TRANSITION_SCHEMA_VERSION: &str = "proofsearch.rl_transition.v1";
+
+/// One canonical RL environment transition (issue #238). Distinct from SFT/DPO
+/// records — this is (s, a, r, s', terminated, truncated) with real values, a
+/// gap-free `step_index`, an explicit `outcome`, and a rich `info` block. Never
+/// packet metadata masquerading as a transition.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RlTransition {
+    pub schema_version: String,
+    pub episode_id: String,
+    pub problem_version_id: Option<String>,
+    pub packet_id: Option<String>,
+    pub step_index: usize,
+    pub state: serde_json::Value,
+    pub action: serde_json::Value,
+    pub reward: f64,
+    pub next_state: serde_json::Value,
+    pub terminated: bool,
+    pub truncated: bool,
+    pub termination_reason: Option<String>,
+    pub truncation_reason: Option<String>,
+    pub outcome: Option<String>,
+    pub info: serde_json::Value,
+    /// Hash binding this transition to the episode + environment + policy.
+    pub transition_hash: String,
+}
+
+/// Export one canonical RL transition per committed environment step, in
+/// deterministic gap-free order. Reuses #231's persisted reward/observation/
+/// terminal reads; legacy events without those fields carry explicit
+/// `info.missing_reason` markers instead of fabricated zeros.
+pub fn export_rl_transitions(conn: &Connection, episode_id: Uuid) -> Result<Vec<RlTransition>, String> {
+    let (problem_version_id, environment_hash, packet_id): (Option<String>, String, Option<String>) = conn
+        .query_row(
+            "SELECT e.problem_version_id, pv.environment_hash, e.task_id
+             FROM episodes e JOIN problem_versions pv ON e.problem_version_id = pv.id
+             WHERE e.id = ?1",
+            [episode_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let tuples = export_rl(conn, episode_id)?;
+    let mut out = Vec::with_capacity(tuples.len());
+    for (step_index, t) in tuples.into_iter().enumerate() {
+        let outcome = t.info.get("outcome").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let termination_reason = None; // per-step commit events are non-terminal; episode terminal events are separate
+        let truncation_reason = None;
+        let reward_available = t.info.get("reward_available").and_then(|v| v.as_bool()).unwrap_or(true);
+        let terminal_available = t.info.get("terminal_fields_available").and_then(|v| v.as_bool()).unwrap_or(true);
+
+        let mut info = serde_json::json!({
+            "environment_hash": environment_hash,
+            "reward_policy_version": t.info.get("reward_policy_version").cloned().unwrap_or(serde_json::Value::Null),
+            "trajectory_schema_version": t.info.get("trajectory_schema_version").cloned().unwrap_or(serde_json::Value::Null),
+            "reward_available": reward_available,
+            "terminal_fields_available": terminal_available,
+            "solve_kind": t.info.get("solve_kind").cloned().unwrap_or(serde_json::Value::Null),
+            "diagnostics": t.info.get("diagnostics").cloned().unwrap_or(serde_json::Value::Null),
+        });
+        // Legacy episodes: explicit missing_reason, never a fabricated zero.
+        if !reward_available || !terminal_available {
+            info["missing_reason"] = serde_json::json!(
+                "pre-#231 trajectory event: reward/terminal not persisted at runtime; reward/terminal are placeholders, not measured"
+            );
+        }
+
+        let core = serde_json::json!({
+            "schema_version": RL_TRANSITION_SCHEMA_VERSION,
+            "episode_id": episode_id.to_string(),
+            "environment_hash": environment_hash,
+            "step_index": step_index,
+            "state": t.state,
+            "action": t.action,
+            "reward": t.reward,
+            "next_state": t.next_state,
+        });
+        let transition_hash = crate::hashing::canonical_hash(&core).unwrap_or_default();
+
+        out.push(RlTransition {
+            schema_version: RL_TRANSITION_SCHEMA_VERSION.to_string(),
+            episode_id: episode_id.to_string(),
+            problem_version_id: problem_version_id.clone(),
+            packet_id: packet_id.clone(),
+            step_index,
+            state: t.state,
+            action: t.action,
+            reward: t.reward,
+            next_state: t.next_state,
+            terminated: t.terminated,
+            truncated: t.truncated,
+            termination_reason,
+            truncation_reason,
+            outcome,
+            info,
+            transition_hash,
+        });
+    }
+    Ok(out)
+}
+
+/// JSONL — the canonical simple RL transition format (one record per line).
+pub fn export_rl_transitions_jsonl(conn: &Connection, episode_id: Uuid) -> Result<String, String> {
+    let transitions = export_rl_transitions(conn, episode_id)?;
+    let mut lines = String::new();
+    for t in &transitions {
+        lines.push_str(&serde_json::to_string(t).map_err(|e| e.to_string())?);
+        lines.push('\n');
+    }
+    Ok(lines)
+}
+
+#[cfg(test)]
+mod issue238_tests {
+    use super::*;
+    use crate::db::initialize_db;
+    use chrono::Utc;
+
+    fn setup() -> (Connection, Uuid, Uuid) {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_db(&conn).unwrap();
+        let pv = Uuid::new_v4();
+        conn.execute(
+            "INSERT INTO problem_versions (id, source_problem_text, source_problem_hash, source_metadata_json,
+                root_formal_statement, root_statement_hash, normalized_root_rendering, environment_hash,
+                fidelity_status, fidelity_method, state, created_at)
+             VALUES (?1,'s','h','{}','stmt','rh','r','env-xyz','unreviewed','manual','CREATED',?2)",
+            (pv.to_string(), Utc::now().to_rfc3339()),
+        ).unwrap();
+        let ep = Uuid::new_v4();
+        conn.execute(
+            "INSERT INTO episodes (id, problem_version_id, state, created_at) VALUES (?1,?2,'awaiting_external_action',?3)",
+            (ep.to_string(), pv.to_string(), Utc::now().to_rfc3339()),
+        ).unwrap();
+        (conn, ep, pv)
+    }
+
+    fn record(conn: &mut Connection, ep: Uuid, sb: &str, sa: &str, payload: serde_json::Value) {
+        let tx = conn.transaction().unwrap();
+        super::super::trajectories::record_event(&tx, ep, "action_committed", sb, sa, "env-xyz", &payload.to_string()).unwrap();
+        tx.commit().unwrap();
+    }
+
+    #[test]
+    fn round_trip_reconstructs_ordered_gap_free_real_valued_transitions() {
+        let (mut conn, ep, _pv) = setup();
+        conn.execute(
+            "INSERT INTO action_requests (id, episode_id, problem_version_id, episode_revision,
+                request_sequence_number, role, status, created_at, observation_hash, observation_json)
+             VALUES (?1,?2,?3,0,1,'prover','pending',?4,'s0','{\"root_theorem_signature\":\"T\"}')",
+            (Uuid::new_v4().to_string(), ep.to_string(), _pv.to_string(), Utc::now().to_rfc3339()),
+        ).unwrap();
+        record(&mut conn, ep, "s0", "s1", serde_json::json!({
+            "action": {"type": "solve", "proof_term": "x"},
+            "outcome": "kernel_fail",
+            "trajectory_schema_version": "1.1",
+            "reward_scaled": -100, "reward_scale_factor": 10000, "terminated": false, "truncated": false,
+        }));
+        record(&mut conn, ep, "s1", "s2", serde_json::json!({
+            "action": {"type": "solve", "proof_term": "y"},
+            "outcome": "kernel_pass",
+            "trajectory_schema_version": "1.1",
+            "reward_scaled": 4900, "reward_scale_factor": 10000, "terminated": true, "truncated": false,
+        }));
+
+        let jsonl = export_rl_transitions_jsonl(&conn, ep).unwrap();
+        let parsed: Vec<RlTransition> = jsonl.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(parsed.len(), 2);
+        // Deterministic, gap-free ordering.
+        assert_eq!(parsed[0].step_index, 0);
+        assert_eq!(parsed[1].step_index, 1);
+        // Real values, not defaults.
+        assert!((parsed[0].reward - (-0.01)).abs() < 1e-9);
+        assert!((parsed[1].reward - 0.49).abs() < 1e-9);
+        assert_eq!(parsed[0].outcome.as_deref(), Some("kernel_fail"));
+        assert_eq!(parsed[1].outcome.as_deref(), Some("kernel_pass"));
+        assert!(parsed[1].terminated);
+        // State reconstructable without the live DB (observation embedded).
+        assert_eq!(parsed[0].state["observation"]["root_theorem_signature"], "T");
+        // Versioned + hash-bound.
+        assert_eq!(parsed[0].schema_version, RL_TRANSITION_SCHEMA_VERSION);
+        assert!(!parsed[0].transition_hash.is_empty());
+        assert_ne!(parsed[0].transition_hash, parsed[1].transition_hash);
+        assert_eq!(parsed[0].info["environment_hash"], "env-xyz");
+    }
+
+    #[test]
+    fn legacy_events_carry_missing_reason_not_fabricated_zeros() {
+        let (mut conn, ep, _pv) = setup();
+        record(&mut conn, ep, "a", "b", serde_json::json!({
+            "action": {"type": "solve"}, "outcome": "kernel_fail",
+        }));
+        let t = &export_rl_transitions(&conn, ep).unwrap()[0];
+        assert_eq!(t.reward, 0.0);
+        assert_eq!(t.info["reward_available"], false);
+        assert!(t.info["missing_reason"].as_str().unwrap().contains("pre-#231"));
+    }
+}
+
 pub fn export_dpo(conn: &Connection, episode_id: Uuid) -> Result<Vec<DpoPair>, String> {
     let mut stmt = conn.prepare(
         "SELECT ar.id, ar.observation_json 
