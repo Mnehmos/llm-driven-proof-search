@@ -4,7 +4,7 @@ CDC step 02 — Local dual identity, dot-product form (paper eqs. (7)–(9);
                 uniqueness hypothesis discharged later by step 05)
 Problem version : 3d5b9cb6-b3a3-4358-95aa-b2e52bb2032b
 Episode         : e77a7f30-368e-412e-82cb-eda4ea51e662
-Outcome         : kernel_verified (2026-07-11)
+Outcome         : kernel_verified (2026-07-12 UTC)
  * NOTE          : this artifact was verified with standard Lean kernel rules
                    using `rfl` (replacing the legacy `native_decide` proof
                    to maintain strict kernel verification).
