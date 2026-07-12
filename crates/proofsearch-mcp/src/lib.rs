@@ -526,6 +526,62 @@ fn build_capability_document(
     })
 }
 
+/// Issue #231: the SINGLE source of truth for a committed step's reward
+/// breakdown. Called both at the `action_committed` trajectory-event write site
+/// (so the reward is durably persisted, not defaulted at export) AND in the
+/// `episode_step` response, so RL export reads the exact reward the environment
+/// applied. Pure function of the persisted step outcome.
+fn compute_step_reward_components(
+    action: &TypedAction,
+    disposition: StepDisposition,
+    accepted: bool,
+    outcome_enum: Option<EpisodeOutcome>,
+    is_terminated: bool,
+    is_truncated: bool,
+) -> Vec<RewardComponent> {
+    let is_verification_action =
+        matches!(action, TypedAction::Solve { .. } | TypedAction::SubmitModule { .. });
+    let mut reward_components = Vec::new();
+    let policy = RewardPolicy::default_policy();
+    if disposition == StepDisposition::Accepted {
+        reward_components.push(RewardComponent {
+            id: RewardComponentId::StepPenalty,
+            value_scaled: policy.step_penalty,
+        });
+        if is_verification_action && accepted {
+            reward_components.push(RewardComponent {
+                id: RewardComponentId::KernelPass,
+                value_scaled: policy.kernel_pass,
+            });
+        } else if is_verification_action && !is_terminated {
+            reward_components.push(RewardComponent {
+                id: RewardComponentId::KernelFail,
+                value_scaled: policy.kernel_fail,
+            });
+        }
+    }
+    if outcome_enum == Some(EpisodeOutcome::Certified)
+        || outcome_enum == Some(EpisodeOutcome::KernelVerified)
+    {
+        reward_components.push(RewardComponent {
+            id: RewardComponentId::RootKernelVerified,
+            value_scaled: policy.root_kernel_verified,
+        });
+        if outcome_enum == Some(EpisodeOutcome::Certified) {
+            reward_components.push(RewardComponent {
+                id: RewardComponentId::TerminalSuccess,
+                value_scaled: policy.terminal_success,
+            });
+        }
+    } else if is_truncated {
+        reward_components.push(RewardComponent {
+            id: RewardComponentId::TruncationPenalty,
+            value_scaled: policy.truncation_penalty,
+        });
+    }
+    reward_components
+}
+
 /// Map a structured `ClosureError` (#224) to an MCP invalid-params error whose
 /// message is the serde-tagged JSON, so a client can branch on `error` (cycle,
 /// unverified_dependency, incompatible_interface, …) rather than parse prose.
@@ -6010,6 +6066,19 @@ fn run_step_post_processing(
         _ => None,
     };
 
+    // Issue #231: persist the exact reward + terminal signals on the committed
+    // event so RL export reconstructs (s, a, r, s', terminated, truncated)
+    // without re-deriving or silently defaulting anything.
+    let reward_policy = RewardPolicy::default_policy();
+    let reward_components = compute_step_reward_components(
+        action,
+        disposition,
+        accepted,
+        outcome_enum,
+        is_terminated,
+        is_truncated,
+    );
+    let reward_scaled: i128 = reward_components.iter().map(|c| c.value_scaled).sum();
     let payload = serde_json::json!({
         "obligation_id": target_obligation_id,
         "problem_version_id": obligation_info.as_ref().map(|(pv, _, _)| pv),
@@ -6023,6 +6092,16 @@ fn run_step_post_processing(
         "diagnostics": error_msg,
         "module_source_hash": module_artifact.as_ref().map(|(s, _)| s),
         "declaration_manifest_hash": module_artifact.as_ref().map(|(_, d)| d),
+        // Issue #231: scalar reward breakdown + terminal signals + policy identity.
+        "trajectory_schema_version": "1.1",
+        "reward_components": reward_components,
+        "reward_scaled": reward_scaled as i64,
+        "reward_scale_factor": reward_policy.scale_factor as i64,
+        "reward_policy_version": "1.0",
+        "terminated": is_terminated,
+        "truncated": is_truncated,
+        "termination_reason": term_reason,
+        "truncation_reason": trunc_reason,
     });
     trajectories::record_event(
         tx, ep_uuid, "action_committed", state_hash_before, &state_hash_after, &env_hash,
@@ -8197,48 +8276,19 @@ impl ChatDbMcp {
         // Decompose/GiveUp — only treat it as a proof-verification result
         // (kernel_pass/kernel_fail reward) for an actual verification action.
         let is_verification_action = matches!(&action, TypedAction::Solve { .. } | TypedAction::SubmitModule { .. });
-        let mut reward_components = Vec::new();
-        let policy = RewardPolicy::default_policy();
-        if disposition == StepDisposition::Accepted {
-            reward_components.push(RewardComponent {
-                id: RewardComponentId::StepPenalty,
-                value_scaled: policy.step_penalty,
-            });
-            if is_verification_action && accepted {
-                reward_components.push(RewardComponent {
-                    id: RewardComponentId::KernelPass,
-                    value_scaled: policy.kernel_pass,
-                });
-            } else if is_verification_action && !is_terminated {
-                reward_components.push(RewardComponent {
-                    id: RewardComponentId::KernelFail,
-                    value_scaled: policy.kernel_fail,
-                });
-            }
-        }
-        if outcome_enum == Some(EpisodeOutcome::Certified) || outcome_enum == Some(EpisodeOutcome::KernelVerified) {
-            // Real work either way: the prover proved exactly the formal
-            // statement it was given. Composite success (TerminalSuccess) is
-            // reserved for when fidelity is ALSO verified — never award it for
-            // a kernel_verified-but-not-certified outcome, or a prover that
-            // faithfully proved a bad formalization looks identical to one
-            // that solved the real problem.
-            reward_components.push(RewardComponent {
-                id: RewardComponentId::RootKernelVerified,
-                value_scaled: policy.root_kernel_verified,
-            });
-            if outcome_enum == Some(EpisodeOutcome::Certified) {
-                reward_components.push(RewardComponent {
-                    id: RewardComponentId::TerminalSuccess,
-                    value_scaled: policy.terminal_success,
-                });
-            }
-        } else if is_truncated {
-            reward_components.push(RewardComponent {
-                id: RewardComponentId::TruncationPenalty,
-                value_scaled: policy.truncation_penalty,
-            });
-        }
+        // Issue #231: reward via the single source of truth also used at the
+        // action_committed trajectory-event write site, so RL export reads this
+        // exact reward rather than silently defaulting it to zero. (Composite
+        // success TerminalSuccess is reserved for Certified — never awarded for a
+        // kernel_verified-but-not-certified outcome — inside the shared fn.)
+        let reward_components = compute_step_reward_components(
+            &action,
+            disposition,
+            accepted,
+            outcome_enum,
+            is_terminated,
+            is_truncated,
+        );
 
         let next_action_request = if let Some(req_id) = next_req_id {
             Some(query_action_request(&conn, req_id).map_err(rs)?)
