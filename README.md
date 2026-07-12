@@ -797,6 +797,22 @@ proc = subprocess.Popen(
 | `PROOFSEARCH_LEAN_PROJECT_PATH` | `./lean-checker` | Path to the Lean 4 project used for verification |
 | `PROOFSEARCH_ELAN_BIN_PATH` | `~/.elan/bin` | Path to the directory containing the `lake`/`lean` elan proxy binaries |
 | `PROOFSEARCH_ELAN_HOME` | *(unset)* | If set, exported as `ELAN_HOME` to Lean subprocesses — the elan **root** where `toolchains/` lives. Use this to keep multi-GB toolchains off the system drive (e.g. `F:\lean\elan`). When unset, elan uses the process env / `~/.elan` |
+| `PROOFSEARCH_VERIFY_PROOF_TIMEOUT_MS` | `300000` | Timeout for a single theorem verification |
+| `PROOFSEARCH_VERIFY_MODULE_TIMEOUT_MS` | `1800000` | Timeout for a structured module verification |
+| `PROOFSEARCH_VERIFY_IMPORT_TIMEOUT_MS` | `600000` | Timeout for validating an import manifest |
+| `PROOFSEARCH_VERIFY_LOOKUP_TIMEOUT_MS` | `60000` | Timeout for declaration lookup under the active imports |
+| `PROOFSEARCH_VERIFY_DEEP_LOOKUP_TIMEOUT_MS` | `300000` | Timeout for opt-in full-Mathlib declaration lookup |
+| `PROOFSEARCH_VERIFY_BUILD_TIMEOUT_MS` | `600000` | Timeout for the best-effort durability build after a kernel pass |
+| `PROOFSEARCH_VERIFY_MAX_SOURCE_BYTES` | `4194304` | Maximum generated Lean source size per verifier invocation |
+| `PROOFSEARCH_VERIFY_MAX_OUTPUT_BYTES` | `4194304` | Maximum stdout/stderr bytes retained from each verifier invocation |
+| `PROOFSEARCH_VERIFY_MAX_DIAGNOSTICS` | `1000` | Maximum parsed diagnostics retained per verifier invocation |
+| `PROOFSEARCH_VERIFY_MAX_CONCURRENT_PROCESSES` | `4` | Process-wide maximum simultaneous Lean/build subprocesses |
+
+All verifier resource settings are operator-owned and bounded by compiled safety ceilings; zero, malformed, and over-ceiling values make startup fail closed. The effective settings and their stable hash are returned by `environment_describe.verifier_resource_policy`, and theorem/module verification receipts record both requested and effective policies.
+
+Large payloads can use the content-addressed `artifact` tool instead of one monolithic MCP string. Call `put_begin`, send ordered base64 `put_chunk` actions (up to the `environment_describe.artifact_transport.chunk_bytes` limit), then `put_commit`; commit verifies the declared length and optional SHA-256 hash and deduplicates identical bytes. `get_metadata`/`find_by_hash` and bounded `get_range` byte or line reads retrieve the result. For a large proof action, store the complete serialized `TypedAction` with media type `application/vnd.proofsearch.typed-action+json`, then pass `"action": {"artifact_hash": "sha256:..."}` to `episode_step`. The artifact is decoded back into the same structured action and goes through the ordinary policy, ledger, and Lean-kernel path—artifact transport grants no proof authority.
+
+After a theorem or structured module passes Lean, the verified source is persisted and a bounded `lake build` durability job is queued in the background. The kernel result returns immediately with a `durability_job` receipt; build success or failure never changes that kernel verdict. Use the `durability` tool’s `status` action to inspect timestamps, exit status, duration, and content-addressed build logs, or `retry` to enqueue a linked repair attempt after a terminal job. The same resource timeout and process-tree cleanup policy applies to these jobs.
 
 ## Episode Lifecycle
 

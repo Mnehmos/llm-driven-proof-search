@@ -9,6 +9,7 @@ use rmcp::service::serve_server;
 use rmcp::transport::async_rw::AsyncRwTransport;
 
 use proofsearch_mcp::{init_db, ChatDbMcp};
+use proofsearch_core::models::VerifierResourcePolicy;
 
 /// LLM-Driven Proof Search Environment MCP Server — Verifier-backed RL environment for LLM-driven proof search
 #[derive(Parser, Debug)]
@@ -59,12 +60,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| PathBuf::from(home).join(".elan").join("bin"));
 
     let shared_conn = Arc::new(Mutex::new(conn));
+    let verifier_resource_policy = VerifierResourcePolicy::from_env()
+        .map_err(|e| format!("invalid verifier resource policy: {e}"))?;
     let shared_lean_project = lean_project_path.clone();
     let shared_elan_bin = elan_bin_path.clone();
 
     match cli.transport.as_str() {
         "stdio" => {
-            let handler = ChatDbMcp::new(shared_conn, lean_project_path, elan_bin_path);
+            let handler = ChatDbMcp::with_verifier_resource_policy(
+                shared_conn,
+                lean_project_path,
+                elan_bin_path,
+                verifier_resource_policy,
+            );
             if !handler.lean_available {
                 eprintln!(
                     "WARNING: Lean gateway unavailable (looked for lakefile under {:?} and lake.exe under {:?}). \
@@ -75,7 +83,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let transport = AsyncRwTransport::new(stdin(), stdout());
             let service = serve_server(handler, transport).await?;
-            service.waiting().await?;
+            let waiting = service.waiting();
+            tokio::pin!(waiting);
+            tokio::select! {
+                result = &mut waiting => { result?; },
+                result = tokio::signal::ctrl_c() => {
+                    result?;
+                    proofsearch_core::lean::terminate_active_verifier_processes()
+                        .map_err(std::io::Error::other)?;
+                }
+            }
+            proofsearch_core::lean::terminate_active_verifier_processes()
+                .map_err(std::io::Error::other)?;
         }
         "http" => {
             use rmcp::transport::streamable_http_server::{
@@ -86,10 +105,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let conn_for_factory = shared_conn.clone();
             let lean_for_factory = shared_lean_project.clone();
             let elan_for_factory = shared_elan_bin.clone();
+            let policy_for_factory = verifier_resource_policy.clone();
 
             let service = StreamableHttpService::new(
                 move || {
-                    Ok(ChatDbMcp::new(conn_for_factory.clone(), lean_for_factory.clone(), elan_for_factory.clone()))
+                    Ok(ChatDbMcp::with_verifier_resource_policy(
+                        conn_for_factory.clone(),
+                        lean_for_factory.clone(),
+                        elan_for_factory.clone(),
+                        policy_for_factory.clone(),
+                    ))
                 },
                 LocalSessionManager::default().into(),
                 Default::default(),
@@ -101,7 +126,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let bind_addr = format!("{}:{}", cli.host, cli.port);
             eprintln!("LLM-Driven Proof Search Environment MCP HTTP server listening on http://{}/mcp", bind_addr);
             let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-            axum::serve(listener, app).await?;
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    if tokio::signal::ctrl_c().await.is_ok() {
+                        let _ = proofsearch_core::lean::terminate_active_verifier_processes();
+                    }
+                })
+                .await?;
+            proofsearch_core::lean::terminate_active_verifier_processes()
+                .map_err(std::io::Error::other)?;
         }
         other => {
             eprintln!("Unknown transport: {}. Use 'stdio' or 'http'.", other);

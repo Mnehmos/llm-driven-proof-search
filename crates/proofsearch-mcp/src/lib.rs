@@ -12,6 +12,8 @@ use uuid::Uuid;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use base64::Engine;
+use sha2::{Digest, Sha256};
 
 use rmcp::ServerHandler;
 use rmcp::model::*;
@@ -55,6 +57,50 @@ const INTERACTIVE_TRUST_BOUNDARY_NOTICE: &str = "interactive proof-session state
 /// default" answer stays consistent with what RealLeanGateway historically
 /// hardcoded.
 const BASE_IMPORT_MANIFEST: &[&str] = &["Mathlib.Tactic.Ring", "Mathlib.Tactic.NormNum"];
+const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+const ARTIFACT_CHUNK_BYTES: usize = 256 * 1024;
+
+#[cfg(test)]
+fn artifact_hash(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+fn normalize_artifact_hash(value: &str) -> Result<String, McpError> {
+    let hex = value.strip_prefix("sha256:").unwrap_or(value);
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(mcp_invalid_params("artifact_hash must be a SHA-256 hex digest, optionally prefixed by sha256:"));
+    }
+    Ok(format!("sha256:{}", hex.to_ascii_lowercase()))
+}
+
+fn verifier_artifact_paths(root: &std::path::Path, hash: &str) -> (PathBuf, PathBuf) {
+    let hex = hash.strip_prefix("sha256:").unwrap_or(hash);
+    let dir = root.join(".proofsearch").join("artifacts").join("sha256");
+    (dir.join(format!("{hex}.bin")), dir.join(format!("{hex}.json")))
+}
+
+fn bounded_line_range(reader: impl std::io::Read, start: u64, count: u64) -> Result<(Vec<u8>, bool), McpError> {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(reader);
+    let mut line = Vec::new();
+    let mut selected = Vec::new();
+    let mut current = 0_u64;
+    let mut truncated = false;
+    loop {
+        line.clear();
+        let read = reader.read_until(b'\n', &mut line)
+            .map_err(|e| mcp_internal_error(format!("artifact line read failed: {e}")))?;
+        if read == 0 { break }
+        if current >= start && current < start + count {
+            let remaining = ARTIFACT_CHUNK_BYTES.saturating_sub(selected.len());
+            selected.extend_from_slice(&line[..line.len().min(remaining)]);
+            if line.len() > remaining { truncated = true; break }
+        }
+        current += 1;
+        if current >= start + count { break }
+    }
+    Ok((selected, truncated))
+}
 
 /// A Lean import target is written verbatim into `import {module}\n` source.
 /// This is the entire security boundary for that interpolation: reject
@@ -307,6 +353,48 @@ fn plan_item_kind_str(kind: &PlanItemKind) -> &'static str {
 
 #[derive(JsonSchema, Deserialize)]
 pub struct EnvironmentDescribeArgs {}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct ArtifactArgs {
+    pub action: ArtifactAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ArtifactAction {
+    PutBegin {
+        media_type: String,
+        expected_bytes: u64,
+        expected_hash: Option<String>,
+        creator: Option<String>,
+        environment_hash: Option<String>,
+    },
+    PutChunk {
+        upload_id: String,
+        offset: u64,
+        data_base64: String,
+    },
+    PutCommit { upload_id: String },
+    GetMetadata { artifact_hash: String },
+    FindByHash { artifact_hash: String },
+    GetRange {
+        artifact_hash: String,
+        offset: Option<u64>,
+        length: Option<u64>,
+        start_line: Option<u64>,
+        line_count: Option<u64>,
+    },
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct DurabilityArgs { pub action: DurabilityAction }
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DurabilityAction {
+    Status { job_id: String },
+    Retry { job_id: String },
+}
 
 /// Issue #35's dedicated read-me-first tool — no args, matching
 /// EnvironmentDescribeArgs, since its whole point is to be the first,
@@ -1084,7 +1172,8 @@ pub struct ProblemCreateArgs {
     /// problem is created; an unresolvable module is rejected outright. The
     /// resulting manifest is immutable for this problem_version — see
     /// docs/fix_plan_playtest_03.md. Broadening imports for an existing problem
-    /// means creating a new problem_version with an extended list.
+    /// means creating a new problem_version with an extended list. Omitted and
+    /// empty both use the fast base; pass ["Mathlib"] to opt into the umbrella.
     #[serde(default)]
     pub problem_imports: Option<Vec<String>>,
     /// Named honestly on purpose: this is NOT a review. It sets fidelity_status
@@ -1181,8 +1270,15 @@ pub struct EpisodeStepArgs {
     pub action_attempt_id: String,
     pub expected_revision: i64,
     pub claim_token: String,
-    pub action: TypedAction,
+    pub action: EpisodeStepActionInput,
     pub cost_micros: i64,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(untagged)]
+pub enum EpisodeStepActionInput {
+    Inline(TypedAction),
+    Artifact { artifact_hash: String },
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -3716,14 +3812,15 @@ fn make_tool<T: JsonSchema>(name: &'static str, desc: &'static str) -> Tool {
 fn annotate_oneof_objecthood(val: &mut serde_json::Value) {
     match val {
         serde_json::Value::Object(obj) => {
-            let all_branches_are_objects = obj.get("oneOf").and_then(|v| v.as_array()).map(|arr| {
+            for (_, v) in obj.iter_mut() {
+                annotate_oneof_objecthood(v);
+            }
+            let branches = obj.get("oneOf").or_else(|| obj.get("anyOf")).and_then(|v| v.as_array());
+            let all_branches_are_objects = branches.map(|arr| {
                 !arr.is_empty() && arr.iter().all(|b| b.get("type").and_then(|t| t.as_str()) == Some("object"))
             }).unwrap_or(false);
             if all_branches_are_objects && !obj.contains_key("type") {
                 obj.insert("type".to_string(), serde_json::Value::String("object".to_string()));
-            }
-            for (_, v) in obj.iter_mut() {
-                annotate_oneof_objecthood(v);
             }
         }
         serde_json::Value::Array(arr) => {
@@ -7545,13 +7642,38 @@ pub struct ChatDbMcp {
 
 impl ChatDbMcp {
     pub fn new(conn: Arc<Mutex<Connection>>, lean_project_path: PathBuf, elan_bin_path: PathBuf) -> Self {
+        Self::with_verifier_resource_policy(
+            conn,
+            lean_project_path,
+            elan_bin_path,
+            proofsearch_core::models::VerifierResourcePolicy::default(),
+        )
+    }
+
+    pub fn with_verifier_resource_policy(
+        conn: Arc<Mutex<Connection>>,
+        lean_project_path: PathBuf,
+        elan_bin_path: PathBuf,
+        verifier_resource_policy: proofsearch_core::models::VerifierResourcePolicy,
+    ) -> Self {
         let lean_available = elan_bin_path.join("lake.exe").exists()
             && (lean_project_path.join("lakefile.toml").exists() || lean_project_path.join("lakefile.lean").exists());
         let lean_environment = proofsearch_core::lean::detect_environment(&lean_project_path);
         let stored_lean_project_path = lean_project_path.clone();
-        let gateway = Box::new(RealLeanGateway::new(lean_project_path, elan_bin_path));
+        let gateway = Box::new(RealLeanGateway::with_resource_policy(
+            lean_project_path,
+            elan_bin_path,
+            verifier_resource_policy.clone(),
+        ));
         let interactive_gateway = Arc::new(MockInteractiveGateway::new());
-        Self { conn, gateway, lean_available, lean_environment, lean_project_path: stored_lean_project_path, interactive_gateway }
+        Self {
+            conn,
+            gateway,
+            lean_available,
+            lean_environment,
+            lean_project_path: stored_lean_project_path,
+            interactive_gateway,
+        }
     }
 
     // -----------------------------------------------------------------
@@ -7675,6 +7797,21 @@ impl ChatDbMcp {
             .map_err(|e| mcp_invalid_params(format!("Invalid attempt Uuid: {}", e)))?;
 
         let mut conn = self.conn.lock().await;
+        let action = match args.action {
+            EpisodeStepActionInput::Inline(action) => action,
+            EpisodeStepActionInput::Artifact { artifact_hash: hash } => {
+                let hash = normalize_artifact_hash(&hash)?;
+                let (media_type, bytes): (String, Vec<u8>) = conn.query_row(
+                    "SELECT media_type, content FROM content_artifacts WHERE artifact_hash = ?1",
+                    [&hash], |row| Ok((row.get(0)?, row.get(1)?)),
+                ).optional().map_err(rs)?.ok_or_else(|| mcp_invalid_params("unknown action artifact_hash"))?;
+                if media_type != "application/vnd.proofsearch.typed-action+json" && media_type != "application/json" {
+                    return Err(mcp_invalid_params(format!("action artifact media_type must be application/vnd.proofsearch.typed-action+json or application/json, got {media_type}")));
+                }
+                serde_json::from_slice::<TypedAction>(&bytes)
+                    .map_err(|e| mcp_invalid_params(format!("artifact does not contain a valid TypedAction JSON value: {e}")))?
+            }
+        };
 
         // SOP hard gate. Exclude the just-claimed current attempt from the
         // count: attempt_claim necessarily creates that row before the caller
@@ -7715,7 +7852,7 @@ impl ChatDbMcp {
                     |row| row.get(0),
                 )
                 .map_err(rs)?;
-            let is_give_up = matches!(&args.action, TypedAction::GiveUp);
+            let is_give_up = matches!(&action, TypedAction::GiveUp);
             if attempts_since_log >= REASONING_LOG_GATE_THRESHOLD && !is_give_up {
                 return Err(mcp_invalid_params(format!(
                     "reasoning_log required before episode_step: {} prior attempt(s) on episode {} are newer than the latest reasoning log (limit {}). File reasoning_log action=add documenting what was tried, the actual outcome, and what the result taught you, then retry this step. Keep scratch work inside the tracked workspace workflow; see docs/sop-reasoning-logs.md.",
@@ -7790,13 +7927,13 @@ impl ChatDbMcp {
             // the DB mutex (`self.conn`) is held, or every other concurrent tool
             // call on this session blocks on it for the duration.
             let prep_res = step::attempt_prepare(
-                &tx1, attempt_uuid, args.expected_revision, &args.claim_token, &args.action, args.cost_micros as i128,
+                &tx1, attempt_uuid, args.expected_revision, &args.claim_token, &action, args.cost_micros as i128,
             );
 
             let prepared = match prep_res {
                 Err(e) => {
                     let post = run_step_post_processing(
-                        &tx1, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
+                        &tx1, ep_uuid, &args.episode_id, attempt_uuid, &action,
                         Err(e), &target_obligation_id, &state_hash_before,
                     )?;
                     tx1.commit().map_err(rs)?;
@@ -7810,7 +7947,7 @@ impl ChatDbMcp {
                         args.cost_micros,
                     )?;
                     let post = run_step_post_processing(
-                        &tx1, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
+                        &tx1, ep_uuid, &args.episode_id, attempt_uuid, &action,
                         Ok(outcome), &target_obligation_id, &state_hash_before,
                     )?;
                     tx1.commit().map_err(rs)?;
@@ -7849,7 +7986,7 @@ impl ChatDbMcp {
                     let tx2 = conn.transaction().map_err(rs)?;
                     let finalize_res = step::attempt_finalize(&tx2, attempt_uuid, &args.claim_token, args.cost_micros as i128, ctx, response);
                     let post = run_step_post_processing(
-                        &tx2, ep_uuid, &args.episode_id, attempt_uuid, &args.action,
+                        &tx2, ep_uuid, &args.episode_id, attempt_uuid, &action,
                         finalize_res, &target_obligation_id, &state_hash_before,
                     )?;
                     tx2.commit().map_err(rs)?;
@@ -7867,7 +8004,7 @@ impl ChatDbMcp {
         // Solve/SubmitModule and as a generic accept/reject signal for
         // Decompose/GiveUp — only treat it as a proof-verification result
         // (kernel_pass/kernel_fail reward) for an actual verification action.
-        let is_verification_action = matches!(args.action, TypedAction::Solve { .. } | TypedAction::SubmitModule { .. });
+        let is_verification_action = matches!(&action, TypedAction::Solve { .. } | TypedAction::SubmitModule { .. });
         let mut reward_components = Vec::new();
         let policy = RewardPolicy::default_policy();
         if disposition == StepDisposition::Accepted {
@@ -13527,6 +13664,197 @@ impl ChatDbMcp {
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&res).unwrap())]))
     }
 
+    async fn do_artifact(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ArtifactArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid artifact params: {e}")))?;
+        let mut conn = self.conn.lock().await;
+        let response = match args.action {
+            ArtifactAction::PutBegin { media_type, expected_bytes, expected_hash, creator, environment_hash } => {
+                let media_type = media_type.trim();
+                if media_type.is_empty() || media_type.len() > 255 || media_type.contains(['\r', '\n']) {
+                    return Err(mcp_invalid_params("media_type must be 1..255 characters without newlines"));
+                }
+                if expected_bytes > MAX_ARTIFACT_BYTES {
+                    return Err(mcp_invalid_params(format!("expected_bytes exceeds administrator ceiling {MAX_ARTIFACT_BYTES}")));
+                }
+                let expected_hash = expected_hash.as_deref().map(normalize_artifact_hash).transpose()?;
+                let upload_id = Uuid::new_v4().to_string();
+                conn.execute(
+                    "INSERT INTO artifact_uploads (id, media_type, expected_bytes, expected_hash, creator, environment_hash, next_offset, content, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, zeroblob(?3), ?7)",
+                    rusqlite::params![upload_id, media_type, expected_bytes as i64, expected_hash,
+                        creator.unwrap_or_else(|| "mcp_client".to_string()), environment_hash, Utc::now().to_rfc3339()],
+                ).map_err(rs)?;
+                serde_json::json!({
+                    "upload_id": upload_id, "state": "uploading", "next_offset": 0,
+                    "expected_bytes": expected_bytes, "max_chunk_bytes": ARTIFACT_CHUNK_BYTES
+                })
+            }
+            ArtifactAction::PutChunk { upload_id, offset, data_base64 } => {
+                let data = base64::engine::general_purpose::STANDARD.decode(data_base64.as_bytes())
+                    .map_err(|e| mcp_invalid_params(format!("data_base64 is invalid: {e}")))?;
+                if data.is_empty() || data.len() > ARTIFACT_CHUNK_BYTES {
+                    return Err(mcp_invalid_params(format!("decoded chunk must be 1..={ARTIFACT_CHUNK_BYTES} bytes")));
+                }
+                let tx = conn.transaction().map_err(rs)?;
+                let upload: Option<(i64, i64, i64)> = tx.query_row(
+                    "SELECT rowid, next_offset, expected_bytes FROM artifact_uploads WHERE id = ?1",
+                    [&upload_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                ).optional().map_err(rs)?;
+                let Some((rowid, next_offset, expected_bytes)) = upload else {
+                    return Err(mcp_invalid_params("unknown upload_id, out-of-order offset, or chunk exceeds declared total"));
+                };
+                if next_offset != offset as i64 || next_offset + data.len() as i64 > expected_bytes {
+                    return Err(mcp_invalid_params("unknown upload_id, out-of-order offset, or chunk exceeds declared total"));
+                }
+                {
+                    use std::io::{Seek, SeekFrom, Write};
+                    let mut blob = tx.blob_open("main", "artifact_uploads", "content", rowid, false).map_err(rs)?;
+                    blob.seek(SeekFrom::Start(offset)).map_err(|e| mcp_internal_error(format!("artifact chunk seek failed: {e}")))?;
+                    blob.write_all(&data).map_err(|e| mcp_internal_error(format!("artifact chunk write failed: {e}")))?;
+                }
+                tx.execute("UPDATE artifact_uploads SET next_offset = ?1 WHERE id = ?2 AND next_offset = ?3",
+                    rusqlite::params![next_offset + data.len() as i64, upload_id, next_offset]).map_err(rs)?;
+                tx.commit().map_err(rs)?;
+                serde_json::json!({"upload_id": upload_id, "state": "uploading", "next_offset": offset + data.len() as u64})
+            }
+            ArtifactAction::PutCommit { upload_id } => {
+                let tx = conn.transaction().map_err(rs)?;
+                let row: Option<(i64, String, i64, Option<String>, String, Option<String>, i64)> = tx.query_row(
+                    "SELECT rowid, media_type, expected_bytes, expected_hash, creator, environment_hash, next_offset
+                     FROM artifact_uploads WHERE id = ?1", [&upload_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+                ).optional().map_err(rs)?;
+                let Some((rowid, media_type, expected_bytes, expected_hash, creator, environment_hash, next_offset)) = row else {
+                    return Err(mcp_invalid_params("unknown upload_id"));
+                };
+                if next_offset != expected_bytes {
+                    return Err(mcp_invalid_params(format!("upload incomplete: received {next_offset} of {expected_bytes} bytes")));
+                }
+                let mut hasher = Sha256::new();
+                {
+                    use std::io::Read;
+                    let mut blob = tx.blob_open("main", "artifact_uploads", "content", rowid, true).map_err(rs)?;
+                    let mut buffer = [0_u8; 64 * 1024];
+                    loop {
+                        let read = blob.read(&mut buffer).map_err(|e| mcp_internal_error(format!("artifact hash read failed: {e}")))?;
+                        if read == 0 { break }
+                        hasher.update(&buffer[..read]);
+                    }
+                }
+                let computed_hash = format!("sha256:{}", hex::encode(hasher.finalize()));
+                if expected_hash.as_deref().is_some_and(|expected| expected != computed_hash) {
+                    return Err(mcp_invalid_params(format!("artifact hash mismatch: expected {}, computed {computed_hash}", expected_hash.unwrap())));
+                }
+                let inserted = tx.execute(
+                    "INSERT OR IGNORE INTO content_artifacts (artifact_hash, media_type, byte_size, content, creator, environment_hash, created_at)
+                     SELECT ?1, ?2, ?3, content, ?4, ?5, ?6 FROM artifact_uploads WHERE id = ?7",
+                    rusqlite::params![computed_hash, media_type, expected_bytes, creator, environment_hash, Utc::now().to_rfc3339(), upload_id],
+                ).map_err(rs)?;
+                tx.execute("DELETE FROM artifact_uploads WHERE id = ?1", [&upload_id]).map_err(rs)?;
+                tx.commit().map_err(rs)?;
+                serde_json::json!({"artifact_hash": computed_hash, "state": "committed", "byte_size": expected_bytes, "deduplicated": inserted == 0})
+            }
+            ArtifactAction::GetMetadata { artifact_hash: hash } | ArtifactAction::FindByHash { artifact_hash: hash } => {
+                let hash = normalize_artifact_hash(&hash)?;
+                let metadata: Option<(String, i64, String, Option<String>, String)> = conn.query_row(
+                    "SELECT media_type, byte_size, creator, environment_hash, created_at FROM content_artifacts WHERE artifact_hash = ?1",
+                    [&hash], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                ).optional().map_err(rs)?;
+                match metadata {
+                    Some((media_type, byte_size, creator, environment_hash, created_at)) => serde_json::json!({
+                        "found": true, "artifact_hash": hash, "media_type": media_type, "byte_size": byte_size,
+                        "creator": creator, "environment_hash": environment_hash, "created_at": created_at
+                    }),
+                    None => {
+                        let (content_path, sidecar_path) = verifier_artifact_paths(&self.lean_project_path, &hash);
+                        if content_path.exists() && sidecar_path.exists() {
+                            let sidecar: serde_json::Value = serde_json::from_slice(&std::fs::read(&sidecar_path).map_err(rs)?)
+                                .map_err(|e| mcp_internal_error(format!("invalid verifier artifact metadata: {e}")))?;
+                            serde_json::json!({
+                                "found": true, "artifact_hash": hash,
+                                "media_type": sidecar["media_type"], "byte_size": sidecar["byte_size"],
+                                "creator": sidecar["creator"], "environment_hash": sidecar["environment_hash"],
+                                "created_at": sidecar["created_at"]
+                            })
+                        } else {
+                            serde_json::json!({"found": false, "artifact_hash": hash})
+                        }
+                    },
+                }
+            }
+            ArtifactAction::GetRange { artifact_hash: hash, offset, length, start_line, line_count } => {
+                let hash = normalize_artifact_hash(&hash)?;
+                if (start_line.is_some() || line_count.is_some()) && (offset.is_some() || length.is_some()) {
+                    return Err(mcp_invalid_params("choose byte range or line range, not both"));
+                }
+                let db_metadata: Option<(String, i64)> = conn.query_row(
+                    "SELECT media_type, byte_size FROM content_artifacts WHERE artifact_hash = ?1", [&hash],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).optional().map_err(rs)?;
+                let (media_type, byte_size, filesystem_path) = if let Some((media_type, byte_size)) = db_metadata {
+                    (media_type, byte_size, None)
+                } else {
+                    let (content_path, sidecar_path) = verifier_artifact_paths(&self.lean_project_path, &hash);
+                    if !content_path.exists() || !sidecar_path.exists() { return Err(mcp_invalid_params("unknown artifact_hash")); }
+                    let sidecar: serde_json::Value = serde_json::from_slice(&std::fs::read(sidecar_path).map_err(rs)?)
+                        .map_err(|e| mcp_internal_error(format!("invalid verifier artifact metadata: {e}")))?;
+                    (sidecar["media_type"].as_str().unwrap_or("application/octet-stream").to_string(),
+                        std::fs::metadata(&content_path).map_err(rs)?.len() as i64, Some(content_path))
+                };
+                let (bytes, range_kind, range_start, truncated) = if start_line.is_some() || line_count.is_some() {
+                    let start = start_line.unwrap_or(0);
+                    let count = line_count.unwrap_or(100);
+                    if count == 0 || count > 10_000 { return Err(mcp_invalid_params("line_count must be 1..=10000")); }
+                    let (selected, did_truncate) = if let Some(path) = &filesystem_path {
+                        bounded_line_range(std::fs::File::open(path).map_err(rs)?, start, count)?
+                    } else {
+                        let content: Vec<u8> = conn.query_row("SELECT content FROM content_artifacts WHERE artifact_hash = ?1", [&hash], |row| row.get(0)).map_err(rs)?;
+                        bounded_line_range(std::io::Cursor::new(content), start, count)?
+                    };
+                    (selected, "lines", start, did_truncate)
+                } else {
+                    let start = offset.unwrap_or(0).min(byte_size as u64);
+                    let requested = length.unwrap_or(ARTIFACT_CHUNK_BYTES as u64);
+                    let retained = requested.min(ARTIFACT_CHUNK_BYTES as u64);
+                    let bytes: Vec<u8> = if let Some(path) = &filesystem_path {
+                        use std::io::{Read, Seek, SeekFrom};
+                        let mut file = std::fs::File::open(path).map_err(rs)?;
+                        file.seek(SeekFrom::Start(start)).map_err(rs)?;
+                        let mut bytes = Vec::with_capacity(retained as usize);
+                        file.take(retained).read_to_end(&mut bytes).map_err(rs)?;
+                        bytes
+                    } else {
+                        conn.query_row(
+                            "SELECT CAST(substr(content, ?1, ?2) AS BLOB) FROM content_artifacts WHERE artifact_hash = ?3",
+                            rusqlite::params![start as i64 + 1, retained as i64, hash], |row| row.get(0),
+                        ).map_err(rs)?
+                    };
+                    (bytes, "bytes", start, requested > retained)
+                };
+                let text = std::str::from_utf8(&bytes).ok();
+                serde_json::json!({
+                    "artifact_hash": hash, "media_type": media_type, "total_bytes": byte_size,
+                    "range_kind": range_kind, "range_start": range_start, "returned_bytes": bytes.len(),
+                    "truncated": truncated, "data_base64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                    "text_utf8": text
+                })
+            }
+        };
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&response).unwrap())]))
+    }
+
+    async fn do_durability(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: DurabilityArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid durability params: {e}")))?;
+        let response = match args.action {
+            DurabilityAction::Status { job_id } => self.gateway.durability_job_status(&job_id),
+            DurabilityAction::Retry { job_id } => self.gateway.durability_job_retry(&job_id)
+                .and_then(|receipt| serde_json::to_value(receipt).map_err(|e| e.to_string())),
+        }.map_err(mcp_invalid_params)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&response).unwrap())]))
+    }
+
 }
 
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
@@ -13547,7 +13875,9 @@ impl ServerHandler for ChatDbMcp {
         let tools = vec![
             make_tool::<ReadmeFirstArgs>("readme_first", "CALL THIS FIRST, before creating any episode. Explains what LLM-Driven Proof Search Environment is (an environment, not a prover), the trust boundary (tracked MCP actions and Lean verifier results are evidence; hidden model reasoning is not), the required proof-search loop, when to use Solve vs SubmitModule, why untracked/side-channel proof checks don't count as valid attempts, and the cost/benchmark-mode boundary"),
             make_tool::<EnvironmentDescribeArgs>("environment_describe", "Return environment version, supported protocol, tool schemas, capabilities"),
-            make_tool::<ProblemCreateArgs>("problem_create", "Register a new problem version (source text + root formal statement). fidelity_status starts 'unreviewed' — proving requires either a real problem_submit_fidelity_review or the honestly-named unsafe_dev_attestation=true (which can reach outcome=kernel_verified but never 'certified'). Import manifest (issue #142): if problem_imports is OMITTED entirely, the registered manifest defaults to the full \"Mathlib\" umbrella (broad enough to PARSE, not just elaborate, ordinary Mathlib-style notation like Finset.sum/Filter.Eventually) — pass problem_imports explicitly (even as an empty list) only if you deliberately want the narrower Ring+NormNum-only manifest instead. problem_imports entries may be Lean module paths AND `open [scoped] <Namespace> ...` directives (issue #62): a statement that relies on scoped notation (ℤ[X], ∠, π) or unqualified names (derivative, volume, ball) needs the upstream open context registered here, or it will not elaborate to the intended mathematics"),
+            make_tool::<ArtifactArgs>("artifact", "Issue #222: content-addressed binary artifact transport. `action` is one of put_begin, put_chunk, put_commit, get_metadata, find_by_hash, or get_range. Upload chunks are base64, ordered by exact byte offset, integrity-checked at commit, and deduplicated by SHA-256. get_range supports bounded byte ranges or line ranges; small payloads remain inline in their owning tools."),
+            make_tool::<DurabilityArgs>("durability", "Issue #227: observe or retry the bounded background `lake build` job queued after a theorem/module kernel pass. Kernel validity and durability status are independent: a failed build never revokes a valid kernel result. Actions: {\"type\":\"status\",\"job_id\":\"..\"} or {\"type\":\"retry\",\"job_id\":\"..\"}."),
+            make_tool::<ProblemCreateArgs>("problem_create", "Register a new problem version (source text + root formal statement). fidelity_status starts 'unreviewed' — proving requires either a real problem_submit_fidelity_review or the honestly-named unsafe_dev_attestation=true (which can reach outcome=kernel_verified but never 'certified'). Import manifest: omitted or empty problem_imports uses the fast Ring+NormNum base manifest; opt into the full umbrella with problem_imports=[\"Mathlib\"] when a statement needs broad Mathlib notation or declarations. problem_imports entries may be Lean module paths AND `open [scoped] <Namespace> ...` directives (issue #62): a statement that relies on scoped notation (ℤ[X], ∠, π) or unqualified names (derivative, volume, ball) needs the corresponding module/open context registered here, or it will not elaborate to the intended mathematics"),
             make_tool::<ProblemSubmitFidelityReviewArgs>("problem_submit_fidelity_review", "Record an evidence-backed determination of whether a problem's formal statement represents its source text. Requires the CURRENT source/statement/rendering hashes (recomputed server-side; mismatches are rejected as stale). decision='verified' is the ONLY path to outcome='certified' and problem state COMPLETE; 'rejected' blocks it. This is a review record, not a flag flip — proof soundness (Lean kernel) and statement fidelity (this tool) are independent claims"),
             make_tool::<ProblemRecordBenchmarkAlignmentArgs>("problem_record_benchmark_alignment", "Record a formal_benchmark_hash_alignment fidelity basis (issue #43) for a benchmark-imported problem: the server verifies the problem_version's root_statement_hash equals the registered benchmark target hash — COALESCE(prover_ready_statement_hash, root_statement_hash) — on a trusted_canonical_source suite, then sets fidelity_status='benchmark_aligned' and unlocks proving WITHOUT unsafe_dev_attestation. This is hash alignment to a curated benchmark target, NOT independent natural-language review: it can reach outcome=kernel_verified but NEVER 'certified'/COMPLETE. An untrusted/custom suite is rejected and directed to problem_submit_fidelity_review"),
             make_tool::<ProblemListArgs>("problem_list", "List known problem versions (id, state, fidelity_status, root statement)"),
@@ -13634,6 +13964,8 @@ impl ServerHandler for ChatDbMcp {
         // to any of the arms themselves.
         let result: Result<CallToolResult, McpError> = async move {
             match request.name.as_ref() {
+            "artifact" => self.do_artifact(args_val).await,
+            "durability" => self.do_durability(args_val).await,
             "readme_first" => {
                 let res = serde_json::json!({
                     "what_this_is": "LLM-Driven Proof Search Environment is a verifier-backed RL ENVIRONMENT, not a prover. It contains no provider SDKs, no API keys, no model routing, no inference calls. The external agent host (you, or whatever is calling this tool) IS the policy — you choose what to try. LLM-Driven Proof Search Environment assembles Lean source under a strict trust boundary, the real Lean 4 kernel verifies it, and the ledger records what happened. If you have not read anything else in this environment, read this response before calling problem_create or episode_create.",
@@ -13702,6 +14034,22 @@ impl ServerHandler for ChatDbMcp {
                     "lean_environment": self.lean_environment.as_ref().map(|e| serde_json::json!({
                         "descriptor": e.descriptor, "hash": e.hash
                     })),
+                    "verifier_resource_policy": self.gateway.resource_policy().map(|policy| serde_json::json!({
+                        "policy_hash": proofsearch_core::hashing::canonical_hash(&policy).unwrap_or_default(),
+                        "effective": policy,
+                        "configuration": "server_operator_only",
+                        "client_unlimited_requests_allowed": false
+                    })),
+                    "artifact_transport": {
+                        "schema_version": "1.0",
+                        "max_artifact_bytes": MAX_ARTIFACT_BYTES,
+                        "chunk_bytes": ARTIFACT_CHUNK_BYTES,
+                        "hash_algorithm": "sha256",
+                        "supports_byte_ranges": true,
+                        "supports_line_ranges": true,
+                        "episode_step_action_artifacts": true,
+                        "typed_action_media_type": "application/vnd.proofsearch.typed-action+json"
+                    },
                     // Issue #166: a real (not hardcoded) capability flag for
                     // the optional Pantograph interactive backend — probes
                     // this environment's PATH and lake-manifest.json the
@@ -13742,9 +14090,29 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 42,
-                        "total_tool_count": 42,
+                        "classified_tool_count": 44,
+                        "total_tool_count": 44,
                         "tools": {
+                            "artifact": {
+                                "side_effect": "mixed by action: put_begin/put_chunk/put_commit stage and commit immutable content-addressed bytes; get_metadata/find_by_hash/get_range are read_only",
+                                "trust_level": "untrusted_input storage — hashes and lengths are verified server-side, but artifact content is never proof authority",
+                                "cost_surface": "storage_side plus bounded MCP transfer",
+                                "benchmark_safety": "private_artifact by default; may contain proof bodies or diagnostic traces and is not a public export",
+                                "replayability": "deterministic by SHA-256 content hash and byte/line range",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "arbitrary_private_artifact",
+                                "required_run_mode": "any — downstream exports remain responsible for contamination gates"
+                            },
+                            "durability": {
+                                "side_effect": "mixed by action: status is read_only; retry creates a new bounded background build job linked to the prior failed/completed job",
+                                "trust_level": "infrastructure metadata only — durability never grants or revokes Lean kernel authority",
+                                "cost_surface": "verifier_side build CPU/wall time plus artifact storage",
+                                "benchmark_safety": "safe infrastructure metadata; build logs are private artifacts",
+                                "replayability": "status is persisted by job id; retry creates an explicitly linked new job",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "build_log",
+                                "required_run_mode": "any"
+                            },
                             "episode_step": {
                                 "side_effect": "mutating — writes action_attempts, episodes, episode_obligations, and (issue #38) action_attempts.lean_result_json",
                                 "trust_level": "mixed: the action payload (proof_term/module_items) is untrusted_input — client-authored and adversarial by default — but the recorded outcome is verifier_backed, since the real Lean kernel, not the client, decides kernel_verified/kernel_fail",
@@ -14193,20 +14561,11 @@ impl ServerHandler for ChatDbMcp {
                     )));
                 }
 
-                // Issue #142: problem_imports omitted entirely (None, not an
-                // explicit empty list) means the caller never thought about
-                // imports at all -- BASE_IMPORT_MANIFEST's narrow Ring+NormNum
-                // pair is nowhere near enough to PARSE (not just elaborate)
-                // ordinary Mathlib-style notation (Finset.sum, Filter.Eventually,
-                // etc.), and the resulting parse_error looks identical to a
-                // proof-content bug, with nothing in the diagnostic pointing at
-                // the real cause. Default to the full "Mathlib" umbrella instead
-                // (matching benchmark_problem's register action's own default
-                // for suite-level registration) so registration is parseable out of
-                // the box; a caller that explicitly passes problem_imports
-                // (even `[]`) is making a deliberate narrower choice and keeps
-                // the previous BASE_IMPORT_MANIFEST-plus-extras behavior.
-                let problem_imports_omitted = args.problem_imports.is_none();
+                // Issue #219: omission must stay on the fast proof-friendly
+                // base manifest. Importing the full Mathlib umbrella made even
+                // trivial first-run goals hit the verifier timeout. Broad
+                // notation remains an explicit, immutable choice via
+                // problem_imports: ["Mathlib"].
                 let raw_extra_imports = args.problem_imports.unwrap_or_default();
                 if raw_extra_imports.len() > 50 {
                     return Err(mcp_invalid_params("problem_imports: at most 50 entries per problem"));
@@ -14231,11 +14590,8 @@ impl ServerHandler for ChatDbMcp {
                         )));
                     }
                 }
-                let mut import_manifest: Vec<String> = if problem_imports_omitted {
-                    vec!["Mathlib".to_string()]
-                } else {
-                    BASE_IMPORT_MANIFEST.iter().map(|s| s.to_string()).collect()
-                };
+                let mut import_manifest: Vec<String> =
+                    BASE_IMPORT_MANIFEST.iter().map(|s| s.to_string()).collect();
                 import_manifest.extend(extra_imports.iter().cloned());
                 let import_manifest_json = serde_json::to_string(&import_manifest).unwrap();
                 let import_manifest_hash = canonical_hash(&import_manifest).map_err(mcp_internal_error)?;
@@ -15404,6 +15760,9 @@ mod tests {
                 diagnostic: None,
                 all_diagnostics: vec![],
                 dependency_use_report: None,
+                resource_policy: None,
+                output_receipt: None,
+                durability_job: None,
                 wall_time_ms: 1,
                 lean_cpu_time_ms: 1,
             })
@@ -15442,6 +15801,9 @@ mod tests {
                     })
                 } else { None },
                 all_diagnostics: vec![],
+                resource_policy: None,
+                output_receipt: None,
+                durability_job: None,
                 wall_time_ms: 1,
             })
         }
@@ -15487,6 +15849,118 @@ mod tests {
     fn tool_json(res: &CallToolResult) -> serde_json::Value {
         assert!(!res.is_error.unwrap_or(false), "tool call returned isError: {:?}", res.content);
         serde_json::from_str(res.content[0].as_text().unwrap().text.as_str()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_artifact_chunk_integrity_dedup_and_ranged_retrieval() {
+        let handler = test_handler();
+        let bytes = b"alpha\n\xffbeta\ngamma\n";
+        let hash = artifact_hash(bytes);
+        let begin = tool_json(&handler.do_artifact(serde_json::json!({"action": {
+            "type": "put_begin", "media_type": "application/octet-stream",
+            "expected_bytes": bytes.len(), "expected_hash": hash,
+            "creator": "test", "environment_hash": "env"
+        }})).await.unwrap());
+        let upload_id = begin["upload_id"].as_str().unwrap();
+
+        let out_of_order = handler.do_artifact(serde_json::json!({"action": {
+            "type": "put_chunk", "upload_id": upload_id, "offset": 1,
+            "data_base64": base64::engine::general_purpose::STANDARD.encode(bytes)
+        }})).await;
+        assert!(out_of_order.is_err(), "out-of-order chunks must fail before mutation");
+
+        let split = 7;
+        for (offset, chunk) in [(0, &bytes[..split]), (split, &bytes[split..])] {
+            handler.do_artifact(serde_json::json!({"action": {
+                "type": "put_chunk", "upload_id": upload_id, "offset": offset,
+                "data_base64": base64::engine::general_purpose::STANDARD.encode(chunk)
+            }})).await.unwrap();
+        }
+        let committed = tool_json(&handler.do_artifact(serde_json::json!({"action": {
+            "type": "put_commit", "upload_id": upload_id
+        }})).await.unwrap());
+        assert_eq!(committed["artifact_hash"], hash);
+
+        let byte_range = tool_json(&handler.do_artifact(serde_json::json!({"action": {
+            "type": "get_range", "artifact_hash": hash, "offset": 5, "length": 8
+        }})).await.unwrap());
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(byte_range["data_base64"].as_str().unwrap()).unwrap();
+        assert_eq!(decoded, bytes[5..13]);
+        assert!(byte_range["text_utf8"].is_null(), "invalid UTF-8 must survive through base64 without lossy conversion");
+
+        let line_range = tool_json(&handler.do_artifact(serde_json::json!({"action": {
+            "type": "get_range", "artifact_hash": hash, "start_line": 2, "line_count": 1
+        }})).await.unwrap());
+        assert_eq!(line_range["text_utf8"], "gamma\n");
+
+        let begin2 = tool_json(&handler.do_artifact(serde_json::json!({"action": {
+            "type": "put_begin", "media_type": "application/octet-stream", "expected_bytes": bytes.len()
+        }})).await.unwrap());
+        let upload2 = begin2["upload_id"].as_str().unwrap();
+        handler.do_artifact(serde_json::json!({"action": {
+            "type": "put_chunk", "upload_id": upload2, "offset": 0,
+            "data_base64": base64::engine::general_purpose::STANDARD.encode(bytes)
+        }})).await.unwrap();
+        let duplicate = tool_json(&handler.do_artifact(serde_json::json!({"action": {
+            "type": "put_commit", "upload_id": upload2
+        }})).await.unwrap());
+        assert_eq!(duplicate["deduplicated"], true);
+    }
+
+    #[tokio::test]
+    async fn test_artifact_accepts_sixteen_megabytes_in_bounded_chunks() {
+        let handler = test_handler();
+        let chunk = vec![0x5a_u8; ARTIFACT_CHUNK_BYTES];
+        let total = 16 * 1024 * 1024;
+        let begin = tool_json(&handler.do_artifact(serde_json::json!({"action": {
+            "type": "put_begin", "media_type": "text/x-lean", "expected_bytes": total
+        }})).await.unwrap());
+        let upload_id = begin["upload_id"].as_str().unwrap().to_string();
+        for offset in (0..total).step_by(ARTIFACT_CHUNK_BYTES) {
+            handler.do_artifact(serde_json::json!({"action": {
+                "type": "put_chunk", "upload_id": upload_id, "offset": offset,
+                "data_base64": base64::engine::general_purpose::STANDARD.encode(&chunk)
+            }})).await.unwrap();
+        }
+        let committed = tool_json(&handler.do_artifact(serde_json::json!({"action": {
+            "type": "put_commit", "upload_id": upload_id
+        }})).await.unwrap());
+        assert_eq!(committed["byte_size"], total);
+        let metadata = tool_json(&handler.do_artifact(serde_json::json!({"action": {
+            "type": "get_metadata", "artifact_hash": committed["artifact_hash"]
+        }})).await.unwrap());
+        assert_eq!(metadata["byte_size"], total);
+    }
+
+    #[tokio::test]
+    async fn test_artifact_retrieves_filesystem_backed_verifier_log() {
+        let root = tempfile::tempdir().unwrap();
+        let bytes = b"PSVERIFIERLOG1\nstdout-bytes:3\nstderr-bytes:0\n\nabc";
+        let hash = artifact_hash(bytes);
+        let (content_path, sidecar_path) = verifier_artifact_paths(root.path(), &hash);
+        std::fs::create_dir_all(content_path.parent().unwrap()).unwrap();
+        std::fs::write(&content_path, bytes).unwrap();
+        std::fs::write(&sidecar_path, serde_json::to_vec(&serde_json::json!({
+            "artifact_hash": hash, "media_type": "application/vnd.proofsearch.verifier-log",
+            "byte_size": bytes.len(), "creator": "lean_gateway", "created_at": "now"
+        })).unwrap()).unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let handler = ChatDbMcp {
+            conn: Arc::new(Mutex::new(conn)), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: root.path().to_path_buf(),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()),
+        };
+        let metadata = tool_json(&handler.do_artifact(serde_json::json!({"action": {
+            "type": "get_metadata", "artifact_hash": hash
+        }})).await.unwrap());
+        assert_eq!(metadata["found"], true);
+        assert_eq!(metadata["byte_size"], bytes.len());
+        let range = tool_json(&handler.do_artifact(serde_json::json!({"action": {
+            "type": "get_range", "artifact_hash": hash, "offset": 0, "length": bytes.len()
+        }})).await.unwrap());
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(range["data_base64"].as_str().unwrap()).unwrap(), bytes);
     }
 
     /// Issue #35 acceptance: readme_first exists, is listed, and its content
@@ -15574,7 +16048,9 @@ mod tests {
         // 18th and FINAL consolidation; every family in the epic's sprint
         // order is now a single action-enum tool) = 41.
         // + 1 reasoning_log (SOP-mandated add/observe process ledger) = 42.
-        assert_eq!(list_res.tools.len(), 42);
+        // + 1 content-addressed artifact family (issue #222) = 43.
+        // + 1 durability job status/retry family (issue #227) = 44.
+        assert_eq!(list_res.tools.len(), 44);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -15589,7 +16065,10 @@ mod tests {
         assert!(step_schema.contains("give_up"), "internally-tagged variant names must be visible: {step_schema}");
         let action_node = &step_schema_val["properties"]["action"];
         assert_eq!(action_node["type"], "object", "action param must declare objecthood inline: {action_node}");
-        assert!(action_node["oneOf"].is_array(), "action param must carry the oneOf variants inline: {action_node}");
+        assert!(action_node["oneOf"].is_array() || action_node["anyOf"].is_array(),
+            "action param must carry inline action/artifact variants: {action_node}");
+        assert!(action_node.to_string().contains("artifact_hash"),
+            "episode_step must advertise artifact-backed actions: {action_node}");
 
         let call_params = CallToolRequestParams::new("environment_describe");
         let call_res = client.peer().call_tool(call_params).await.unwrap();
@@ -15597,6 +16076,13 @@ mod tests {
         assert_eq!(json["protocol_version"], "2025-11-25");
         assert_eq!(json["lean_gateway"], "unavailable");
         assert!(json["lean_environment"].is_null(), "no lean-checker at the dummy test path -> no environment to report");
+        let policy = &json["verifier_resource_policy"];
+        assert!(policy["effective"].is_object(), "effective verifier limits must be discoverable: {policy}");
+        assert_eq!(policy["configuration"], "server_operator_only");
+        assert_eq!(policy["client_unlimited_requests_allowed"], false);
+        assert!(policy["policy_hash"].as_str().is_some_and(|hash| !hash.is_empty()));
+        assert_eq!(json["artifact_transport"]["chunk_bytes"], ARTIFACT_CHUNK_BYTES);
+        assert_eq!(json["artifact_transport"]["episode_step_action_artifacts"], true);
         assert!(json["action_schema"].is_object(), "environment_describe must expose the TypedAction schema");
         assert_eq!(json["action_examples"][0]["type"], "solve");
 
@@ -15909,10 +16395,28 @@ mod tests {
         let attempt_id = claim["action_attempt_id"].as_str().unwrap().to_string();
         let claim_token = claim["claim_token"].as_str().unwrap().to_string();
 
+        // Issue #222: transport the typed action by content hash. Resolution
+        // happens before the ordinary attempt reducer, so the recorded/replayed
+        // action remains the same canonical TypedAction as an inline submit.
+        let action_bytes = br#"{"type":"solve","proof_term":"norm_num"}"#;
+        let action_hash = artifact_hash(action_bytes);
+        let upload = tool_json(&peer.call_tool(CallToolRequestParams::new("artifact").with_arguments(serde_json::json!({
+            "action": {"type": "put_begin", "media_type": "application/vnd.proofsearch.typed-action+json",
+                "expected_bytes": action_bytes.len(), "expected_hash": action_hash}
+        }).as_object().unwrap().clone())).await.unwrap());
+        let upload_id = upload["upload_id"].as_str().unwrap();
+        peer.call_tool(CallToolRequestParams::new("artifact").with_arguments(serde_json::json!({
+            "action": {"type": "put_chunk", "upload_id": upload_id, "offset": 0,
+                "data_base64": base64::engine::general_purpose::STANDARD.encode(action_bytes)}
+        }).as_object().unwrap().clone())).await.unwrap();
+        let committed_action = tool_json(&peer.call_tool(CallToolRequestParams::new("artifact").with_arguments(serde_json::json!({
+            "action": {"type": "put_commit", "upload_id": upload_id}
+        }).as_object().unwrap().clone())).await.unwrap());
+
         let step = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
             "episode_id": episode_id, "action_attempt_id": attempt_id,
             "expected_revision": revision, "claim_token": claim_token,
-            "action": {"type": "solve", "proof_term": "norm_num"},
+            "action": {"artifact_hash": committed_action["artifact_hash"]},
             "cost_micros": 100,
         }).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(step["disposition"], "accepted", "{:?}", step);
@@ -15960,12 +16464,12 @@ mod tests {
         let lean = lean_res.content[0].as_text().unwrap().text.clone();
         assert!(lean.contains("theorem root_theorem : 1 + 1 = 2 := by"), "{lean}");
         assert!(!lean.contains("## "), "lean format must be bare source, not markdown: {lean}");
-        // The assembled source must carry the problem's REAL import manifest, not
-        // a hardcoded stub. This problem omitted problem_imports entirely, so
-        // (issue #142) it gets the broad "Mathlib" umbrella default, not the
-        // narrow Ring/NormNum pair BASE_IMPORT_MANIFEST used to apply even when
-        // the caller never asked for imports at all.
-        assert!(lean.contains("import Mathlib\n"), "real (broad-default) manifest must be rendered: {lean}");
+        // The assembled source must carry the problem's REAL import manifest,
+        // not a hardcoded stub. Issue #219 keeps omission on the fast
+        // Ring+NormNum base instead of silently loading the full umbrella.
+        assert!(lean.contains("import Mathlib.Tactic.Ring\n"), "base Ring import must be rendered: {lean}");
+        assert!(lean.contains("import Mathlib.Tactic.NormNum\n"), "base NormNum import must be rendered: {lean}");
+        assert!(!lean.contains("import Mathlib\n"), "omission must not silently load the full Mathlib umbrella: {lean}");
         // The dossier must state the pinned verification context as a receipt.
         assert!(md.contains("## Verification context"), "dossier must carry verification context: {md}");
         assert!(md.contains("Import manifest hash:"), "dossier must carry manifest hash: {md}");
@@ -16017,6 +16521,9 @@ mod tests {
                 diagnostic: None,
                 all_diagnostics: vec![],
                 dependency_use_report: None,
+                resource_policy: None,
+                output_receipt: None,
+                durability_job: None,
                 wall_time_ms: 1,
                 lean_cpu_time_ms: 1,
             })
@@ -16036,6 +16543,9 @@ mod tests {
                 kernel_result_hash: "k".to_string(),
                 diagnostic: None,
                 all_diagnostics: vec![],
+                resource_policy: None,
+                output_receipt: None,
+                durability_job: None,
                 wall_time_ms: 1,
             })
         }
@@ -17019,6 +17529,9 @@ mod tests {
                 diagnostic: None,
                 all_diagnostics: vec![],
                 dependency_use_report: None,
+                resource_policy: None,
+                output_receipt: None,
+                durability_job: None,
                 wall_time_ms: 1,
                 lean_cpu_time_ms: 1,
             })
@@ -17107,6 +17620,9 @@ mod tests {
                 diagnostic: None,
                 all_diagnostics: vec![],
                 dependency_use_report: None,
+                resource_policy: None,
+                output_receipt: None,
+                durability_job: None,
                 wall_time_ms: 1,
                 lean_cpu_time_ms: 1,
             })
@@ -17852,14 +18368,10 @@ mod tests {
         // test_handler's RealLeanGateway points at a dummy, nonexistent path.
     }
 
-    /// Issue #142: problem_imports OMITTED entirely (not an explicit empty
-    /// list) must default the registered manifest to the broad "Mathlib"
-    /// umbrella, not the narrow Ring+NormNum-only BASE_IMPORT_MANIFEST pair
-    /// that isn't enough to PARSE ordinary Mathlib-style notation
-    /// (Finset.sum, Filter.Eventually, etc.) and previously produced a
-    /// parse_error indistinguishable from a real proof-content bug.
+    /// Issue #219: omitted and explicitly empty problem_imports both use the
+    /// fast base manifest. Full Mathlib remains available as an explicit import.
     #[tokio::test]
-    async fn test_problem_create_defaults_to_broad_mathlib_manifest_when_imports_omitted() {
+    async fn test_problem_create_defaults_to_fast_base_manifest_when_imports_omitted() {
         let client = connected_client(test_handler_with_gateway(MockGateway)).await;
         let peer = client.peer();
 
@@ -17868,22 +18380,31 @@ mod tests {
         }).as_object().unwrap().clone())).await.unwrap());
         let omitted_manifest: Vec<&str> = omitted["import_manifest"].as_array().unwrap()
             .iter().map(|v| v.as_str().unwrap()).collect();
-        assert_eq!(omitted_manifest, vec!["Mathlib"], "problem_imports omitted entirely must default to the broad umbrella, not Ring+NormNum: {:?}", omitted_manifest);
+        assert_eq!(omitted_manifest, vec!["Mathlib.Tactic.Ring", "Mathlib.Tactic.NormNum"],
+            "problem_imports omitted entirely must use the fast base manifest: {:?}", omitted_manifest);
 
-        // An EXPLICIT empty list is a deliberate narrower choice by the
-        // caller, not an omission -- it must keep the previous
-        // BASE_IMPORT_MANIFEST-only behavior, unaffected by this default
-        // change.
+        // An explicit empty list has the same base-only meaning.
         let explicit_empty = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
             "source_problem_text": "y", "root_formal_statement": "y", "problem_imports": [],
         }).as_object().unwrap().clone())).await.unwrap());
         let explicit_manifest: Vec<&str> = explicit_empty["import_manifest"].as_array().unwrap()
             .iter().map(|v| v.as_str().unwrap()).collect();
         assert_eq!(explicit_manifest, vec!["Mathlib.Tactic.Ring", "Mathlib.Tactic.NormNum"],
-            "an EXPLICIT empty problem_imports must keep the narrow base manifest, not the new broad default: {:?}", explicit_manifest);
+            "an explicit empty problem_imports must keep the base manifest: {:?}", explicit_manifest);
 
-        assert_ne!(omitted["import_manifest_hash"], explicit_empty["import_manifest_hash"],
-            "the two manifests are genuinely different and must hash differently");
+        assert_eq!(omitted["import_manifest_hash"], explicit_empty["import_manifest_hash"],
+            "omitted and explicit-empty manifests are identical and must hash identically");
+
+        let broad = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+            "source_problem_text": "z", "root_formal_statement": "z",
+            "problem_imports": ["Mathlib"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        let broad_manifest: Vec<&str> = broad["import_manifest"].as_array().unwrap()
+            .iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(broad_manifest.contains(&"Mathlib"),
+            "the full umbrella must remain available by explicit opt-in: {:?}", broad_manifest);
+        assert_ne!(broad["import_manifest_hash"], omitted["import_manifest_hash"],
+            "the explicit broad manifest must remain distinguishable from the base default");
     }
 
     /// lean_declaration_lookup must return an honest per-name status even when

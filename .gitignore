@@ -30,6 +30,7 @@ desktop.ini
 # Lean build artifacts
 /lean-checker/build/
 /lean-checker/.lake/
+/lean-checker/.proofsearch/
 # Kernel-passing proofs the gateway drops here at runtime — episode-local artifacts,
 # not source. Delete freely; they regenerate on the next certified solve.
 /lean-checker/LeanChecker/Verified/*.lean

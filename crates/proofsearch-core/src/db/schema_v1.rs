@@ -1993,6 +1993,37 @@ CREATE TABLE IF NOT EXISTS reasoning_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_reasoning_logs_episode ON reasoning_logs(episode_id, episode_revision);
 CREATE INDEX IF NOT EXISTS idx_reasoning_logs_attempt ON reasoning_logs(action_attempt_id);
+
+-- Issue #222: generic content-addressed binary artifacts. Uploads are staged
+-- separately so a disconnected or invalid chunk stream can never create a
+-- committed artifact. The hash is SHA-256 over the exact BLOB bytes.
+CREATE TABLE IF NOT EXISTS content_artifacts (
+    artifact_hash TEXT PRIMARY KEY,
+    media_type TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    content BLOB NOT NULL,
+    creator TEXT NOT NULL,
+    environment_hash TEXT,
+    created_at TEXT NOT NULL,
+    CHECK(byte_size >= 0),
+    CHECK(length(content) = byte_size)
+);
+CREATE INDEX IF NOT EXISTS idx_content_artifacts_created ON content_artifacts(created_at);
+
+CREATE TABLE IF NOT EXISTS artifact_uploads (
+    id TEXT PRIMARY KEY,
+    media_type TEXT NOT NULL,
+    expected_bytes INTEGER NOT NULL,
+    expected_hash TEXT,
+    creator TEXT NOT NULL,
+    environment_hash TEXT,
+    next_offset INTEGER NOT NULL DEFAULT 0,
+    content BLOB NOT NULL DEFAULT X'',
+    created_at TEXT NOT NULL,
+    CHECK(expected_bytes >= 0),
+    CHECK(next_offset >= 0),
+    CHECK(length(content) = expected_bytes)
+);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
