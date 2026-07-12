@@ -422,6 +422,15 @@ pub struct ObservationExpandArgs {
     pub limit: Option<usize>,
 }
 
+/// Issue #232: derive a deterministic, versioned ProofProfile from a verified
+/// obligation's recorded proof source. Read-only, derivative — never runs Lean,
+/// never affects acceptance; regenerable from persisted artifacts.
+#[derive(JsonSchema, Deserialize)]
+pub struct ProofProfileArgs {
+    pub episode_id: String,
+    pub obligation_id: String,
+}
+
 /// Issue #224: server-side assembly and kernel-verification of a
 /// dependency-closed Lean module. Internally-tagged `action`, exactly like
 /// `verification`/`artifact`. All three actions traverse the verified obligation
@@ -11514,6 +11523,59 @@ impl ChatDbMcp {
 
     // -----------------------------------------------------------------
 
+    /// Issue #232: derive a deterministic ProofProfile from a verified
+    /// obligation's recorded proof source. Read-only + derivative.
+    async fn do_proof_profile(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProofProfileArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let episode_id = Uuid::parse_str(&args.episode_id)
+            .map_err(|_| mcp_invalid_params(format!("episode_id is not a valid UUID: {}", args.episode_id)))?;
+        let obligation_id = Uuid::parse_str(&args.obligation_id)
+            .map_err(|_| mcp_invalid_params(format!("obligation_id is not a valid UUID: {}", args.obligation_id)))?;
+
+        let conn = self.conn.lock().await;
+        let source = interactive_verified_proof_text_for_obligation(&conn, episode_id, obligation_id)?
+            .ok_or_else(|| mcp_invalid_params(format!(
+                "no committed kernel_pass proof source recorded for obligation {} in episode {}",
+                obligation_id, episode_id
+            )))?;
+
+        // solve_kind: a verified module solve leaves an episode_verified_modules row.
+        let is_module: bool = conn.query_row(
+            "SELECT 1 FROM episode_verified_modules WHERE root_obligation_id = ?1 LIMIT 1",
+            [obligation_id.to_string()],
+            |_| Ok(()),
+        ).optional().map_err(rs)?.is_some();
+        let solve_kind = if is_module { "verified_module" } else { "single_theorem" };
+
+        // Dependency inputs from the verified graph (best-effort: transitive
+        // closure requires every dependency proved).
+        let explicit: usize = conn.query_row(
+            "SELECT COUNT(*) FROM episode_obligation_edges WHERE parent_obligation_id = ?1",
+            [obligation_id.to_string()],
+            |row| row.get::<_, i64>(0),
+        ).map_err(rs)? as usize;
+        let transitive = order_closure(&conn, episode_id, obligation_id)
+            .map(|c| c.declarations.len().saturating_sub(1))
+            .unwrap_or(explicit);
+
+        let profile = proofsearch_core::analyzer::analyze_proof(
+            &source,
+            solve_kind,
+            proofsearch_core::analyzer::DependencyInputs {
+                explicit,
+                transitive,
+                retrieval_depth: 0,
+            },
+        );
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "episode_id": episode_id.to_string(),
+            "obligation_id": obligation_id.to_string(),
+            "profile": profile,
+            "policy": "ProofProfile is deterministic, versioned, derivative metadata — it never runs Lean, never affects kernel acceptance, and is regenerable from persisted proof source.",
+        })).unwrap())]))
+    }
+
     /// Issue #224: assemble/verify/export a dependency-closed Lean module from
     /// the verified obligation graph, reusing the proven SubmitModule path.
     async fn do_module(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
@@ -14419,6 +14481,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ExpositionArgs>("exposition", "Issue #198: ONE tool for the exposition-artifact family (issue #7), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, obligation_id, verified_module_id, verified_lemma_id, dossier_id, prose_status, title) records a human-readable mathematical exposition section (section_kind: problem_summary/formalization_explanation/construction_intuition/key_lemmas/proof_strategy/verified_claim/unverified_bridges/reviewer_notes/next_formalization_targets) linked to a problem, episode, obligation, verified module, verified lemma, and/or dossier — prose_status (prose/reviewed_prose/formalized) marks epistemic weight: prose is never proof and never changes certification or training eligibility; `observe` (+ one of problem_version_id, episode_id, dossier_id) lists exposition artifacts for that scope — read-only prose, explicitly separate from kernel-verified proof"),
             make_tool::<ReasoningLogArgs>("reasoning_log", "SOP-mandated append-only process ledger and hard gate for episode_step; see docs/sop-reasoning-logs.md. `action` is internally tagged: `add` records episode_id, episode_revision, optional action_attempt_id, reasoning_kind (initial_plan/retry_after_failure/strategy_pivot/error_diagnosis/success_retrospective/other), optional hypothesis, required approach_summary, optional expected_outcome/actual_outcome/lesson_learned/confidence (low/medium/high), and author; `observe` lists one episode's logs in chronological order. Ordinary work gets at most 2 submissions between logs; give_up always requires a fresh log with actual_outcome plus lesson_learned. This is process metadata only: never proof and never changes outcomes, certification, or training eligibility"),
             make_tool::<ModuleArgs>("module", "Issue #224: assemble and kernel-verify a dependency-closed Lean module from the VERIFIED obligation graph, server-side — no resubmitting every step source through MCP. Internally-tagged `action`, exactly one of: {\"type\":\"assemble\",\"episode_id\":\"..\",\"root_obligation_id\":\"..\"} (traverse the obligation-edge DAG from the root, require a positive verified lemma per node, topologically order dependencies-before-dependents, resolve each declaration's REAL kernel-submitted proof from the tracked commit trail, and render one combined module via the proven SubmitModule assembly — returns source + declaration manifest + hashes, NO kernel run) | {\"type\":\"verify\",..} (assemble, then kernel-check the WHOLE closure as one module in the pinned Lean environment: producer/consumer theorem types are checked by Lean, not just ledger bookkeeping — returns kernel_outcome + diagnostic. A proof written against a dependency as a hypothesis instead of the named prior declaration fails HERE, which is the point) | {\"type\":\"export\",..} (verify, then persist the verified module and return an export bundle: source, declaration manifest, environment hash, module_source_hash, and a replay command). Missing/unverified/cyclic/incompatible/environment-mismatched dependencies fail with a structured graph error (error: root_not_found | unverified_dependency | cycle | incompatible_interface | environment_mismatch). Assembly is deterministic for the same graph. Trust: reuses the SAME assemble_module + verify_module the SubmitModule path uses; nothing here changes proof authority — only the pinned kernel decides."),
+            make_tool::<ProofProfileArgs>("proof_profile", "Issue #232: derive a deterministic, versioned ProofProfile from a VERIFIED obligation's recorded proof source (episode_id + obligation_id). Classifies the proof for MathCorpus enrichment / evaluation: observed facts (tactics referenced, dotted declarations, tactic count, proof length, branch/case count, dependency counts, and induction/contradiction/witness/rewriting/intermediate-claim indicators, single-theorem vs verified-module) are kept STRICTLY separate from heuristic classification (primary/secondary proof class, automation level none/light/moderate/heavy). Every profile records analyzer_version and a profile_hash; the same source + inputs always produce the same profile. Read-only + derivative: it never runs Lean and never affects kernel acceptance. Regenerable at any time from persisted proof source. A manual annotation layer can add notes but can NEVER overwrite machine-derived evidence or change the hash."),
             make_tool::<ObservationExpandArgs>("observation_expand", "Issue #223: paginate observation material that did not fit the negotiated budget. A budgeted observation always includes the current obligation and its statement hash, the environment and import-manifest hashes, dependency summaries (name/status/hash), and a head of the latest primary diagnostic; larger material is replaced by a `references` entry carrying a byte-exact `content_hash`, `total_bytes`, `included_bytes`, and `next_offset`, and a `budget` block reports included/omitted/referenced byte counts. Call this with `episode_id`, `field` (root_theorem | dependency_signatures | diagnostics | proof_history), optional `obligation_id` (defaults to the episode's current target obligation), `offset` (start byte, default 0), and optional `limit` (max bytes, default 8192; 0 = whole tail). Returns {field, content_hash, total_bytes, offset, bytes, next_offset}; page until next_offset is null. Content is re-derived deterministically from recorded state and matches the omitted material byte-for-byte. Pure read path: never proof, never mutates state."),
             make_tool::<SemanticSkeletonArgs>("semantic_skeleton", "Issue #199: ONE tool for the semantic-skeleton / module-aware-fidelity family (issue #6), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, root_obligation_id, module_id, module_item_id, verified_lemma_id, dossier_id, node_id, root_fidelity_review_id — all links optional) attaches a semantic statement skeleton / module-aware fidelity note: a structured reading of a root statement, verified module, or source-aligned solution — quantifiers, hypotheses, conclusion, helper definitions, construction/final-answer map, back-translation, and fidelity risk_flags — scoped by review_scope (root_statement_only/module_artifact/source_aligned_solution/computational_check_only/structural_proof). semantic_fingerprint_hash is server-computed. Metadata only: never marks anything proved, never sets fidelity_status, never substitutes for problem_submit_fidelity_review; `observe` (semantic_skeleton_id, observation, finding, + optional risk_flags_json, details_json, observed_by) appends one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive, optional risk_flags) to a semantic skeleton's review_notes history and reads it back. Never changes proof/fidelity/budget/benchmark status; 'confirms_faithful' is not the root fidelity gate"),
             make_tool::<ExpertReviewArgs>("expert_review", "Issue #200: ONE tool for the expert-review ledger family (issue #14), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (dossier_id optional, reviewer_id, reviewer_role: proposer/construction_searcher/formalizer/prover/reviewer/domain_expert/refuter/editor/librarian, review_target_kind: source_problem/formal_statement/construction_artifact/module_artifact/external_citation/asymptotic_extraction/exposition/full_dossier, review_target_id, decision: approved/approved_with_changes/needs_changes/rejected/abstain, + optional expertise_tags, confidence: low/medium/high, notes, requested_changes_json, risk_flags_json) records one role-separated expert-review ledger entry against a polymorphic target. ADDITIVE metadata only: a pure insert that never marks anything proved and never changes proof, certification, obligation, budget, or benchmark state. reviewer_id is free text, not an authenticated principal; a human decision stays distinct from Lean kernel verification; `observe` (+ optional dossier_id, review_target_kind + review_target_id together, reviewer_role, include_revoked) reads expert-review ledger entries back, filtered by dossier, polymorphic target (kind+id together), and/or reviewer role. Revoked reviews are omitted unless include_revoked=true. Read-only. Across both actions: expert reviews are a role-separated ledger of who reviewed what, not a substitute for kernel verification"),
@@ -14607,9 +14670,19 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 47,
-                        "total_tool_count": 47,
+                        "classified_tool_count": 48,
+                        "total_tool_count": 48,
                         "tools": {
+                            "proof_profile": {
+                                "side_effect": "read_only — reads a verified obligation's recorded proof source and derives a profile; writes nothing",
+                                "trust_level": "derivative_metadata — classification is heuristic and NEVER affects kernel acceptance; observed facts are read off already-verified source. Analyzer version + profile hash are recorded; a manual annotation layer can never overwrite machine-derived evidence",
+                                "cost_surface": "none — pure text analysis, no Lean invocation",
+                                "benchmark_safety": "contamination_risk — the profile references tactic/declaration content from a real proof; private_artifact by default, not a public export",
+                                "replayability": "deterministic — same source + inputs yield the same profile_hash; regenerable from persisted artifacts",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_metadata",
+                                "required_run_mode": "any — export-time contamination gates remain proof_export/trajectory_export's responsibility"
+                            },
                             "module": {
                                 "side_effect": "mixed by action (issue #224): assemble/verify are read_only (traverse the verified graph, render + kernel-check, write nothing); export additionally persists one episode_verified_modules row for the composed module",
                                 "trust_level": "verifier_backed — the kernel verdict comes from the SAME pinned Lean verify_module the SubmitModule path uses; the graph, ordering, and resolved proofs are all recorded verified state, never client-authored. Nothing here can mark anything proved that the kernel did not",
@@ -16102,6 +16175,7 @@ impl ServerHandler for ChatDbMcp {
             "reasoning_log" => self.do_reasoning_log(args_val).await,
             "observation_expand" => self.do_observation_expand(args_val).await,
             "module" => self.do_module(args_val).await,
+            "proof_profile" => self.do_proof_profile(args_val).await,
             "semantic_skeleton" => self.do_semantic_skeleton(args_val).await,
             "expert_review" => self.do_expert_review(args_val).await,
             "mathlib_search_declarations" => {
@@ -17022,7 +17096,9 @@ mod tests {
         // material omitted under the byte budget) = 46.
         // + 1 module (issue #224: assemble/verify/export a dependency-closed
         // Lean module from the verified obligation graph) = 47.
-        assert_eq!(list_res.tools.len(), 47);
+        // + 1 proof_profile (issue #232: deterministic versioned proof profiles
+        // derived from verified proof source) = 48.
+        assert_eq!(list_res.tools.len(), 48);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
