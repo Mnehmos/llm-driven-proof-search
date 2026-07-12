@@ -39,7 +39,7 @@ malformed records are summarized in
 | # | Step (file in `steps/`) | Mirrors in cdc-lean | Problem version | Episode | Outcome |
 |---|---|---|---|---|---|
 | [01](steps/01-local-pair-parity.lean) | [Local pair parity (eqs. 2–3)](steps/01-local-pair-parity.lean) | `local_pair_parity` | `64ea8680-26c9-4544-acb3-eaf565df0e2e` | [90be1f6b-3408-4362-9711-17380cd615fb](audit/dossiers/step-01-dossier.md) | kernel_verified (2026-07-11) |
-| [02](steps/02-local-dual-identity-dotproduct.lean) | [Local dual identity, dot-product form](steps/02-local-dual-identity-dotproduct.lean) | `local_dual_identity` | `3d5b9cb6-b3a3-4358-95aa-b2e52bb2032b` | [23b209f0-a31f-40be-8ec4-429ebbfa56d9](audit/dossiers/step-02-dossier.md) | kernel_verified (2026-07-11) ⚠ uses `native_decide` |
+| [02](steps/02-local-dual-identity-dotproduct.lean) | [Local dual identity, dot-product form](steps/02-local-dual-identity-dotproduct.lean) | `local_dual_identity` | `3d5b9cb6-b3a3-4358-95aa-b2e52bb2032b` | [e77a7f30-368e-412e-82cb-eda4ea51e662](audit/dossiers/step-02-dossier.md) | kernel_verified (2026-07-11, 2 attempts) |
 | [03](steps/03-abstract-vertex-identity.lean) | [Abstract vertex identity (eqs. 7–9)](steps/03-abstract-vertex-identity.lean) | `local_dual_identity (abstract χ)` | `566d2bfc-fbc9-4d9f-a0e6-274ef69cb428` | [b64f8ba3-3ba8-46e5-8487-2dff301ee410](audit/dossiers/step-03-dossier.md) | kernel_verified (2026-07-11) |
 | [04](steps/04-global-dual-assembly.lean) | [Global dual-obstruction assembly (system 4)](steps/04-global-dual-assembly.lean) | `compatibility_solvable (certificate form)` | `9eafd294-d3b7-4f2f-8704-6e530e0d227e` | [4eeb87f5-2ee8-48f1-a414-0b1e4c942ee6](audit/dossiers/step-04-dossier.md) | kernel_verified (2026-07-11) |
 | [05](steps/05-annihilator-uniqueness-3d.lean) | [Annihilator uniqueness in dim 3](steps/05-annihilator-uniqueness-3d.lean) | `(implicit in their decide)` | `cf9ca3b0-d4a9-4406-bf34-c406515efd6f` | [9763965c-5107-45db-bc6e-f5b2e391b250](audit/dossiers/step-05-dossier.md) | kernel_verified (2026-07-11, 1 attempt) |
@@ -142,9 +142,9 @@ separate problems in the same environment on 2026-07-10/11; they are listed by
   failure, and finally the module-with-helper-budgets idiom that solved it.
   The full attempt/diagnostic/reasoning trail is in the environment ledgers
   (episode `e0395b03-…`), exportable via `proof_export`/`trajectory_export`.
-- Step 02 (early session) used `native_decide`, which extends trust beyond the
-  Lean kernel. It is flagged here for honesty; the final chain (06→07→08) does
-  **not** depend on it — everything is re-derived with plain kernel `decide`.
+- Step 02 has been fully re-verified with standard Lean kernel rules (using `rfl`
+  instead of `native_decide`), eliminating the need to extend trust beyond the
+  Lean kernel for this step.
 - Trust model: `fidelity_status` for these problems is `attested`
   (`unsafe_dev_attestation`), meaning statement–intent fidelity was asserted by
   the operating agent, not independently reviewed. The kernel outcomes are

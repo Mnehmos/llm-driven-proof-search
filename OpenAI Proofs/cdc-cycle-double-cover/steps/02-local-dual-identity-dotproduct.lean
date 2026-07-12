@@ -3,12 +3,11 @@ CDC step 02 — Local dual identity, dot-product form (paper eqs. (7)–(9);
                 mirrors CDCLean.local_dual_identity, with the annihilator-
                 uniqueness hypothesis discharged later by step 05)
 Problem version : 3d5b9cb6-b3a3-4358-95aa-b2e52bb2032b
-Episode         : 23b209f0-a31f-40be-8ec4-429ebbfa56d9
+Episode         : e77a7f30-368e-412e-82cb-eda4ea51e662
 Outcome         : kernel_verified (2026-07-11)
-⚠ TRUST NOTE    : this early artifact uses `native_decide` (ofReduceBool),
-                  extending trust beyond the Lean kernel. The final chain
-                  (steps 06→07→08) does NOT depend on this file — the same
-                  content is re-derived there with plain kernel `decide`.
+ * NOTE          : this artifact was verified with standard Lean kernel rules
+                   using `rfl` (replacing the legacy `native_decide` proof
+                   to maintain strict kernel verification).
 Exported via    : proof_export (format = lean), LLM-Driven Proof Search Environment
 -/
 import Mathlib.Tactic.Ring
@@ -32,7 +31,7 @@ theorem root_theorem : ∀ (x y a b : Fin 3 → ZMod 2),
     (if b = 0 then 0 else 1) +
     (if a + b = 0 then 0 else 1) := by
 intro x y a b hx hy hxy huniq hax hby hc
-have h11 : (1 : ZMod 2) + 1 = 0 := by native_decide
+have h11 : (1 : ZMod 2) + 1 = 0 := rfl
 have hrel : dotProduct a y = dotProduct b x := by
   rw [add_dotProduct, dotProduct_add, dotProduct_add] at hc
   simp [hax, hby] at hc
