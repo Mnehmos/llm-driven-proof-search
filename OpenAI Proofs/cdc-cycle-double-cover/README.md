@@ -78,45 +78,15 @@ malformed records are summarized in
 | [38](steps/38-bridgeless-to-even-double-cover.lean) | [**Bridgeless graph ⇒ indexed even double cover** (14→13 rotation, then 36→37)](steps/38-bridgeless-to-even-double-cover.lean) | `full reduction to the expansion` | `a590ad0c-5165-49f7-b098-7c46eca98d93` | [e078a0a6-3a45-404d-84f0-1fa7c9c92c60](audit/dossiers/step-38-dossier.md) | kernel_verified (2026-07-11, corrected statement, 1 proof attempt) |
 | [39](steps/39-cycle-double-cover-capstone.lean) | [**Final Cycle Double Cover capstone** (step 38 + step 09; step-11 list assembly rederived inline)](steps/39-cycle-double-cover-capstone.lean) | `cycleDoubleCover_of_bridgeless theorem shape` | `7211fcc8-d1d9-422c-aab3-14db222a98b3` | [06c72fd1-9e61-44f0-8ec5-93995d204eed](audit/dossiers/step-39-dossier.md) | kernel_verified (2026-07-11, 1 attempt) |
 
-**Chained composition (general reduction, flow-conditional):** steps 14 → 13 →
-15 (with 08 discharged) → 12 → 11 (with 09) compose to: *every finite loopless
-bridgeless multigraph whose vertex-ring expansion carries a nowhere-zero
-F₂³-flow has a cycle double cover*. Unconditional CDC now requires exactly two
-more inputs: bridgelessness of the expansion (their
-`expansionGraph_bridgeless`) and the Jaeger–Kilpatrick 8-flow theorem.
+**Chained composition (general reduction, flow-conditional):** [step 14](steps/14-bridgeless-degree-ne-one.lean) → [step 13](steps/13-rotation-system-existence.lean) → [step 15](steps/15-flow-to-expansion-cover.lean) (with [step 08](steps/08-multigraph-cdc.lean) discharged) → [step 12](steps/12-expansion-cover-projection.lean) → [step 11](steps/11-cover-to-cycle-double-cover.lean) (with [step 09](steps/09-cycle-decomposition.lean) discharged) compose to: *every finite loopless bridgeless multigraph whose vertex-ring expansion carries a nowhere-zero F₂³-flow has a cycle double cover*. Unconditional CDC now requires exactly two more inputs: bridgelessness of the expansion ([step 16](steps/16-expansion-bridgeless.lean)) and the Jaeger–Kilpatrick 8-flow theorem.
 
-**Chained composition (8-flow for 3-edge-connected graphs, COMPLETE):** steps
-21 → 27 (instantiated at `E × Fin 2`) → 23 → 22 (with 17/18/19 discharged
-inside 22) compose to: *every finite 3-edge-connected multigraph has a
-nowhere-zero F₂³-flow in ends form*. The Nash-Williams giant (3657 reference
-lines) is covered by steps 24–27 in the Diestel maximum-tuple formulation —
-the Kaiser machinery's recursively-defined partition sequences cannot cross
-this environment's plain-statement chaining boundary, so the campaign proves
-Diestel's exchange lemma (step 26) instead. Step 20 is the flow glue with a
-pairwise-disjointness hypothesis in `E` itself — verified but off the main
-chain, since the doubled packing projects to *overlapping* sets (only omission
-survives; the pigeonhole of step 23). **Chained composition (THE 8-FLOW THEOREM, COMPLETE):** step 34 (fed step 33's
-conclusion), step 33 (fed hFlow3EC — dischargeable by 29∘30 — and steps
-28/31/32) compose to: *every finite bridgeless multigraph has a nowhere-zero
-F₂³-flow in ends form*. The full discharge tree is
-34 ← 33 ← (29∘30) ← {17,18,19,21,22,23,24,25,26,27} + {28,31,32} — every link
-kernel-verified. **The capstone is now complete:** step 35 converts the
-ends-form expansion flow to the localized equation; step 36 composes
-expansion bridgelessness with the global 8-flow theorem; step 37 composes
-35→15+08→12; step 38 supplies the rotation via 14→13; and step 39 combines
-the resulting indexed even cover with step 09 while rederiving step 11's list
-assembly inline. Thus the step-by-step track reaches the unconditional Cycle
-Double Cover conclusion for finite loopless bridgeless multigraphs.
+**Chained composition (8-flow for 3-edge-connected graphs, COMPLETE):** [step 21](steps/21-double-graph-packing-condition.lean) → [step 27](steps/27-nash-williams-tree-packing.lean) (instantiated at `E × Fin 2`) → [step 23](steps/23-doubled-packing-projection.lean) → [step 22](steps/22-omission-glue-flow.lean) (with [step 17](steps/17-flow-from-three-even-covers.lean)/[step 18](steps/18-even-superset-from-fundamental-cycles.lean)/[step 19](steps/19-fundamental-cycles-from-connectivity.lean) discharged inside [step 22](steps/22-omission-glue-flow.lean)) compose to: *every finite 3-edge-connected multigraph has a nowhere-zero F₂³-flow in ends form*. The Nash-Williams giant (3657 reference lines) is covered by [steps 24–27](steps/) in the Diestel maximum-tuple formulation — the Kaiser machinery's recursively-defined partition sequences cannot cross this environment's plain-statement chaining boundary, so the campaign proves Diestel's exchange lemma ([step 26](steps/26-exchange-lemma.lean)) instead. [Step 20](steps/20-tree-packing-implies-flow.lean) is the flow glue with a pairwise-disjointness hypothesis in `E` itself — verified but off the main chain, since the doubled packing projects to *overlapping* sets (only omission survives; the pigeonhole of [step 23](steps/23-doubled-packing-projection.lean)).
 
-**Chained composition (cubic CDC):** steps 09 + 10 + 11 compose by two modus
-ponens steps to: *every finite loopless cubic multigraph carrying a
-nowhere-zero F₂³-flow has a cycle double cover*. The composition is chained
-through hypotheses rather than inlined because the verifier enforces a
-60-second wall cap per Lean invocation (and the MCP transport caps payload
-size); each link is unconditional kernel evidence, and step 11's hypotheses
-are exactly the conclusions of steps 09 and 10. The all-in-one restatement is
-registered as problem `d835eca2-ab17-4a0d-bfd8-3ee859787439` (open; cannot fit
-the wall cap as a single declaration).
+**Chained composition (THE 8-FLOW THEOREM, COMPLETE):** [step 34](steps/34-component-decomposition.lean) (fed [step 33](steps/33-bridgeless-to-3ec-recursion.lean)'s conclusion), [step 33](steps/33-bridgeless-to-3ec-recursion.lean) (fed hFlow3EC — dischargeable by [step 29](steps/29-double-graph-tree-packing-of-3ec.lean)∘[step 30](steps/30-doubled-packing-to-flow.lean) — and [steps 28](steps/28-conservation-across-two-cut.lean)/[step 31](steps/31-two-cut-contraction-pullback.lean)/[step 32](steps/32-two-cut-existence.lean)) compose to: *every finite bridgeless multigraph has a nowhere-zero F₂³-flow in ends form*. The full discharge tree is [step 34](steps/34-component-decomposition.lean) ← [step 33](steps/33-bridgeless-to-3ec-recursion.lean) ← ([step 29](steps/29-double-graph-tree-packing-of-3ec.lean)∘[step 30](steps/30-doubled-packing-to-flow.lean)) ← {[step 17](steps/17-flow-from-three-even-covers.lean),[step 18](steps/18-even-superset-from-fundamental-cycles.lean),[step 19](steps/19-fundamental-cycles-from-connectivity.lean),[step 21](steps/21-double-graph-packing-condition.lean),[step 22](steps/22-omission-glue-flow.lean),[step 23](steps/23-doubled-packing-projection.lean),[step 24](steps/24-internal-quotient-connectivity-glue.lean),[step 25](steps/25-forest-crossing-count.lean),[step 26](steps/26-exchange-lemma.lean),[step 27](steps/27-nash-williams-tree-packing.lean)} + {[step 28](steps/28-conservation-across-two-cut.lean),[step 31](steps/31-two-cut-contraction-pullback.lean),[step 32](steps/32-two-cut-existence.lean)} — every link kernel-verified.
+
+**The capstone is now complete:** [step 35](steps/35-expansion-conservation-localization.lean) converts the ends-form expansion flow to the localized equation; [step 36](steps/36-expansion-bridgeless-to-flow.lean) composes expansion bridgelessness with the global 8-flow theorem; [step 37](steps/37-expansion-flow-to-original-cover.lean) composes [step 35](steps/35-expansion-conservation-localization.lean)→[step 15](steps/15-flow-to-expansion-cover.lean)+[step 08](steps/08-multigraph-cdc.lean)→[step 12](steps/12-expansion-cover-projection.lean); [step 38](steps/38-bridgeless-to-even-double-cover.lean) supplies the rotation via [step 14](steps/14-bridgeless-degree-ne-one.lean)→[step 13](steps/13-rotation-system-existence.lean); and [step 39](steps/39-cycle-double-cover-capstone.lean) combines the resulting indexed even cover with [step 09](steps/09-cycle-decomposition.lean) while rederiving [step 11](steps/11-cover-to-cycle-double-cover.lean)'s list assembly inline. Thus the step-by-step track reaches the unconditional Cycle Double Cover conclusion for finite loopless bridgeless multigraphs.
+
+**Chained composition (cubic CDC):** [step 09](steps/09-cycle-decomposition.lean) + [step 10](steps/10-ends-even-double-cover.lean) + [step 11](steps/11-cover-to-cycle-double-cover.lean) compose by two modus ponens steps to: *every finite loopless cubic multigraph carrying a nowhere-zero F₂³-flow has a cycle double cover*. The composition is chained through hypotheses rather than inlined because the verifier enforces a 60-second wall cap per Lean invocation (and the MCP transport caps payload size); each link is unconditional kernel evidence, and [step 11](steps/11-cover-to-cycle-double-cover.lean)'s hypotheses are exactly the conclusions of [steps 09](steps/09-cycle-decomposition.lean) and [step 10](steps/10-ends-even-double-cover.lean). The all-in-one restatement is registered as problem `d835eca2-ab17-4a0d-bfd8-3ee859787439` (open; cannot fit the wall cap as a single declaration).
 
 **Parallel track:** files `08-multigraph-cdc.lean`, `08-cycle-decomposition.lean`,
 `multigraph_test.lean`, `step_lemma21.json` in `steps/` were produced by a
@@ -132,34 +102,14 @@ separate problems in the same environment on 2026-07-10/11; they are listed by
 
 ### Notes on the process data
 
-- Steps 05–08 compose earlier steps by **re-derivation**: the environment
-  deliberately provides no cross-problem imports, so each root theorem is
-  self-contained and independently kernel-checked. Step 06 appears verbatim as
-  the `hsolv` sub-proof inside steps 07 and 08.
-- Step 07's episode is the richest process artifact: five attempts spanning a
-  cumulative-heartbeat exhaustion, a no-op `set_option` discovery, a
-  `classical`-instance poisoning of `decide`, a genuine `Decidable` synthesis
-  failure, and finally the module-with-helper-budgets idiom that solved it.
-  The full attempt/diagnostic/reasoning trail is in the environment ledgers
-  (episode `e0395b03-…`), exportable via `proof_export`/`trajectory_export`.
-- Step 02 has been fully re-verified with standard Lean kernel rules (using `rfl`
-  instead of `native_decide`), eliminating the need to extend trust beyond the
-  Lean kernel for this step.
-- Trust model: `fidelity_status` for these problems is `attested`
-  (`unsafe_dev_attestation`), meaning statement–intent fidelity was asserted by
-  the operating agent, not independently reviewed. The kernel outcomes are
-  unconditional; the fidelity review of statements against the paper is the
-  remaining human-auditable surface, aided by the side-by-side mirror column.
+- [Steps 05–08](steps/) compose earlier steps by **re-derivation**: the environment deliberately provides no cross-problem imports, so each root theorem is self-contained and independently kernel-checked. [Step 06](steps/06-lemma-2-2-compatibility-solvable.lean) appears verbatim as the `hsolv` sub-proof inside [steps 07](steps/07-cubic-labeling.lean) and [08](steps/08-indexed-even-double-cover.lean).
+- [Step 07](steps/07-cubic-labeling.lean)'s episode is the richest process artifact: five attempts spanning a cumulative-heartbeat exhaustion, a no-op `set_option` discovery, a `classical`-instance poisoning of `decide`, a genuine `Decidable` synthesis failure, and finally the module-with-helper-budgets idiom that solved it. The full attempt/diagnostic/reasoning trail is in the environment ledgers (episode `e0395b03-…`), exportable via `proof_export`/`trajectory_export`.
+- [Step 02](steps/02-local-dual-identity-dotproduct.lean) has been fully re-verified with standard Lean kernel rules (using `rfl` instead of `native_decide`), eliminating the need to extend trust beyond the Lean kernel for this step.
+- Trust model: `fidelity_status` for these problems is `attested` (`unsafe_dev_attestation`), meaning statement–intent fidelity was asserted by the operating agent, not independently reviewed. The kernel outcomes are unconditional; the fidelity review of statements against the paper is the remaining human-auditable surface, aided by the side-by-side mirror column.
 
 ### Completion status
 
-The tracked re-derivation now contains 39 kernel-verified steps, ending in the
-unconditional CDC capstone. Cross-problem composition is expressed through
-exact theorem-as-hypothesis interfaces because the proof-search environment
-does not import declarations from previous problem versions and enforces a
-per-invocation wall limit. Each interface link is separately kernel-verified,
-and steps 35–39 were also compiled together against the pinned local
-`lean-checker/` environment.
+The tracked re-derivation now contains 39 kernel-verified steps, ending in the unconditional CDC capstone. Cross-problem composition is expressed through exact theorem-as-hypothesis interfaces because the proof-search environment does not import declarations from previous problem versions and enforces a per-invocation wall limit. Each interface link is separately kernel-verified, and [steps 35–39](steps/) were also compiled together against the pinned local [lean-checker/](https://github.com/Mnehmos/llm-driven-proof-search/tree/develop/lean-checker) environment.
 
 ## Verifier environments
 
