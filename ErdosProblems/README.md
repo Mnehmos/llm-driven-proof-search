@@ -31,6 +31,13 @@ ErdosProblems/
 │   ├── attack-plan.md      integer_isGoodPair_iff fully assembled, all milestones DONE
 │   ├── proof/              7 kernel-verified theorems
 │   └── trace/              7 episode ledgers
+├── erdos-647/              Erdős Problem #647 (LIVING campaign — problem OPEN)
+│   ├── README.md           start here: headline results + status, plainly
+│   ├── whitepaper.md       the campaign log: rederivation → the wall → the frontier
+│   ├── attack-plan.md      density-bound program (Selberg sieve Layers A/B/C)
+│   ├── credit.md           Hughes / Kitamura / Idén / Bloom attribution + limits
+│   ├── evidence.md         machine records for ~110 kernel-verified theorems
+│   └── proof/              snapshots: Theorem 2 (3 stages) + Mertens identity
 └── shared/                 cross-problem infrastructure notes
     ├── corpus-validation.md
     ├── bounty-board.md
@@ -86,6 +93,17 @@ relevant) into a new `erdos-<N>/` folder and link it from the project index.
    Steinerberger): distinct `A, B ⊆ ℂ` of equal size with the same multiset of
    3-subset *products* — corpus `sorry`, kernel-verified via the witness
    `A = {1,ω,ω²,2}`, `B = ω·A` (`ω³=1`), reducing to a one-line scalar lemma.
+8. **The #647 campaign** ([erdos-647/](erdos-647/README.md), **living
+   folder, problem OPEN**): independent kernel-verified replication of the
+   Hughes/Idén/Kitamura modular reduction (41 open residue classes, via a
+   tighter 48-survivor sieve with every row *proven* from classification
+   theorems); 48 new sub-AP closures (then frozen — the all-avoid
+   obstruction proves that technique class can't finish); the **first
+   machine-checked proof of Hughes's Theorem 2** (every candidate sits in
+   one of two explicit 4-prime constellations); and an active push toward a
+   machine-checked Brun/Selberg-sieve density bound, starting with an exact
+   Mertens identity for `∑ 1/p` via Chebyshev θ (a piece Mathlib lacks).
+   ~110 kernel-verified theorems and counting.
 
 ## Verify it yourself
 
