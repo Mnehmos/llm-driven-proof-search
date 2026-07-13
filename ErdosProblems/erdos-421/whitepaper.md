@@ -32,13 +32,15 @@ Formal statement (from `google-deepmind/formal-conjectures`,
   divisible by exactly one of a well-chosen set of consecutive primes.
   Category `research solved` in the corpus, but the Lean proof body is
   **still `sorry`** — informally accepted, never kernel-verified anywhere.
-- **Our own contribution (kernel-verified today):** the explicit sequence
-  `d(n) = 4n + 2` (naturals `≡ 2 (mod 4)`) has natural density `1/4` and
-  **all consecutive-block products are pairwise distinct** — the
-  *structural* half of this claim (`StrictMono`, `1 ≤ d 0`, and the
-  block-product `InjOn` property) is now Lean-kernel-verified. See
-  [evidence.md](evidence.md) for the exact proof-search trail. The
-  remaining piece (the density-limit `Tendsto` obligation) is in progress.
+- **Our own contribution — FULLY kernel-verified 2026-07-13:** the explicit
+  sequence `d(n) = 4n + 2` (naturals `≡ 2 (mod 4)`) has natural density
+  exactly `1/4` and **all consecutive-block products are pairwise
+  distinct** — the complete existential statement (matching Erdős #421's
+  exact shape, with `1` replaced by `1/4`) is Lean-kernel-verified
+  end-to-end (`root_kernel_verified`, no `sorry`, no external citations).
+  See [evidence.md](evidence.md) for the exact proof-search trail and
+  [proof/Erdos421_density_quarter.lean](proof/Erdos421_density_quarter.lean)
+  for the reconstructed snapshot.
 - **What is disputed and NOT relied on by us:** a claimed density-1
   solution (Przemek Chojecki, heavy GPT-5.x assistance, reviewed publicly
   by Terence Tao) leaning on the Castryck–Cluckers–Dittmann–Nguyen
@@ -64,15 +66,16 @@ products force equal start index too. Together: injectivity.
 
 ## What we did / did not prove
 
-- **Did (kernel-verified 2026-07-13):** `StrictMono (fun n => 4n+2) ∧
-  1 ≤ 4·0+2 ∧ {(u,v) | u≤v}.InjOn (block-product map)` for the explicit
-  density-1/4 witness.
-- **In progress:** the density-Tendsto obligation for the same witness
-  (standard floor-count squeeze; no external citations expected).
+- **Did (kernel-verified 2026-07-13, complete):**
+  `∃ d, StrictMono d ∧ 1≤d 0 ∧ HasDensity(range d, 1/4) ∧
+  {(u,v)|u≤v}.InjOn(block-product)` — the full existential, witness
+  `d(n)=4n+2`, all three components (structural half, density-Tendsto
+  half, and the final assembly) independently kernel-verified via three
+  `episode_step` submissions in episode `0f5562fe-e14f-41b9-9f7b-ac11485a1be6`.
 - **Did not:** Selfridge's stronger `1/e − ε` bound (corpus `sorry`,
-  unformalized), and emphatically **not** the disputed density-1 claim —
-  that remains genuinely open to this project and to the mathematical
-  community as of this writing.
+  unformalized) — our natural next target — and emphatically **not** the
+  disputed density-1 claim, which remains genuinely open to this project
+  and to the mathematical community as of this writing.
 
 ## Proof-search trail
 

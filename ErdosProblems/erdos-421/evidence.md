@@ -37,7 +37,16 @@ Mathlib umbrella.)
     `Finset.image_add_left_Icc` reindexing, all `omega` arithmetic)
     elaborated correctly on the *first* attempt.
   - Child (2), obligation `O_83c289dc5c4649bc`: the density-`1/4` `Tendsto`
-    goal for `d(n)=4n+2`. **In progress** as of this writing.
+    goal for `d(n)=4n+2`, via `tendsto_add_mul_div_add_mul_atTop_nhds` +
+    `div_le_div_iff₀` + `nlinarith` squeeze on the floor-division count.
+    **Kernel-verified on the first submission attempt**, zero bugs.
+  - **Root assembly**: `exact ⟨fun n => 4n+2, O_1446cf16b3e14f8c.1,
+    O_1446cf16b3e14f8c.2.1, O_83c289dc5c4649bc, O_1446cf16b3e14f8c.2.2⟩`,
+    referencing both proved children by name. **`outcome=kernel_verified`,
+    `termination_reason=root_proved`**, reward included
+    `root_kernel_verified:20000`. The density-1/4 problem_version's root
+    existential is now completely proved end-to-end. Snapshot at
+    [proof/Erdos421_density_quarter.lean](proof/Erdos421_density_quarter.lean).
 
 ## Research dossier
 
@@ -75,11 +84,12 @@ area, not committed — reproducible from the description below):
 2. `f0cb282a-db3b-4715-b181-a70a342bea3b` — density-1/4 `initial_plan`
 3. `7af76aff-2b16-48ae-91fe-8fabbd9d69fd` — `retry_after_failure` (the two bugs above)
 4. `d5c8885f-0da0-4b9e-aeca-f10c5f2be0a0` — `success_retrospective` (structural half verified)
+5. `dbdcf521-614f-4496-895a-a9e8b17a2583` — `success_retrospective` (density Tendsto + root assembly both verified; campaign's density-1/4 sub-goal is COMPLETE)
 
 ## Reproduce
 
-This work is tracked in the `proofsearch` MCP's database (SQLite,
-`chatdb`/`proofsearch` per `.mcp.json`), not as standalone `.lean` files
-yet. A byte-stamped `proof/` snapshot will be added once the density
-Tendsto obligation is also kernel-verified and the root existential is
-assembled end-to-end.
+This work is tracked live in the `proofsearch` MCP's database. A
+reconstructed snapshot of the full kernel-verified proof is at
+[proof/Erdos421_density_quarter.lean](proof/Erdos421_density_quarter.lean)
+(toolchain `leanprover/lean4:v4.32.0-rc1` +
+`mathlib@360da6fa66c1273b76b6b2d8c5666fd5ac2e3b56`).
