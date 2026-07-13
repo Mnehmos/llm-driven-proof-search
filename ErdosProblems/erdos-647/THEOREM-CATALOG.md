@@ -26,29 +26,29 @@
 > (never "certified" — statements were authored in-project, not imported from a
 > neutral catalog). See [credit.md](credit.md) for attribution and limits.
 
-## Proof-source coverage (what's in `proof/` vs. cataloged by id)
+## Proof-source coverage & full episode index
 
-Two levels of documentation appear in this folder, and the difference is
-deliberate:
+Every one of the 104 catalogued theorems has its **full `episode_id` recovered**
+— see [dossiers/episode-index.tsv](dossiers/episode-index.tsv)
+(`family, problem_version_id, episode_id, n_episodes`). That index was
+reconstructed by parsing the `episode_create` responses in the session
+transcripts (both the Claude lanes and the Codex lanes), which log the full
+`(episode_id, problem_version_id)` pair verbatim. So **every theorem here is
+directly re-exportable and re-verifiable** — `proof_export{episode_id, format:
+"lean"}` returns the complete proof source, `format: "public_summary"` returns
+the redacted verification record, and `episode_replay` re-runs it through the
+Lean kernel.
 
-- **Full Lean proof source is committed** for the **8 headline theorems**
-  (Theorem 2's three stages + the five Layer-A lemmas) — the ones proved in the
-  session that created this folder. See [proof/](proof/). Their bodies are also
-  re-exportable via `proof_export{episode_id, format: "lean"}`.
-- **The other ~100 theorems are cataloged by `problem_version_id`** (with exact
-  statement and hash) but their proof *bodies* are **not committed here**. They
-  were kernel-verified in earlier sessions whose episode ids were recorded only
-  as short prefixes; `proof_export`/`episode_replay` require the **full episode
-  UUID**, and there is no problem→episode lookup to recover it from the
-  `problem_version_id` alone. Each remains fully re-verifiable in the environment
-  (the `root_statement_hash` pins the exact statement), and its proof body is
-  retrievable by anyone with the environment and the full episode id — it simply
-  isn't checked into this public folder.
+Committed proof bodies:
+- Full Lean source for the **8 headline theorems** (Theorem 2 ×3, Layer A ×5) is
+  in [proof/](proof/).
+- Full Lean source for the other families (sieve certificates, classifications,
+  bridging closures, residue closures, sub-AP closures) is exported into
+  [proof/campaign/](proof/campaign/), one consolidated file per family.
 
-This is an honest gap, not a claim that the ~100 are unproven: they reached
-`kernel_verified` (that is what earns a row here). Going forward, every newly
-verified theorem is snapshotted into `proof/` at the time of proof, so the gap
-does not grow.
+(An earlier version of this note claimed the older episode ids were
+unrecoverable because only short prefixes had been logged. That was wrong: the
+full ids were in the transcripts all along, and are now indexed above.)
 
 ## Tally by family
 
