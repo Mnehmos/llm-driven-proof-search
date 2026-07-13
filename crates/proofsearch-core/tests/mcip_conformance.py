@@ -37,6 +37,10 @@ RECORD_TYPE_TO_SCHEMA = {
     "dependency_manifest": "dependency_manifest.schema.json",
     "negative_example": "negative_example.schema.json",
     "rl_transition": "rl_transition.schema.json",
+    "literature_source": "literature_source.schema.json",
+    "idea_attribution": "idea_attribution.schema.json",
+    "contribution_statement": "contribution_statement.schema.json",
+    "citation_review": "citation_review.schema.json",
 }
 
 

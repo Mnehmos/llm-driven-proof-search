@@ -366,6 +366,130 @@ pub fn rl_transition_to_mcip(
     finalize("rl_transition", env, f)
 }
 
+fn mcip_attribution_status(s: crate::literature_lineage::AttributionStatus) -> &'static str {
+    use crate::literature_lineage::AttributionStatus::*;
+    match s {
+        DirectlyUsed => "directly_used",
+        LikelyInfluential => "likely_influential",
+        BackgroundOnly => "background_only",
+        IndependentlyRediscovered => "independent_rediscovery",
+        Uncertain => "uncertain",
+        NotUsed => "not_used",
+    }
+}
+
+fn mcip_visibility(v: crate::literature_lineage::Visibility) -> &'static str {
+    use crate::literature_lineage::Visibility::*;
+    match v {
+        ModelVisible => "model_visible",
+        PostHocReviewOnly => "post_hoc",
+    }
+}
+
+/// #236 -> MCIP `literature_source`.
+pub fn literature_source_to_mcip(
+    s: &crate::literature_lineage::SourceRecord,
+    env: &Envelope,
+) -> Value {
+    let mut f = BTreeMap::new();
+    f.insert("title".into(), json!(s.title));
+    if !s.authors.is_empty() {
+        f.insert("authors".into(), json!(s.authors));
+    }
+    if let Some(y) = s.year {
+        f.insert("publication_year".into(), json!(y));
+    }
+    if let Some(v) = &s.venue {
+        f.insert("venue".into(), json!(v));
+    }
+    if let Some(u) = &s.doi_or_url {
+        f.insert("external_ids".into(), json!({ "url": u }));
+    }
+    if let Some(h) = &s.source_hash {
+        f.insert("source_sha256".into(), json!(h));
+    }
+    finalize("literature_source", env, f)
+}
+
+/// #236 -> MCIP `idea_attribution`.
+pub fn idea_attribution_to_mcip(
+    s: &crate::literature_lineage::SourceRecord,
+    env: &Envelope,
+    formal_statement_sha256: &str,
+) -> Value {
+    let mut f = BTreeMap::new();
+    f.insert(
+        "formal_statement_sha256".into(),
+        json!(formal_statement_sha256),
+    );
+    f.insert("literature_source_id".into(), json!(s.source_id));
+    f.insert("source_sha256_pin".into(), json!(s.source_hash));
+    f.insert(
+        "attribution_status".into(),
+        json!(mcip_attribution_status(s.attribution)),
+    );
+    f.insert("visibility".into(), json!(mcip_visibility(s.visibility)));
+    finalize("idea_attribution", env, f)
+}
+
+/// #237 -> MCIP `contribution_statement`.
+pub fn contribution_statement_to_mcip(
+    r: &crate::publication_review::PublicationReview,
+    env: &Envelope,
+    author: &str,
+) -> Value {
+    let mut f = BTreeMap::new();
+    f.insert(
+        "contribution_class".into(),
+        serde_json::to_value(r.contribution_type).unwrap_or(Value::Null),
+    );
+    if !r.known_prior_art.is_empty() {
+        f.insert("known_prior_art_refs".into(), json!(r.known_prior_art));
+    }
+    f.insert("author".into(), json!(author));
+    f.insert("ai_assistance_disclosure".into(),
+        json!("AI-assisted proof search; correctness is kernel-verified. See the publication_review gate."));
+    finalize("contribution_statement", env, f)
+}
+
+/// #237 -> MCIP `citation_review` (from the publication review's citation-lineage layer).
+pub fn citation_review_to_mcip(
+    r: &crate::publication_review::PublicationReview,
+    env: &Envelope,
+    reviewer_confidence: f64,
+) -> Value {
+    use crate::publication_review::LayerStatus;
+    let layer = &r.layers.citation_lineage;
+    let review_status = match layer.status {
+        LayerStatus::Complete => "endorsed",
+        LayerStatus::BlockedMissingAttribution => "disputed",
+        _ => "needs_more_evidence",
+    };
+    let mut f = BTreeMap::new();
+    f.insert(
+        "reviewer".into(),
+        json!(if layer.reviewer.is_empty() {
+            "unassigned"
+        } else {
+            &layer.reviewer
+        }),
+    );
+    f.insert("reviewer_confidence".into(), json!(reviewer_confidence));
+    f.insert("review_status".into(), json!(review_status));
+    f.insert(
+        "reviewed_at".into(),
+        json!(if layer.decided_at.is_empty() {
+            &env.created_at
+        } else {
+            &layer.decided_at
+        }),
+    );
+    if let Some(n) = &layer.notes {
+        f.insert("notes".into(), json!(n));
+    }
+    finalize("citation_review", env, f)
+}
+
 /// #235 -> MCIP `repair_trajectory`.
 pub fn repair_chain_to_mcip(c: &crate::repair_chain::RepairChain, env: &Envelope) -> Value {
     let steps: Vec<Value> = c
@@ -584,12 +708,78 @@ mod tests {
         )
         .unwrap();
 
+        // #236 literature records + #237 contribution/citation records.
+        use crate::literature_lineage as lit;
+        let src = lit::SourceRecord {
+            source_id: "src-1".into(),
+            title: "On the irrationality of sqrt 2".into(),
+            authors: vec!["Euclid".into()],
+            year: Some(-300),
+            venue: Some("Elements".into()),
+            doi_or_url: Some("https://example.org/elements".into()),
+            source_hash: Some("a".repeat(64)),
+            retrieved_passages_artifact_ref: Some("sha256:passage".into()),
+            visibility: lit::Visibility::PostHocReviewOnly,
+            retrieval_timing: lit::RetrievalTiming::AfterProofDiscovery,
+            attribution: lit::AttributionStatus::IndependentlyRediscovered,
+            extracted_claims: vec![],
+            reviewer_notes: None,
+            confidence: "medium".into(),
+        };
+        let ls = literature_source_to_mcip(&src, &env());
+        assert_eq!(ls["record_type"], "literature_source");
+        std::fs::write(
+            out.join("literature_source.json"),
+            serde_json::to_vec_pretty(&ls).unwrap(),
+        )
+        .unwrap();
+        let ia = idea_attribution_to_mcip(&src, &env(), &"b".repeat(64));
+        assert_eq!(ia["attribution_status"], "independent_rediscovery");
+        std::fs::write(
+            out.join("idea_attribution.json"),
+            serde_json::to_vec_pretty(&ia).unwrap(),
+        )
+        .unwrap();
+
+        use crate::publication_review as pr;
+        let mut review = pr::PublicationReview {
+            review_version: pr::PUBLICATION_REVIEW_VERSION.into(),
+            episode_id: "ep".into(),
+            contribution_type: pr::ContributionType::Reconstruction,
+            layers: pr::ReviewLayers::default(),
+            makes_strong_novelty_claim: false,
+            novelty_uncertain: false,
+            contribution_statement: "Formal reconstruction; not novel.".into(),
+            known_prior_art: vec!["Prior Fano-flow literature".into()],
+        };
+        review.layers.citation_lineage = pr::ReviewDecision {
+            status: pr::LayerStatus::Complete,
+            reviewer: "maintainer".into(),
+            decided_at: "2026-07-12T00:00:00Z".into(),
+            bound_hashes: vec![],
+            notes: None,
+        };
+        let cs = contribution_statement_to_mcip(&review, &env(), "Mnehmos");
+        assert_eq!(cs["contribution_class"], "reconstruction");
+        std::fs::write(
+            out.join("contribution_statement.json"),
+            serde_json::to_vec_pretty(&cs).unwrap(),
+        )
+        .unwrap();
+        let cr = citation_review_to_mcip(&review, &env(), 0.8);
+        assert_eq!(cr["review_status"], "endorsed");
+        std::fs::write(
+            out.join("citation_review.json"),
+            serde_json::to_vec_pretty(&cr).unwrap(),
+        )
+        .unwrap();
+
         let bundle = build_bundle(
             "bundle-0001",
             "2026-07-12T00:00:00Z",
-            vec![pid, pp, rpm, dm, nm, tm, rt],
+            vec![pid, pp, rpm, dm, nm, tm, rt, ls, ia, cs, cr],
         );
-        assert_eq!(bundle["records"].as_array().unwrap().len(), 7);
+        assert_eq!(bundle["records"].as_array().unwrap().len(), 11);
         std::fs::write(
             out.join("bundle.json"),
             serde_json::to_vec_pretty(&bundle).unwrap(),
