@@ -2118,3 +2118,908 @@ theorem erdos647_subap_N24310 :
           rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
           norm_num
         exact hclose p hpdvd hfinal
+
+theorem erdos647_subap_N18733_mod1062347 :
+    ∀ n N : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → N % 1062347 = 18733 → False := by
+  intro n N hn H hnN hres
+  have shift : ArithmeticFunction.sigma 0 (n - 5) ≤ 7 := by
+    have hsub : n - 5 < n := by omega
+    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x
+    have hbdd : BddAbove (Set.range f) := by
+      refine ⟨2 * n, ?_⟩
+      rintro y ⟨x, rfl⟩
+      dsimp [f]
+      rw [ArithmeticFunction.sigma_zero_apply]
+      have hc := Nat.card_divisors_le_self (x : ℕ)
+      have hx : (x : ℕ) < n := x.isLt
+      omega
+    let mm : Fin n := ⟨n - 5, hsub⟩
+    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H
+    dsimp [f, mm] at hm
+    omega
+  set q := N / 1062347 with hq_def
+  have hNeq : N = 1062347 * q + 18733 := by omega
+  have hnk : n - 5 = 115 * (23279256 * q + 410497) := by
+    have h1 : n - 5 = 115 * 23279256 * q + 115 * 410497 := by omega
+    rw [h1]; ring
+  set eval := 23279256 * q + 410497 with heval_def
+  have heval_ge : 410497 ≤ eval := by dsimp [eval]; omega
+  have hnkne : n - 5 ≠ 0 := by omega
+  have hmono : ∀ a : ℕ, a ∣ (n - 5) → ArithmeticFunction.sigma 0 a ≤ ArithmeticFunction.sigma 0 (n - 5) := by
+    intro a hadvd
+    have hsub2 : a.divisors ⊆ (n - 5).divisors := by
+      intro d hd
+      rw [Nat.mem_divisors] at hd ⊢
+      exact ⟨hd.1.trans hadvd, hnkne⟩
+    rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]
+    exact Finset.card_le_card hsub2
+  have hclose : ∀ D : ℕ, D ∣ eval → 7 < ArithmeticFunction.sigma 0 (115 * D) → False := by
+    intro D hDdvd hsig
+    have hDm : 115 * D ∣ (n - 5) := by rw [hnk]; exact Nat.mul_dvd_mul_left 115 hDdvd
+    have := hmono (115 * D) hDm
+    omega
+  have hexists_other : ∀ p : ℕ, Nat.Prime p → p ∣ eval → (∀ s, eval ≠ p ^ s) →
+      ∃ p' : ℕ, Nat.Prime p' ∧ p' ∣ eval ∧ p' ≠ p := by
+    intro p hp hpdvd hnotpow
+    by_contra hnone
+    push_neg at hnone
+    have heval0 : eval ≠ 0 := by omega
+    have hpow := Nat.eq_prime_pow_of_unique_prime_dvd heval0 (fun {r} hq hqd => hnone r hq hqd)
+    exact hnotpow _ hpow
+  have hnopowA : ∀ s : ℕ, eval ≠ 5 ^ s := by
+    intro s hs
+    have heq2 : n - 5 = 5 ^ (s + 1) * 23 := by rw [hnk, hs]; ring
+    have hcop : Nat.Coprime (5 ^ (s + 1)) 23 := by
+      have hbase : Nat.Coprime 5 23 := by norm_num
+      exact hbase.pow_left (s + 1)
+    have hsigeq : ArithmeticFunction.sigma 0 (n - 5) = (s + 2) * ArithmeticFunction.sigma 0 23 := by
+      rw [heq2, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,
+        ArithmeticFunction.sigma_zero_apply_prime_pow (by norm_num : Nat.Prime 5)]
+    have hsigB : ArithmeticFunction.sigma 0 23 = 2 := by native_decide
+    rw [hsigB] at hsigeq
+    have hsle : (s + 2) * 2 ≤ 7 := by rw [← hsigeq]; exact shift
+    have hsbound : s ≤ 1 := by omega
+    interval_cases s
+    · norm_num at hs; omega
+    · norm_num at hs; omega
+  have hnopowB : ∀ s : ℕ, eval ≠ 23 ^ s := by
+    intro s hs
+    have heq2 : n - 5 = 23 ^ (s + 1) * 5 := by rw [hnk, hs]; ring
+    have hcop : Nat.Coprime (23 ^ (s + 1)) 5 := by
+      have hbase : Nat.Coprime 23 5 := by norm_num
+      exact hbase.pow_left (s + 1)
+    have hsigeq : ArithmeticFunction.sigma 0 (n - 5) = (s + 2) * ArithmeticFunction.sigma 0 5 := by
+      rw [heq2, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,
+        ArithmeticFunction.sigma_zero_apply_prime_pow (by norm_num : Nat.Prime 23)]
+    have hsigA : ArithmeticFunction.sigma 0 5 = 2 := by native_decide
+    rw [hsigA] at hsigeq
+    have hsle : (s + 2) * 2 ≤ 7 := by rw [← hsigeq]; exact shift
+    have hsbound : s ≤ 1 := by omega
+    interval_cases s
+    · norm_num at hs; omega
+    · norm_num at hs; omega
+  by_cases hq1 : 5 ∣ eval
+  · by_cases hq2 : 23 ∣ eval
+    · have hboth : (115:ℕ) ∣ eval := Nat.Coprime.mul_dvd_of_dvd_of_dvd (by norm_num) hq1 hq2
+      exact hclose 115 hboth (by native_decide)
+    · obtain ⟨p, hp, hpdvd, hpne⟩ := hexists_other 5 (by norm_num) hq1 hnopowA
+      have hcopg : Nat.Coprime 115 p := by
+        have hfac : (115:ℕ).primeFactors = {5, 23} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (115:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hpne rfl
+        · exact hq2 hpdvd
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 115 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (115 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+  · by_cases hq2 : 23 ∣ eval
+    · obtain ⟨p, hp, hpdvd, hpne⟩ := hexists_other 23 (by norm_num) hq2 hnopowB
+      have hcopg : Nat.Coprime 115 p := by
+        have hfac : (115:ℕ).primeFactors = {5, 23} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (115:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hq1 hpdvd
+        · exact hpne rfl
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 115 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (115 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+    · obtain ⟨p, hp, hpdvd⟩ := Nat.exists_prime_and_dvd (show eval ≠ 1 by omega)
+      have hcopg : Nat.Coprime 115 p := by
+        have hfac : (115:ℕ).primeFactors = {5, 23} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (115:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hq1 hpdvd
+        · exact hq2 hpdvd
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 115 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (115 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+
+theorem erdos647_subap_N17160 :
+    ∀ n N : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → N % 1708993 = 17160 → False := by
+  intro n N hn H hnN hres
+  have shift : ArithmeticFunction.sigma 0 (n - 5) ≤ 7 := by
+    have hsub : n - 5 < n := by omega
+    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x
+    have hbdd : BddAbove (Set.range f) := by
+      refine ⟨2 * n, ?_⟩
+      rintro y ⟨x, rfl⟩
+      dsimp [f]
+      rw [ArithmeticFunction.sigma_zero_apply]
+      have hc := Nat.card_divisors_le_self (x : ℕ)
+      have hx : (x : ℕ) < n := x.isLt
+      omega
+    let mm : Fin n := ⟨n - 5, hsub⟩
+    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H
+    dsimp [f, mm] at hm
+    omega
+  set q := N / 1708993 with hq_def
+  have hNeq : N = 1708993 * q + 17160 := by omega
+  have hnk : n - 5 = 185 * (23279256 * q + 233747) := by
+    have h1 : n - 5 = 185 * 23279256 * q + 185 * 233747 := by omega
+    rw [h1]; ring
+  set eval := 23279256 * q + 233747 with heval_def
+  have heval_ge : 233747 ≤ eval := by dsimp [eval]; omega
+  have hnkne : n - 5 ≠ 0 := by omega
+  have hmono : ∀ a : ℕ, a ∣ (n - 5) → ArithmeticFunction.sigma 0 a ≤ ArithmeticFunction.sigma 0 (n - 5) := by
+    intro a hadvd
+    have hsub2 : a.divisors ⊆ (n - 5).divisors := by
+      intro d hd
+      rw [Nat.mem_divisors] at hd ⊢
+      exact ⟨hd.1.trans hadvd, hnkne⟩
+    rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]
+    exact Finset.card_le_card hsub2
+  have hclose : ∀ D : ℕ, D ∣ eval → 7 < ArithmeticFunction.sigma 0 (185 * D) → False := by
+    intro D hDdvd hsig
+    have hDm : 185 * D ∣ (n - 5) := by rw [hnk]; exact Nat.mul_dvd_mul_left 185 hDdvd
+    have := hmono (185 * D) hDm
+    omega
+  have hexists_other : ∀ p : ℕ, Nat.Prime p → p ∣ eval → (∀ s, eval ≠ p ^ s) →
+      ∃ p' : ℕ, Nat.Prime p' ∧ p' ∣ eval ∧ p' ≠ p := by
+    intro p hp hpdvd hnotpow
+    by_contra hnone
+    push_neg at hnone
+    have heval0 : eval ≠ 0 := by omega
+    have hpow := Nat.eq_prime_pow_of_unique_prime_dvd heval0 (fun {r} hq hqd => hnone r hq hqd)
+    exact hnotpow _ hpow
+  have hnopowA : ∀ s : ℕ, eval ≠ 5 ^ s := by
+    intro s hs
+    have heq2 : n - 5 = 5 ^ (s + 1) * 37 := by rw [hnk, hs]; ring
+    have hcop : Nat.Coprime (5 ^ (s + 1)) 37 := by
+      have hbase : Nat.Coprime 5 37 := by norm_num
+      exact hbase.pow_left (s + 1)
+    have hsigeq : ArithmeticFunction.sigma 0 (n - 5) = (s + 2) * ArithmeticFunction.sigma 0 37 := by
+      rw [heq2, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,
+        ArithmeticFunction.sigma_zero_apply_prime_pow (by norm_num : Nat.Prime 5)]
+    have hsigB : ArithmeticFunction.sigma 0 37 = 2 := by native_decide
+    rw [hsigB] at hsigeq
+    have hsle : (s + 2) * 2 ≤ 7 := by rw [← hsigeq]; exact shift
+    have hsbound : s ≤ 1 := by omega
+    interval_cases s
+    · norm_num at hs; omega
+    · norm_num at hs; omega
+  have hnopowB : ∀ s : ℕ, eval ≠ 37 ^ s := by
+    intro s hs
+    have heq2 : n - 5 = 37 ^ (s + 1) * 5 := by rw [hnk, hs]; ring
+    have hcop : Nat.Coprime (37 ^ (s + 1)) 5 := by
+      have hbase : Nat.Coprime 37 5 := by norm_num
+      exact hbase.pow_left (s + 1)
+    have hsigeq : ArithmeticFunction.sigma 0 (n - 5) = (s + 2) * ArithmeticFunction.sigma 0 5 := by
+      rw [heq2, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,
+        ArithmeticFunction.sigma_zero_apply_prime_pow (by norm_num : Nat.Prime 37)]
+    have hsigA : ArithmeticFunction.sigma 0 5 = 2 := by native_decide
+    rw [hsigA] at hsigeq
+    have hsle : (s + 2) * 2 ≤ 7 := by rw [← hsigeq]; exact shift
+    have hsbound : s ≤ 1 := by omega
+    interval_cases s
+    · norm_num at hs; omega
+    · norm_num at hs; omega
+  by_cases hq1 : 5 ∣ eval
+  · by_cases hq2 : 37 ∣ eval
+    · have hboth : (185:ℕ) ∣ eval := Nat.Coprime.mul_dvd_of_dvd_of_dvd (by norm_num) hq1 hq2
+      exact hclose 185 hboth (by native_decide)
+    · obtain ⟨p, hp, hpdvd, hpne⟩ := hexists_other 5 (by norm_num) hq1 hnopowA
+      have hcopg : Nat.Coprime 185 p := by
+        have hfac : (185:ℕ).primeFactors = {5, 37} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (185:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hpne rfl
+        · exact hq2 hpdvd
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 185 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (185 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+  · by_cases hq2 : 37 ∣ eval
+    · obtain ⟨p, hp, hpdvd, hpne⟩ := hexists_other 37 (by norm_num) hq2 hnopowB
+      have hcopg : Nat.Coprime 185 p := by
+        have hfac : (185:ℕ).primeFactors = {5, 37} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (185:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hq1 hpdvd
+        · exact hpne rfl
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 185 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (185 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+    · obtain ⟨p, hp, hpdvd⟩ := Nat.exists_prime_and_dvd (show eval ≠ 1 by omega)
+      have hcopg : Nat.Coprime 185 p := by
+        have hfac : (185:ℕ).primeFactors = {5, 37} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (185:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hq1 hpdvd
+        · exact hq2 hpdvd
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 185 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (185 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+
+theorem erdos647_subap_N12155_mod1062347 :
+    ∀ n N : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → N % 1062347 = 12155 → False := by
+  intro n N hn H hnN hres
+  have shift : ArithmeticFunction.sigma 0 (n - 5) ≤ 7 := by
+    have hsub : n - 5 < n := by omega
+    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x
+    have hbdd : BddAbove (Set.range f) := by
+      refine ⟨2 * n, ?_⟩
+      rintro y ⟨x, rfl⟩
+      dsimp [f]
+      rw [ArithmeticFunction.sigma_zero_apply]
+      have hc := Nat.card_divisors_le_self (x : ℕ)
+      have hx : (x : ℕ) < n := x.isLt
+      omega
+    let mm : Fin n := ⟨n - 5, hsub⟩
+    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H
+    dsimp [f, mm] at hm
+    omega
+  set q := N / 1062347 with hq_def
+  have hNeq : N = 1062347 * q + 12155 := by omega
+  have hnk : n - 5 = 115 * (23279256 * q + 266353) := by
+    have h1 : n - 5 = 115 * 23279256 * q + 115 * 266353 := by omega
+    rw [h1]; ring
+  set eval := 23279256 * q + 266353 with heval_def
+  have heval_ge : 266353 ≤ eval := by dsimp [eval]; omega
+  have hnkne : n - 5 ≠ 0 := by omega
+  have hmono : ∀ a : ℕ, a ∣ (n - 5) → ArithmeticFunction.sigma 0 a ≤ ArithmeticFunction.sigma 0 (n - 5) := by
+    intro a hadvd
+    have hsub2 : a.divisors ⊆ (n - 5).divisors := by
+      intro d hd
+      rw [Nat.mem_divisors] at hd ⊢
+      exact ⟨hd.1.trans hadvd, hnkne⟩
+    rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]
+    exact Finset.card_le_card hsub2
+  have hclose : ∀ D : ℕ, D ∣ eval → 7 < ArithmeticFunction.sigma 0 (115 * D) → False := by
+    intro D hDdvd hsig
+    have hDm : 115 * D ∣ (n - 5) := by rw [hnk]; exact Nat.mul_dvd_mul_left 115 hDdvd
+    have := hmono (115 * D) hDm
+    omega
+  have hexists_other : ∀ p : ℕ, Nat.Prime p → p ∣ eval → (∀ s, eval ≠ p ^ s) →
+      ∃ p' : ℕ, Nat.Prime p' ∧ p' ∣ eval ∧ p' ≠ p := by
+    intro p hp hpdvd hnotpow
+    by_contra hnone
+    push_neg at hnone
+    have heval0 : eval ≠ 0 := by omega
+    have hpow := Nat.eq_prime_pow_of_unique_prime_dvd heval0 (fun {r} hq hqd => hnone r hq hqd)
+    exact hnotpow _ hpow
+  have hnopowA : ∀ s : ℕ, eval ≠ 5 ^ s := by
+    intro s hs
+    have heq2 : n - 5 = 5 ^ (s + 1) * 23 := by rw [hnk, hs]; ring
+    have hcop : Nat.Coprime (5 ^ (s + 1)) 23 := by
+      have hbase : Nat.Coprime 5 23 := by norm_num
+      exact hbase.pow_left (s + 1)
+    have hsigeq : ArithmeticFunction.sigma 0 (n - 5) = (s + 2) * ArithmeticFunction.sigma 0 23 := by
+      rw [heq2, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,
+        ArithmeticFunction.sigma_zero_apply_prime_pow (by norm_num : Nat.Prime 5)]
+    have hsigB : ArithmeticFunction.sigma 0 23 = 2 := by native_decide
+    rw [hsigB] at hsigeq
+    have hsle : (s + 2) * 2 ≤ 7 := by rw [← hsigeq]; exact shift
+    have hsbound : s ≤ 1 := by omega
+    interval_cases s
+    · norm_num at hs; omega
+    · norm_num at hs; omega
+  have hnopowB : ∀ s : ℕ, eval ≠ 23 ^ s := by
+    intro s hs
+    have heq2 : n - 5 = 23 ^ (s + 1) * 5 := by rw [hnk, hs]; ring
+    have hcop : Nat.Coprime (23 ^ (s + 1)) 5 := by
+      have hbase : Nat.Coprime 23 5 := by norm_num
+      exact hbase.pow_left (s + 1)
+    have hsigeq : ArithmeticFunction.sigma 0 (n - 5) = (s + 2) * ArithmeticFunction.sigma 0 5 := by
+      rw [heq2, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,
+        ArithmeticFunction.sigma_zero_apply_prime_pow (by norm_num : Nat.Prime 23)]
+    have hsigA : ArithmeticFunction.sigma 0 5 = 2 := by native_decide
+    rw [hsigA] at hsigeq
+    have hsle : (s + 2) * 2 ≤ 7 := by rw [← hsigeq]; exact shift
+    have hsbound : s ≤ 1 := by omega
+    interval_cases s
+    · norm_num at hs; omega
+    · norm_num at hs; omega
+  by_cases hq1 : 5 ∣ eval
+  · by_cases hq2 : 23 ∣ eval
+    · have hboth : (115:ℕ) ∣ eval := Nat.Coprime.mul_dvd_of_dvd_of_dvd (by norm_num) hq1 hq2
+      exact hclose 115 hboth (by native_decide)
+    · obtain ⟨p, hp, hpdvd, hpne⟩ := hexists_other 5 (by norm_num) hq1 hnopowA
+      have hcopg : Nat.Coprime 115 p := by
+        have hfac : (115:ℕ).primeFactors = {5, 23} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (115:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hpne rfl
+        · exact hq2 hpdvd
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 115 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (115 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+  · by_cases hq2 : 23 ∣ eval
+    · obtain ⟨p, hp, hpdvd, hpne⟩ := hexists_other 23 (by norm_num) hq2 hnopowB
+      have hcopg : Nat.Coprime 115 p := by
+        have hfac : (115:ℕ).primeFactors = {5, 23} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (115:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hq1 hpdvd
+        · exact hpne rfl
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 115 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (115 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+    · obtain ⟨p, hp, hpdvd⟩ := Nat.exists_prime_and_dvd (show eval ≠ 1 by omega)
+      have hcopg : Nat.Coprime 115 p := by
+        have hfac : (115:ℕ).primeFactors = {5, 23} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (115:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hq1 hpdvd
+        · exact hq2 hpdvd
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 115 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (115 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+
+theorem erdos647_subap_N4862_mod1893749 :
+    ∀ n N : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → N % 1893749 = 4862 → False := by
+  intro n N hn H hnN hres
+  have shift : ArithmeticFunction.sigma 0 (n - 5) ≤ 7 := by
+    have hsub : n - 5 < n := by omega
+    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x
+    have hbdd : BddAbove (Set.range f) := by
+      refine ⟨2 * n, ?_⟩
+      rintro y ⟨x, rfl⟩
+      dsimp [f]
+      rw [ArithmeticFunction.sigma_zero_apply]
+      have hc := Nat.card_divisors_le_self (x : ℕ)
+      have hx : (x : ℕ) < n := x.isLt
+      omega
+    let mm : Fin n := ⟨n - 5, hsub⟩
+    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H
+    dsimp [f, mm] at hm
+    omega
+  set q := N / 1893749 with hq_def
+  have hNeq : N = 1893749 * q + 4862 := by omega
+  have hnk : n - 5 = 205 * (23279256 * q + 59767) := by
+    have h1 : n - 5 = 205 * 23279256 * q + 205 * 59767 := by omega
+    rw [h1]; ring
+  set eval := 23279256 * q + 59767 with heval_def
+  have heval_ge : 59767 ≤ eval := by dsimp [eval]; omega
+  have hnkne : n - 5 ≠ 0 := by omega
+  have hmono : ∀ a : ℕ, a ∣ (n - 5) → ArithmeticFunction.sigma 0 a ≤ ArithmeticFunction.sigma 0 (n - 5) := by
+    intro a hadvd
+    have hsub2 : a.divisors ⊆ (n - 5).divisors := by
+      intro d hd
+      rw [Nat.mem_divisors] at hd ⊢
+      exact ⟨hd.1.trans hadvd, hnkne⟩
+    rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]
+    exact Finset.card_le_card hsub2
+  have hclose : ∀ D : ℕ, D ∣ eval → 7 < ArithmeticFunction.sigma 0 (205 * D) → False := by
+    intro D hDdvd hsig
+    have hDm : 205 * D ∣ (n - 5) := by rw [hnk]; exact Nat.mul_dvd_mul_left 205 hDdvd
+    have := hmono (205 * D) hDm
+    omega
+  have hexists_other : ∀ p : ℕ, Nat.Prime p → p ∣ eval → (∀ s, eval ≠ p ^ s) →
+      ∃ p' : ℕ, Nat.Prime p' ∧ p' ∣ eval ∧ p' ≠ p := by
+    intro p hp hpdvd hnotpow
+    by_contra hnone
+    push_neg at hnone
+    have heval0 : eval ≠ 0 := by omega
+    have hpow := Nat.eq_prime_pow_of_unique_prime_dvd heval0 (fun {r} hq hqd => hnone r hq hqd)
+    exact hnotpow _ hpow
+  have hnopowA : ∀ s : ℕ, eval ≠ 5 ^ s := by
+    intro s hs
+    have heq2 : n - 5 = 5 ^ (s + 1) * 41 := by rw [hnk, hs]; ring
+    have hcop : Nat.Coprime (5 ^ (s + 1)) 41 := by
+      have hbase : Nat.Coprime 5 41 := by norm_num
+      exact hbase.pow_left (s + 1)
+    have hsigeq : ArithmeticFunction.sigma 0 (n - 5) = (s + 2) * ArithmeticFunction.sigma 0 41 := by
+      rw [heq2, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,
+        ArithmeticFunction.sigma_zero_apply_prime_pow (by norm_num : Nat.Prime 5)]
+    have hsigB : ArithmeticFunction.sigma 0 41 = 2 := by native_decide
+    rw [hsigB] at hsigeq
+    have hsle : (s + 2) * 2 ≤ 7 := by rw [← hsigeq]; exact shift
+    have hsbound : s ≤ 1 := by omega
+    interval_cases s
+    · norm_num at hs; omega
+    · norm_num at hs; omega
+  have hnopowB : ∀ s : ℕ, eval ≠ 41 ^ s := by
+    intro s hs
+    have heq2 : n - 5 = 41 ^ (s + 1) * 5 := by rw [hnk, hs]; ring
+    have hcop : Nat.Coprime (41 ^ (s + 1)) 5 := by
+      have hbase : Nat.Coprime 41 5 := by norm_num
+      exact hbase.pow_left (s + 1)
+    have hsigeq : ArithmeticFunction.sigma 0 (n - 5) = (s + 2) * ArithmeticFunction.sigma 0 5 := by
+      rw [heq2, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,
+        ArithmeticFunction.sigma_zero_apply_prime_pow (by norm_num : Nat.Prime 41)]
+    have hsigA : ArithmeticFunction.sigma 0 5 = 2 := by native_decide
+    rw [hsigA] at hsigeq
+    have hsle : (s + 2) * 2 ≤ 7 := by rw [← hsigeq]; exact shift
+    have hsbound : s ≤ 1 := by omega
+    interval_cases s
+    · norm_num at hs; omega
+    · norm_num at hs; omega
+  by_cases hq1 : 5 ∣ eval
+  · by_cases hq2 : 41 ∣ eval
+    · have hboth : (205:ℕ) ∣ eval := Nat.Coprime.mul_dvd_of_dvd_of_dvd (by norm_num) hq1 hq2
+      exact hclose 205 hboth (by native_decide)
+    · obtain ⟨p, hp, hpdvd, hpne⟩ := hexists_other 5 (by norm_num) hq1 hnopowA
+      have hcopg : Nat.Coprime 205 p := by
+        have hfac : (205:ℕ).primeFactors = {5, 41} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (205:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hpne rfl
+        · exact hq2 hpdvd
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 205 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (205 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+  · by_cases hq2 : 41 ∣ eval
+    · obtain ⟨p, hp, hpdvd, hpne⟩ := hexists_other 41 (by norm_num) hq2 hnopowB
+      have hcopg : Nat.Coprime 205 p := by
+        have hfac : (205:ℕ).primeFactors = {5, 41} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (205:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hq1 hpdvd
+        · exact hpne rfl
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 205 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (205 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+    · obtain ⟨p, hp, hpdvd⟩ := Nat.exists_prime_and_dvd (show eval ≠ 1 by omega)
+      have hcopg : Nat.Coprime 205 p := by
+        have hfac : (205:ℕ).primeFactors = {5, 41} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (205:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hq1 hpdvd
+        · exact hq2 hpdvd
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 205 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (205 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+
+theorem erdos647_subap_N1287 :
+    ∀ n N : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → N % 1708993 = 1287 → False := by
+  intro n N hn H hnN hres
+  have shift : ArithmeticFunction.sigma 0 (n - 5) ≤ 7 := by
+    have hsub : n - 5 < n := by omega
+    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x
+    have hbdd : BddAbove (Set.range f) := by
+      refine ⟨2 * n, ?_⟩
+      rintro y ⟨x, rfl⟩
+      dsimp [f]
+      rw [ArithmeticFunction.sigma_zero_apply]
+      have hc := Nat.card_divisors_le_self (x : ℕ)
+      have hx : (x : ℕ) < n := x.isLt
+      omega
+    let mm : Fin n := ⟨n - 5, hsub⟩
+    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H
+    dsimp [f, mm] at hm
+    omega
+  set q := N / 1708993 with hq_def
+  have hNeq : N = 1708993 * q + 1287 := by omega
+  have hnk : n - 5 = 185 * (23279256 * q + 17531) := by
+    have h1 : n - 5 = 185 * 23279256 * q + 185 * 17531 := by omega
+    rw [h1]; ring
+  set eval := 23279256 * q + 17531 with heval_def
+  have heval_ge : 17531 ≤ eval := by dsimp [eval]; omega
+  have hnkne : n - 5 ≠ 0 := by omega
+  have hmono : ∀ a : ℕ, a ∣ (n - 5) → ArithmeticFunction.sigma 0 a ≤ ArithmeticFunction.sigma 0 (n - 5) := by
+    intro a hadvd
+    have hsub2 : a.divisors ⊆ (n - 5).divisors := by
+      intro d hd
+      rw [Nat.mem_divisors] at hd ⊢
+      exact ⟨hd.1.trans hadvd, hnkne⟩
+    rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]
+    exact Finset.card_le_card hsub2
+  have hclose : ∀ D : ℕ, D ∣ eval → 7 < ArithmeticFunction.sigma 0 (185 * D) → False := by
+    intro D hDdvd hsig
+    have hDm : 185 * D ∣ (n - 5) := by rw [hnk]; exact Nat.mul_dvd_mul_left 185 hDdvd
+    have := hmono (185 * D) hDm
+    omega
+  have hexists_other : ∀ p : ℕ, Nat.Prime p → p ∣ eval → (∀ s, eval ≠ p ^ s) →
+      ∃ p' : ℕ, Nat.Prime p' ∧ p' ∣ eval ∧ p' ≠ p := by
+    intro p hp hpdvd hnotpow
+    by_contra hnone
+    push_neg at hnone
+    have heval0 : eval ≠ 0 := by omega
+    have hpow := Nat.eq_prime_pow_of_unique_prime_dvd heval0 (fun {r} hq hqd => hnone r hq hqd)
+    exact hnotpow _ hpow
+  have hnopow5 : ∀ s : ℕ, eval ≠ 5 ^ s := by
+    intro s hs
+    have heq2 : n - 5 = 5 ^ (s + 1) * 37 := by rw [hnk, hs]; ring
+    have hcop : Nat.Coprime (5 ^ (s + 1)) 37 := by
+      have h5_37 : Nat.Coprime 5 37 := by norm_num
+      exact h5_37.pow_left (s + 1)
+    have hsigeq : ArithmeticFunction.sigma 0 (n - 5) = (s + 2) * ArithmeticFunction.sigma 0 37 := by
+      rw [heq2, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,
+        ArithmeticFunction.sigma_zero_apply_prime_pow (by norm_num : Nat.Prime 5)]
+    have hsig37 : ArithmeticFunction.sigma 0 37 = 2 := by native_decide
+    rw [hsig37] at hsigeq
+    have hsle : (s + 2) * 2 ≤ 7 := by rw [← hsigeq]; exact shift
+    have hsbound : s ≤ 1 := by omega
+    interval_cases s
+    · norm_num at hs; omega
+    · norm_num at hs; omega
+  have hnopow37 : ∀ s : ℕ, eval ≠ 37 ^ s := by
+    intro s hs
+    have heq2 : n - 5 = 37 ^ (s + 1) * 5 := by rw [hnk, hs]; ring
+    have hcop : Nat.Coprime (37 ^ (s + 1)) 5 := by
+      have h37_5 : Nat.Coprime 37 5 := by norm_num
+      exact h37_5.pow_left (s + 1)
+    have hsigeq : ArithmeticFunction.sigma 0 (n - 5) = (s + 2) * ArithmeticFunction.sigma 0 5 := by
+      rw [heq2, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,
+        ArithmeticFunction.sigma_zero_apply_prime_pow (by norm_num : Nat.Prime 37)]
+    have hsig5 : ArithmeticFunction.sigma 0 5 = 2 := by native_decide
+    rw [hsig5] at hsigeq
+    have hsle : (s + 2) * 2 ≤ 7 := by rw [← hsigeq]; exact shift
+    have hsbound : s ≤ 1 := by omega
+    interval_cases s
+    · norm_num at hs; omega
+    · norm_num at hs; omega
+  by_cases hq1 : 5 ∣ eval
+  · by_cases hq2 : 37 ∣ eval
+    · have hboth : (185:ℕ) ∣ eval := Nat.Coprime.mul_dvd_of_dvd_of_dvd (by norm_num) hq1 hq2
+      exact hclose 185 hboth (by native_decide)
+    · obtain ⟨p, hp, hpdvd, hpne⟩ := hexists_other 5 (by norm_num) hq1 hnopow5
+      have hcopg : Nat.Coprime 185 p := by
+        have hfac : (185:ℕ).primeFactors = {5, 37} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (185:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hpne rfl
+        · exact hq2 hpdvd
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 185 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (185 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+  · by_cases hq2 : 37 ∣ eval
+    · obtain ⟨p, hp, hpdvd, hpne⟩ := hexists_other 37 (by norm_num) hq2 hnopow37
+      have hcopg : Nat.Coprime 185 p := by
+        have hfac : (185:ℕ).primeFactors = {5, 37} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (185:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hq1 hpdvd
+        · exact hpne rfl
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 185 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (185 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+    · obtain ⟨p, hp, hpdvd⟩ := Nat.exists_prime_and_dvd (show eval ≠ 1 by omega)
+      have hcopg : Nat.Coprime 185 p := by
+        have hfac : (185:ℕ).primeFactors = {5, 37} := by native_decide
+        refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+        intro hpdvdg
+        have hpmem : p ∈ (185:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+        rw [hfac] at hpmem
+        simp at hpmem
+        rcases hpmem with rfl | rfl
+        · exact hq1 hpdvd
+        · exact hq2 hpdvd
+      have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+        rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+      have hsg : ArithmeticFunction.sigma 0 185 = 4 := by native_decide
+      have hfinal : 7 < ArithmeticFunction.sigma 0 (185 * p) := by
+        rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+        norm_num
+      exact hclose p hpdvd hfinal
+
+theorem erdos647_subap_N17017 :
+    ∀ n N : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → N % 1062347 = 17017 → False := by
+  intro n N hn H hnN hres
+  have shift : ArithmeticFunction.sigma 0 (n - 30) ≤ 32 := by
+    have hsub : n - 30 < n := by omega
+    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x
+    have hbdd : BddAbove (Set.range f) := by
+      refine ⟨2 * n, ?_⟩
+      rintro y ⟨x, rfl⟩
+      dsimp [f]
+      rw [ArithmeticFunction.sigma_zero_apply]
+      have hc := Nat.card_divisors_le_self (x : ℕ)
+      have hx : (x : ℕ) < n := x.isLt
+      omega
+    let mm : Fin n := ⟨n - 30, hsub⟩
+    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H
+    dsimp [f, mm] at hm
+    omega
+  set q := N / 1062347 with hq_def
+  have hNeq : N = 1062347 * q + 17017 := by omega
+  have hnk : n - 30 = 13110 * (204204 * q + 3271) := by
+    have h1 : n - 30 = 13110 * 204204 * q + 13110 * 3271 := by omega
+    rw [h1]; ring
+  set eval := 204204 * q + 3271 with heval_def
+  have heval_ge : 3271 ≤ eval := by dsimp [eval]; omega
+  have hnkne : n - 30 ≠ 0 := by omega
+  have hmono : ∀ a : ℕ, a ∣ (n - 30) → ArithmeticFunction.sigma 0 a ≤ ArithmeticFunction.sigma 0 (n - 30) := by
+    intro a hadvd
+    have hsub2 : a.divisors ⊆ (n - 30).divisors := by
+      intro d hd
+      rw [Nat.mem_divisors] at hd ⊢
+      exact ⟨hd.1.trans hadvd, hnkne⟩
+    rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]
+    exact Finset.card_le_card hsub2
+  have hclose : ∀ D : ℕ, D ∣ eval → 32 < ArithmeticFunction.sigma 0 (13110 * D) → False := by
+    intro D hDdvd hsig
+    have hDm : 13110 * D ∣ (n - 30) := by rw [hnk]; exact Nat.mul_dvd_mul_left 13110 hDdvd
+    have := hmono (13110 * D) hDm
+    omega
+  by_cases hq1 : 2 ∣ eval
+  · exact hclose 2 hq1 (by native_decide)
+  · by_cases hq2 : 3 ∣ eval
+    · exact hclose 3 hq2 (by native_decide)
+    · by_cases hq3 : 5 ∣ eval
+      · exact hclose 5 hq3 (by native_decide)
+      · by_cases hq4 : 19 ∣ eval
+        · exact hclose 19 hq4 (by native_decide)
+        · by_cases hq5 : 23 ∣ eval
+          · exact hclose 23 hq5 (by native_decide)
+          · obtain ⟨p, hp, hpdvd⟩ := Nat.exists_prime_and_dvd (show eval ≠ 1 by omega)
+            have hcopg : Nat.Coprime 13110 p := by
+              have hfac : (13110:ℕ).primeFactors = {2, 3, 5, 19, 23} := by native_decide
+              refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+              intro hpdvdg
+              have hpmem : p ∈ (13110:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+              rw [hfac] at hpmem
+              simp at hpmem
+              rcases hpmem with rfl | rfl | rfl | rfl | rfl
+              · exact hq1 hpdvd
+              · exact hq2 hpdvd
+              · exact hq3 hpdvd
+              · exact hq4 hpdvd
+              · exact hq5 hpdvd
+            have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+              rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+            have hsg : ArithmeticFunction.sigma 0 13110 = 32 := by native_decide
+            have hfinal : 32 < ArithmeticFunction.sigma 0 (13110 * p) := by
+              rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+              norm_num
+            exact hclose p hpdvd hfinal
+
+theorem erdos647_subap_N9009_mod1339481 :
+    ∀ n N : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → N % 1339481 = 9009 → False := by
+  intro n N hn H hnN hres
+  have shift : ArithmeticFunction.sigma 0 (n - 30) ≤ 32 := by
+    have hsub : n - 30 < n := by omega
+    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x
+    have hbdd : BddAbove (Set.range f) := by
+      refine ⟨2 * n, ?_⟩
+      rintro y ⟨x, rfl⟩
+      dsimp [f]
+      rw [ArithmeticFunction.sigma_zero_apply]
+      have hc := Nat.card_divisors_le_self (x : ℕ)
+      have hx : (x : ℕ) < n := x.isLt
+      omega
+    let mm : Fin n := ⟨n - 30, hsub⟩
+    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H
+    dsimp [f, mm] at hm
+    omega
+  set q := N / 1339481 with hq_def
+  have hNeq : N = 1339481 * q + 9009 := by omega
+  have hnk : n - 30 = 14790 * (228228 * q + 1535) := by
+    have h1 : n - 30 = 14790 * 228228 * q + 14790 * 1535 := by omega
+    rw [h1]; ring
+  set eval := 228228 * q + 1535 with heval_def
+  have heval_ge : 1535 ≤ eval := by dsimp [eval]; omega
+  have hnkne : n - 30 ≠ 0 := by omega
+  have hmono : ∀ a : ℕ, a ∣ (n - 30) → ArithmeticFunction.sigma 0 a ≤ ArithmeticFunction.sigma 0 (n - 30) := by
+    intro a hadvd
+    have hsub2 : a.divisors ⊆ (n - 30).divisors := by
+      intro d hd
+      rw [Nat.mem_divisors] at hd ⊢
+      exact ⟨hd.1.trans hadvd, hnkne⟩
+    rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]
+    exact Finset.card_le_card hsub2
+  have hclose : ∀ D : ℕ, D ∣ eval → 32 < ArithmeticFunction.sigma 0 (14790 * D) → False := by
+    intro D hDdvd hsig
+    have hDm : 14790 * D ∣ (n - 30) := by rw [hnk]; exact Nat.mul_dvd_mul_left 14790 hDdvd
+    have := hmono (14790 * D) hDm
+    omega
+  by_cases hq1 : 2 ∣ eval
+  · exact hclose 2 hq1 (by native_decide)
+  · by_cases hq2 : 3 ∣ eval
+    · exact hclose 3 hq2 (by native_decide)
+    · by_cases hq3 : 5 ∣ eval
+      · exact hclose 5 hq3 (by native_decide)
+      · by_cases hq4 : 17 ∣ eval
+        · exact hclose 17 hq4 (by native_decide)
+        · by_cases hq5 : 29 ∣ eval
+          · exact hclose 29 hq5 (by native_decide)
+          · obtain ⟨p, hp, hpdvd⟩ := Nat.exists_prime_and_dvd (show eval ≠ 1 by omega)
+            have hcopg : Nat.Coprime 14790 p := by
+              have hfac : (14790:ℕ).primeFactors = {2, 3, 5, 17, 29} := by native_decide
+              refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+              intro hpdvdg
+              have hpmem : p ∈ (14790:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+              rw [hfac] at hpmem
+              simp at hpmem
+              rcases hpmem with rfl | rfl | rfl | rfl | rfl
+              · exact hq1 hpdvd
+              · exact hq2 hpdvd
+              · exact hq3 hpdvd
+              · exact hq4 hpdvd
+              · exact hq5 hpdvd
+            have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+              rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+            have hsg : ArithmeticFunction.sigma 0 14790 = 32 := by native_decide
+            have hfinal : 32 < ArithmeticFunction.sigma 0 (14790 * p) := by
+              rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+              norm_num
+            exact hclose p hpdvd hfinal
+
+theorem erdos647_subap_N13013 :
+    ∀ n N : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → N % 1986127 = 13013 → False := by
+  intro n N hn H hnN hres
+  have shift : ArithmeticFunction.sigma 0 (n - 14) ≤ 16 := by
+    have hsub : n - 14 < n := by omega
+    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x
+    have hbdd : BddAbove (Set.range f) := by
+      refine ⟨2 * n, ?_⟩
+      rintro y ⟨x, rfl⟩
+      dsimp [f]
+      rw [ArithmeticFunction.sigma_zero_apply]
+      have hc := Nat.card_divisors_le_self (x : ℕ)
+      have hx : (x : ℕ) < n := x.isLt
+      omega
+    let mm : Fin n := ⟨n - 14, hsub⟩
+    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H
+    dsimp [f, mm] at hm
+    omega
+  set q := N / 1986127 with hq_def
+  have hNeq : N = 1986127 * q + 13013 := by omega
+  have hnk : n - 14 = 11438 * (437580 * q + 2867) := by
+    have h1 : n - 14 = 11438 * 437580 * q + 11438 * 2867 := by omega
+    rw [h1]; ring
+  set eval := 437580 * q + 2867 with heval_def
+  have heval_ge : 2867 ≤ eval := by dsimp [eval]; omega
+  have hnkne : n - 14 ≠ 0 := by omega
+  have hmono : ∀ a : ℕ, a ∣ (n - 14) → ArithmeticFunction.sigma 0 a ≤ ArithmeticFunction.sigma 0 (n - 14) := by
+    intro a hadvd
+    have hsub2 : a.divisors ⊆ (n - 14).divisors := by
+      intro d hd
+      rw [Nat.mem_divisors] at hd ⊢
+      exact ⟨hd.1.trans hadvd, hnkne⟩
+    rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]
+    exact Finset.card_le_card hsub2
+  have hclose : ∀ D : ℕ, D ∣ eval → 16 < ArithmeticFunction.sigma 0 (11438 * D) → False := by
+    intro D hDdvd hsig
+    have hDm : 11438 * D ∣ (n - 14) := by rw [hnk]; exact Nat.mul_dvd_mul_left 11438 hDdvd
+    have := hmono (11438 * D) hDm
+    omega
+  by_cases hq1 : 2 ∣ eval
+  · exact hclose 2 hq1 (by native_decide)
+  · by_cases hq2 : 7 ∣ eval
+    · exact hclose 7 hq2 (by native_decide)
+    · by_cases hq3 : 19 ∣ eval
+      · exact hclose 19 hq3 (by native_decide)
+      · by_cases hq4 : 43 ∣ eval
+        · exact hclose 43 hq4 (by native_decide)
+        · obtain ⟨p, hp, hpdvd⟩ := Nat.exists_prime_and_dvd (show eval ≠ 1 by omega)
+          have hcopg : Nat.Coprime 11438 p := by
+            have hfac : (11438:ℕ).primeFactors = {2, 7, 19, 43} := by native_decide
+            refine ((hp.coprime_iff_not_dvd).mpr ?_).symm
+            intro hpdvdg
+            have hpmem : p ∈ (11438:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩
+            rw [hfac] at hpmem
+            simp at hpmem
+            rcases hpmem with rfl | rfl | rfl | rfl
+            · exact hq1 hpdvd
+            · exact hq2 hpdvd
+            · exact hq3 hpdvd
+            · exact hq4 hpdvd
+          have hsigp : ArithmeticFunction.sigma 0 p = 2 := by
+            rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]
+          have hsg : ArithmeticFunction.sigma 0 11438 = 16 := by native_decide
+          have hfinal : 16 < ArithmeticFunction.sigma 0 (11438 * p) := by
+            rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]
+            norm_num
+          exact hclose p hpdvd hfinal
