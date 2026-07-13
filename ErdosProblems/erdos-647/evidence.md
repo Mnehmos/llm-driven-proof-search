@@ -75,6 +75,17 @@
 | outcome | **kernel_verified**, `root_proved` |
 | snapshot | [proof/Erdos647_MertensWeightIntegral.lean](proof/Erdos647_MertensWeightIntegral.lean) |
 
+### Layer A part 2b — power-law comparison antiderivative (FTC)
+
+| field | value |
+|---|---|
+| statement | `∀ x : ℝ, 2 ≤ x → ∫ t in (2:ℝ)..x, ((t^2)⁻¹) = (2:ℝ)⁻¹ - x⁻¹` |
+| problem_version_id | `89b0e678-f69b-427d-9e71-9523856a7cab` |
+| episode_id | `1f97aff1-1173-4246-b6dd-06d15ff25ee4` |
+| root_statement_hash | `cd03a308ddacbad0f6723dfd5c88377d555d9737d0ce99b92a5b4d325db0fe9b` |
+| outcome | **kernel_verified**, `root_proved` |
+| snapshot | [proof/Erdos647_PowerIntegral.lean](proof/Erdos647_PowerIntegral.lean) |
+
 ## Campaign ledger (problem_version_id index, 2026-07-12/13 sessions)
 
 Base sieve & refinement certificates: `200bce1c` (48 survivors mod 46189),
