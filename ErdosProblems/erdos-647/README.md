@@ -19,8 +19,10 @@ the human.
 | file | what it is |
 |---|---|
 | [whitepaper.md](whitepaper.md) | the full story: problem, prior art, campaign log, the wall, the frontier |
+| [THEOREM-CATALOG.md](THEOREM-CATALOG.md) | **complete inventory of all ~110 kernel-verified theorems** by family, with problem IDs, statements, hashes |
 | [attack-plan.md](attack-plan.md) | current plan of record (density-bound program, Layers A/B/C) |
-| [evidence.md](evidence.md) | machine records: statements, problem/episode IDs, hashes, outcomes |
+| [evidence.md](evidence.md) | machine records for the headline theorems: statements, episode IDs, hashes, outcomes |
+| [dossiers/](dossiers/public-summaries.md) | machine-generated `proof_export` public-summary records (verifiable, no proof body) |
 | [credit.md](credit.md) | attribution (Hughes, Kitamura, Idén, Bloom) + honest limits |
 | [proof/](proof/) | byte-faithful `.lean` snapshots of the headline kernel-verified theorems |
 
