@@ -30,6 +30,7 @@ RECORDS_DIR = os.environ.get(
 )
 
 RECORD_TYPE_TO_SCHEMA = {
+    "packet_identity": "packet_identity.schema.json",
     "proof_profile": "proof_profile.schema.json",
     "restriction_profile": "restriction_profile.schema.json",
     "dependency_manifest": "dependency_manifest.schema.json",
@@ -63,27 +64,44 @@ def main():
 
     registry = build_registry(SCHEMA_DIR)
     ok = True
+
+    def validate(obj, schema_name, label):
+        nonlocal ok
+        with open(os.path.join(SCHEMA_DIR, schema_name), encoding="utf-8") as fh:
+            schema = json.load(fh)
+        errors = sorted(Draft202012Validator(schema, registry=registry).iter_errors(obj), key=lambda e: list(e.path))
+        if errors:
+            ok = False
+            print(f"FAIL {label}: {len(errors)} error(s)")
+            for e in errors[:5]:
+                loc = "/".join(str(p) for p in e.path) or "(root)"
+                print(f"    - at {loc}: {e.message}")
+        else:
+            extra = f" (record_hash={obj['record_hash'][:12]}...)" if "record_hash" in obj else ""
+            print(f"PASS {label} conforms to MCIP {schema_name}{extra}")
+
     for rec_path in records:
         with open(rec_path, encoding="utf-8") as fh:
             rec = json.load(fh)
+        # A bundle: validate the envelope, then dispatch each record.
+        if "records" in rec and "mcip_version" in rec:
+            validate(rec, "bundle.schema.json", f"bundle {rec.get('bundle_id','')}")
+            for sub in rec["records"]:
+                srt = sub.get("record_type")
+                sname = RECORD_TYPE_TO_SCHEMA.get(srt)
+                if sname:
+                    validate(sub, sname, f"  bundle.record {srt}")
+                else:
+                    print(f"  SKIP bundle.record: unmapped {srt!r}")
+            continue
         rt = rec.get("record_type")
         schema_name = RECORD_TYPE_TO_SCHEMA.get(rt)
         if not schema_name:
             print(f"SKIP {os.path.basename(rec_path)}: unmapped record_type {rt!r}")
             continue
-        with open(os.path.join(SCHEMA_DIR, schema_name), encoding="utf-8") as fh:
-            schema = json.load(fh)
-        validator = Draft202012Validator(schema, registry=registry)
-        errors = sorted(validator.iter_errors(rec), key=lambda e: e.path)
-        if errors:
-            ok = False
-            print(f"FAIL {rt}: {len(errors)} error(s)")
-            for e in errors[:5]:
-                loc = "/".join(str(p) for p in e.path) or "(root)"
-                print(f"    - at {loc}: {e.message}")
-        else:
-            print(f"PASS {rt} conforms to MCIP {schema_name} (record_hash={rec['record_hash'][:12]}...)")
-    print("\nALL MCIP RECORDS CONFORM" if ok else "\nSOME RECORDS FAILED")
+        validate(rec, schema_name, rt)
+
+    print("\nALL MCIP RECORDS + BUNDLE CONFORM" if ok else "\nSOME RECORDS FAILED")
     return 0 if ok else 1
 
 

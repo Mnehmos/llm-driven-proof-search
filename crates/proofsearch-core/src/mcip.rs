@@ -366,6 +366,41 @@ pub fn rl_transition_to_mcip(
     finalize("rl_transition", env, f)
 }
 
+/// The `packet_identity` record that binds a bundle to a packet + environment.
+pub fn packet_identity_to_mcip(
+    env: &Envelope,
+    packet_version: &str,
+    formal_statement_sha256: Option<&str>,
+    lean_version: &str,
+    mathlib_rev: &str,
+    status: &str,
+) -> Value {
+    let mut f = BTreeMap::new();
+    f.insert("packet_version".into(), json!(packet_version));
+    f.insert(
+        "formal_statement_sha256".into(),
+        json!(formal_statement_sha256),
+    );
+    f.insert(
+        "toolchain".into(),
+        json!({ "lean_version": lean_version, "mathlib_rev": mathlib_rev }),
+    );
+    f.insert("status".into(), json!(status));
+    finalize("packet_identity", env, f)
+}
+
+/// Wrap MCIP records in the `bundle.schema.json` transport envelope (#230).
+/// The first record should be a `packet_identity` binding the bundle.
+pub fn build_bundle(bundle_id: &str, created_at: &str, records: Vec<Value>) -> Value {
+    json!({
+        "mcip_version": MCIP_VERSION,
+        "bundle_id": bundle_id,
+        "created_at": created_at,
+        "producer": "llm-driven-proof-search",
+        "records": records,
+    })
+}
+
 fn dedup_sorted(v: &[String]) -> Vec<String> {
     let mut out: Vec<String> = v.to_vec();
     out.sort();
@@ -489,6 +524,28 @@ mod tests {
         std::fs::write(
             out.join("rl_transition.json"),
             serde_json::to_vec_pretty(&tm).unwrap(),
+        )
+        .unwrap();
+
+        // #230: a full transport bundle bound by a packet_identity record.
+        let pid = packet_identity_to_mcip(
+            &env(),
+            "1.0.0",
+            Some(&"b".repeat(64)),
+            "leanprover/lean4:v4.32.0",
+            "abc123",
+            "kernel_verified",
+        );
+        assert_eq!(pid["record_type"], "packet_identity");
+        let bundle = build_bundle(
+            "bundle-0001",
+            "2026-07-12T00:00:00Z",
+            vec![pid, pp, rpm, dm, nm, tm],
+        );
+        assert_eq!(bundle["records"].as_array().unwrap().len(), 6);
+        std::fs::write(
+            out.join("bundle.json"),
+            serde_json::to_vec_pretty(&bundle).unwrap(),
         )
         .unwrap();
     }
