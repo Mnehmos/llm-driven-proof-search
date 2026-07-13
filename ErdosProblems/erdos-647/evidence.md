@@ -53,6 +53,17 @@
 | outcome | **kernel_verified**, `root_proved` |
 | snapshot | [proof/Erdos647_MertensIdentity.lean](proof/Erdos647_MertensIdentity.lean) |
 
+### Layer A part 2a — main-term antiderivative (FTC)
+
+| field | value |
+|---|---|
+| statement | `∀ x : ℝ, 2 ≤ x → ∫ t in (2:ℝ)..x, (Real.log t + 1) / (t * (Real.log t)^2) = (Real.log (Real.log x) - (Real.log x)⁻¹) - (Real.log (Real.log 2) - (Real.log 2)⁻¹)` |
+| problem_version_id | `781d4876-55c9-4c3c-9420-602b508771be` |
+| episode_id | `36f8eaa9-7116-44a3-b633-f8f1a03210f4` |
+| root_statement_hash | `513062caa29c528d7f2df3f6e92de50073c08703b87b05fe15abc49064431b65` |
+| outcome | **kernel_verified**, `root_proved` |
+| snapshot | [proof/Erdos647_MertensMainTerm.lean](proof/Erdos647_MertensMainTerm.lean) |
+
 ## Campaign ledger (problem_version_id index, 2026-07-12/13 sessions)
 
 Base sieve & refinement certificates: `200bce1c` (48 survivors mod 46189),
