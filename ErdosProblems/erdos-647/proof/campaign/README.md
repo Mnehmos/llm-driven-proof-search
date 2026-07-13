@@ -27,12 +27,11 @@ is the only thing that is actually publicly checkable.
   Family-2 classification), covering both the `ℓ ≤ 19` and `ℓ ≤ 29` tiers.
 - [family4-residue-closures.lean](family4-residue-closures.lean) — all 4
   frontier-shrinking residue closures (39325, 41470, 40612, 26884).
+- [family5-subap-closures.lean](family5-subap-closures.lean) — all 48 sub-AP
+  congruence closures, one per (residue, extra-prime) pair.
 
-## Not yet committed
-
-- **Family 5 — sub-AP closures (48):** the sub-cell-closure template, one per
-  (residue, prime) pair, backing the mod-23·23 sub-AP layer. Reproducible via
-  the episode index above; not yet materialized as committed `.lean` source.
+Every catalogued theorem across all 5 families is now published as committed,
+self-contained `.lean` source.
 
 Everything here is `kernel_verified`, pinned to
 `environment_hash 9e26d28edb…`; the problem itself remains **open**.
