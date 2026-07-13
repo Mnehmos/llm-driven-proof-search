@@ -26,6 +26,30 @@
 > (never "certified" — statements were authored in-project, not imported from a
 > neutral catalog). See [credit.md](credit.md) for attribution and limits.
 
+## Proof-source coverage (what's in `proof/` vs. cataloged by id)
+
+Two levels of documentation appear in this folder, and the difference is
+deliberate:
+
+- **Full Lean proof source is committed** for the **8 headline theorems**
+  (Theorem 2's three stages + the five Layer-A lemmas) — the ones proved in the
+  session that created this folder. See [proof/](proof/). Their bodies are also
+  re-exportable via `proof_export{episode_id, format: "lean"}`.
+- **The other ~100 theorems are cataloged by `problem_version_id`** (with exact
+  statement and hash) but their proof *bodies* are **not committed here**. They
+  were kernel-verified in earlier sessions whose episode ids were recorded only
+  as short prefixes; `proof_export`/`episode_replay` require the **full episode
+  UUID**, and there is no problem→episode lookup to recover it from the
+  `problem_version_id` alone. Each remains fully re-verifiable in the environment
+  (the `root_statement_hash` pins the exact statement), and its proof body is
+  retrievable by anyone with the environment and the full episode id — it simply
+  isn't checked into this public folder.
+
+This is an honest gap, not a claim that the ~100 are unproven: they reached
+`kernel_verified` (that is what earns a row here). Going forward, every newly
+verified theorem is snapshotted into `proof/` at the time of proof, so the gap
+does not grow.
+
 ## Tally by family
 
 | # | Family | Count | What it establishes |
