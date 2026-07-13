@@ -48,6 +48,29 @@ Mathlib umbrella.)
     existential is now completely proved end-to-end. Snapshot at
     [proof/Erdos421_density_quarter.lean](proof/Erdos421_density_quarter.lean).
 
+## Second problem/episode: generalized k-prime multiplicity lemma
+
+`problem_version_id = a9f3f35b-7495-44ba-a62b-78a5dc96be0b`, episode
+`318d5fcd-17af-4688-8f15-f4437dbdc4ce`. Statement: `∀ S : Finset ℕ, ∀ a b :
+Finset ℕ, (∀n∈a, ∑q∈S, n.factorization q = 1) → (∀n∈b, ...) → a.prod id =
+b.prod id → a.card = b.card`. **Kernel-verified on the first submission**,
+`outcome=kernel_verified`, `termination_reason=root_proved`. Generalizes
+the density-1/4 result's single-prime valuation argument to an arbitrary
+finite set of primes -- the ℕ-specialization of the corpus's
+`Set.IsMulCardSet` for Selfridge's set `A_S`. Snapshot:
+[proof/GeneralMulCard.lean](proof/GeneralMulCard.lean). Reasoning logs:
+`83d6e2ad-7604-43eb-9028-7e0960d14989` (initial_plan),
+`facbfe74-ac63-4591-992f-a146a4e1b082` (success_retrospective).
+
+Honest scoping of what's *left* for the full `erdos_786.parts.i.selfridge`:
+the cutoff-`k`-exists part is tractable (Mathlib has
+`Nat.Primes.not_summable_one_div`, `Mathlib/NumberTheory/SumPrimeReciprocals.lean`),
+but the density `= 1/e - ε` claim needs a Mertens-third-theorem-style
+asymptotic (`∏(1-1/q) → e⁻¹`) with **no located Mathlib lemma** (searched
+for "Mertens" across Mathlib, zero hits) -- assessed as a genuinely
+substantial, multi-session sub-project. Recorded as dossier node
+`9f7feb53-7be5-4dcd-8bf2-8c3a20fe4602` (open_gap).
+
 ## Research dossier
 
 `dossier_id = 1d3efc7e-8e21-45e6-a30f-8361bc187a8c`, linked to the root

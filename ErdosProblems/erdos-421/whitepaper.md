@@ -72,10 +72,21 @@ products force equal start index too. Together: injectivity.
   `d(n)=4n+2`, all three components (structural half, density-Tendsto
   half, and the final assembly) independently kernel-verified via three
   `episode_step` submissions in episode `0f5562fe-e14f-41b9-9f7b-ac11485a1be6`.
-- **Did not:** Selfridge's stronger `1/e − ε` bound (corpus `sorry`,
-  unformalized) — our natural next target — and emphatically **not** the
-  disputed density-1 claim, which remains genuinely open to this project
-  and to the mathematical community as of this writing.
+- **Did (kernel-verified 2026-07-13, bonus):** a *generalization* of the
+  multiplicity-one argument from one prime to an arbitrary finite set of
+  primes `S` — `∀ a b : Finset ℕ` divisible-by-exactly-one-of-`S`, equal
+  products force equal cardinality. This is the ℕ-specialization of the
+  corpus's `Set.IsMulCardSet` property and a genuine, reusable building
+  block toward Selfridge's construction. See
+  [proof/GeneralMulCard.lean](proof/GeneralMulCard.lean).
+- **Honestly assessed as NOT yet tractable in this campaign:** the rest of
+  Selfridge's `1/e − ε` claim needs a Mertens-third-theorem-style density
+  asymptotic (`∏(1−1/q) → e⁻¹`) that has no ready-made Mathlib lemma —
+  a genuinely deep, multi-session sub-project, not attempted blind. See
+  the dossier's `open_gap` node for the precise scoping.
+- **Did not, and will not attempt to shortcut:** the disputed density-1
+  claim, which remains genuinely open to this project and to the
+  mathematical community as of this writing.
 
 ## Proof-search trail
 
