@@ -439,6 +439,21 @@ pub struct DependencyManifestArgs {
     pub obligation_id: String,
 }
 
+/// Issue #230: export a MathCorpus MCIP v1 bundle for a verified obligation —
+/// packet_identity + proof_profile + dependency_manifest + controlled negatives
+/// + RL transitions, in the bundle transport envelope. Read-only.
+#[derive(JsonSchema, Deserialize)]
+pub struct MathcorpusExportArgs {
+    pub episode_id: String,
+    pub obligation_id: String,
+    /// The MathCorpus packet_id this evidence is about (e.g. "algebra.add_comm.v1").
+    pub packet_id: String,
+    #[serde(default = "default_true")]
+    pub include_negatives: bool,
+    #[serde(default = "default_true")]
+    pub include_transitions: bool,
+}
+
 /// Issue #224: server-side assembly and kernel-verification of a
 /// dependency-closed Lean module. Internally-tagged `action`, exactly like
 /// `verification`/`artifact`. All three actions traverse the verified obligation
@@ -11531,6 +11546,97 @@ impl ChatDbMcp {
 
     // -----------------------------------------------------------------
 
+    /// Issue #230: export a conformant MCIP v1 bundle for a verified obligation.
+    async fn do_mathcorpus_export(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        use proofsearch_core::mcip;
+        let args: MathcorpusExportArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let episode_id = Uuid::parse_str(&args.episode_id)
+            .map_err(|_| mcp_invalid_params(format!("episode_id is not a valid UUID: {}", args.episode_id)))?;
+        let obligation_id = Uuid::parse_str(&args.obligation_id)
+            .map_err(|_| mcp_invalid_params(format!("obligation_id is not a valid UUID: {}", args.obligation_id)))?;
+
+        let conn = self.conn.lock().await;
+        let source = interactive_verified_proof_text_for_obligation(&conn, episode_id, obligation_id)?
+            .ok_or_else(|| mcp_invalid_params(format!(
+                "no committed kernel_pass proof source for obligation {} in episode {}",
+                obligation_id, episode_id
+            )))?;
+        let (env_hash, import_manifest_json, lean_statement): (String, String, String) = conn.query_row(
+            "SELECT pv.environment_hash, pv.import_manifest_json, o.lean_statement
+             FROM episodes e JOIN problem_versions pv ON e.problem_version_id = pv.id
+             JOIN episode_obligations o ON o.id = ?2
+             WHERE e.id = ?1",
+            [episode_id.to_string(), obligation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).map_err(rs)?;
+        let import_manifest: Vec<String> = serde_json::from_str(&import_manifest_json).unwrap_or_default();
+        let is_module: bool = conn.query_row(
+            "SELECT 1 FROM episode_verified_modules WHERE root_obligation_id = ?1 LIMIT 1",
+            [obligation_id.to_string()], |_| Ok(()),
+        ).optional().map_err(rs)?.is_some();
+        let solve_kind = if is_module { "verified_module" } else { "single_theorem" };
+        let explicit: usize = conn.query_row(
+            "SELECT COUNT(*) FROM episode_obligation_edges WHERE parent_obligation_id = ?1",
+            [obligation_id.to_string()], |row| row.get::<_, i64>(0),
+        ).map_err(rs)? as usize;
+
+        let now = Utc::now().to_rfc3339();
+        let now = now.split('.').next().unwrap_or(&now).to_string() + "Z"; // MCIP iso_timestamp (trailing Z)
+        let formal_stmt_sha = {
+            use sha2::{Digest, Sha256};
+            format!("{:x}", Sha256::digest(lean_statement.as_bytes()))
+        };
+        let (lean_ver, mathlib_rev) = self.lean_environment.as_ref()
+            .map(|e| (e.toolchain.clone(), e.mathlib_rev.clone()))
+            .unwrap_or_else(|| ("unknown".into(), "unknown".into()));
+        let env_for = |rid: String| mcip::Envelope {
+            packet_id: args.packet_id.clone(),
+            record_id: rid,
+            environment_hash: env_hash.clone(),
+            created_at: now.clone(),
+            trust_status: "kernel_verified".into(),
+            export_eligibility: "restricted".into(),
+        };
+
+        let mut records: Vec<serde_json::Value> = Vec::new();
+        records.push(mcip::packet_identity_to_mcip(
+            &env_for(format!("{}:packet_identity", obligation_id)),
+            "1.0.0", Some(&formal_stmt_sha), &lean_ver, &mathlib_rev, "kernel_verified",
+        ));
+
+        let profile = proofsearch_core::analyzer::analyze_proof(&source, solve_kind,
+            proofsearch_core::analyzer::DependencyInputs { explicit, transitive: explicit, retrieval_depth: 0 });
+        let variant_id = format!("{}:variant", obligation_id);
+        records.push(mcip::proof_profile_to_mcip(&profile, &env_for(format!("{}:proof_profile", obligation_id)), &variant_id));
+
+        let manifest = proofsearch_core::dependency_manifest::build_dependency_manifest(
+            &conn, episode_id, obligation_id, &source, &env_hash, &import_manifest, None,
+        ).map_err(mcp_internal_error)?;
+        records.push(mcip::dependency_manifest_to_mcip(&manifest, &env_for(format!("{}:dependency_manifest", obligation_id)), Some(&variant_id)));
+
+        if args.include_negatives {
+            for (i, neg) in proofsearch_core::mutations::generate_mutations(&source).iter().enumerate() {
+                records.push(mcip::synthetic_negative_to_mcip(
+                    neg, &env_for(format!("{}:negative:{}", obligation_id, i)), &format!("{}:attempt", obligation_id),
+                ));
+            }
+        }
+        if args.include_transitions {
+            let transitions = proofsearch_core::orchestrator::dataset::export_rl_transitions(&conn, episode_id)
+                .map_err(mcp_internal_error)?;
+            for t in &transitions {
+                records.push(mcip::rl_transition_to_mcip(t, &env_for(format!("{}:transition:{}", episode_id, t.step_index)), &formal_stmt_sha));
+            }
+        }
+
+        let bundle = mcip::build_bundle(&format!("bundle:{}", obligation_id), &now, records);
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "bundle": bundle,
+            "policy": "MCIP v1 bundle of child EVIDENCE records — never packet authority. Records are hash-pinned; validate against schema/mcip/v1/ before ingestion.",
+        })).unwrap())]))
+    }
+
     /// Issue #234: build the verifier-backed dependency manifest for an accepted
     /// obligation solve — declared/approved/used/mathlib/module deps kept
     /// distinct, missing instrumentation marked unknown. Read-only.
@@ -14528,6 +14634,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ModuleArgs>("module", "Issue #224: assemble and kernel-verify a dependency-closed Lean module from the VERIFIED obligation graph, server-side — no resubmitting every step source through MCP. Internally-tagged `action`, exactly one of: {\"type\":\"assemble\",\"episode_id\":\"..\",\"root_obligation_id\":\"..\"} (traverse the obligation-edge DAG from the root, require a positive verified lemma per node, topologically order dependencies-before-dependents, resolve each declaration's REAL kernel-submitted proof from the tracked commit trail, and render one combined module via the proven SubmitModule assembly — returns source + declaration manifest + hashes, NO kernel run) | {\"type\":\"verify\",..} (assemble, then kernel-check the WHOLE closure as one module in the pinned Lean environment: producer/consumer theorem types are checked by Lean, not just ledger bookkeeping — returns kernel_outcome + diagnostic. A proof written against a dependency as a hypothesis instead of the named prior declaration fails HERE, which is the point) | {\"type\":\"export\",..} (verify, then persist the verified module and return an export bundle: source, declaration manifest, environment hash, module_source_hash, and a replay command). Missing/unverified/cyclic/incompatible/environment-mismatched dependencies fail with a structured graph error (error: root_not_found | unverified_dependency | cycle | incompatible_interface | environment_mismatch). Assembly is deterministic for the same graph. Trust: reuses the SAME assemble_module + verify_module the SubmitModule path uses; nothing here changes proof authority — only the pinned kernel decides."),
             make_tool::<ProofProfileArgs>("proof_profile", "Issue #232: derive a deterministic, versioned ProofProfile from a VERIFIED obligation's recorded proof source (episode_id + obligation_id). Classifies the proof for MathCorpus enrichment / evaluation: observed facts (tactics referenced, dotted declarations, tactic count, proof length, branch/case count, dependency counts, and induction/contradiction/witness/rewriting/intermediate-claim indicators, single-theorem vs verified-module) are kept STRICTLY separate from heuristic classification (primary/secondary proof class, automation level none/light/moderate/heavy). Every profile records analyzer_version and a profile_hash; the same source + inputs always produce the same profile. Read-only + derivative: it never runs Lean and never affects kernel acceptance. Regenerable at any time from persisted proof source. A manual annotation layer can add notes but can NEVER overwrite machine-derived evidence or change the hash."),
             make_tool::<DependencyManifestArgs>("dependency_manifest", "Issue #234: build the verifier-backed dependency & retrieval manifest for an accepted obligation solve (episode_id + obligation_id). Keeps DISTINCT: declared dependencies, approved obligation dependencies (recorded edges), actually-used verified lemmas, Mathlib declarations referenced by the proof, and verified module-item edges — plus retrieved candidates + scores and the retrieved-but-unused remainder (hard negatives). Bound to the exact environment_hash + import manifest the names resolve under. Deterministic + hash-pinned so replay can regenerate and compare. Critically, an uninstrumented category (e.g. retrieval, which isn't tracked yet) is marked `instrumented: false` (UNKNOWN) rather than an empty list — never falsely claiming nothing was used/retrieved. Read-only, derivative metadata; never affects kernel acceptance."),
+            make_tool::<MathcorpusExportArgs>("mathcorpus_export", "Issue #230: export a MathCorpus Interchange Protocol (MCIP) v1 bundle for a VERIFIED obligation (episode_id + obligation_id + packet_id). Emits the bundle transport envelope wrapping a packet_identity binding record plus proof_profile (#232), dependency_manifest (#234), controlled synthetic negative_examples (#235, opt-out via include_negatives=false), and RL rl_transitions (#238, opt-out via include_transitions=false) — each carrying the MCIP envelope (schema_version, record_type, record_id, packet_id, environment_hash, created_at, trust_status, export_eligibility) and a canonical record_hash (SHA-256 over the record's sorted-key JSON minus record_hash). Records are child EVIDENCE, never packet proof authority; validated against schema/mcip/v1/. Read-only."),
             make_tool::<ObservationExpandArgs>("observation_expand", "Issue #223: paginate observation material that did not fit the negotiated budget. A budgeted observation always includes the current obligation and its statement hash, the environment and import-manifest hashes, dependency summaries (name/status/hash), and a head of the latest primary diagnostic; larger material is replaced by a `references` entry carrying a byte-exact `content_hash`, `total_bytes`, `included_bytes`, and `next_offset`, and a `budget` block reports included/omitted/referenced byte counts. Call this with `episode_id`, `field` (root_theorem | dependency_signatures | diagnostics | proof_history), optional `obligation_id` (defaults to the episode's current target obligation), `offset` (start byte, default 0), and optional `limit` (max bytes, default 8192; 0 = whole tail). Returns {field, content_hash, total_bytes, offset, bytes, next_offset}; page until next_offset is null. Content is re-derived deterministically from recorded state and matches the omitted material byte-for-byte. Pure read path: never proof, never mutates state."),
             make_tool::<SemanticSkeletonArgs>("semantic_skeleton", "Issue #199: ONE tool for the semantic-skeleton / module-aware-fidelity family (issue #6), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (+ optional problem_version_id, episode_id, root_obligation_id, module_id, module_item_id, verified_lemma_id, dossier_id, node_id, root_fidelity_review_id — all links optional) attaches a semantic statement skeleton / module-aware fidelity note: a structured reading of a root statement, verified module, or source-aligned solution — quantifiers, hypotheses, conclusion, helper definitions, construction/final-answer map, back-translation, and fidelity risk_flags — scoped by review_scope (root_statement_only/module_artifact/source_aligned_solution/computational_check_only/structural_proof). semantic_fingerprint_hash is server-computed. Metadata only: never marks anything proved, never sets fidelity_status, never substitutes for problem_submit_fidelity_review; `observe` (semantic_skeleton_id, observation, finding, + optional risk_flags_json, details_json, observed_by) appends one module-aware fidelity observation (confirms_faithful/raises_concern/reports_mismatch/inconclusive, optional risk_flags) to a semantic skeleton's review_notes history and reads it back. Never changes proof/fidelity/budget/benchmark status; 'confirms_faithful' is not the root fidelity gate"),
             make_tool::<ExpertReviewArgs>("expert_review", "Issue #200: ONE tool for the expert-review ledger family (issue #14), dispatching on an internally-tagged `action` (`add` / `observe`) — exactly like `episode_step`'s typed `action`. `add` (dossier_id optional, reviewer_id, reviewer_role: proposer/construction_searcher/formalizer/prover/reviewer/domain_expert/refuter/editor/librarian, review_target_kind: source_problem/formal_statement/construction_artifact/module_artifact/external_citation/asymptotic_extraction/exposition/full_dossier, review_target_id, decision: approved/approved_with_changes/needs_changes/rejected/abstain, + optional expertise_tags, confidence: low/medium/high, notes, requested_changes_json, risk_flags_json) records one role-separated expert-review ledger entry against a polymorphic target. ADDITIVE metadata only: a pure insert that never marks anything proved and never changes proof, certification, obligation, budget, or benchmark state. reviewer_id is free text, not an authenticated principal; a human decision stays distinct from Lean kernel verification; `observe` (+ optional dossier_id, review_target_kind + review_target_id together, reviewer_role, include_revoked) reads expert-review ledger entries back, filtered by dossier, polymorphic target (kind+id together), and/or reviewer role. Revoked reviews are omitted unless include_revoked=true. Read-only. Across both actions: expert reviews are a role-separated ledger of who reviewed what, not a substitute for kernel verification"),
@@ -14716,9 +14823,19 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 49,
-                        "total_tool_count": 49,
+                        "classified_tool_count": 50,
+                        "total_tool_count": 50,
                         "tools": {
+                            "mathcorpus_export": {
+                                "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
+                                "trust_level": "derivative_evidence — MCIP records are child evidence, never packet proof authority; verifier-backed categories come from recorded verified state, mapped (not re-decided) into MCIP shape",
+                                "cost_surface": "none — DB reads + pure mapping, no Lean invocation",
+                                "benchmark_safety": "contamination_risk — the bundle carries proof profile, dependency, negative-example, and transition evidence referencing real proof content; export_eligibility defaults to 'restricted', private by default",
+                                "replayability": "deterministic — every record is hash-pinned (canonical record_hash); regenerable from persisted state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_evidence_bundle",
+                                "required_run_mode": "any — downstream MCIP ingestion applies its own trust/export gates"
+                            },
                             "dependency_manifest": {
                                 "side_effect": "read_only — aggregates recorded dependency/edge/proof state into a manifest; writes nothing",
                                 "trust_level": "verifier_backed for the recorded categories (edges, verified lemmas, module edges) plus heuristic mathlib-reference detection; derivative metadata that never affects kernel acceptance. Uninstrumented categories are marked unknown, never falsely proven",
@@ -16233,6 +16350,7 @@ impl ServerHandler for ChatDbMcp {
             "module" => self.do_module(args_val).await,
             "proof_profile" => self.do_proof_profile(args_val).await,
             "dependency_manifest" => self.do_dependency_manifest(args_val).await,
+            "mathcorpus_export" => self.do_mathcorpus_export(args_val).await,
             "semantic_skeleton" => self.do_semantic_skeleton(args_val).await,
             "expert_review" => self.do_expert_review(args_val).await,
             "mathlib_search_declarations" => {
@@ -17157,7 +17275,8 @@ mod tests {
         // derived from verified proof source) = 48.
         // + 1 dependency_manifest (issue #234: verifier-backed dependency &
         // retrieval manifest for an accepted solve) = 49.
-        assert_eq!(list_res.tools.len(), 49);
+        // + 1 mathcorpus_export (issue #230: MCIP v1 bundle export) = 50.
+        assert_eq!(list_res.tools.len(), 50);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
