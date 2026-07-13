@@ -11630,6 +11630,15 @@ impl ChatDbMcp {
             }
         }
 
+        // Attempt records: one per real recorded attempt on this obligation.
+        let summaries = proofsearch_core::repair_chain::attempt_summaries(&conn, obligation_id)
+            .map_err(mcp_internal_error)?;
+        for (i, a) in summaries.iter().enumerate() {
+            records.push(mcip::attempt_record_to_mcip(
+                a, &env_for(format!("{}:attempt:{}", obligation_id, i)), &episode_id.to_string(),
+            ));
+        }
+
         // #235: an ordered repair chain, when this obligation was solved only
         // after organic failures.
         if let Some(chain) = proofsearch_core::repair_chain::build_repair_chain(&conn, obligation_id)

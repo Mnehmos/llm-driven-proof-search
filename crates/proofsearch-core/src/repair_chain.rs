@@ -102,6 +102,18 @@ pub fn build_repair_chain(
     conn: &Connection,
     obligation_id: Uuid,
 ) -> Result<Option<RepairChain>, String> {
+    Ok(assemble_repair_chain(&attempt_summaries(
+        conn,
+        obligation_id,
+    )?))
+}
+
+/// The ordered per-attempt summaries for an obligation (committed/verified =
+/// succeeded; anything else that ran = failed; claimed/executing skipped).
+pub fn attempt_summaries(
+    conn: &Connection,
+    obligation_id: Uuid,
+) -> Result<Vec<AttemptSummary>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT aa.id, aa.status, aa.lean_result_json
@@ -147,7 +159,7 @@ pub fn build_repair_chain(
             repair_note: None,
         });
     }
-    Ok(assemble_repair_chain(&attempts))
+    Ok(attempts)
 }
 
 #[cfg(test)]

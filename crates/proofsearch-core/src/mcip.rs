@@ -513,6 +513,22 @@ pub fn repair_chain_to_mcip(c: &crate::repair_chain::RepairChain, env: &Envelope
     finalize("repair_trajectory", env, f)
 }
 
+/// One recorded attempt -> MCIP `attempt_record`.
+pub fn attempt_record_to_mcip(
+    a: &crate::repair_chain::AttemptSummary,
+    env: &Envelope,
+    episode_id: &str,
+) -> Value {
+    let mut f = BTreeMap::new();
+    f.insert(
+        "outcome".into(),
+        json!(if a.failed { "failed" } else { "succeeded" }),
+    );
+    f.insert("episode_id".into(), json!(episode_id));
+    f.insert("diagnostic_category".into(), json!(a.diagnostic_category));
+    finalize("attempt_record", env, f)
+}
+
 /// The `packet_identity` record that binds a bundle to a packet + environment.
 pub fn packet_identity_to_mcip(
     env: &Envelope,
@@ -774,12 +790,30 @@ mod tests {
         )
         .unwrap();
 
+        let ar = attempt_record_to_mcip(
+            &crate::repair_chain::AttemptSummary {
+                attempt_id: "a1".into(),
+                failed: true,
+                diagnostic_category: Some("tactic_timeout".into()),
+                repair_note: None,
+            },
+            &env(),
+            "ep",
+        );
+        assert_eq!(ar["record_type"], "attempt_record");
+        assert_eq!(ar["outcome"], "failed");
+        std::fs::write(
+            out.join("attempt_record.json"),
+            serde_json::to_vec_pretty(&ar).unwrap(),
+        )
+        .unwrap();
+
         let bundle = build_bundle(
             "bundle-0001",
             "2026-07-12T00:00:00Z",
-            vec![pid, pp, rpm, dm, nm, tm, rt, ls, ia, cs, cr],
+            vec![pid, pp, rpm, dm, nm, tm, rt, ls, ia, cs, cr, ar],
         );
-        assert_eq!(bundle["records"].as_array().unwrap().len(), 11);
+        assert_eq!(bundle["records"].as_array().unwrap().len(), 12);
         std::fs::write(
             out.join("bundle.json"),
             serde_json::to_vec_pretty(&bundle).unwrap(),
