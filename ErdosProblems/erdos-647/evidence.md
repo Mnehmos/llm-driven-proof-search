@@ -86,6 +86,18 @@
 | outcome | **kernel_verified**, `root_proved` |
 | snapshot | [proof/Erdos647_PowerIntegral.lean](proof/Erdos647_PowerIntegral.lean) |
 
+### Layer A part 2b — log(t+2) error integral bound (analytic inequality)
+
+| field | value |
+|---|---|
+| statement | `∀ x : ℝ, 2 ≤ x → (∫ t in (2:ℝ)..x, (Real.log t + 1) * Real.log (t + 2) / (t^2 * (Real.log t)^2)) ≤ 1 + (Real.log 2)⁻¹` |
+| problem_version_id | `8bf294a3-c882-4588-9894-e2fbc8ee0edf` |
+| episode_id | `6fa25185-251b-4203-a843-63fc2b0c43e6` |
+| root_statement_hash | `935fe42967e7ff964228916ae4a685a231db58b3131fe2f491aff2da5b1c0a61` |
+| outcome | **kernel_verified**, `root_proved` |
+| snapshot | [proof/Erdos647_MertensErrorLog.lean](proof/Erdos647_MertensErrorLog.lean) |
+| note | first genuine analytic inequality (pointwise comparison + `integral_mono_on`), not an antiderivative identity |
+
 ## Campaign ledger (problem_version_id index, 2026-07-12/13 sessions)
 
 Base sieve & refinement certificates: `200bce1c` (48 survivors mod 46189),
