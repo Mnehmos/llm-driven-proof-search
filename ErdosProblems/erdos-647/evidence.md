@@ -64,6 +64,17 @@
 | outcome | **kernel_verified**, `root_proved` |
 | snapshot | [proof/Erdos647_MertensMainTerm.lean](proof/Erdos647_MertensMainTerm.lean) |
 
+### Layer A part 2b (piece) — Mertens weight integral (FTC)
+
+| field | value |
+|---|---|
+| statement | `∀ x : ℝ, 2 ≤ x → ∫ t in (2:ℝ)..x, (Real.log t + 1) / (t^2 * (Real.log t)^2) = (2 * Real.log 2)⁻¹ - (x * Real.log x)⁻¹` |
+| problem_version_id | `1fc1ab2d-de49-4660-8d7c-8aefeb853a73` |
+| episode_id | `700f297f-d8bc-448f-b118-2921e1b98491` |
+| root_statement_hash | `a9a3ca286fad52e416ba8ee74768a661e33d22b0528d82f9022c4f636b7795df` |
+| outcome | **kernel_verified**, `root_proved` |
+| snapshot | [proof/Erdos647_MertensWeightIntegral.lean](proof/Erdos647_MertensWeightIntegral.lean) |
+
 ## Campaign ledger (problem_version_id index, 2026-07-12/13 sessions)
 
 Base sieve & refinement certificates: `200bce1c` (48 survivors mod 46189),
