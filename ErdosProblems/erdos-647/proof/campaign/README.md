@@ -2,45 +2,37 @@
 
 The eight headline theorems (Theorem 2 ×3, Layer A ×5) have their full Lean
 source in the parent [proof/](../) directory. This subfolder holds full proof
-bodies for the rest of the campaign, recovered from the tracked pipeline.
+bodies for the rest of the campaign, recovered from the tracked pipeline. Every
+`.lean` file here is self-contained: it checks against Mathlib with `lake`
+alone, with no dependency on the project's local database.
 
-## How every proof body is retrievable
+## How a proof body is (internally) re-derivable
 
-All **104** catalogued theorems have their full `episode_id` recorded in
-[../../dossiers/episode-index.tsv](../../dossiers/episode-index.tsv). Any body is
-one call away:
+Every catalogued theorem's full `episode_id` is recorded in
+[../../dossiers/episode-index.tsv](../../dossiers/episode-index.tsv). This is
+**not a public retrieval path** — it only lets *us*, holders of the local
+proof-search database, re-run `proof_export{episode_id, format: "lean"}` to
+regenerate a body if a committed file is ever lost. Anyone without that
+database gets nothing from an episode_id; the committed `.lean` source below
+is the only thing that is actually publicly checkable.
 
-```
-proof_export{episode_id: "<from episode-index.tsv>", format: "lean"}
-```
+## Committed here (fully published)
 
-returns the complete, kernel-verified Lean source (as re-verified through the
-pinned environment). `format: "public_summary"` returns the redacted record;
-`episode_replay` re-runs it through the Lean kernel.
+- [family1-sieve-certificates.lean](family1-sieve-certificates.lean) — all 8
+  sieve counting certificates (`native_decide` cardinality proofs).
+- [family2-classifications.lean](family2-classifications.lean) — all 14 shift
+  classification theorems (shift-bound extraction + p-adic decomposition).
+- [family3-bridging-closures.lean](family3-bridging-closures.lean) — all 21
+  bridging-closure theorems (`coeff·N % ℓ ≠ 1`, derived from the matching
+  Family-2 classification), covering both the `ℓ ≤ 19` and `ℓ ≤ 29` tiers.
+- [family4-residue-closures.lean](family4-residue-closures.lean) — all 4
+  frontier-shrinking residue closures (39325, 41470, 40612, 26884).
 
-## Committed here
+## Not yet committed
 
-- [family4-residue-closures.lean](family4-residue-closures.lean) — three of the
-  four frontier-shrinking residue closures (39325, 41470, 40612), the
-  substantial mathematically-distinct proofs; the fourth (26884) is noted inline
-  with its episode id.
-
-## Not separately committed (retrievable via the index)
-
-- **Family 1 — sieve counting certificates (9):** short `native_decide`
-  cardinality proofs.
-- **Family 2 — shift classification theorems (14):** the necessary-condition
-  theorems; template-based (shift-bound extraction + p-adic decomposition).
-- **Family 3 — bridging-closure theorems (21):** near-identical instances of one
-  template (`coeff·N % ℓ ≠ 1` from the classification), one per coefficient.
-- **Family 5 — sub-AP closures (48):** near-identical instances of the
-  sub-cell-closure template, one per (residue, prime) pair.
-
-These four families are dominated by template repetition — committing ~92
-near-duplicate bodies would add bulk without insight, and the episode index
-makes any of them reproducible on demand. If you want the complete set of `.lean`
-files materialized, export each `episode_id` in the index with
-`format: "lean"`.
+- **Family 5 — sub-AP closures (48):** the sub-cell-closure template, one per
+  (residue, prime) pair, backing the mod-23·23 sub-AP layer. Reproducible via
+  the episode index above; not yet materialized as committed `.lean` source.
 
 Everything here is `kernel_verified`, pinned to
 `environment_hash 9e26d28edb…`; the problem itself remains **open**.

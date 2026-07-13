@@ -42,7 +42,9 @@ Committed Lean source:
 - **8 headline theorems** (Theorem 2 ×3, Layer A ×5): [proof/](proof/).
 - **The rest of the campaign** (sieve certificates, classifications, bridging
   closures, residue closures, sub-AP closures): [proof/campaign/](proof/campaign/),
-  one consolidated file per family. This is being materialized family-by-family;
+  one consolidated file per family. Families 1–4 (sieve certificates, shift
+  classifications, bridging closures, residue closures — 47 theorems) are fully
+  committed; Family 5 (48 sub-AP closures) is not yet materialized.
   [proof/campaign/README.md](proof/campaign/README.md) tracks what is present.
 
 Internal reproduction handle (NOT a public retrieval path):
