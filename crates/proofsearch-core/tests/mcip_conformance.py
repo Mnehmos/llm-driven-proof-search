@@ -32,6 +32,7 @@ RECORDS_DIR = os.environ.get(
 RECORD_TYPE_TO_SCHEMA = {
     "packet_identity": "packet_identity.schema.json",
     "proof_profile": "proof_profile.schema.json",
+    "repair_trajectory": "repair_trajectory.schema.json",
     "restriction_profile": "restriction_profile.schema.json",
     "dependency_manifest": "dependency_manifest.schema.json",
     "negative_example": "negative_example.schema.json",

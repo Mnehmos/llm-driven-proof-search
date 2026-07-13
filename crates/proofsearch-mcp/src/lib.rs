@@ -11630,6 +11630,14 @@ impl ChatDbMcp {
             }
         }
 
+        // #235: an ordered repair chain, when this obligation was solved only
+        // after organic failures.
+        if let Some(chain) = proofsearch_core::repair_chain::build_repair_chain(&conn, obligation_id)
+            .map_err(mcp_internal_error)?
+        {
+            records.push(mcip::repair_chain_to_mcip(&chain, &env_for(format!("{}:repair_trajectory", obligation_id))));
+        }
+
         let bundle = mcip::build_bundle(&format!("bundle:{}", obligation_id), &now, records);
         Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
             "bundle": bundle,

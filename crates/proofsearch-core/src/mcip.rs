@@ -366,6 +366,29 @@ pub fn rl_transition_to_mcip(
     finalize("rl_transition", env, f)
 }
 
+/// #235 -> MCIP `repair_trajectory`.
+pub fn repair_chain_to_mcip(c: &crate::repair_chain::RepairChain, env: &Envelope) -> Value {
+    let steps: Vec<Value> = c
+        .steps
+        .iter()
+        .map(|s| {
+            json!({
+                "step_index": s.step_index,
+                "from_attempt_id": s.from_attempt_id,
+                "repair_action": s.repair_action,
+                "diagnostic_category_addressed": s.diagnostic_category_addressed,
+                "to_ref": s.to_ref,
+                "step_hash": s.step_hash,
+            })
+        })
+        .collect();
+    let mut f = BTreeMap::new();
+    f.insert("steps".into(), json!(steps));
+    f.insert("terminal_outcome".into(), json!(c.terminal_outcome));
+    f.insert("terminal_ref".into(), json!(c.terminal_ref));
+    finalize("repair_trajectory", env, f)
+}
+
 /// The `packet_identity` record that binds a bundle to a packet + environment.
 pub fn packet_identity_to_mcip(
     env: &Envelope,
@@ -537,12 +560,36 @@ mod tests {
             "kernel_verified",
         );
         assert_eq!(pid["record_type"], "packet_identity");
+
+        let chain = crate::repair_chain::assemble_repair_chain(&[
+            crate::repair_chain::AttemptSummary {
+                attempt_id: "a1".into(),
+                failed: true,
+                diagnostic_category: Some("tactic_timeout".into()),
+                repair_note: None,
+            },
+            crate::repair_chain::AttemptSummary {
+                attempt_id: "a2".into(),
+                failed: false,
+                diagnostic_category: None,
+                repair_note: None,
+            },
+        ])
+        .unwrap();
+        let rt = repair_chain_to_mcip(&chain, &env());
+        assert_eq!(rt["record_type"], "repair_trajectory");
+        std::fs::write(
+            out.join("repair_trajectory.json"),
+            serde_json::to_vec_pretty(&rt).unwrap(),
+        )
+        .unwrap();
+
         let bundle = build_bundle(
             "bundle-0001",
             "2026-07-12T00:00:00Z",
-            vec![pid, pp, rpm, dm, nm, tm],
+            vec![pid, pp, rpm, dm, nm, tm, rt],
         );
-        assert_eq!(bundle["records"].as_array().unwrap().len(), 6);
+        assert_eq!(bundle["records"].as_array().unwrap().len(), 7);
         std::fs::write(
             out.join("bundle.json"),
             serde_json::to_vec_pretty(&bundle).unwrap(),
