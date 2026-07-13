@@ -86,6 +86,16 @@ problem version. Contains:
 - Two dossier `nodes`: the root proposition, and an explicit `open_gap`
   node stating the density-1 case is genuinely unresolved by this project.
 
+## OEIS cross-check (2026-07-13)
+
+erdosproblems.com/421 lists A389544 and A390848 as "related OEIS
+sequences." Direct OEIS access is blocked for automated fetches (403);
+web search snippets indicate **A390848 was withdrawn** (per the OEIS wiki
+"Deleted sequences/2025" page) and A389544's content could not be
+independently retrieved this way. Not pursued further; flagged here so a
+future session with OEIS access doesn't skip this check believing it was
+never attempted.
+
 ## Empirical searches (experimental evidence, never proof)
 
 `empirical_search_id = 61fa13eb-1cac-4ae1-82ed-cc0ff0483aaf` — exact
