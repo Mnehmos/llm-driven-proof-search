@@ -9,15 +9,21 @@
 > statement hash and episode id. Nothing here resolves the open problem; this
 > is the machine-checked scaffolding *around* it.
 >
-> **How to independently verify / export any entry.** Every tracked problem is
-> re-exportable and re-verifiable from its id via the environment's tools:
-> `proof_export{episode_id, format}` (dossier — `public_summary` is public-safe
-> and never exposes the proof body; `lean` gives bare source), `episode_replay`
-> (re-runs the typed actions through the canonical reducer with Lean
-> re-verification), or `problem_list` (returns the exact `root_statement_hash`).
-> Machine-generated `public_summary` records for the eight headline theorems
-> are in [dossiers/public-summaries.md](dossiers/public-summaries.md); full
-> Lean proof snapshots for those eight are in [proof/](proof/).
+> **What is portable vs. internal.** The **committed `.lean` files are the
+> public artifact** — they are self-contained Lean 4 source that checks against
+> Mathlib with `lake`, needing nothing from this project's database. The
+> `problem_version_id`/`episode_id` handles and the `proof_export` /
+> `episode_replay` tools referenced below operate against *our* local
+> proof-search environment DB; **they are not a retrieval path for anyone who
+> only has this public repo.** They are recorded here for our own reproduction
+> and audit trail, and so we can regenerate any `.lean` body on demand. If a
+> body you want is not yet committed as source, that is a gap in this repo, not
+> something a third party can resolve with an id.
+>
+> Full Lean source: the eight headline theorems are in [proof/](proof/); the
+> rest of the campaign is being materialized into [proof/campaign/](proof/campaign/).
+> The `root_statement_hash` in each row lets anyone confirm they are checking the
+> exact statement claimed.
 >
 > Pinned environment for the whole campaign:
 > `environment_hash = 9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d`,
@@ -28,27 +34,25 @@
 
 ## Proof-source coverage & full episode index
 
-Every one of the 104 catalogued theorems has its **full `episode_id` recovered**
-— see [dossiers/episode-index.tsv](dossiers/episode-index.tsv)
-(`family, problem_version_id, episode_id, n_episodes`). That index was
-reconstructed by parsing the `episode_create` responses in the session
-transcripts (both the Claude lanes and the Codex lanes), which log the full
-`(episode_id, problem_version_id)` pair verbatim. So **every theorem here is
-directly re-exportable and re-verifiable** — `proof_export{episode_id, format:
-"lean"}` returns the complete proof source, `format: "public_summary"` returns
-the redacted verification record, and `episode_replay` re-runs it through the
-Lean kernel.
+**The portable, publicly-verifiable artifact is the committed Lean source**, not
+any id. Anyone can check a committed `.lean` file against Mathlib with `lake` —
+no access to this project's database required.
 
-Committed proof bodies:
-- Full Lean source for the **8 headline theorems** (Theorem 2 ×3, Layer A ×5) is
-  in [proof/](proof/).
-- Full Lean source for the other families (sieve certificates, classifications,
-  bridging closures, residue closures, sub-AP closures) is exported into
-  [proof/campaign/](proof/campaign/), one consolidated file per family.
+Committed Lean source:
+- **8 headline theorems** (Theorem 2 ×3, Layer A ×5): [proof/](proof/).
+- **The rest of the campaign** (sieve certificates, classifications, bridging
+  closures, residue closures, sub-AP closures): [proof/campaign/](proof/campaign/),
+  one consolidated file per family. This is being materialized family-by-family;
+  [proof/campaign/README.md](proof/campaign/README.md) tracks what is present.
 
-(An earlier version of this note claimed the older episode ids were
-unrecoverable because only short prefixes had been logged. That was wrong: the
-full ids were in the transcripts all along, and are now indexed above.)
+Internal reproduction handle (NOT a public retrieval path):
+[dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps every theorem to
+its `episode_id` in *our* environment. We use it to regenerate any `.lean` body
+via `proof_export`; it does nothing for someone who only has this repo. It was
+reconstructed by parsing the `episode_create` responses in the Claude- and
+Codex-lane session transcripts (each logs the full `(episode_id,
+problem_version_id)` pair). Committed for our own audit trail and so no body is
+ever unrecoverable on our side.
 
 ## Tally by family
 
