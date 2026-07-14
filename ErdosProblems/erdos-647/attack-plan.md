@@ -240,6 +240,16 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     syntactically equal under Nat mul-commutativity (need `⟨p, by ring⟩`);
     `Nat.Coprime.dvd_of_dvd_mul_left` wants its coprimality hypothesis with
     the dividing element first, requiring a `.symm` flip.
+  - ✅ **Concrete closed form for the abstract SelbergSieve divisor sum
+    DONE (2026-07-14)**: `erdos647_divisor_sum_selbergTerms_div_nu` proves,
+    for any `s:SelbergSieve` and `d∈s.prodPrimes.divisors`,
+    `∑_{d1∣d} selbergTerms(d1)/ν(d1) = ∏_{p∈d.primeFactors}(1+(1-ν(p))⁻¹)`
+    — combining `erdos647_divisor_sum_prod_one_add` (inlined, since
+    cross-submission references don't work) with Mathlib's
+    `selbergTerms_apply` and `nu_pos_of_dvd_prodPrimes`. This makes
+    `erdos647_lambdaSquared_bound`'s bound fully concrete. Kernel-verified
+    FIRST TRY on both the untracked pre-check and the tracked pipeline.
+    Snapshot `proof/Erdos647_DivisorSumSelbergTermsDivNu.lean`.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
