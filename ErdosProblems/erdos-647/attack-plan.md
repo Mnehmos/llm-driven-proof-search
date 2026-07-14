@@ -379,6 +379,19 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     term growth-rate chain (`nu_sum_ge_seven_mertens`+`L_ge_exp_nu_sum`+
     Layer A Mertens) is solid and complete; only the error-term side needs
     this rework.
+  - ✅ **errSum REPAIR, Milestone A piece 1/N DONE (2026-07-14):
+    `erdos647_lambdaSquared_support_sq`** proves the generic mechanism
+    that fixes the critical errSum defect: `(∀d,R<d→w d=0) → ∀d,
+    R*R<d→lambdaSquared(w)(d)=0` — a level-truncated weight automatically
+    gives a level-truncated `lambdaSquared`, converting the errSum bound
+    from "over all `2^π(z)` divisors" to "over integers `≤R²`". Fully
+    generic, no Lean bugs. Snapshot
+    `proof/Erdos647_LambdaSquaredSupportSq.lean`. **Still needed for the
+    full repair** (Milestone A remainder): actually construct a
+    truncated optimal weight `w_R` (restricted-divisor-set Möbius
+    inversion, `w_R(1)=1`, `mainSum(lambdaSquared w_R)=1/L_R`) — see the
+    level-truncation repair plan under the CRITICAL DIAGNOSTIC headline
+    at the top of this file.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
