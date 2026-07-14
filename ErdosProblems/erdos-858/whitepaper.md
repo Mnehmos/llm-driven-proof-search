@@ -295,13 +295,17 @@ frontier combinatorics are machine-checked through the Corollary 3.5 capstone
 `M(N) = S_N(K)`; the Theorem 2.4 recursion's combinatorial content is verified;
 and the §5 analytic wall has been breached at its base — the two-sided
 quantitative-Mertens bracket, the Prop 5.6 core, and the KP threshold are now
-kernel-verified (97 results total; incl. the reusable **left-endpoint Riemann-sum →
+kernel-verified (102 results total; incl. the reusable **left-endpoint Riemann-sum →
 interval-integral theorem for continuous f, built from scratch** as the §5.4 engine; α₂ now numerically bracketed to (0.26, 0.30),
 and — via EXACT FTC evaluation of the density integral, no PNT — c₂ bracketed
-two-sided to **[0.610, 0.633]** around the true 0.6187712…; and the §5.4 harmonic
-Riemann-sum machinery for Theorem 1.2 is now under construction — the interval-sum
-weight `Σ_{m<a≤n}1/a = log(n/m)+O(1)`, `harmonic n/log n → 1`, and the block-weight
-limit `harmonic(2n)−harmonic(n) → log 2` are verified), and the concrete
+two-sided to **[0.610, 0.633]** around the true 0.6187712…; and the §5.4 log-harmonic
+transfer for Theorem 1.2 now has its five abstract rungs verified — the log-scale block mass
+`harmonic(⌊N^x⌋)/log N → x` (#98), interval mass
+`(harmonic(⌊N^t⌋)−harmonic(⌊N^s⌋))/log N → t−s` (#99), the fixed-K weighted step-sum →
+Riemann step-sum `R_K(f)` (#100), the aggregation error bound
+`|Σ S_j − Σ w_j·m_j| ≤ ε·Σ m_j` (#101), and the diagonal two-limit squeeze that assembles
+them into `(1/log N)Σ f(u_a)/a → ∫₀¹f` (#102) — leaving only the concrete block partition
+identity), and the concrete
 building blocks of Mertens'
 first theorem are now verified (double-count identity, `log(N!)` bridge, `ψ=O(x)`).
 Toward the two headline theorems the dependency chains have tightened further: the

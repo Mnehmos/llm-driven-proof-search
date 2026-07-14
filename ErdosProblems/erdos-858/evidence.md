@@ -1223,6 +1223,81 @@ pin. (§5.1's frontier closed-form hit a transient API error mid-round — reach
   variation `≤ ε/2`; rung C′ (#96) gives `|∫₀¹f − R_K| ≤ ε/2 < ε`. **This is the durable artifact identified as the
   best first checkpoint**, the real-analysis core of §5.4. No PNT.
 
+### 98. Log-harmonic transfer rung 1 — normalized harmonic endpoint (log-scale block mass)  (paper §5.4)
+
+- **Statement (root_statement_hash `ade71283ccd2aedcc1a9db7f71f13d395f034ed01a62f0a8398ccf5e6370720d`):**
+  for `x > 0` (with the floor endpoint limit `log⌊N^x⌋/log N → x`, #91, as hyp),
+  `Tendsto (fun N => harmonic(⌊N^x⌋)/log N) atTop (𝓝 x)`, i.e. `(1/log N)Σ_{a≤⌊N^x⌋}1/a → x`.
+- problem_version_id: `016d526f-59f0-4bec-8c8c-dd5bff9a23f4` · episode_id: `eb1457ce-b9c0-41ca-87bd-2b670cad97d5`
+- outcome: `kernel_verified` (2nd submission) · snapshot: [proof/Erdos858_NormHarmonicEndpoint.lean](proof/Erdos858_NormHarmonicEndpoint.lean)
+- **Why it matters:** the log-scale block mass, the harmonic analogue of the equispaced count `(1/K)·j → j/K` in the
+  durable Riemann-sum theorem (#97). Proof: split off the bounded `harmonic − log → γ` correction
+  (`Real.tendsto_harmonic_sub_log` ∘ `tendsto_nat_floor_atTop`), which `/log N → 0` (`Tendsto.div_atTop`). No PNT.
+
+### 99. Log-harmonic transfer rung 2 — block mass over an interval  (paper §5.4)
+
+- **Statement (root_statement_hash `f64d151e287336d5f4eae4bbd7378d1c0eb6c77992646be61dbb8e3cf2afae7d`):**
+  for `0 < s < t` (with the two #98 endpoint limits as hyps),
+  `Tendsto (fun N => (harmonic(⌊N^t⌋) − harmonic(⌊N^s⌋))/log N) atTop (𝓝 (t − s))`,
+  i.e. the log-scale mass of the block `N^s < a ≤ N^t` is exactly its width `t − s`.
+- problem_version_id: `b12afd35-5b51-44af-a272-1ac96b611df0` · episode_id: `eedeed16-3f8d-4219-9803-8afdbe236eab`
+- outcome: `kernel_verified` (**first try**) · snapshot: [proof/Erdos858_LogBlockMass.lean](proof/Erdos858_LogBlockMass.lean)
+- **Why it matters:** the harmonic analogue of a partition-block width `(j+1)/K − j/K = 1/K`. Proof: `Tendsto.sub` of
+  the two endpoint limits, transported pointwise by the ring identity `a/L − b/L = (a−b)/L`. No PNT.
+
+### 100. Log-harmonic transfer rung 3 — fixed-K weighted block-sum limit (R_K assembly)  (paper §5.4)
+
+- **Statement (root_statement_hash `158f0af5f137ccbe5ba1c71ffea1a232ca20d5f20119a20b714ec1e801a12b0c`):**
+  for fixed `K`, weights `c`, block-mass sequences `g` and limits `L`, if `∀ j<K, (fun N => g N j) → L j`
+  then `(fun N => Σ_{j<K} c j · g N j) → Σ_{j<K} c j · L j`.
+- problem_version_id: `6110060c-586f-430f-a99f-6cdb980af045` · episode_id: `0f811ba8-f204-4897-b2fb-da26cc030f25`
+- outcome: `kernel_verified` (**first try**) · snapshot: [proof/Erdos858_WeightedBlockSum.lean](proof/Erdos858_WeightedBlockSum.lean)
+- **Why it matters:** with `c j = f(j/K)`, `L j = 1/K` (from #99), the limit is exactly the Riemann step-sum
+  `R_K(f) = Σ_j f(j/K)/K` — the fixed-K, `N→∞` limit of the log-harmonic weighted block sum. Combined with the durable
+  #97 (`R_K → ∫₀¹f`), the two-limit squeeze drives the full transfer. Proof: `tendsto_finset_sum` + `tendsto_const_nhds.mul`. No PNT.
+
+### 101. Log-harmonic transfer rung 4 — weighted approximation aggregation (transfer error)  (paper §5.4)
+
+- **Statement (root_statement_hash `7cebca510ea59fcfdb61cb93796ade655bbe365c759b5ff841d4f3a2197c8599`):**
+  for fixed `K`, block sums `S`, weights `w`, masses `m`, `ε`, if `∀ j<K, |S j − w j·m j| ≤ ε·m j`
+  then `|Σ_{j<K} S j − Σ_{j<K} w j·m j| ≤ ε · Σ_{j<K} m j`.
+- problem_version_id: `9cbfdb3b-177a-4dac-a112-01b8225332ca` · episode_id: `0603e58f-3bcc-4e3a-ae25-2c2b015c7829`
+- outcome: `kernel_verified` (6th submission) · snapshot: [proof/Erdos858_TransferAggregation.lean](proof/Erdos858_TransferAggregation.lean)
+- **Why it matters:** the analytic heart — aggregates the per-block uniform-continuity error into the global bound
+  between the true log-harmonic sum and the weighted step-sum (harmonic analogue of the #96 block-variation ⟹ error step).
+  Proof: `Finset.sum_sub_distrib` (explicit `f g` term) rewrites the goal to one-sum form, then Finset triangle
+  (`abs_sum_le_sum_abs`) + monotonicity (`sum_le_sum`) + `mul_sum`. **Lesson:** `|(∑S)−(∑wm)|` (two-sum) and
+  `|∑(S−wm)|` (one-sum) are distinct `rw`/`linarith` atoms — bridge by rewriting the GOAL, not a separate `have`. No PNT.
+
+### 102. Log-harmonic transfer rung 5 / assembly — diagonal two-limit squeeze  (paper §5.4)
+
+- **Statement (root_statement_hash `8830ae5e0b76b4856d1d563c0ba2c2e5cbb61e10494a75d4ec101e51a0b57c80`):**
+  for `W : ℕ→ℕ→ℝ`, `R : ℕ→ℝ`, `L`, `A : ℕ→ℝ`, if (i) `∀K, (fun N => W K N) → R K`, (ii) `R → L`, and
+  (iii) `∀ ε>0, ∀ᶠ K, ∀ᶠ N, |A N − W K N| ≤ ε`, then `A → L`.
+- problem_version_id: `153e5a12-0b28-4d14-973c-151d26fd7b8f` · episode_id: `c675fe0a-d0be-46b7-a555-544507b5a9d4`
+- outcome: `kernel_verified` (**first try**) · snapshot: [proof/Erdos858_DiagonalSqueeze.lean](proof/Erdos858_DiagonalSqueeze.lean)
+- **Why it matters:** the **keystone assembly** — the ε/3 diagonal argument that combines rung 3 (#100, `W K → R_K`),
+  the durable Riemann-sum theorem (#97, `R_K → ∫`, as (ii)), and rung 4 (#101, the aggregation error, as (iii)) into
+  `(1/log N)Σ_{1<a≤N}f(u_a)/a → ∫₀¹f`. Reusable double-limit lemma. Proof: work in the ε-N form
+  (`Metric.tendsto_atTop`/`eventually_atTop`, avoiding nhds/ball unification), common K-witness via `Eventually.and.exists`,
+  `abs_sub_le` triangle (×2) + `linarith`. No PNT.
+
+*Results #100–#101 (2026-07-14, WALL 2 — log-harmonic transfer rungs 3–4, main-loop direct): #100 the fixed-K weighted
+block-sum limit (`Σ_j c_j·g_N,j → Σ_j c_j·L_j`, giving the Riemann step-sum `R_K(f)` with `c_j=f(j/K)`, `L_j=1/K`) and
+#101 the weighted approximation aggregation (`|Σ S_j − Σ w_j·m_j| ≤ ε·Σ m_j`, the transfer-error bound). With #98/#99
+(block masses) and the durable #97 (`R_K→∫`), the four transfer rungs are now in place; the remaining assembly is the
+diagonal two-limit squeeze + the partition identity (actual sum = weighted block sum + error over blocks of (1,N]).
+All elementary, no PNT.*
+
+*Results #98–#99 (2026-07-14, WALL 2 — log-harmonic transfer STARTED, main-loop direct): the transport layer that
+carries the analytic weight of the sum onto the interval integral (the route to the asymptotic Theorem 1.2, via §6
+eventual frontier exactness — confirmed as the cheapest/lowest-risk finishing path). #98 the normalized harmonic
+endpoint `harmonic(⌊N^x⌋)/log N → x` (log-scale block mass) and #99 the interval block mass
+`(harmonic(⌊N^t⌋)−harmonic(⌊N^s⌋))/log N → t−s`. These are the harmonic analogues of the equispaced count and block
+width in the durable Riemann-sum theorem (#97). Remaining: fixed-K weighted step-sum → R_K (rung 3), combine with #97
+→ full log-harmonic Riemann theorem `(1/log N)Σ_{1<a≤N}f(log a/log N)/a → ∫₀¹f` → §5.3 prime version → 5.5/5.7/5.8 →
+Thm 1.2. All elementary, no PNT.*
+
 *Results #96–#97 (2026-07-14, WALL 2 — DURABLE Riemann-sum→integral theorem COMPLETE, main-loop direct): #96 the
 key assembly (block variation ⟹ fixed-K error, inlining rungs B+C) and #97 the **durable theorem** — for every
 continuous `f` on `[0,1]`, the equispaced left-endpoint Riemann sums `(1/K)Σ_{j<K}f(j/K) → ∫₀¹f` (ε-δ via uniform

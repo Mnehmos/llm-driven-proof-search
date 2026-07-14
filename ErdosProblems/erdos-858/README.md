@@ -49,11 +49,12 @@ results: the two-sided quantitative-Mertens bracket `log 2·loglog x − C ≤
 Σ_{p≤x} 1/p ≤ log 4·loglog x + C'` (via a real-valued Chebyshev `ϑ` bridge), the
 Prop 5.6 real-analytic core (`α₂ < 1/3`, + continuity + integrand sign), and the
 KP threshold `α = 1/(e+1) ∈ (1/4,1/3)`, and the first **Mertens-first-theorem
-building blocks** toward `c₂`**, as **ninety-seven** independent `kernel_verified`
+building blocks** toward `c₂`**, as **one hundred and two** independent `kernel_verified`
 results (`leanprover/lean4:v4.32.0-rc1` + `mathlib@360da6fa`; full records in
-[evidence.md](evidence.md)). The first 18 are listed below; #19–#97 (the
+[evidence.md](evidence.md)). The first 18 are listed below; #19–#102 (the
 max-closure machinery, Bellman, the full Theorem 2.4 recursion, the §5 analytic
-layer, and the Mertens-1 building blocks) are in [evidence.md](evidence.md):
+layer, the Mertens-1 building blocks, and the log-harmonic transfer rungs
+#98–#102) are in [evidence.md](evidence.md):
 
 1. **`⪯` is a partial order** (§1) — reflexivity, antisymmetry, transitivity of
    `a ⪯ b := ∃ t, b = a·t ∧ (∀ prime p ∣ t, a < p)`. The Introduction asserts
