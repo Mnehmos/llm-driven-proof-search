@@ -30,12 +30,11 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     `erdos647_mertens_error_log`, ≤ `1 + 1/log 2`) and `2√t·log t` term
     (problem `d804be62`, `erdos647_mertens_error_sqrt`, ≤ `2√2(1+1/log 2)`,
     2026-07-13).
-  - **Part 2b assembly (next):** combine the four pieces — main-term
-    antiderivative (`781d4876`), weight integral (`1fc1ab2d`), and the two
-    error bounds above — into the full inequality
-    `∑_{p≤x} 1/p ≥ log 2 · log log x − C` with an explicit `C`. This is
-    pure bookkeeping (`linarith`/`nlinarith` combination of already-proven
-    pieces plus the Part 1 identity), not new analysis.
+  - ✅ *Part 2b assembly DONE* (kernel-verified, problem `15d4503a`,
+    `erdos647_mertens_assembly`, 2026-07-14): combines all six pieces above
+    into the full unconditional inequality
+    `∀ x≥2, log2·loglog(x) − (1/2 + log2·loglog2 + (1+1/log2)·(1+2√2)) ≤
+    ∑_{p≤x} 1/p`. **Layer A (quantitative Mertens) is now fully complete.**
 - **Layer B — Selberg optimization step.** Mathlib diagonalizes the Λ² main
   term (`mainSum_lambdaSquared_eq_sum_mul_sum_sq`) but lacks the classical
   optimal-weight bound `mainSum ≤ 1/∑_{l≤z} (selbergTerms l)⁻¹`. Formalize
