@@ -296,6 +296,21 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     (1 fix: `mul_right_comm` instead of a non-adjacent `mul_comm` to
     bring the cancelling `ν(prodPrimes)`/`ν(prodPrimes)⁻¹` factors
     together). Snapshot `proof/Erdos647_LEqProd.lean`.
+  - 🔑 **NEW STRUCTURAL FACT: rootUnionCount(p)=7 exactly, p>7,p≠11
+    DONE (2026-07-14)**: `erdos647_seventuple_rootcount_eq_seven`
+    sharpens the earlier "between 1 and 7" bound to an EXACT value for
+    all but ONE exceptional prime — verified numerically first (Python,
+    primes to 300), then formalized via pairwise non-collision of the 7
+    coefficients' ZMod-p roots (21 pairwise-difference non-divisibility
+    facts, each via `native_decide` on a concrete `primeFactors⊆
+    {2,3,5,7,11}` check) combined into a 7-way disjoint-union cardinality.
+    This is what a Mertens-type growth-rate estimate needs: `ν(p)~7/p`
+    (not just `∈[1/p,7/p]`) to get `L~(log z)^7`, matching the target
+    exponent. Snapshot `proof/Erdos647_RootCountEqSeven.lean`. Hit and
+    fixed the SAME `set`-without-`clear_value` whnf-timeout class as
+    `erdos647_rem_bound` — now a confirmed 3rd instance; the lesson
+    generalizes to any proof combining several `set`-bound `Finset.filter`
+    locals via multiple downstream `have`s.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
