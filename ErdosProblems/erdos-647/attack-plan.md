@@ -173,6 +173,23 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     `erdos647_mertens_assembly`, choosing an optimal `z=z(x)`, for the
     final `x/(log x)^7`-shaped bound. This remaining step is genuine new
     analytic content (a weight-boundedness argument), not just assembly.
+  - ⚠ **Confirmed (2026-07-14): the pure Legendre/Möbius sieve (`muPlus :=
+    μ` instead of Selberg's `lambdaSquared w`) is NOT a viable shortcut**,
+    despite `|μ(d)|≤1` being trivial. `errSum(μ) ≤
+    Σ_{d|prodPrimes(z)}rootUnionCount(d) ≤ 8^π(z)` (since `rootUnionCount`
+    is multiplicative, `≤7` at each prime) — EXPONENTIAL in `π(z)`, the
+    classical Legendre "combinatorial explosion" that historically forces
+    `z=O(log x)` and only an `x/log x`-type bound. Selberg's
+    variance-minimized weight is genuinely load-bearing for the `(log
+    x)^7` exponent; there is no way to route around its magnitude bound.
+    Mathlib's `SelbergSieve.lean` supplies zero weight-magnitude/error
+    theorems beyond the diagonalization identity (confirmed by reading
+    the whole file) — the bound must be derived from scratch for our `ν`,
+    comparable in depth to a textbook Selberg-sieve error-term derivation.
+    Recommended approach for whoever picks this up: prove a CONDITIONAL
+    final-assembly theorem first (`∀z, (∀d,|lambdaSquared w d|≤B(d)) →
+    [final bound in terms of B]`) so assembly work (tractable) is
+    decoupled from proving the weight bound (the genuine open task).
 - Fallback if a layer stalls: a weaker exponent (`x/(log x)^k`, k < 7, using
   fewer forms) is still a first-of-its-kind artifact; take the partial win
   and iterate.
