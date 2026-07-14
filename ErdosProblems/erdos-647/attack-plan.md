@@ -198,10 +198,13 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     Snapshot `proof/Erdos647_SelbergWeightBound.lean`. This was the
     genuine open research gap flagged at the end of the prior session —
     now closed.
-  - **Remaining for the final numeric theorem**: use
-    `erdos647_selberg_weight_bound` to bound `|lambdaSquared w d| =
-    |∑_{d1,d2:lcm=d} w(d1)w(d2)| ≤ ∑_{d1,d2:lcm=d}
-    (selbergTerms(d1)/ν(d1))(selbergTerms(d2)/ν(d2))`, combine with
+  - ✅ **λ² aggregate bound DONE (2026-07-14)**: `erdos647_lambdaSquared_bound`
+    proves `|lambdaSquared(w)(d)| ≤ (∑_{d1∣d}selbergTerms(d1)/ν(d1))²`
+    given the pointwise bound (generic in `w`, reusable). Snapshot
+    `proof/Erdos647_LambdaSquaredBound.lean`.
+  - **Remaining for the final numeric theorem**: combine
+    `erdos647_lambdaSquared_bound` (instantiated with
+    `erdos647_selberg_weight_bound`'s pointwise bound) with
     `erdos647_rem_bound_squarefree`/`erdos647_rem_bound_one` to bound
     `errSum(lambdaSquared w) = Σ_d |lambdaSquared w d|·|rem d|`; combine
     with `siftedSum_le_mainSum_errSum_of_upperMoebius` +
