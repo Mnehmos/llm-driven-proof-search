@@ -221,6 +221,25 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     support/weights choice) equals the raw filter-count form used
     throughout the `rem`-bound theorems. Snapshot
     `proof/Erdos647_MultSumEqFilterCard.lean`.
+  - ✅ **Multiplicative sum-over-divisors identity DONE (2026-07-14)**:
+    `erdos647_divisor_sum_prod_one_add` proves, for a `Finset t` of distinct
+    primes and any `f:ℕ→ℝ`, `∑_{d1∣∏t} ∏_{p∈d1.primeFactors} f(p) =
+    ∏_{p∈t}(1+f(p))` — combined with `selbergTerms_apply`
+    (`selbergTerms(d1)/ν(d1) = ∏_{p∈d1.primeFactors}(1-ν(p))⁻¹`), this gives
+    the CLOSED FORM `∑_{d1∣d} selbergTerms(d1)/ν(d1) =
+    ∏_{p∈d.primeFactors}(1+(1-ν(p))⁻¹)` that
+    `erdos647_lambdaSquared_bound`'s bound needs made concrete/summable.
+    Kernel-verified first-try on the tracked pipeline after 3 verification-tool
+    rounds. Snapshot `proof/Erdos647_DivisorSumProdOneAdd.lean`. Lessons: an
+    ambiguous no-argument `rw [Finset.prod_insert ...]` silently picked the
+    wrong of two structurally-different `∏x∈insert p t',...` occurrences
+    (fixed with explicit `conv_lhs`/`conv_rhs`); a `simp only [...,
+    Nat.mem_divisors]` that already fully unfolds a goal makes a later
+    redundant `rw [Nat.mem_divisors]` fail (same "already unfolded" trap as
+    `RemBoundSquarefree`); `Dvd.intro p rfl` fails when the two sides aren't
+    syntactically equal under Nat mul-commutativity (need `⟨p, by ring⟩`);
+    `Nat.Coprime.dvd_of_dvd_mul_left` wants its coprimality hypothesis with
+    the dividing element first, requiring a `.symm` flip.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
