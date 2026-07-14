@@ -202,12 +202,18 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     proves `|lambdaSquared(w)(d)| ≤ (∑_{d1∣d}selbergTerms(d1)/ν(d1))²`
     given the pointwise bound (generic in `w`, reusable). Snapshot
     `proof/Erdos647_LambdaSquaredBound.lean`.
+  - ✅ **rootUnionCount(d) ≤ 7^ω(d) DONE (2026-07-14)**:
+    `erdos647_rootUnionCount_le` proves the explicit numeric growth bound
+    for squarefree admissible `d` (combines `crt_card_finset` + inlined
+    per-prime admissibility, `∏≤7 ≤ 7^ω(d)`). Snapshot
+    `proof/Erdos647_RootUnionCountLe.lean`.
   - **Remaining for the final numeric theorem**: combine
     `erdos647_lambdaSquared_bound` (instantiated with
     `erdos647_selberg_weight_bound`'s pointwise bound) with
-    `erdos647_rem_bound_squarefree`/`erdos647_rem_bound_one` to bound
-    `errSum(lambdaSquared w) = Σ_d |lambdaSquared w d|·|rem d|`; combine
-    with `siftedSum_le_mainSum_errSum_of_upperMoebius` +
+    `erdos647_rem_bound_squarefree`/`erdos647_rem_bound_one` and
+    `erdos647_rootUnionCount_le` to bound `errSum(lambdaSquared w) =
+    Σ_d |lambdaSquared w d|·|rem d|`; combine with
+    `siftedSum_le_mainSum_errSum_of_upperMoebius` +
     `erdos647_selberg_optimal_weight` (mainSum value) + Layer A's
     `erdos647_mertens_assembly`, choosing an optimal `z=z(x)` balancing
     main term vs error term, for the final `x/(log x)^7`-shaped bound.
