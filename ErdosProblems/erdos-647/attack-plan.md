@@ -137,12 +137,20 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     `Nat.modEq_and_modEq_iff_modEq_mul`), the combinatorial engine for
     `rootUnionCount(d)=∏_{p∣d}rootUnionCount(p)` on squarefree `d`.
     Snapshot `proof/Erdos647_CrtCardTwo.lean`.
-  - **Remaining for the final numeric theorem**: use
-    `erdos647_crt_card_two` (by induction on `d`'s prime factors, peeling
-    one prime at a time) to extend `erdos647_rem_bound` from prime `p` to
-    composite squarefree `d`; sum the resulting per-`d` bound over
-    `prodPrimes(z).divisors` weighted by the Selberg `λ_d²` structure to
-    get the actual `errSum` used by
+  - ✅ **Squarefree divisibility characterization DONE (2026-07-14)**:
+    `erdos647_squarefree_dvd_iff` proves `d∣m ↔ ∀p∈d.primeFactors, p∣m`
+    for squarefree `d` (via Mathlib's `Finset.prod_primes_dvd` +
+    `Nat.prod_primeFactors_of_squarefree`). This is the bridge that lets
+    `erdos647_forms_divisible_iff` (prime-only) generalize to composite
+    squarefree `d`. Snapshot `proof/Erdos647_SquarefreeDvdIff.lean`.
+  - **Remaining for the final numeric theorem**: combine the three
+    building blocks now in hand (`erdos647_forms_divisible_iff`,
+    `erdos647_crt_card_two`, `erdos647_squarefree_dvd_iff`) — by induction
+    on `d.primeFactors` (peeling one prime at a time, using
+    `crt_card_two` as the inductive step) — to extend `erdos647_rem_bound`
+    from prime `p` to composite squarefree `d`; sum the resulting per-`d`
+    bound over `prodPrimes(z).divisors` weighted by the Selberg `λ_d²`
+    structure to get the actual `errSum` used by
     `BoundingSieve.siftedSum_le_mainSum_errSum_of_upperMoebius`; combine
     with Layer B's `erdos647_selberg_optimal_weight` + Layer A's Mertens
     estimate, choosing an optimal `z=z(x)`, for the final
