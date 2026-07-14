@@ -160,9 +160,12 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     `prodPrimes(z)`) can be bounded — the structural/combinatorial core
     of Layer C's error-term analysis is now complete. Snapshot
     `proof/Erdos647_RemBoundSquarefree.lean`.
+  - ✅ **`d=1` trivial case DONE (2026-07-14)**: `erdos647_rem_bound_one`
+    proves `rem(1)=0` exactly (multSum(1,X)=X since `1∣` everything,
+    `ν(1)=1`). Snapshot `proof/Erdos647_RemBoundOne.lean`.
   - **Remaining for the final numeric theorem**: sum
-    `erdos647_rem_bound_squarefree` (plus the `d=1` trivial case, where
-    `rem(1)=0` exactly) over `prodPrimes(z).divisors` weighted by the
+    `erdos647_rem_bound_squarefree` (plus `erdos647_rem_bound_one` for
+    `d=1`) over `prodPrimes(z).divisors` weighted by the
     Selberg `λ_d²` structure (`lambdaSquared`, from
     `Mathlib.NumberTheory.SelbergSieve`) to get the actual `errSum` used
     by `BoundingSieve.siftedSum_le_mainSum_errSum_of_upperMoebius`; this
