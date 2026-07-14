@@ -86,14 +86,20 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     theorems above. This supplies all three `BoundingSieve` `nu`-related
     structure fields. Snapshot `proof/Erdos647_NuAdmissible.lean`. The
     analytic core of Layer C is done.
-  - **Next (structure-building, not analysis)**: choose sieve level `z`,
-    set `prodPrimes := ∏_{p≤z prime, p∉{3,5,7}} p`, define
-    `support`/`weights`/`totalMass` tied to the actual candidate-counting
-    problem (`n≤x`, Family A `n=2520N`, the seven forms), bound `errSum`
-    (elementary bound suffices for Brun's method), then combine
-    `BoundingSieve.siftedSum_le_mainSum_errSum_of_upperMoebius` + Layer
-    B's `erdos647_selberg_optimal_weight` + Layer A's Mertens estimate for
-    the final `x/(log x)^7`-shaped bound.
+  - ✅ **THE FULL BoundingSieve INSTANCE IS BUILT (2026-07-14)**:
+    `erdos647_boundingSieve_instance` constructs a complete, concrete
+    `BoundingSieve` for every level `z`, with `support` = the injective
+    product-of-seven-forms map, `prodPrimes` = the squarefree product of
+    admissible primes ≤z, `weights=1`, `totalMass=z`, and `ν` fully
+    admissible — all six structure fields discharged from this campaign's
+    own results. Snapshot `proof/Erdos647_BoundingSieveInstance.lean`.
+  - **Remaining for the final numeric theorem** (the instance itself is
+    complete): bound `errSum` by summing
+    `erdos647_residue_count_bound` over each `d`'s root-union, then
+    combine `BoundingSieve.siftedSum_le_mainSum_errSum_of_upperMoebius` +
+    Layer B's `erdos647_selberg_optimal_weight` + Layer A's Mertens
+    estimate, choosing an optimal `z=z(x)`, for the final
+    `x/(log x)^7`-shaped bound.
 - Fallback if a layer stalls: a weaker exponent (`x/(log x)^k`, k < 7, using
   fewer forms) is still a first-of-its-kind artifact; take the partial win
   and iterate.
