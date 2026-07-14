@@ -265,6 +265,27 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     one self-contained submission. Kernel-verified FIRST TRY on both the
     untracked pre-check and the tracked pipeline. Snapshot
     `proof/Erdos647_ErrSumConditionalBound.lean`.
+  - 🏆 **CAPSTONE: full conditional Selberg sieve bound DONE (2026-07-14)**:
+    `erdos647_selberg_sieve_bound_conditional` proves, for ANY
+    `s:SelbergSieve`, `siftedSum ≤ totalMass/L + ∑_{d∣prodPrimes}
+    (∏_{p∈d.primeFactors}(1+(1-ν(p))⁻¹))²·|rem d|` where
+    `L=∑_{l∣prodPrimes}selbergTerms(l)` — combining the ENTIRE Layer B
+    optimal-weight construction, its magnitude bound, Mathlib's
+    upper-Moebius sieve inequality, and the errSum aggregate bound into
+    ONE ~400-line theorem. Deliberately leaves `|rem d|` abstract so the
+    wiring is fully generic/reusable; the campaign's own construction
+    (`rem_bound_squarefree`/`_one` + `rootUnionCount_le`) substitutes in
+    directly at the final numeric-assembly step. Kernel-verified FIRST
+    TRY on both the untracked pre-check (~22s Lean CPU time) and the
+    tracked pipeline — zero new Lean bugs, built by carefully sharing
+    the `D`/`L`/`y`/`w` local definitions between the (previously
+    separate) optimal-weight and weight-bound arguments rather than
+    re-deriving or risking a syntactic w-mismatch. Snapshot
+    `proof/Erdos647_SelbergSieveBoundConditional.lean`. **Only remaining
+    step for the final `x/(log x)^7` theorem**: inline this campaign's
+    own seven-tuple `BoundingSieve` instance as a concrete `s`, substitute
+    the concrete `rem`/`rootUnionCount` bounds, tie `L`'s growth rate to
+    Layer A's `erdos647_mertens_assembly`, and choose `z=z(x)` optimally.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
