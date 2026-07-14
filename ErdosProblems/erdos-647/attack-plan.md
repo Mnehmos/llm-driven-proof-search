@@ -319,6 +319,16 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     `proof/Erdos647_NuEqSevenDivP.lean`. This is the exact per-prime
     density needed to drive the Mertens-type growth-rate estimate for
     `L=∏(1-ν(p))⁻¹ ~ (log z)^7`.
+  - ✅ **Mertens-type lower bound on ∑ν(p) DONE (2026-07-14)**:
+    `erdos647_nu_sum_ge_seven_mertens` proves, for `z≥11`,
+    `7·∑_{p≤z,Prime}1/p − 7·(1/2+1/3+1/5+1/7+1/11) ≤ ∑_{p≤z,Prime}ν(p)`
+    — split at `p>11` via `Finset.sum_filter_add_sum_filter_not`, exact
+    substitution `ν(p)=7/p` on the `p>11` part, the `p≤11` part (⊆
+    `{2,3,5,7,11}`) dropped as a nonneg correction bounded by an explicit
+    constant. This is the first piece feeding into a full Mertens-type
+    growth-rate estimate for `L~(log z)^7`, combined with
+    `erdos647_mertens_assembly`'s lower bound on `∑1/p` and
+    `-log(1-x)≥x`. Snapshot `proof/Erdos647_NuSumGe.lean`.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
