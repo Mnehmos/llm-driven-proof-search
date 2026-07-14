@@ -24,14 +24,18 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     `781d4876`): `∫_2^x (log t+1)/(t log²t) dt = (log log x − 1/log x) −
     (log log 2 − 1/log 2)` — the `θ(t)=t` idealization, carrying the
     double-log growth, via FTC on `F(t) = log log t − 1/log t`.
-  - **Part 2b (next):** connect them — bound the *true* integrand below by
-    replacing `θ(t)` with `Chebyshev.theta_ge` (`θ(t) ≥ (t−1)log 2 −
-    log(t+2) − 2√t·log t`). The `(t−1)log 2` piece over `t²` reduces (up to
-    the `−1` shift) to `log 2 ·` the part-2a antiderivative; the
-    `log(t+2)` and `2√t log t` pieces over `t²·log²t` give absolutely
-    convergent error integrals (`∫ t^{-3/2} log t`-type) bounded by
-    constants. Output target: `∑_{p≤x} 1/p ≥ log 2 · log log x − C` with
-    explicit `C`.
+  - ✅ *Part 2b error bounds done*: both convergent error integrals from
+    `Chebyshev.theta_ge` (`θ(t) ≥ (t−1)log 2 − log(t+2) − 2√t·log t`) are
+    kernel-verified — `log(t+2)` term (problem `8bf294a3`,
+    `erdos647_mertens_error_log`, ≤ `1 + 1/log 2`) and `2√t·log t` term
+    (problem `d804be62`, `erdos647_mertens_error_sqrt`, ≤ `2√2(1+1/log 2)`,
+    2026-07-13).
+  - **Part 2b assembly (next):** combine the four pieces — main-term
+    antiderivative (`781d4876`), weight integral (`1fc1ab2d`), and the two
+    error bounds above — into the full inequality
+    `∑_{p≤x} 1/p ≥ log 2 · log log x − C` with an explicit `C`. This is
+    pure bookkeeping (`linarith`/`nlinarith` combination of already-proven
+    pieces plus the Part 1 identity), not new analysis.
 - **Layer B — Selberg optimization step.** Mathlib diagonalizes the Λ² main
   term (`mainSum_lambdaSquared_eq_sum_mul_sum_sq`) but lacks the classical
   optimal-weight bound `mainSum ≤ 1/∑_{l≤z} (selbergTerms l)⁻¹`. Formalize
