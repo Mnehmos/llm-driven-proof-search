@@ -1,7 +1,24 @@
 # Attack plan — Erdős #647 (living)
 
-> Last updated 2026-07-13. This is the working plan of record; it changes as
+> Last updated 2026-07-14. This is the working plan of record; it changes as
 > results land. Completed milestones move to the whitepaper's campaign log.
+
+## HEADLINE STATUS (2026-07-14)
+
+**Main term solved. Error term structurally unresolved. The desired
+`x/(log x)^7` density theorem does NOT yet follow from the verified
+bounds.** The main-term growth chain for `L` is complete and solid
+(`erdos647_L_eq_prod` + `erdos647_seventuple_rootcount_eq_seven` + `erdos647_nu_eq_seven_div_p`
++ `erdos647_nu_sum_ge_seven_mertens` + `erdos647_L_ge_exp_nu_sum` ⟹
+`L≳(log z)^7`). The capstone `erdos647_selberg_sieve_bound_conditional`
+is real and kernel-verified, but its `errSum` term is bounded via a
+crude pointwise estimate summed over an UNRESTRICTED divisor set —
+Mathlib's `SelbergSieve.level` is vestigial (never used to truncate
+`lambdaSquared`'s support), so this bound is plausibly exponential in
+`π(z)`, reproducing the "Legendre explosion" already ruled out for a
+cruder shortcut. **Do not attempt the final numeric assembly until this
+is resolved** — see the "⚠⚠ CRITICAL DIAGNOSTIC" bullet under Layer C
+below for full detail and the two candidate resolutions.
 
 ## Guiding constraint (proven, not vibes)
 
