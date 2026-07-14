@@ -79,15 +79,21 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     (`erdos647_seventuple_admissible_general`, via `ZMod p` field
     inverses for existence + cancellation for uniqueness). Snapshot
     `proof/Erdos647_SevenTupleAdmissibility.lean`.
-  - **Next**: build the actual `BoundingSieve`/`SelbergSieve` instance —
-    define `ν` as a multiplicative `ArithmeticFunction ℝ` supported on
-    primes `∉{3,5,7}` (`ν(p) = (root-union size)/p`), prove
-    `IsMultiplicative`/`0<ν(p)<1` for every prime using the admissibility
-    theorems above, define `support`/`weights`/`totalMass` for the actual
-    candidate-counting problem, bound `errSum`, and combine with Layers
-    A+B (Layer A's Mertens estimate converts `1/∑selbergTerms` into the
-    `x/(log x)^7` shape). This remaining assembly is substantial —
-    comparable in scope to Layer B's final assembly.
+  - ✅ **ν function DONE (2026-07-14)**: `erdos647_nu_admissible` defines
+    `ν := ArithmeticFunction.prodPrimeFactors (fun q => rootUnionCount(q)/q)`
+    (always multiplicative for free via Mathlib's constructor) and proves
+    `0<ν(p)<1` for every prime `p∉{3,5,7}`, combining both admissibility
+    theorems above. This supplies all three `BoundingSieve` `nu`-related
+    structure fields. Snapshot `proof/Erdos647_NuAdmissible.lean`. The
+    analytic core of Layer C is done.
+  - **Next (structure-building, not analysis)**: choose sieve level `z`,
+    set `prodPrimes := ∏_{p≤z prime, p∉{3,5,7}} p`, define
+    `support`/`weights`/`totalMass` tied to the actual candidate-counting
+    problem (`n≤x`, Family A `n=2520N`, the seven forms), bound `errSum`
+    (elementary bound suffices for Brun's method), then combine
+    `BoundingSieve.siftedSum_le_mainSum_errSum_of_upperMoebius` + Layer
+    B's `erdos647_selberg_optimal_weight` + Layer A's Mertens estimate for
+    the final `x/(log x)^7`-shaped bound.
 - Fallback if a layer stalls: a weaker exponent (`x/(log x)^k`, k < 7, using
   fewer forms) is still a first-of-its-kind artifact; take the partial win
   and iterate.
