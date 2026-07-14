@@ -400,6 +400,49 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     `ν(11)=6/11` value or a `p=11` case split. Needed for either errSum
     repair route (level truncation or a sharper signed bound). Snapshot
     `proof/Erdos647_SelbergCoeffBound.lean`.
+  - 📚 **Independent research pass completed (2026-07-14, task
+    `w7x3bu4fp`)**: a deep-research workflow independently re-verified
+    the errSum diagnosis against Mathlib's raw source (CONFIRMED:
+    `level` is genuinely inert) and against classical sieve texts
+    (CONFIRMED: hard support truncation `λ(d)=0` for `d>z` is the
+    standard classical technique, not a shortcut — quote from Rutgers
+    notes, "since we have the freedom to choose λ, we'll insist that λ
+    is supported on only small numbers: λ(n)=0, if n>z"). **Open gap
+    surfaced**: the exact quantitative relationship between the sifting
+    level `z` (which primes are active) and the weight-support
+    truncation `R`/level-of-distribution `D` (Tao's 254A notes: these
+    are TWO independent parameters, `D` is not simply derived from `z`)
+    was not pinned to a clean primary source — do not assume `R=z^A` or
+    any specific normalization without re-deriving it directly from the
+    log-moment tail bound below. Secondary unconfirmed risk flagged:
+    Granville–Koukoulopoulos–Maynard (arXiv:1606.06781) show bare
+    non-smoothed cutoff weights can misbehave for a *different* (linear,
+    not λ²-quadratic) weight object — applicability to this campaign's
+    construction is unresolved, not a confirmed blocker.
+  - ✅ **errSum REPAIR, Milestone A/B piece DONE (2026-07-14):
+    `erdos647_selberg_log_moment`** proves the log-moment identity
+    `∑_{d∣prodPrimes} selbergTerms(d)·log(d) = L·∑_{p∣prodPrimes}
+    ν(p)·log(p)` for any `SelbergSieve` — the key fact needed to show a
+    level-truncated denominator `L_R := ∑_{d∣prodPrimes,d≤R}
+    selbergTerms(d)` retains `L`'s growth rate: since `log d>log R` for
+    `d>R>1` and `selbergTerms≥0`, `∑_{d>R}selbergTerms(d) ≤
+    (1/log R)·∑_{d>R}selbergTerms(d)·log(d) ≤ (L/log R)·∑_pν(p)log(p)`,
+    giving `L_R ≥ L·(1−[∑_pν(p)log p]/log R)`. Proof: combined
+    `Finset.induction_on` over an abstract prime `Finset`, using the
+    per-prime identity `selbergTerms(p)=(1+selbergTerms(p))·ν(p)`. Two
+    bugs, both the same self-referential-rewrite pattern seen repeatedly
+    this campaign — most notably `rw [hkey]` (where `hkey`'s own RHS
+    still contains the LHS pattern being rewritten) corrupted BOTH sides
+    of a goal at once, confirmed by reading the exact post-`kernel_fail`
+    unsolved-goals diagnostic (a spurious `ν(p)²` cross term appeared);
+    fixed with `conv_lhs => rw [hkey]` to scope the rewrite. Snapshot
+    `proof/Erdos647_SelbergLogMoment.lean`. **Still needed for the full
+    Milestone A/B repair**: the actual level-truncated weight
+    construction `w_R` (restricted-divisor-set Möbius inversion,
+    `w_R(1)=1`, `mainSum(λ²w_R)=1/L_R`), combined with
+    `erdos647_lambdaSquared_support_sq`'s support bound and this
+    log-moment tail estimate, to get a complete truncated-Selberg-sieve
+    bound with a controlled error term.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
