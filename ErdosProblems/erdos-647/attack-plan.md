@@ -286,6 +286,16 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     own seven-tuple `BoundingSieve` instance as a concrete `s`, substitute
     the concrete `rem`/`rootUnionCount` bounds, tie `L`'s growth rate to
     Layer A's `erdos647_mertens_assembly`, and choose `z=z(x)` optimally.
+  - ✅ **L Euler-product closed form DONE (2026-07-14)**: `erdos647_L_eq_prod`
+    proves `L := ∑_{l∣prodPrimes} selbergTerms(l) = ∏_{p∈prodPrimes.
+    primeFactors}(1-ν(p))⁻¹` — combining Mathlib's own `sum_divisors_
+    selbergTerms_eq_selbergTerms_mul_nu_inv` (at `d:=prodPrimes`) with
+    `selbergTerms_apply` and cancelling the `ν(prodPrimes)` factor. This
+    is what a Mertens-type product estimate needs to act on directly to
+    get `L`'s growth rate as a function of the level `z`. Kernel-verified
+    (1 fix: `mul_right_comm` instead of a non-adjacent `mul_comm` to
+    bring the cancelling `ν(prodPrimes)`/`ν(prodPrimes)⁻¹` factors
+    together). Snapshot `proof/Erdos647_LEqProd.lean`.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
