@@ -392,6 +392,21 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     inversion, `w_R(1)=1`, `mainSum(lambdaSquared w_R)=1/L_R`) — see the
     level-truncation repair plan under the CRITICAL DIAGNOSTIC headline
     at the top of this file.
+  - ✅ **errSum REPAIR, Milestone A/B piece 2/N DONE (2026-07-14):
+    `erdos647_selberg_L_tail_bound`** proves the growth-preservation
+    step built directly on `erdos647_selberg_log_moment`:
+    `∑_{d∣prodPrimes,d>R} selbergTerms(d) ≤ L·(∑_pν(p)log p)/log R` for
+    any `R>1`. Combined with the trivial split `L=L_R+tail`, this gives
+    `L_R ≥ L·(1−[∑_pν(p)log p]/log R)` — i.e. the level-truncated
+    denominator `L_R` retains `L`'s `≳(log z)^7` growth once `R` is
+    large enough. Zero Lean bugs, kernel-verified FIRST TRY on both
+    pre-check and tracked pipeline — the first repair-sequence piece
+    with no verification-tool round trip. Snapshot
+    `proof/Erdos647_SelbergLTailBound.lean`. **Still needed for
+    Milestone A**: the actual `w_R` construction; **for the final
+    normalization** (choosing `R=R(z)`): per the deep-research finding,
+    do not assume `R=z^A`, derive the balance directly from this bound
+    once the error-side growth rate is known.
   - ✅ **errSum REPAIR, Milestone C piece DONE (2026-07-14):
     `erdos647_selberg_coeff_bound`** proves the uniform coefficient
     bound `1+(1-ν(p))⁻¹≤4` for every admissible prime — simpler than
