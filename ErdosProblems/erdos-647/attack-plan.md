@@ -143,18 +143,27 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     `Nat.prod_primeFactors_of_squarefree`). This is the bridge that lets
     `erdos647_forms_divisible_iff` (prime-only) generalize to composite
     squarefree `d`. Snapshot `proof/Erdos647_SquarefreeDvdIff.lean`.
-  - **Remaining for the final numeric theorem**: combine the three
-    building blocks now in hand (`erdos647_forms_divisible_iff`,
-    `erdos647_crt_card_two`, `erdos647_squarefree_dvd_iff`) — by induction
-    on `d.primeFactors` (peeling one prime at a time, using
-    `crt_card_two` as the inductive step) — to extend `erdos647_rem_bound`
-    from prime `p` to composite squarefree `d`; sum the resulting per-`d`
-    bound over `prodPrimes(z).divisors` weighted by the Selberg `λ_d²`
-    structure to get the actual `errSum` used by
-    `BoundingSieve.siftedSum_le_mainSum_errSum_of_upperMoebius`; combine
-    with Layer B's `erdos647_selberg_optimal_weight` + Layer A's Mertens
-    estimate, choosing an optimal `z=z(x)`, for the final
-    `x/(log x)^7`-shaped bound.
+  - ✅ **General n-ary CRT card-product formula DONE (2026-07-14)**:
+    `erdos647_crt_card_finset` generalizes `erdos647_crt_card_two` from 2
+    moduli to an arbitrary `Finset` of primes — `|{r<∏(t) : ∀p∈t,
+    r%p∈S(p)}| = ∏_{p∈t}|S(p)|` — by `Finset.induction_on`, peeling one
+    prime at a time and applying the 2-modulus case as the inductive
+    step. Kernel-verified FIRST TRY. Snapshot `proof/Erdos647_CrtCardFinset.lean`.
+  - **All four building blocks now in hand for the composite-d rem
+    bound**: `erdos647_forms_divisible_iff`, `erdos647_crt_card_two`,
+    `erdos647_squarefree_dvd_iff`, `erdos647_crt_card_finset`.
+  - **Remaining for the final numeric theorem**: assemble the four
+    building blocks (apply `crt_card_finset` at `t := d.primeFactors`,
+    using `squarefree_dvd_iff` + `forms_divisible_iff` to translate `d ∣
+    ∏formᵢ(N)` into the per-prime-residue condition the finset lemma
+    needs) into `rootUnionCount(d) = ∏_{p∣d} rootUnionCount(p)` for
+    squarefree `d`, then rerun `erdos647_rem_bound`'s biUnion/floor-count
+    argument at modulus `d` to get the general
+    `|multSum(d,X)-ν(d)X|≤rootUnionCount(d)` bound; sum over
+    `prodPrimes(z).divisors` weighted by the Selberg `λ_d²` structure to
+    get `errSum`; combine with Layer B's `erdos647_selberg_optimal_weight`
+    + Layer A's Mertens estimate, choosing an optimal `z=z(x)`, for the
+    final `x/(log x)^7`-shaped bound.
 - Fallback if a layer stalls: a weaker exponent (`x/(log x)^k`, k < 7, using
   fewer forms) is still a first-of-its-kind artifact; take the partial win
   and iterate.
