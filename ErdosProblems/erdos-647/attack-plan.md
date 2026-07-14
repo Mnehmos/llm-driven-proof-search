@@ -110,14 +110,26 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     recorded there (episode_step `solve`'s `proof_format` must be
     `raw_lean_block` for bullet-heavy proofs, and even then sibling
     top-level tactics must share one column).
-  - **Remaining for the final numeric theorem**: bound `errSum` for
-    PRIME `d` by combining `erdos647_forms_divisible_iff` with the
-    residue-counting bounds (root-union has ≤7 residues mod `p`, each
-    contributing `O(1)` discrepancy from `ν(p)·X`); extend to composite
+  - ✅ **rem(p) BOUND DONE for prime d (2026-07-14)**: `erdos647_rem_bound`
+    proves `|multSum(p,X) - ν(p)·X| ≤ rootUnionCount(p)` for every prime
+    `p` and level `X` — the first genuine per-prime `errSum` piece,
+    combining the forms-divisible-iff bridge with both residue-counting
+    bounds via a disjoint `Finset.biUnion` decomposition. Snapshot
+    `proof/Erdos647_RemBound.lean`. Two new Lean lessons recorded there:
+    `positivity`/`field_simp`/`simp` can hit max recursion depth when the
+    context has `set`-introduced huge local defs (fix: `clear_value` right
+    after `set`, forcing later tactics to go through the equation
+    hypothesis instead of unfolding); and chained type ascriptions
+    `(e : T1 : T2)` are a parse error, not automatic double-casting.
+  - **Remaining for the final numeric theorem**: extend `rem` to composite
     squarefree `d` (needs CRT-style reasoning — deliberately deferred,
-    harder scope, not yet attempted); then combine
-    `BoundingSieve.siftedSum_le_mainSum_errSum_of_upperMoebius` +
-    Layer B's `erdos647_selberg_optimal_weight` + Layer A's Mertens
+    harder scope, not yet attempted, since `prodPrimes(z).divisors`
+    ranges over all squarefree products of admissible primes ≤z, not just
+    primes themselves); sum the resulting per-`d` bound over
+    `prodPrimes(z).divisors` weighted by the Selberg `λ_d²` structure to
+    get the actual `errSum` used by
+    `BoundingSieve.siftedSum_le_mainSum_errSum_of_upperMoebius`; combine
+    with Layer B's `erdos647_selberg_optimal_weight` + Layer A's Mertens
     estimate, choosing an optimal `z=z(x)`, for the final
     `x/(log x)^7`-shaped bound.
 - Fallback if a layer stalls: a weaker exponent (`x/(log x)^k`, k < 7, using
