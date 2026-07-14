@@ -518,6 +518,80 @@ pub struct DependencyUseReport {
     pub undeclared_generated_dependency_ids: Vec<Uuid>,
 }
 
+/// Server-owned resource limits for verifier subprocesses. Values are recorded
+/// in milliseconds/bytes so receipts are unambiguous across transports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerifierResourcePolicy {
+    pub proof_timeout_ms: u64,
+    pub module_timeout_ms: u64,
+    pub import_validation_timeout_ms: u64,
+    pub declaration_lookup_timeout_ms: u64,
+    pub deep_declaration_lookup_timeout_ms: u64,
+    pub durability_build_timeout_ms: u64,
+    pub max_source_bytes: usize,
+    pub max_output_bytes: usize,
+    pub max_diagnostics: usize,
+    pub max_concurrent_processes: usize,
+}
+
+/// Auditable policy attached to a verifier result. `requested` is the policy
+/// selected for this operation; `effective` is the server-clamped policy that
+/// was actually enforced. The public API currently permits server/operator
+/// configuration only, so the two are equal; keeping both makes later bounded
+/// request classes additive rather than a receipt-schema break.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationPolicyReceipt {
+    pub requested: VerifierResourcePolicy,
+    pub effective: VerifierResourcePolicy,
+    pub policy_hash: String,
+}
+
+/// Bounded summary of the complete verifier stdout/stderr bundle persisted as
+/// a content-addressed artifact. Normal MCP results carry this receipt, not the
+/// potentially enormous raw compiler output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerifierOutputReceipt {
+    pub artifact_hash: String,
+    pub media_type: String,
+    pub total_bytes: u64,
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
+    pub retained_stdout_bytes: u64,
+    pub retained_stderr_bytes: u64,
+    pub truncated_bytes: u64,
+    pub total_diagnostics: u64,
+    pub retained_diagnostics: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DurabilityJobReceipt {
+    pub job_id: String,
+    pub target: String,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+/// Issue #220: the immediate receipt an asynchronous verification `submit`
+/// returns. It carries the durable `job_id` plus the source and environment
+/// hashes the job is keyed on, and the queued (or, for a deduplicated reuse, an
+/// already-terminal) phase — never a verification verdict. The verdict lives in
+/// the job's own persisted state and result artifact, reached later through the
+/// status/result actions; this receipt is transport bookkeeping, not proof
+/// authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationJobReceipt {
+    pub job_id: String,
+    pub source_hash: String,
+    pub environment_hash: String,
+    /// The job's phase at receipt time: `queued` for a freshly launched job, or
+    /// the terminal phase (`complete`/`failed`/...) of an existing identical job
+    /// when `reused` is true.
+    pub phase: String,
+    /// True when an identical completed job (same source and environment hash)
+    /// already existed and was returned instead of launching a new run.
+    pub reused: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeanVerificationResult {
     pub outcome: LeanVerificationOutcome,
@@ -540,6 +614,12 @@ pub struct LeanVerificationResult {
     #[serde(default)]
     pub all_diagnostics: Vec<LeanDiagnostic>,
     pub dependency_use_report: Option<DependencyUseReport>,
+    #[serde(default)]
+    pub resource_policy: Option<VerificationPolicyReceipt>,
+    #[serde(default)]
+    pub output_receipt: Option<VerifierOutputReceipt>,
+    #[serde(default)]
+    pub durability_job: Option<DurabilityJobReceipt>,
     pub wall_time_ms: u64,
     pub lean_cpu_time_ms: u64,
 }
@@ -570,6 +650,12 @@ pub struct LeanModuleVerificationResult {
     pub diagnostic: Option<LeanDiagnostic>,
     #[serde(default)]
     pub all_diagnostics: Vec<LeanDiagnostic>,
+    #[serde(default)]
+    pub resource_policy: Option<VerificationPolicyReceipt>,
+    #[serde(default)]
+    pub output_receipt: Option<VerifierOutputReceipt>,
+    #[serde(default)]
+    pub durability_job: Option<DurabilityJobReceipt>,
     pub wall_time_ms: u64,
 }
 

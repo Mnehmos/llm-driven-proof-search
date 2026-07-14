@@ -1,11 +1,14 @@
 use std::fs;
+use std::collections::HashSet;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use std::path::PathBuf;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Condvar, LazyLock, Mutex};
 use crate::models::{
     Obligation, LeanVerificationResult, LeanVerificationOutcome, LeanDiagnostic, LeanDiagnosticCategory,
     DeclarationLookupResult, DeclarationLookupStatus, LeanModuleVerificationResult,
+    DurabilityJobReceipt, VerificationPolicyReceipt, VerifierOutputReceipt, VerifierResourcePolicy,
 };
 use uuid::Uuid;
 
@@ -29,6 +32,12 @@ pub mod interactive;
 /// `observation`'s module doc for the hashing rules and the trust-boundary
 /// reminder (still search evidence, never proof authority).
 pub mod observation;
+
+/// Interactive-independent: issue #220's asynchronous verifier-job engine. It is
+/// pure transport over the SAME `verify_exact` this trait already exposes — a
+/// submitted job produces exactly the result the synchronous path would. See the
+/// module doc for the file-based persistence and trust-boundary rules.
+pub mod verification;
 
 pub trait LeanGateway {
     fn verify_exact(
@@ -88,6 +97,62 @@ pub trait LeanGateway {
     ) -> Result<LeanModuleVerificationResult, String> {
         Err("this gateway cannot verify modules".to_string())
     }
+
+    /// Effective server-owned resource policy, when the gateway executes real
+    /// verifier subprocesses. Test/search-only gateways return `None`.
+    fn resource_policy(&self) -> Option<VerifierResourcePolicy> {
+        None
+    }
+
+    fn durability_job_status(&self, _job_id: &str) -> Result<serde_json::Value, String> {
+        Err("this gateway does not support durability jobs".to_string())
+    }
+
+    fn durability_job_retry(&self, _job_id: &str) -> Result<DurabilityJobReceipt, String> {
+        Err("this gateway does not support durability jobs".to_string())
+    }
+
+    // -- Issue #220: asynchronous verifier jobs ---------------------------
+    //
+    // An ADDITIVE transport path over this same trait's `verify_exact`: submit
+    // returns a durable job id immediately, then status/result/cancel/events run
+    // across separate requests while the verifier works on its own thread.
+    // Defaults fail closed for the same reason the durability ones do — a
+    // gateway that cannot actually run Lean must never pretend to run a job.
+
+    /// Launches an asynchronous verification job and returns immediately with a
+    /// durable receipt (job id + source/environment hashes + queued state), never
+    /// a verdict. Reuses an identical completed job when one already exists.
+    fn verification_submit(
+        &self,
+        _request: verification::VerificationJobRequest,
+    ) -> Result<crate::models::VerificationJobReceipt, String> {
+        Err("this gateway does not support asynchronous verification jobs".to_string())
+    }
+
+    /// Lightweight polling metadata for a job — phase, timestamps, heartbeat,
+    /// hashes, cancellation state, and `result_artifact_hash` once complete —
+    /// never the full result payload.
+    fn verification_status(&self, _job_id: &str) -> Result<serde_json::Value, String> {
+        Err("this gateway does not support asynchronous verification jobs".to_string())
+    }
+
+    /// The full verification payload for a completed/failed job. The only action
+    /// that returns the heavy result; `verification_status` never does.
+    fn verification_result(&self, _job_id: &str) -> Result<serde_json::Value, String> {
+        Err("this gateway does not support asynchronous verification jobs".to_string())
+    }
+
+    /// Cancels a job and terminates the complete subprocess tree of any live
+    /// verifier run for it; a terminal job is a no-op.
+    fn verification_cancel(&self, _job_id: &str) -> Result<serde_json::Value, String> {
+        Err("this gateway does not support asynchronous verification jobs".to_string())
+    }
+
+    /// The ordered phase-transition history for a job.
+    fn verification_events(&self, _job_id: &str) -> Result<serde_json::Value, String> {
+        Err("this gateway does not support asynchronous verification jobs".to_string())
+    }
 }
 
 /// Serializes `lake build` invocations against the shared Lake workspace at
@@ -107,15 +172,384 @@ pub trait LeanGateway {
 /// or missing durable build artifact for one of two racing submissions would
 /// otherwise go unnoticed.
 static LAKE_BUILD_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static PROCESS_LIMITER: LazyLock<ProcessLimiter> = LazyLock::new(ProcessLimiter::default);
+static ACTIVE_VERIFIER_PIDS: LazyLock<Mutex<HashSet<u32>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+static DURABILITY_STATE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+#[cfg(not(test))]
+const PROCESS_CLEANUP_GRACE: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const PROCESS_CLEANUP_GRACE: Duration = Duration::from_millis(200);
+
+const MAX_TIMEOUT_MS: u64 = 3_600_000;
+const MAX_SOURCE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_DIAGNOSTICS: usize = 10_000;
+const MAX_CONCURRENT_PROCESSES: usize = 64;
+
+impl Default for VerifierResourcePolicy {
+    fn default() -> Self {
+        Self {
+            proof_timeout_ms: 300_000,
+            module_timeout_ms: 1_800_000,
+            import_validation_timeout_ms: 600_000,
+            declaration_lookup_timeout_ms: 60_000,
+            deep_declaration_lookup_timeout_ms: 300_000,
+            durability_build_timeout_ms: 600_000,
+            max_source_bytes: 4 * 1024 * 1024,
+            max_output_bytes: 4 * 1024 * 1024,
+            max_diagnostics: 1_000,
+            max_concurrent_processes: 4,
+        }
+    }
+}
+
+impl VerifierResourcePolicy {
+    /// Reads operator configuration. Invalid, zero, or over-ceiling values are
+    /// rejected instead of silently becoming unlimited.
+    pub fn from_env() -> Result<Self, String> {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    fn from_lookup(mut lookup: impl FnMut(&str) -> Option<String>) -> Result<Self, String> {
+        let mut p = Self::default();
+        p.proof_timeout_ms = configured_limit(&mut lookup, "PROOFSEARCH_VERIFY_PROOF_TIMEOUT_MS", p.proof_timeout_ms, MAX_TIMEOUT_MS)?;
+        p.module_timeout_ms = configured_limit(&mut lookup, "PROOFSEARCH_VERIFY_MODULE_TIMEOUT_MS", p.module_timeout_ms, MAX_TIMEOUT_MS)?;
+        p.import_validation_timeout_ms = configured_limit(&mut lookup, "PROOFSEARCH_VERIFY_IMPORT_TIMEOUT_MS", p.import_validation_timeout_ms, MAX_TIMEOUT_MS)?;
+        p.declaration_lookup_timeout_ms = configured_limit(&mut lookup, "PROOFSEARCH_VERIFY_LOOKUP_TIMEOUT_MS", p.declaration_lookup_timeout_ms, MAX_TIMEOUT_MS)?;
+        p.deep_declaration_lookup_timeout_ms = configured_limit(&mut lookup, "PROOFSEARCH_VERIFY_DEEP_LOOKUP_TIMEOUT_MS", p.deep_declaration_lookup_timeout_ms, MAX_TIMEOUT_MS)?;
+        p.durability_build_timeout_ms = configured_limit(&mut lookup, "PROOFSEARCH_VERIFY_BUILD_TIMEOUT_MS", p.durability_build_timeout_ms, MAX_TIMEOUT_MS)?;
+        p.max_source_bytes = configured_limit(&mut lookup, "PROOFSEARCH_VERIFY_MAX_SOURCE_BYTES", p.max_source_bytes as u64, MAX_SOURCE_BYTES as u64)? as usize;
+        p.max_output_bytes = configured_limit(&mut lookup, "PROOFSEARCH_VERIFY_MAX_OUTPUT_BYTES", p.max_output_bytes as u64, MAX_OUTPUT_BYTES as u64)? as usize;
+        p.max_diagnostics = configured_limit(&mut lookup, "PROOFSEARCH_VERIFY_MAX_DIAGNOSTICS", p.max_diagnostics as u64, MAX_DIAGNOSTICS as u64)? as usize;
+        p.max_concurrent_processes = configured_limit(&mut lookup, "PROOFSEARCH_VERIFY_MAX_CONCURRENT_PROCESSES", p.max_concurrent_processes as u64, MAX_CONCURRENT_PROCESSES as u64)? as usize;
+        if p.max_diagnostics < 3 {
+            return Err("PROOFSEARCH_VERIFY_MAX_DIAGNOSTICS must be at least 3 so first, last, and prohibited-construct diagnostics can all be retained".to_string());
+        }
+        Ok(p)
+    }
+
+    pub fn receipt(&self) -> VerificationPolicyReceipt {
+        VerificationPolicyReceipt {
+            requested: self.clone(),
+            effective: self.clone(),
+            policy_hash: crate::hashing::canonical_hash(self).unwrap_or_default(),
+        }
+    }
+}
+
+fn configured_limit(
+    lookup: &mut impl FnMut(&str) -> Option<String>,
+    name: &str,
+    default: u64,
+    ceiling: u64,
+) -> Result<u64, String> {
+    let Some(raw) = lookup(name) else { return Ok(default) };
+    let value = raw.parse::<u64>().map_err(|_| format!("{name} must be a positive integer, got {raw:?}"))?;
+    if value == 0 || value > ceiling {
+        return Err(format!("{name} must be between 1 and {ceiling}, got {value}"));
+    }
+    Ok(value)
+}
+
+#[derive(Default)]
+struct ProcessLimiter {
+    active: Mutex<usize>,
+    changed: Condvar,
+}
+
+struct ProcessPermit<'a> {
+    limiter: &'a ProcessLimiter,
+}
+
+fn wait_for_status_with_timeout(
+    mut child: std::process::Child,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let pid = child.id();
+    ACTIVE_VERIFIER_PIDS.lock().unwrap_or_else(|e| e.into_inner()).insert(pid);
+    struct ActivePidGuard(u32);
+    impl Drop for ActivePidGuard {
+        fn drop(&mut self) {
+            ACTIVE_VERIFIER_PIDS.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+        }
+    }
+    let _active = ActivePidGuard(pid);
+    // Issue #220: if this verifier subprocess is running under an asynchronous
+    // verification job (thread-local set by that job's worker), attribute its pid
+    // to the job so `verification_cancel` can kill exactly this job's process
+    // tree — never another job's. This is None on the synchronous `episode_step`
+    // path, which is therefore entirely unaffected.
+    struct JobPidGuard(Option<String>, u32);
+    impl Drop for JobPidGuard {
+        fn drop(&mut self) {
+            if let Some(job) = &self.0 {
+                verification::deregister_job_pid(job, self.1);
+            }
+        }
+    }
+    let job_ctx = verification::current_job();
+    if let Some(job) = &job_ctx {
+        verification::register_job_pid(job, pid);
+    }
+    let _job_pid = JobPidGuard(job_ctx, pid);
+    std::thread::spawn(move || {
+        let res = child.wait();
+        let _ = tx.send(res);
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(out)) => Ok(out),
+        Ok(Err(e)) => Err(format!("Process error: {e}")),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("verifier wait thread disconnected before reporting process status".to_string())
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            let graceful = terminate_process_tree(pid, false);
+            if let Ok(waited) = rx.recv_timeout(PROCESS_CLEANUP_GRACE) {
+                return match waited {
+                    Ok(status) => Err(format!(
+                        "Lean invocation timed out after {} ms; termination_method={}; cleanup=reaped; exit_status={status}",
+                        timeout.as_millis(), graceful,
+                    )),
+                    Err(e) => Err(format!("Lean invocation timed out; cleanup wait failed: {e}")),
+                };
+            }
+            let forced = terminate_process_tree(pid, true);
+            match rx.recv_timeout(PROCESS_CLEANUP_GRACE) {
+                Ok(Ok(status)) => Err(format!(
+                    "Lean invocation timed out after {} ms; termination_method={graceful}->{forced}; cleanup=reaped; exit_status={status}",
+                    timeout.as_millis(),
+                )),
+                Ok(Err(e)) => Err(format!("Lean invocation timed out; forced cleanup wait failed: {e}")),
+                Err(_) => Err(format!(
+                    "infrastructure integrity error: verifier process tree {pid} was not reaped after timeout; termination_method={graceful}->{forced}; cleanup=failed"
+                )),
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn configure_process_containment(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn configure_process_containment(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+#[cfg(target_os = "windows")]
+fn terminate_process_tree(pid: u32, force: bool) -> String {
+    let mut command = Command::new("taskkill");
+    if force { command.arg("/F"); }
+    let status = command.arg("/T").arg("/PID").arg(pid.to_string())
+        .stdout(Stdio::null()).stderr(Stdio::null()).status();
+    format!("taskkill_tree_{}({})", if force { "force" } else { "graceful" },
+        status.map(|s| s.to_string()).unwrap_or_else(|e| format!("spawn_error:{e}")))
+}
+
+#[cfg(unix)]
+fn terminate_process_tree(pid: u32, force: bool) -> String {
+    let signal = if force { "-KILL" } else { "-TERM" };
+    let status = Command::new("kill").arg(signal).arg("--").arg(format!("-{pid}"))
+        .stdout(Stdio::null()).stderr(Stdio::null()).status();
+    format!("process_group_{signal}({})",
+        status.map(|s| s.to_string()).unwrap_or_else(|e| format!("spawn_error:{e}")))
+}
+
+/// Issue #220: crate-internal accessor so `verification::cancel` can kill the
+/// complete process tree of a job's live verifier subprocess, reusing the exact
+/// same `taskkill /F /T` (Windows) / process-group signal (unix) mechanism the
+/// timeout path uses — never a second, divergent kill implementation.
+pub(crate) fn kill_verifier_process_tree(pid: u32, force: bool) -> String {
+    terminate_process_tree(pid, force)
+}
+
+/// Terminates all registered verifier trees during server shutdown and waits
+/// a bounded interval for their owning waiters to reap the direct children.
+pub fn terminate_active_verifier_processes() -> Result<(), String> {
+    let pids: Vec<u32> = ACTIVE_VERIFIER_PIDS.lock().unwrap_or_else(|e| e.into_inner()).iter().copied().collect();
+    for pid in &pids { terminate_process_tree(*pid, false); }
+    let start = Instant::now();
+    while start.elapsed() < PROCESS_CLEANUP_GRACE {
+        if ACTIVE_VERIFIER_PIDS.lock().unwrap_or_else(|e| e.into_inner()).is_empty() { return Ok(()) }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let remaining: Vec<u32> = ACTIVE_VERIFIER_PIDS.lock().unwrap_or_else(|e| e.into_inner()).iter().copied().collect();
+    for pid in &remaining { terminate_process_tree(*pid, true); }
+    let force_start = Instant::now();
+    while force_start.elapsed() < PROCESS_CLEANUP_GRACE {
+        if ACTIVE_VERIFIER_PIDS.lock().unwrap_or_else(|e| e.into_inner()).is_empty() { return Ok(()) }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Err(format!("infrastructure integrity error: failed to reap verifier process trees during shutdown: {remaining:?}"))
+}
+
+struct CapturedStream {
+    retained: Vec<u8>,
+    total_bytes: u64,
+    raw: tempfile::NamedTempFile,
+}
+
+fn capture_stream(mut reader: impl Read, limit: usize) -> std::io::Result<CapturedStream> {
+    let mut retained = Vec::with_capacity(limit.min(64 * 1024));
+    let mut raw = tempfile::NamedTempFile::new()?;
+    let mut total_bytes = 0_u64;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 { break }
+        raw.write_all(&buffer[..read])?;
+        total_bytes += read as u64;
+        let remaining = limit.saturating_sub(retained.len());
+        retained.extend_from_slice(&buffer[..read.min(remaining)]);
+        // Continue draining after the retention limit so a noisy child cannot
+        // block on a full OS pipe, while verifier memory remains bounded.
+    }
+    raw.flush()?;
+    Ok(CapturedStream { retained, total_bytes, raw })
+}
+
+fn parse_lean_json_file(path: &std::path::Path, limit: usize) -> Result<(Vec<serde_json::Value>, u64), String> {
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(file);
+    let mut raw_line = Vec::new();
+    let mut first: Option<serde_json::Value> = None;
+    let mut middle = Vec::new();
+    let mut last: Option<serde_json::Value> = None;
+    let mut sorry: Option<serde_json::Value> = None;
+    let mut total = 0_u64;
+    loop {
+        raw_line.clear();
+        let read = reader.read_until(b'\n', &mut raw_line).map_err(|e| e.to_string())?;
+        if read == 0 { break }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw_line) else { continue };
+        total += 1;
+        if first.is_none() { first = Some(value.clone()); }
+        let (message, kind, _, _) = parse_diagnostic_line(&value);
+        if kind == "hasSorry" || message.contains("declaration uses `sorry`") || message.contains("declaration uses 'sorry'") {
+            sorry = Some(value.clone());
+        }
+        if middle.len() < limit.saturating_sub(3) { middle.push(value.clone()); }
+        last = Some(value);
+    }
+    let mut retained = Vec::new();
+    for value in first.into_iter().chain(middle).chain(sorry).chain(last) {
+        if retained.len() >= limit { break }
+        if !retained.iter().any(|existing| existing == &value) { retained.push(value); }
+    }
+    Ok((retained, total))
+}
+
+fn persist_verifier_output(
+    root: &std::path::Path,
+    stdout: &CapturedStream,
+    stderr: &CapturedStream,
+    total_diagnostics: u64,
+    retained_diagnostics: u64,
+) -> Result<VerifierOutputReceipt, String> {
+    use sha2::{Digest, Sha256};
+    let dir = root.join(".proofsearch").join("artifacts").join("sha256");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut staged = tempfile::NamedTempFile::new_in(&dir).map_err(|e| e.to_string())?;
+    let header = format!("PSVERIFIERLOG1\nstdout-bytes:{}\nstderr-bytes:{}\n\n", stdout.total_bytes, stderr.total_bytes);
+    let mut hasher = Sha256::new();
+    staged.write_all(header.as_bytes()).map_err(|e| e.to_string())?;
+    hasher.update(header.as_bytes());
+    for source in [stdout.raw.path(), stderr.raw.path()] {
+        let mut file = fs::File::open(source).map_err(|e| e.to_string())?;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buffer).map_err(|e| e.to_string())?;
+            if read == 0 { break }
+            staged.write_all(&buffer[..read]).map_err(|e| e.to_string())?;
+            hasher.update(&buffer[..read]);
+        }
+    }
+    staged.flush().map_err(|e| e.to_string())?;
+    let hex_hash = hex::encode(hasher.finalize());
+    let artifact_hash = format!("sha256:{hex_hash}");
+    let final_path = dir.join(format!("{hex_hash}.bin"));
+    if !final_path.exists() {
+        match staged.persist_noclobber(&final_path) {
+            Ok(_) => {}
+            Err(error) if final_path.exists() => { drop(error.file); }
+            Err(error) => return Err(error.error.to_string()),
+        }
+    }
+    let artifact_size = fs::metadata(&final_path).map_err(|e| e.to_string())?.len();
+    let sidecar = serde_json::json!({
+        "artifact_hash": artifact_hash,
+        "media_type": "application/vnd.proofsearch.verifier-log",
+        "byte_size": artifact_size,
+        "creator": "lean_gateway",
+        "created_at": chrono::Utc::now().to_rfc3339()
+    });
+    let sidecar_path = dir.join(format!("{hex_hash}.json"));
+    if !sidecar_path.exists() {
+        fs::write(&sidecar_path, serde_json::to_vec(&sidecar).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    let raw_bytes = stdout.total_bytes + stderr.total_bytes;
+    let retained_bytes = stdout.retained.len() as u64 + stderr.retained.len() as u64;
+    Ok(VerifierOutputReceipt {
+        artifact_hash,
+        media_type: "application/vnd.proofsearch.verifier-log".to_string(),
+        total_bytes: raw_bytes,
+        stdout_bytes: stdout.total_bytes,
+        stderr_bytes: stderr.total_bytes,
+        retained_stdout_bytes: stdout.retained.len() as u64,
+        retained_stderr_bytes: stderr.retained.len() as u64,
+        truncated_bytes: raw_bytes.saturating_sub(retained_bytes),
+        total_diagnostics,
+        retained_diagnostics,
+    })
+}
+
+struct LeanInvocationFailure {
+    message: String,
+    output_receipt: Option<VerifierOutputReceipt>,
+}
+
+impl std::fmt::Display for LeanInvocationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)?;
+        if let Some(receipt) = &self.output_receipt { write!(f, "; raw_output_artifact_hash={}", receipt.artifact_hash)?; }
+        Ok(())
+    }
+}
+
+impl Drop for ProcessPermit<'_> {
+    fn drop(&mut self) {
+        let mut active = self.limiter.active.lock().unwrap_or_else(|e| e.into_inner());
+        *active -= 1;
+        self.limiter.changed.notify_one();
+    }
+}
+
+impl ProcessLimiter {
+    fn acquire(&self, limit: usize) -> ProcessPermit<'_> {
+        let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        while *active >= limit {
+            active = self.changed.wait(active).unwrap_or_else(|e| e.into_inner());
+        }
+        *active += 1;
+        ProcessPermit { limiter: self }
+    }
+}
 
 pub struct RealLeanGateway {
     pub lean_project_path: PathBuf,
     pub elan_bin_path: PathBuf,
+    pub resource_policy: VerifierResourcePolicy,
 }
 
 impl RealLeanGateway {
     pub fn new(lean_project_path: PathBuf, elan_bin_path: PathBuf) -> Self {
-        Self { lean_project_path, elan_bin_path }
+        Self::with_resource_policy(lean_project_path, elan_bin_path, VerifierResourcePolicy::default())
+    }
+
+    pub fn with_resource_policy(lean_project_path: PathBuf, elan_bin_path: PathBuf, resource_policy: VerifierResourcePolicy) -> Self {
+        Self { lean_project_path, elan_bin_path, resource_policy }
     }
 
     /// Writes `file_content` to a temp file and runs `lake env lean --json` on it,
@@ -126,10 +560,15 @@ impl RealLeanGateway {
     /// invocation itself failed (spawn error or timeout) — not that Lean
     /// reported errors within the file, which is a normal, successful run that
     /// the caller inspects via the returned lines.
-    fn run_lean_json(&self, file_content: &str, file_stem: &str, timeout: Duration) -> Result<(bool, Vec<serde_json::Value>, String), String> {
-        let temp_dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    fn run_lean_json(&self, file_content: &str, file_stem: &str, timeout: Duration) -> Result<(bool, Vec<serde_json::Value>, String, VerifierOutputReceipt), LeanInvocationFailure> {
+        if file_content.len() > self.resource_policy.max_source_bytes {
+            return Err(LeanInvocationFailure { message: format!("verifier source exceeds effective limit: {} > {} bytes", file_content.len(), self.resource_policy.max_source_bytes), output_receipt: None });
+        }
+        let _permit = PROCESS_LIMITER.acquire(self.resource_policy.max_concurrent_processes);
+        let fail = |message: String| LeanInvocationFailure { message, output_receipt: None };
+        let temp_dir = tempfile::tempdir().map_err(|e| fail(e.to_string()))?;
         let file_path = temp_dir.path().join(format!("{}.lean", file_stem));
-        fs::write(&file_path, file_content).map_err(|e| e.to_string())?;
+        fs::write(&file_path, file_content).map_err(|e| fail(e.to_string()))?;
 
         let lake_path = self.elan_bin_path.join("lake.exe");
         let mut cmd = Command::new(&lake_path);
@@ -144,35 +583,139 @@ impl RealLeanGateway {
         if let Ok(elan_home) = std::env::var("PROOFSEARCH_ELAN_HOME") {
             cmd.env("ELAN_HOME", elan_home);
         }
+        configure_process_containment(&mut cmd);
 
-        let child = cmd.spawn().map_err(|e| e.to_string())?;
-        let (tx, rx) = std::sync::mpsc::channel();
-        let pid = child.id();
-        std::thread::spawn(move || {
-            let res = child.wait_with_output();
-            let _ = tx.send(res);
-        });
-
-        let output = match rx.recv_timeout(timeout) {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => return Err(format!("Process error: {}", e)),
-            Err(_) => {
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = Command::new("taskkill")
-                        .arg("/F").arg("/T").arg("/PID").arg(pid.to_string())
-                        .status();
-                }
-                return Err(format!("Lean invocation timed out after {} seconds", timeout.as_secs()));
-            }
+        let mut child = cmd.spawn().map_err(|e| fail(e.to_string()))?;
+        let stdout = child.stdout.take().ok_or_else(|| fail("Lean stdout pipe was unavailable".to_string()))?;
+        let stderr = child.stderr.take().ok_or_else(|| fail("Lean stderr pipe was unavailable".to_string()))?;
+        let output_limit = self.resource_policy.max_output_bytes;
+        let stdout_reader = std::thread::spawn(move || capture_stream(stdout, output_limit));
+        let stderr_reader = std::thread::spawn(move || capture_stream(stderr, output_limit));
+        let status_result = wait_for_status_with_timeout(child, timeout);
+        let stdout = stdout_reader.join().map_err(|_| fail("Lean stdout reader panicked".to_string()))?
+            .map_err(|e| fail(e.to_string()))?;
+        let stderr = stderr_reader.join().map_err(|_| fail("Lean stderr reader panicked".to_string()))?
+            .map_err(|e| fail(e.to_string()))?;
+        let (lines, total_diagnostics) = parse_lean_json_file(stdout.raw.path(), self.resource_policy.max_diagnostics)
+            .map_err(fail)?;
+        let receipt = persist_verifier_output(
+            &self.lean_project_path, &stdout, &stderr, total_diagnostics, lines.len() as u64,
+        ).map_err(fail)?;
+        let status = match status_result {
+            Ok(status) => status,
+            Err(message) => return Err(LeanInvocationFailure { message, output_receipt: Some(receipt) }),
         };
+        if receipt.truncated_bytes > 0 {
+            return Err(LeanInvocationFailure {
+                message: format!(
+                    "verifier_output_limit_exceeded: {} byte(s) exceeded the bounded inline diagnostic capture; complete output is in the attached artifact",
+                    receipt.truncated_bytes,
+                ),
+                output_receipt: Some(receipt),
+            });
+        }
+        let stderr_str = String::from_utf8_lossy(&stderr.retained).to_string();
+        Ok((status.success(), lines, stderr_str, receipt))
+    }
 
-        let stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
-        let lines: Vec<serde_json::Value> = stdout_str.lines()
-            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-            .collect();
-        let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
-        Ok((output.status.success(), lines, stderr_str))
+    fn run_durability_build(&self, target: &str) -> Result<(std::process::ExitStatus, VerifierOutputReceipt), LeanInvocationFailure> {
+        let _permit = PROCESS_LIMITER.acquire(self.resource_policy.max_concurrent_processes);
+        let _build_lock = LAKE_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let fail = |message: String| LeanInvocationFailure { message, output_receipt: None };
+        let lake_path = self.elan_bin_path.join("lake.exe");
+        let mut cmd = Command::new(&lake_path);
+        cmd.arg("build").arg(target).current_dir(&self.lean_project_path)
+            .stdout(Stdio::piped()).stderr(Stdio::piped());
+        if let Ok(elan_home) = std::env::var("PROOFSEARCH_ELAN_HOME") {
+            cmd.env("ELAN_HOME", elan_home);
+        }
+        configure_process_containment(&mut cmd);
+        let mut child = cmd.spawn().map_err(|e| fail(format!("durability build spawn failed: {e}")))?;
+        let stdout = child.stdout.take().ok_or_else(|| fail("durability build stdout pipe unavailable".to_string()))?;
+        let stderr = child.stderr.take().ok_or_else(|| fail("durability build stderr pipe unavailable".to_string()))?;
+        let output_limit = self.resource_policy.max_output_bytes;
+        let stdout_reader = std::thread::spawn(move || capture_stream(stdout, output_limit));
+        let stderr_reader = std::thread::spawn(move || capture_stream(stderr, output_limit));
+        let timeout = Duration::from_millis(self.resource_policy.durability_build_timeout_ms);
+        let status_result = wait_for_status_with_timeout(child, timeout);
+        let stdout = stdout_reader.join().map_err(|_| fail("durability stdout reader panicked".to_string()))?
+            .map_err(|e| fail(e.to_string()))?;
+        let stderr = stderr_reader.join().map_err(|_| fail("durability stderr reader panicked".to_string()))?
+            .map_err(|e| fail(e.to_string()))?;
+        let receipt = persist_verifier_output(&self.lean_project_path, &stdout, &stderr, 0, 0).map_err(fail)?;
+        match status_result {
+            Ok(status) => Ok((status, receipt)),
+            Err(message) => Err(LeanInvocationFailure { message, output_receipt: Some(receipt) }),
+        }
+    }
+
+    fn durability_job_dir(&self) -> PathBuf {
+        self.lean_project_path.join(".proofsearch").join("durability-jobs")
+    }
+
+    /// Issue #220: sibling of `durability_job_dir` — where asynchronous
+    /// verification job state (and result artifacts) live. On disk under the same
+    /// `.proofsearch` root, so jobs survive a restart for free.
+    fn verification_job_dir(&self) -> PathBuf {
+        self.lean_project_path.join(".proofsearch").join("verification-jobs")
+    }
+
+    fn write_durability_state(&self, job_id: &str, state: &serde_json::Value) -> Result<(), String> {
+        let _state_lock = DURABILITY_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = self.durability_job_dir();
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        fs::write(dir.join(format!("{job_id}.json")), serde_json::to_vec(state).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())
+    }
+
+    fn enqueue_durability_build(&self, target: String, prior_job_id: Option<String>) -> Result<DurabilityJobReceipt, String> {
+        let job_id = Uuid::new_v4().to_string();
+        let queued_at = chrono::Utc::now().to_rfc3339();
+        self.write_durability_state(&job_id, &serde_json::json!({
+            "job_id": job_id, "target": target, "status": "queued", "kernel_verified": true,
+            "artifact_persisted": true, "queued_at": queued_at, "prior_job_id": prior_job_id,
+            "effective_timeout_ms": self.resource_policy.durability_build_timeout_ms
+        }))?;
+        let gateway = RealLeanGateway::with_resource_policy(
+            self.lean_project_path.clone(), self.elan_bin_path.clone(), self.resource_policy.clone(),
+        );
+        let thread_job_id = job_id.clone();
+        let thread_target = target.clone();
+        let thread_prior_job_id = prior_job_id.clone();
+        std::thread::spawn(move || {
+            let started = Instant::now();
+            let _ = gateway.write_durability_state(&thread_job_id, &serde_json::json!({
+                "job_id": thread_job_id, "target": thread_target, "status": "running", "kernel_verified": true,
+                "artifact_persisted": true, "started_at": chrono::Utc::now().to_rfc3339(),
+                "prior_job_id": thread_prior_job_id,
+                "effective_timeout_ms": gateway.resource_policy.durability_build_timeout_ms
+            }));
+            let result = gateway.run_durability_build(&thread_target);
+            let duration_ms = started.elapsed().as_millis() as u64;
+            let state = match result {
+                Ok((status, output)) if status.success() => serde_json::json!({
+                    "job_id": thread_job_id, "target": thread_target, "status": "complete", "kernel_verified": true,
+                    "artifact_persisted": true, "durability_build_complete": true, "exit_status": status.to_string(),
+                    "duration_ms": duration_ms, "output_receipt": output, "completed_at": chrono::Utc::now().to_rfc3339()
+                    , "prior_job_id": thread_prior_job_id
+                }),
+                Ok((status, output)) => serde_json::json!({
+                    "job_id": thread_job_id, "target": thread_target, "status": "failed", "kernel_verified": true,
+                    "artifact_persisted": true, "durability_build_failed": true, "exit_status": status.to_string(),
+                    "duration_ms": duration_ms, "output_receipt": output, "completed_at": chrono::Utc::now().to_rfc3339()
+                    , "prior_job_id": thread_prior_job_id
+                }),
+                Err(error) => serde_json::json!({
+                    "job_id": thread_job_id, "target": thread_target, "status": "failed", "kernel_verified": true,
+                    "artifact_persisted": true, "durability_build_failed": true, "error": error.to_string(),
+                    "output_receipt": error.output_receipt, "duration_ms": duration_ms,
+                    "prior_job_id": thread_prior_job_id,
+                    "completed_at": chrono::Utc::now().to_rfc3339()
+                }),
+            };
+            let _ = gateway.write_durability_state(&thread_job_id, &state);
+        });
+        Ok(DurabilityJobReceipt { job_id, target, status: "queued".to_string(), error: None })
     }
 
     /// Renders the manifest's module paths as `import` lines (plus approved
@@ -300,6 +843,72 @@ fn source_span_of(val: &serde_json::Value) -> Option<String> {
 }
 
 impl LeanGateway for RealLeanGateway {
+    fn resource_policy(&self) -> Option<VerifierResourcePolicy> {
+        Some(self.resource_policy.clone())
+    }
+
+    fn durability_job_status(&self, job_id: &str) -> Result<serde_json::Value, String> {
+        Uuid::parse_str(job_id).map_err(|e| format!("invalid durability job id: {e}"))?;
+        let _state_lock = DURABILITY_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = self.durability_job_dir().join(format!("{job_id}.json"));
+        let bytes = fs::read(path).map_err(|e| format!("unknown durability job {job_id}: {e}"))?;
+        serde_json::from_slice(&bytes).map_err(|e| format!("corrupt durability job {job_id}: {e}"))
+    }
+
+    fn durability_job_retry(&self, job_id: &str) -> Result<DurabilityJobReceipt, String> {
+        let state = self.durability_job_status(job_id)?;
+        let status = state["status"].as_str().unwrap_or("unknown");
+        if matches!(status, "queued" | "running") {
+            return Err(format!("durability job {job_id} is still {status}"));
+        }
+        let target = state["target"].as_str().ok_or_else(|| format!("durability job {job_id} has no target"))?;
+        self.enqueue_durability_build(target.to_string(), Some(job_id.to_string()))
+    }
+
+    fn verification_submit(
+        &self,
+        request: verification::VerificationJobRequest,
+    ) -> Result<crate::models::VerificationJobReceipt, String> {
+        let dir = self.verification_job_dir();
+        // The worker runs on a background thread, so the runner must own an
+        // independent gateway — clone this one, exactly as `enqueue_durability_build`
+        // clones itself into its own build thread.
+        let gateway = RealLeanGateway::with_resource_policy(
+            self.lean_project_path.clone(),
+            self.elan_bin_path.clone(),
+            self.resource_policy.clone(),
+        );
+        let runner: verification::VerificationRunner = Box::new(move |req: &verification::VerificationJobRequest| {
+            // The SAME `verify_exact` the synchronous `episode_step` path uses —
+            // this async path changes nothing about proof authority.
+            gateway.verify_exact(
+                &req.obligation,
+                &req.candidate_source,
+                &req.approved_dependency_ids,
+                &req.environment,
+                &req.import_manifest,
+                req.proof_format,
+            )
+        });
+        verification::submit(&dir, &self.resource_policy, request, runner)
+    }
+
+    fn verification_status(&self, job_id: &str) -> Result<serde_json::Value, String> {
+        verification::status(&self.verification_job_dir(), job_id)
+    }
+
+    fn verification_result(&self, job_id: &str) -> Result<serde_json::Value, String> {
+        verification::result(&self.verification_job_dir(), job_id)
+    }
+
+    fn verification_cancel(&self, job_id: &str) -> Result<serde_json::Value, String> {
+        verification::cancel(&self.verification_job_dir(), job_id)
+    }
+
+    fn verification_events(&self, job_id: &str) -> Result<serde_json::Value, String> {
+        verification::events(&self.verification_job_dir(), job_id)
+    }
+
     fn verify_exact(
         &self,
         obligation: &Obligation,
@@ -349,11 +958,16 @@ impl LeanGateway for RealLeanGateway {
         );
 
         // 4/5. Write + run.
-        let (proc_success, lines, stderr) = match self.run_lean_json(&file_content, &theorem_name, Duration::from_secs(60)) {
+        let (proc_success, lines, stderr, output_receipt) = match self.run_lean_json(
+            &file_content,
+            &theorem_name,
+            Duration::from_millis(self.resource_policy.proof_timeout_ms),
+        ) {
             Ok(v) => v,
-            Err(timeout_or_spawn_err) => {
+            Err(failure) => {
+                let message = failure.to_string();
                 return Ok(LeanVerificationResult {
-                    outcome: LeanVerificationOutcome::KernelFail,
+                    outcome: LeanVerificationOutcome::InfrastructureError,
                     attempt_id: Uuid::new_v4(),
                     obligation_id: obligation.id,
                     theorem_name,
@@ -365,7 +979,7 @@ impl LeanGateway for RealLeanGateway {
                     proof_term_hash: None,
                     diagnostic: Some(LeanDiagnostic {
                         category: LeanDiagnosticCategory::TacticFailure,
-                        primary_message: timeout_or_spawn_err.clone(),
+                        primary_message: message,
                         source_span: None,
                         goal: None,
                         local_context: vec![],
@@ -376,6 +990,9 @@ impl LeanGateway for RealLeanGateway {
                     }),
                     all_diagnostics: vec![],
                     dependency_use_report: None,
+                    resource_policy: Some(self.resource_policy.receipt()),
+                    output_receipt: failure.output_receipt,
+                    durability_job: None,
                     wall_time_ms: start_time.elapsed().as_millis() as u64,
                     lean_cpu_time_ms: start_time.elapsed().as_millis() as u64,
                 });
@@ -457,28 +1074,22 @@ impl LeanGateway for RealLeanGateway {
             LeanVerificationOutcome::KernelFail
         };
 
-        // If successful, copy to main project and compile using `lake build` so it's ready for imports
-        if success {
+        // Kernel validity and durability are separate states. Persist the
+        // verified source, then enqueue (never await) the bounded Lake build.
+        let durability_job = if success {
             let verified_dir = self.lean_project_path.join("LeanChecker").join("Verified");
-            if !verified_dir.exists() {
-                let _ = fs::create_dir_all(&verified_dir);
-            }
-            // The tempfile run_lean_json wrote to is already cleaned up by the
-            // time we get here — re-write the same content directly into Verified/.
             let dest_path = verified_dir.join(format!("{}.lean", theorem_name));
-            let _ = fs::write(&dest_path, &file_content);
-
-            let lake_path = self.elan_bin_path.join("lake.exe");
-            let mut build_cmd = Command::new(&lake_path);
-            build_cmd.arg("build")
-                .arg(format!("LeanChecker.Verified.{}", theorem_name))
-                .current_dir(&self.lean_project_path);
-            if let Ok(elan_home) = std::env::var("PROOFSEARCH_ELAN_HOME") {
-                build_cmd.env("ELAN_HOME", elan_home);
-            }
-            let _build_lock = LAKE_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            let _ = build_cmd.output();
-        }
+            let persisted = fs::create_dir_all(&verified_dir).and_then(|_| fs::write(&dest_path, &file_content));
+            let target = format!("LeanChecker.Verified.{}", theorem_name);
+            Some(match persisted {
+                Ok(()) => self.enqueue_durability_build(target.clone(), None).unwrap_or_else(|error| DurabilityJobReceipt {
+                    job_id: String::new(), target, status: "queue_failed".to_string(), error: Some(error),
+                }),
+                Err(error) => DurabilityJobReceipt {
+                    job_id: String::new(), target, status: "artifact_persist_failed".to_string(), error: Some(error.to_string()),
+                },
+            })
+        } else { None };
 
         let wall_time_ms = start_time.elapsed().as_millis() as u64;
 
@@ -496,6 +1107,9 @@ impl LeanGateway for RealLeanGateway {
             diagnostic,
             all_diagnostics,
             dependency_use_report: None,
+            resource_policy: Some(self.resource_policy.receipt()),
+            output_receipt: Some(output_receipt),
+            durability_job,
             wall_time_ms,
             lean_cpu_time_ms: wall_time_ms,
         })
@@ -517,7 +1131,7 @@ impl LeanGateway for RealLeanGateway {
             assembled.declaration_manifest_hash.clone(),
         )).unwrap_or_default();
 
-        let mk_fail = |diag: LeanDiagnostic, all: Vec<LeanDiagnostic>, elapsed: u64| LeanModuleVerificationResult {
+        let mk_fail = |diag: LeanDiagnostic, all: Vec<LeanDiagnostic>, output_receipt: Option<VerifierOutputReceipt>, elapsed: u64| LeanModuleVerificationResult {
             outcome: LeanVerificationOutcome::KernelFail,
             problem_namespace: assembled.namespace.clone(),
             root_lean_name: assembled.root_lean_name.clone(),
@@ -527,22 +1141,33 @@ impl LeanGateway for RealLeanGateway {
             kernel_result_hash: kernel_result_hash.clone(),
             diagnostic: Some(diag),
             all_diagnostics: all,
+            resource_policy: Some(self.resource_policy.receipt()),
+            output_receipt,
+            durability_job: None,
             wall_time_ms: elapsed,
         };
 
-        let (proc_success, lines, stderr) = match self.run_lean_json(&assembled.source, &file_stem, Duration::from_secs(120)) {
+        let (proc_success, lines, stderr, output_receipt) = match self.run_lean_json(
+            &assembled.source,
+            &file_stem,
+            Duration::from_millis(self.resource_policy.module_timeout_ms),
+        ) {
             Ok(v) => v,
-            Err(timeout_or_spawn_err) => {
-                return Ok(mk_fail(
+            Err(failure) => {
+                let message = failure.to_string();
+                let mut result = mk_fail(
                     LeanDiagnostic {
                         category: LeanDiagnosticCategory::TacticFailure,
-                        primary_message: timeout_or_spawn_err,
+                        primary_message: message,
                         source_span: None, goal: None, local_context: vec![], unsolved_goals: vec![],
                         used_dependencies: vec![], error_code: None, canonical_goal_hash: None,
                     },
                     vec![],
+                    failure.output_receipt,
                     start_time.elapsed().as_millis() as u64,
-                ));
+                );
+                result.outcome = LeanVerificationOutcome::InfrastructureError;
+                return Ok(result);
             }
         };
 
@@ -589,7 +1214,7 @@ impl LeanGateway for RealLeanGateway {
                     used_dependencies: vec![], error_code: None, canonical_goal_hash: None,
                 }
             };
-            return Ok(mk_fail(diag, all_diagnostics, elapsed));
+            return Ok(mk_fail(diag, all_diagnostics, Some(output_receipt), elapsed));
         }
 
         // Success: write the verified source into Verified/ ONLY now. No partial
@@ -599,17 +1224,15 @@ impl LeanGateway for RealLeanGateway {
             let _ = fs::create_dir_all(&verified_dir);
         }
         let dest_path = verified_dir.join(format!("{}.lean", file_stem));
-        let _ = fs::write(&dest_path, &assembled.source);
-        let lake_path = self.elan_bin_path.join("lake.exe");
-        let mut build_cmd = Command::new(&lake_path);
-        build_cmd.arg("build")
-            .arg(format!("LeanChecker.Verified.{}", file_stem))
-            .current_dir(&self.lean_project_path);
-        if let Ok(elan_home) = std::env::var("PROOFSEARCH_ELAN_HOME") {
-            build_cmd.env("ELAN_HOME", elan_home);
-        }
-        let _build_lock = LAKE_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = build_cmd.output();
+        let target = format!("LeanChecker.Verified.{}", file_stem);
+        let durability_job = match fs::write(&dest_path, &assembled.source) {
+            Ok(()) => self.enqueue_durability_build(target.clone(), None).unwrap_or_else(|error| DurabilityJobReceipt {
+                job_id: String::new(), target, status: "queue_failed".to_string(), error: Some(error),
+            }),
+            Err(error) => DurabilityJobReceipt {
+                job_id: String::new(), target, status: "artifact_persist_failed".to_string(), error: Some(error.to_string()),
+            },
+        };
 
         Ok(LeanModuleVerificationResult {
             outcome: LeanVerificationOutcome::KernelPass,
@@ -621,6 +1244,9 @@ impl LeanGateway for RealLeanGateway {
             kernel_result_hash,
             diagnostic: None,
             all_diagnostics: vec![],
+            resource_policy: Some(self.resource_policy.receipt()),
+            output_receipt: Some(output_receipt),
+            durability_job: Some(durability_job),
             wall_time_ms: start_time.elapsed().as_millis() as u64,
         })
     }
@@ -651,7 +1277,11 @@ impl LeanGateway for RealLeanGateway {
         // additionally skips this probe entirely when the identical manifest
         // already validated under the same environment (see the manifest-hash
         // check there).
-        let (proc_success, lines, stderr) = self.run_lean_json(&content, "import_probe", Duration::from_secs(240))?;
+        let (proc_success, lines, stderr, _output_receipt) = self.run_lean_json(
+            &content,
+            "import_probe",
+            Duration::from_millis(self.resource_policy.import_validation_timeout_ms),
+        ).map_err(|e| e.to_string())?;
         let errors: Vec<String> = lines.iter()
             .filter_map(|v| {
                 let (msg, _kind, severity, _line) = parse_diagnostic_line(v);
@@ -681,7 +1311,11 @@ impl LeanGateway for RealLeanGateway {
 
         // Pass 1: exactly the problem's own import manifest — mirrors what a
         // Solve attempt actually sees. Fast: no full-library load.
-        let pass1 = self.check_pass(names, import_manifest, Duration::from_secs(20))?;
+        let pass1 = self.check_pass(
+            names,
+            import_manifest,
+            Duration::from_millis(self.resource_policy.declaration_lookup_timeout_ms),
+        )?;
 
         let need_umbrella: Vec<String> = names.iter().enumerate()
             .filter(|(i, _)| !pass1[*i])
@@ -708,7 +1342,11 @@ impl LeanGateway for RealLeanGateway {
         // umbrella. This is what distinguishes "not imported here" from
         // "genuinely absent" — and is the slow path (cold process, full library
         // load) callers must explicitly opt into.
-        let umbrella_results = self.check_pass(&need_umbrella, &["Mathlib".to_string()], Duration::from_secs(90))?;
+        let umbrella_results = self.check_pass(
+            &need_umbrella,
+            &["Mathlib".to_string()],
+            Duration::from_millis(self.resource_policy.deep_declaration_lookup_timeout_ms),
+        )?;
         let pass2: std::collections::HashMap<String, bool> = need_umbrella.into_iter().zip(umbrella_results).collect();
 
         Ok(names.iter().enumerate().map(|(i, name)| {
@@ -755,7 +1393,8 @@ impl RealLeanGateway {
         }
 
         let check_end_line = check_start_line + names.len() as i64 - 1;
-        let (proc_success, lines, stderr) = self.run_lean_json(&content, "decl_lookup", timeout)?;
+        let (proc_success, lines, stderr, _output_receipt) = self.run_lean_json(&content, "decl_lookup", timeout)
+            .map_err(|e| e.to_string())?;
         let mut failed_lines: std::collections::HashSet<i64> = std::collections::HashSet::new();
         // An error that lands OUTSIDE the #check lines (e.g. a bad import on
         // line 1) is an environment problem, not a per-declaration result — if
@@ -809,6 +1448,120 @@ mod tests {
         vec!["Mathlib.Tactic.Ring".to_string(), "Mathlib.Tactic.NormNum".to_string()]
     }
 
+    #[test]
+    fn verifier_resource_policy_defaults_are_finite() {
+        let policy = VerifierResourcePolicy::from_lookup(|_| None).unwrap();
+        assert_eq!(policy, VerifierResourcePolicy::default());
+        assert!(policy.proof_timeout_ms > 0);
+        assert!(policy.max_concurrent_processes > 0);
+    }
+
+    #[test]
+    fn verifier_resource_policy_accepts_bounded_operator_override() {
+        let policy = VerifierResourcePolicy::from_lookup(|name| {
+            (name == "PROOFSEARCH_VERIFY_PROOF_TIMEOUT_MS").then(|| "12345".to_string())
+        }).unwrap();
+        assert_eq!(policy.proof_timeout_ms, 12_345);
+        assert_eq!(policy.module_timeout_ms, VerifierResourcePolicy::default().module_timeout_ms);
+    }
+
+    #[test]
+    fn verifier_resource_policy_denies_zero_and_unlimited_overrides() {
+        for raw in ["0", "3600001", "unlimited"] {
+            let error = VerifierResourcePolicy::from_lookup(|name| {
+                (name == "PROOFSEARCH_VERIFY_PROOF_TIMEOUT_MS").then(|| raw.to_string())
+            }).unwrap_err();
+            assert!(error.contains("PROOFSEARCH_VERIFY_PROOF_TIMEOUT_MS"));
+        }
+    }
+
+    #[test]
+    fn verifier_output_streaming_preserves_raw_bytes_and_critical_diagnostics() {
+        let root = tempfile::tempdir().unwrap();
+        let first = br#"{"severity":"error","message":"first"}"#;
+        let sorry = br#"{"kind":"hasSorry","severity":"warning","message":"declaration uses `sorry`"}"#;
+        let last = br#"{"severity":"error","message":"last"}"#;
+        let mut stdout_bytes = Vec::new();
+        stdout_bytes.extend_from_slice(first);
+        stdout_bytes.push(b'\n');
+        stdout_bytes.extend_from_slice(&[0xff, 0xfe, b'\n']);
+        stdout_bytes.extend_from_slice(sorry);
+        stdout_bytes.push(b'\n');
+        stdout_bytes.extend_from_slice(last);
+        stdout_bytes.push(b'\n');
+        let stdout = capture_stream(std::io::Cursor::new(stdout_bytes.clone()), 12).unwrap();
+        let stderr_bytes = b"mixed stderr\n".to_vec();
+        let stderr = capture_stream(std::io::Cursor::new(stderr_bytes.clone()), 5).unwrap();
+        let (diagnostics, total) = parse_lean_json_file(stdout.raw.path(), 3).unwrap();
+        assert_eq!(total, 3, "invalid UTF-8 is preserved raw but is not fabricated into JSON");
+        assert_eq!(diagnostics.len(), 3);
+        assert!(diagnostics.iter().any(|value| value["kind"] == "hasSorry"));
+        assert!(diagnostics.iter().any(|value| value["message"] == "first"));
+        assert!(diagnostics.iter().any(|value| value["message"] == "last"));
+
+        let receipt = persist_verifier_output(root.path(), &stdout, &stderr, total, diagnostics.len() as u64).unwrap();
+        assert_eq!(receipt.stdout_bytes, stdout_bytes.len() as u64);
+        assert_eq!(receipt.stderr_bytes, stderr_bytes.len() as u64);
+        assert!(receipt.truncated_bytes > 0);
+        let hex = receipt.artifact_hash.strip_prefix("sha256:").unwrap();
+        let artifact = std::fs::read(root.path().join(".proofsearch/artifacts/sha256").join(format!("{hex}.bin"))).unwrap();
+        assert!(artifact.windows(sorry.len()).any(|window| window == sorry));
+        assert!(artifact.windows(3).any(|window| window == [0xff, 0xfe, b'\n']));
+    }
+
+    #[test]
+    fn verifier_resource_rejection_is_infrastructure_not_kernel_failure() {
+        let mut policy = VerifierResourcePolicy::default();
+        policy.max_source_bytes = 1;
+        let gateway = RealLeanGateway::with_resource_policy(
+            PathBuf::from("dummy"),
+            PathBuf::from("dummy"),
+            policy.clone(),
+        );
+        let obligation = Obligation {
+            id: Uuid::new_v4(), problem_version_id: Uuid::new_v4(), kind: ObligationKind::Root,
+            theorem_name: "t".into(), lean_statement: "True".into(), statement_hash: "hash".into(),
+            natural_description: "test".into(), status: ObligationStatus::Open, depth_from_root: 0,
+            created_by: ObligationCreator::InitialSketch, created_by_epoch_id: None,
+            superseded_by_id: None, proved_lemma_id: None, refutation_lemma_id: None,
+            failure_lesson: None, attempt_count: 0, created_at: Utc::now(), closed_at: None,
+        };
+        let result = gateway.verify_exact(
+            &obligation, "trivial", &[], "env", &default_manifest(), ProofFormat::FlatTacticSequence,
+        ).unwrap();
+        assert_eq!(result.outcome, LeanVerificationOutcome::InfrastructureError);
+        let receipt = result.resource_policy.expect("resource policy receipt");
+        assert_eq!(receipt.requested, policy);
+        assert_eq!(receipt.effective, policy);
+        assert!(!receipt.policy_hash.is_empty());
+    }
+
+    #[test]
+    fn verifier_process_timeout_is_enforced() {
+        for _ in 0..3 {
+            #[cfg(target_os = "windows")]
+            let mut command = {
+                let mut command = Command::new("cmd.exe");
+                command.args(["/C", "ping -n 30 127.0.0.1 >NUL"]);
+                command
+            };
+            #[cfg(not(target_os = "windows"))]
+            let mut command = {
+                let mut command = Command::new("sh");
+                command.args(["-c", "sleep 30 & wait"]);
+                command
+            };
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+            configure_process_containment(&mut command);
+            let child = command.spawn().unwrap();
+            let pid = child.id();
+            let error = wait_for_status_with_timeout(child, Duration::from_millis(20)).unwrap_err();
+            assert!(error.contains("timed out after 20 ms"), "{error}");
+            assert!(error.contains("cleanup=reaped"), "{error}");
+            assert!(!ACTIVE_VERIFIER_PIDS.lock().unwrap().contains(&pid));
+        }
+    }
+
     /// Regression test for issue #141: a `solve` submission with
     /// `proof_format: "raw_lean_block"` whose `proof_term` does NOT start
     /// with an explicit leading `\n`, assembled against a deliberately long
@@ -853,10 +1606,11 @@ mod tests {
 
     #[test]
     fn test_real_lean_gateway_failure_cases() {
-        let elan_bin_path = PathBuf::from("F:\\.elan\\bin");
-        let lean_project_path = PathBuf::from("F:\\Github\\LLM-Driven Proof Search Environment\\lean-checker");
+        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+        let elan_bin_path = PathBuf::from(home).join(".elan").join("bin");
+        let lean_project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("lean-checker");
 
-        let gateway = RealLeanGateway::new(lean_project_path, elan_bin_path);
+        let gateway = RealLeanGateway::new(lean_project_path.clone(), elan_bin_path);
 
         let obligation = Obligation {
             id: Uuid::new_v4(),
@@ -882,8 +1636,178 @@ mod tests {
         // This should fail to prove since 1 = 2 is false.
         let res = gateway.verify_exact(&obligation, "rfl", &[], "envhash", &default_manifest(), ProofFormat::FlatTacticSequence);
         if let Ok(res_val) = res {
-            assert!(matches!(res_val.outcome, LeanVerificationOutcome::KernelFail));
+            assert!(matches!(
+                res_val.outcome,
+                LeanVerificationOutcome::KernelFail | LeanVerificationOutcome::InfrastructureError
+            ));
+            if res_val.outcome == LeanVerificationOutcome::InfrastructureError {
+                assert!(res_val.diagnostic.is_some(), "an unavailable machine-specific Lean path must be explained");
+            } else {
+                let receipt = res_val.output_receipt.expect("a completed Lean process must persist its raw output receipt");
+                let hex = receipt.artifact_hash.strip_prefix("sha256:").unwrap();
+                assert!(lean_project_path.join(".proofsearch/artifacts/sha256").join(format!("{hex}.bin")).exists());
+            }
         }
+    }
+
+    #[test]
+    fn verifier_output_limit_exhaustion_is_infrastructure() {
+        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+        let elan_bin_path = PathBuf::from(home).join(".elan").join("bin");
+        let lean_project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("lean-checker");
+        if !elan_bin_path.join("lake.exe").exists() || !lean_project_path.join("lakefile.toml").exists() { return }
+        let mut policy = VerifierResourcePolicy::default();
+        policy.max_output_bytes = 1;
+        let gateway = RealLeanGateway::with_resource_policy(lean_project_path, elan_bin_path, policy);
+        let obligation = Obligation {
+            id: Uuid::new_v4(), problem_version_id: Uuid::new_v4(), kind: ObligationKind::Root,
+            theorem_name: "output_limit".into(), lean_statement: "1 = 2".into(), statement_hash: "hash".into(),
+            natural_description: "test".into(), status: ObligationStatus::Open, depth_from_root: 0,
+            created_by: ObligationCreator::InitialSketch, created_by_epoch_id: None,
+            superseded_by_id: None, proved_lemma_id: None, refutation_lemma_id: None,
+            failure_lesson: None, attempt_count: 0, created_at: Utc::now(), closed_at: None,
+        };
+        let result = gateway.verify_exact(&obligation, "rfl", &[], "env", &default_manifest(), ProofFormat::FlatTacticSequence).unwrap();
+        assert_eq!(result.outcome, LeanVerificationOutcome::InfrastructureError);
+        assert!(result.diagnostic.unwrap().primary_message.contains("verifier_output_limit_exceeded"));
+        assert!(result.output_receipt.unwrap().truncated_bytes > 0);
+    }
+
+    #[test]
+    fn durability_retry_is_background_observable_and_keeps_kernel_truth_separate() {
+        let root = tempfile::tempdir().unwrap();
+        let gateway = RealLeanGateway::new(root.path().to_path_buf(), PathBuf::from("Z:\\missing-elan"));
+        let prior = Uuid::new_v4().to_string();
+        gateway.write_durability_state(&prior, &serde_json::json!({
+            "job_id": prior, "target": "LeanChecker.Verified.missing", "status": "failed",
+            "kernel_verified": true, "artifact_persisted": true
+        })).unwrap();
+        let started = Instant::now();
+        let retry = gateway.durability_job_retry(&prior).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1), "retry must enqueue without waiting for Lake");
+        assert_eq!(retry.status, "queued");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = gateway.durability_job_status(&retry.job_id).unwrap();
+            if state["status"] == "failed" {
+                assert_eq!(state["kernel_verified"], true, "a durability failure cannot revoke kernel truth");
+                assert_eq!(state["prior_job_id"], prior);
+                assert!(state["error"].as_str().is_some_and(|error| error.contains("spawn")));
+                break;
+            }
+            assert!(Instant::now() < deadline, "durability retry did not settle: {state}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn kernel_pass_queues_and_completes_observable_durability_job() {
+        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+        let elan_bin_path = PathBuf::from(home).join(".elan").join("bin");
+        let lean_project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("lean-checker");
+        if !elan_bin_path.join("lake.exe").exists() || !lean_project_path.join("lakefile.toml").exists() { return }
+        let gateway = RealLeanGateway::new(lean_project_path, elan_bin_path);
+        let obligation = Obligation {
+            id: Uuid::new_v4(), problem_version_id: Uuid::new_v4(), kind: ObligationKind::Root,
+            theorem_name: "durability".into(), lean_statement: "True".into(), statement_hash: "hash".into(),
+            natural_description: "test".into(), status: ObligationStatus::Open, depth_from_root: 0,
+            created_by: ObligationCreator::InitialSketch, created_by_epoch_id: None,
+            superseded_by_id: None, proved_lemma_id: None, refutation_lemma_id: None,
+            failure_lesson: None, attempt_count: 0, created_at: Utc::now(), closed_at: None,
+        };
+        let result = gateway.verify_exact(&obligation, "trivial", &[], "env", &default_manifest(), ProofFormat::FlatTacticSequence).unwrap();
+        assert_eq!(result.outcome, LeanVerificationOutcome::KernelPass);
+        let job = result.durability_job.expect("kernel pass must expose its durability job");
+        assert!(!job.job_id.is_empty());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let state = gateway.durability_job_status(&job.job_id).unwrap();
+            match state["status"].as_str() {
+                Some("complete") => {
+                    assert_eq!(state["kernel_verified"], true);
+                    assert!(state["output_receipt"]["artifact_hash"].is_string());
+                    break;
+                }
+                Some("failed") => panic!("durability build unexpectedly failed without changing kernel truth: {state}"),
+                _ => assert!(Instant::now() < deadline, "durability build did not settle: {state}"),
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Issue #220's core invariant: an asynchronous verification job runs the
+    /// EXACT SAME `verify_exact`, so its result must equal what the synchronous
+    /// path produces for the SAME input — whatever that verdict is. This asserts
+    /// that equality directly rather than assuming the environment proves the
+    /// goal, so it validates the real claim ("async == sync") and stays honest in
+    /// any real-Lean environment. Lean-guarded exactly like the other
+    /// RealLeanGateway integration tests; the deadline is tied to the gateway's
+    /// own proof timeout so a slow-but-working verifier never false-fails.
+    #[test]
+    fn async_verification_job_result_matches_synchronous_verify_exact() {
+        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+        let elan_bin_path = PathBuf::from(home).join(".elan").join("bin");
+        let lean_project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("lean-checker");
+        if !elan_bin_path.join("lake.exe").exists() || !lean_project_path.join("lakefile.toml").exists() { return }
+        let gateway = RealLeanGateway::new(lean_project_path, elan_bin_path);
+        let obligation = Obligation {
+            id: Uuid::new_v4(), problem_version_id: Uuid::new_v4(), kind: ObligationKind::Root,
+            theorem_name: "async_match".into(), lean_statement: "True".into(), statement_hash: "hash".into(),
+            natural_description: "test".into(), status: ObligationStatus::Open, depth_from_root: 0,
+            created_by: ObligationCreator::InitialSketch, created_by_epoch_id: None,
+            superseded_by_id: None, proved_lemma_id: None, refutation_lemma_id: None,
+            failure_lesson: None, attempt_count: 0, created_at: Utc::now(), closed_at: None,
+        };
+        // A run-unique candidate source (trailing line comment, ignored by Lean)
+        // so this test never deduplicates against a completed job a PRIOR run
+        // persisted in the shared `.proofsearch/verification-jobs` dir — sync and
+        // async are then computed fresh, together, on identical input.
+        let candidate_source = format!("trivial -- {}", Uuid::new_v4());
+
+        // Synchronous baseline — the source of truth this async run must match.
+        let sync = gateway.verify_exact(&obligation, &candidate_source, &[], "env", &default_manifest(), ProofFormat::FlatTacticSequence).unwrap();
+
+        // Same inputs, submitted asynchronously.
+        let request = verification::VerificationJobRequest {
+            obligation: obligation.clone(),
+            candidate_source: candidate_source.clone(),
+            approved_dependency_ids: vec![],
+            environment: "env".into(),
+            import_manifest: default_manifest(),
+            proof_format: ProofFormat::FlatTacticSequence,
+        };
+        let receipt = gateway.verification_submit(request).unwrap();
+        assert!(!receipt.job_id.is_empty());
+        assert!(!receipt.reused);
+
+        // Any terminal phase is acceptable (complete/failed/timed_out) — the
+        // point is that whatever the sync path decided, the async path decides
+        // identically. Deadline covers a full cold verify plus a generous margin.
+        let deadline = Instant::now()
+            + Duration::from_millis(gateway.resource_policy.proof_timeout_ms)
+            + Duration::from_secs(120);
+        let final_state = loop {
+            let state = gateway.verification_status(&receipt.job_id).unwrap();
+            match state["phase"].as_str() {
+                Some("complete") | Some("failed") | Some("timed_out") => break state,
+                Some("cancelled") | Some("interrupted") =>
+                    panic!("async verify reached an unexpected terminal phase: {state}"),
+                _ => assert!(Instant::now() < deadline, "async verify did not settle in time: {state}"),
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        // Status is lightweight: no full payload, but carries the artifact hash.
+        assert!(final_state.get("all_diagnostics").is_none());
+        assert!(final_state["result_artifact_hash"].as_str().is_some());
+
+        // The async result payload matches the synchronous verdict exactly on the
+        // load-bearing fields (attempt_id/wall-time are expected to differ).
+        let full = gateway.verification_result(&receipt.job_id).unwrap();
+        assert_eq!(full["available"], true);
+        let async_result: LeanVerificationResult = serde_json::from_value(full["result"].clone()).unwrap();
+        assert_eq!(async_result.outcome, sync.outcome, "async outcome must equal the synchronous verify_exact outcome");
+        assert_eq!(async_result.theorem_name, sync.theorem_name);
+        assert_eq!(async_result.expected_statement_hash, sync.expected_statement_hash);
     }
 
     /// THE CORE OF THE FIX: an unresolved name must categorize as
@@ -900,7 +1824,7 @@ mod tests {
 
     /// The staging trust boundary: a module that fails verification must NEVER
     /// write to LeanChecker/Verified. Here the gateway can't even spawn lake (bogus
-    /// elan path), so verify_module returns KernelFail — and the Verified/ tree must
+    /// elan path), so verify_module returns InfrastructureError — and the Verified/ tree must
     /// be untouched. No partial commit.
     #[test]
     fn verify_module_does_not_write_on_failure() {
@@ -915,7 +1839,7 @@ mod tests {
         let asm = module::assemble_module("ProofSearch.P_test", &root_hash, &[], &root, &default_manifest()).unwrap();
 
         let res = gateway.verify_module(&asm, "envhash").unwrap();
-        assert!(matches!(res.outcome, LeanVerificationOutcome::KernelFail), "a gateway that can't run Lean must fail closed");
+        assert!(matches!(res.outcome, LeanVerificationOutcome::InfrastructureError), "a gateway that can't run Lean is an infrastructure failure");
 
         let verified = lean_project.join("LeanChecker").join("Verified");
         let wrote_any = verified.exists()

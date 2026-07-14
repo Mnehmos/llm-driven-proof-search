@@ -820,14 +820,18 @@ name = "proofsearch-mcp"
 version = "0.3.27"
 dependencies = [
  "axum",
+ "base64",
  "chrono",
  "clap",
+ "hex",
  "proofsearch_core",
  "rmcp",
  "rusqlite",
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "tokio",
  "uuid",
 ]

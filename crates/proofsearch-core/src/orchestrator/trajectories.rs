@@ -402,6 +402,9 @@ mod module_replay_tests {
                 kernel_result_hash: "k".to_string(),
                 diagnostic: None,
                 all_diagnostics: vec![],
+                resource_policy: None,
+                output_receipt: None,
+                durability_job: None,
                 wall_time_ms: 1,
             })
         }

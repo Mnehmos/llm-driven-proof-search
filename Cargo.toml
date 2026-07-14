@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.dependencies]
-rusqlite = { version = "0.40.1", features = ["bundled"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "blob"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 serde_jcs = "0.1.0"
@@ -16,3 +16,4 @@ chrono = { version = "0.4.38", features = ["serde"] }
 sha2 = "0.10.8"
 hex = "0.4.3"
 schemars = { version = "0.8.21", features = ["uuid1", "chrono"] }
+base64 = "0.22"

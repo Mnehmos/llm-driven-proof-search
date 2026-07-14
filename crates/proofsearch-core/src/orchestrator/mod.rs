@@ -6,6 +6,7 @@ pub mod attempts;
 pub mod step;
 pub mod trajectories;
 pub mod dataset;
+pub mod module_closure;
 
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -323,6 +324,9 @@ mod tests {
                 proof_term_hash: None,
                 diagnostic: None,
                 dependency_use_report: None,
+                resource_policy: None,
+                output_receipt: None,
+                durability_job: None,
                 wall_time_ms: 10,
                 lean_cpu_time_ms: 10,
             })
