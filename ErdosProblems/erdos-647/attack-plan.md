@@ -215,6 +215,30 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     the `rem`-bound theorems and the Selberg weight/`lambdaSquared`
     bounds are talking about the same `ν` for a shared instance. Snapshot
     `proof/Erdos647_NuEqProd.lean`.
+  - ✅ **multSum bridging lemma DONE (2026-07-14)**:
+    `erdos647_multSum_eq_filter_card` confirms Mathlib's
+    `BoundingSieve.multSum` (sum-over-support indicator, for our
+    support/weights choice) equals the raw filter-count form used
+    throughout the `rem`-bound theorems. Snapshot
+    `proof/Erdos647_MultSumEqFilterCard.lean`.
+  - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
+    statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
+    not a nameable value with accessible fields, and cross-submission
+    references don't work anyway (each tracked submission compiles
+    independently). This means the eventual final numeric theorem cannot
+    "load" a previously-built instance; it must either (a) construct the
+    instance inline within one giant self-contained submission alongside
+    everything else, or (b) stay in fully elementary/combinatorial terms
+    (as `rem_bound_squarefree`, `nu_eq_prod`, `multSum_eq_filter_card`
+    already do) and only reach for the abstract `SelbergSieve` API
+    (`selberg_weight_bound`, `lambdaSquared_bound`,
+    `siftedSum_le_mainSum_errSum_of_upperMoebius`) via GENERIC lemmas
+    parameterized over an abstract `s`, never a named concrete instance —
+    exactly the pattern already used for every Selberg-specific theorem
+    built this session. Route (b) is what's been followed throughout;
+    the final assembly will still need a single large, carefully-staged
+    submission, but every individual piece it draws on is independently
+    pre-verified.
   - **Remaining for the final numeric theorem**: combine
     `erdos647_lambdaSquared_bound` (instantiated with
     `erdos647_selberg_weight_bound`'s pointwise bound) with
