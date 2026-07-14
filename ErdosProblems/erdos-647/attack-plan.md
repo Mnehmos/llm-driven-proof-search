@@ -250,6 +250,21 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     `erdos647_lambdaSquared_bound`'s bound fully concrete. Kernel-verified
     FIRST TRY on both the untracked pre-check and the tracked pipeline.
     Snapshot `proof/Erdos647_DivisorSumSelbergTermsDivNu.lean`.
+  - ✅ **Conditional termwise errSum bound DONE (2026-07-14)**:
+    `erdos647_errSum_conditional_bound` proves, for any `s:SelbergSieve`
+    and weight `w` satisfying the Selberg pointwise magnitude bound,
+    `errSum(lambdaSquared w) ≤ ∑_{d∣prodPrimes}
+    (∏_{p∈d.primeFactors}(1+(1-ν(p))⁻¹))²·|rem d|` — combining
+    `erdos647_lambdaSquared_bound` + `erdos647_divisor_sum_selbergTerms_div_nu`
+    (both inlined). Deliberately leaves `|rem d|` abstract/generic (not
+    tied to this campaign's own construction), decoupling the
+    errSum-bounding wiring (done, reusable for any `SelbergSieve`) from
+    bounding `|rem d|` itself (already done separately via
+    `erdos647_rem_bound_squarefree`/`_one` for our own instance) — the
+    final numeric assembly substitutes the latter into the former inside
+    one self-contained submission. Kernel-verified FIRST TRY on both the
+    untracked pre-check and the tracked pipeline. Snapshot
+    `proof/Erdos647_ErrSumConditionalBound.lean`.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
