@@ -185,14 +185,33 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     `z=O(log x)` and only an `x/log x`-type bound. Selberg's
     variance-minimized weight is genuinely load-bearing for the `(log
     x)^7` exponent; there is no way to route around its magnitude bound.
-    Mathlib's `SelbergSieve.lean` supplies zero weight-magnitude/error
-    theorems beyond the diagonalization identity (confirmed by reading
-    the whole file) — the bound must be derived from scratch for our `ν`,
-    comparable in depth to a textbook Selberg-sieve error-term derivation.
-    Recommended approach for whoever picks this up: prove a CONDITIONAL
-    final-assembly theorem first (`∀z, (∀d,|lambdaSquared w d|≤B(d)) →
-    [final bound in terms of B]`) so assembly work (tractable) is
-    decoupled from proving the weight bound (the genuine open task).
+  - ✅ **SELBERG WEIGHT MAGNITUDE BOUND DONE (2026-07-14)**:
+    `erdos647_selberg_weight_bound` proves `|w(d)| ≤ selbergTerms(d)/ν(d)`
+    for Layer B's explicit optimal weight `w` (from
+    `erdos647_selberg_optimal_weight`), for every `d ∈
+    prodPrimes.divisors`. Genuine new analytic derivation (reindex the
+    defining Möbius-inversion sum via `l'=d·e`, use multiplicativity +
+    `μ(e)²=1` to collapse to `μ(d)·(selbergTerms(d)/L)·∑selbergTerms(e)`,
+    bound the inner sum by `L`). Caught and fixed a sign error in an
+    earlier hand-derivation (`w(d)` is NOT `≥0`, it alternates sign with
+    `μ(d)` — only the absolute-value bound holds) before formalizing.
+    Snapshot `proof/Erdos647_SelbergWeightBound.lean`. This was the
+    genuine open research gap flagged at the end of the prior session —
+    now closed.
+  - **Remaining for the final numeric theorem**: use
+    `erdos647_selberg_weight_bound` to bound `|lambdaSquared w d| =
+    |∑_{d1,d2:lcm=d} w(d1)w(d2)| ≤ ∑_{d1,d2:lcm=d}
+    (selbergTerms(d1)/ν(d1))(selbergTerms(d2)/ν(d2))`, combine with
+    `erdos647_rem_bound_squarefree`/`erdos647_rem_bound_one` to bound
+    `errSum(lambdaSquared w) = Σ_d |lambdaSquared w d|·|rem d|`; combine
+    with `siftedSum_le_mainSum_errSum_of_upperMoebius` +
+    `erdos647_selberg_optimal_weight` (mainSum value) + Layer A's
+    `erdos647_mertens_assembly`, choosing an optimal `z=z(x)` balancing
+    main term vs error term, for the final `x/(log x)^7`-shaped bound.
+    This remaining step is now genuinely "assembly" (combining proven
+    pieces + an explicit growth-rate/summability estimate for
+    `∑_{d|prodPrimes(z)} selbergTerms(d)/ν(d)`-type sums), not open
+    research — though the growth-rate estimate itself still needs care.
 - Fallback if a layer stalls: a weaker exponent (`x/(log x)^k`, k < 7, using
   fewer forms) is still a first-of-its-kind artifact; take the partial win
   and iterate.
