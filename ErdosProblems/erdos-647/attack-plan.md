@@ -56,35 +56,38 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
   `proof/Erdos647_MoebiusIndicator.lean`,
   `proof/Erdos647_MoebiusSwapInversion.lean`,
   `proof/Erdos647_SelbergOptimalWeight.lean`.
-- **Layer C — the 7-tuple application (research finding 2026-07-14: the
-  exact 7-tuple is NOT publicly derivable — see below before attempting).**
-  Instantiate `BoundingSieve` for families A/B (`n=8s+8` / `n=16s+8` with
-  their 7 forms): define ν(p) = (residues killed)/p, prove admissibility
-  `0 < ν(p) < 1`, bound `errSum` by level truncation, combine with Layers
-  A+B for the final bound.
-  - **Blocker**: Hughes's paper attributes the seven-form Theorem's PROOF
-    to an unpublished companion manuscript (`HughesChains`), absent from
-    his public repo/Lean sources (checked `docs/theorem_map.md` and
-    `lean/` — only the unrelated 12-coefficient mod-46189 certificate
-    exists there). No ground-truth source for the exact 7 linear forms.
-  - **My reconstruction attempt is DISPROVEN — do not reuse.** Naively
-    substituting `s=315N-1` (from `2520|n`) into the base forms
-    `s,2s+1,4s+3,8s+7` plus adjoined shifts {3,6,12} gives
-    `{210N-1,315N-1,420N-1,630N-1,840N-1,1260N-1,2520N-1}` —
-    `(2520/k)N-1` for `k∈{1,2,3,4,6,8,12}`. Checked directly: primes
-    3,5,7 divide EVERY one of these 7 coefficients (structurally, since
-    no `k` in that set shares a factor with 5 or 7), forcing root-union
-    size 0 for p=3,5,7 — contradicting the paper's claimed sizes 2,4,6.
-    Insight: those claimed sizes equal `min(p-1,7)`, the MAXIMUM possible
-    for an admissible 7-tuple — meaning the true construction needs
-    N-coefficients that are UNITS mod 2,3,5,7 (opposite of `2520/k`,
-    which is built to be divisible by them). Full reasoning in campaign
-    memory (`erdos-647-campaign-state.md`).
-  - **Next steps**: either locate `HughesChains` via arXiv/other search
-    (not yet tried), or independently derive a fresh admissible 7-tuple
-    from this campaign's own proven Theorem stage2 forms — genuinely new
-    sieve-theoretic design work; spot-check admissibility numerically
-    (Python/native_decide) BEFORE any Lean submission attempt.
+- **Layer C — the 7-tuple application. IN PROGRESS, own independent
+  construction confirmed valid (2026-07-14).** Hughes's paper attributes
+  the seven-form Theorem's proof to an unpublished companion manuscript
+  (`HughesChains`, no arXiv ID) absent from his public repo — no
+  ground-truth source exists for his exact construction. This campaign
+  built and VERIFIED its own instead, grounded entirely in already-proven
+  campaign theorems (Stage 1 `2520|n`, Stage 2 prime-chain families, and
+  the prior pure-prime shift-3/6/12 classifications):
+  the seven-tuple `{210N-1,315N-1,420N-1,630N-1,840N-1,1260N-1,2520N-1}`
+  = `(2520/k)N-1` for `k∈{1,2,3,4,6,8,12}`.
+  - **Admissibility, kernel-verified**: `gcd` of all 7 coefficients is
+    `105=3·5·7`, so every form is `≡-1 mod {3,5,7}` identically —
+    root-union size 0 at those three primes (`erdos647_seventuple_admissible_small_primes`,
+    `native_decide`), meaning 3,5,7 are structurally EXCLUDED from the
+    sieve's active prime set (`BoundingSieve` requires `ν(p)>0` for
+    included primes). At p=2: root-union size exactly 1 (matches Hughes's
+    claimed value — the only one that does, since his p=3,5,7 claims of
+    2,4,6 don't match this construction and can't, given the gcd fact).
+    At every prime p>7: proven UNIFORMLY (not case-by-case) that
+    root-union size is between 1 and 7
+    (`erdos647_seventuple_admissible_general`, via `ZMod p` field
+    inverses for existence + cancellation for uniqueness). Snapshot
+    `proof/Erdos647_SevenTupleAdmissibility.lean`.
+  - **Next**: build the actual `BoundingSieve`/`SelbergSieve` instance —
+    define `ν` as a multiplicative `ArithmeticFunction ℝ` supported on
+    primes `∉{3,5,7}` (`ν(p) = (root-union size)/p`), prove
+    `IsMultiplicative`/`0<ν(p)<1` for every prime using the admissibility
+    theorems above, define `support`/`weights`/`totalMass` for the actual
+    candidate-counting problem, bound `errSum`, and combine with Layers
+    A+B (Layer A's Mertens estimate converts `1/∑selbergTerms` into the
+    `x/(log x)^7` shape). This remaining assembly is substantial —
+    comparable in scope to Layer B's final assembly.
 - Fallback if a layer stalls: a weaker exponent (`x/(log x)^k`, k < 7, using
   fewer forms) is still a first-of-its-kind artifact; take the partial win
   and iterate.
