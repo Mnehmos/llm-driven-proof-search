@@ -121,11 +121,26 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     after `set`, forcing later tactics to go through the equation
     hypothesis instead of unfolding); and chained type ascriptions
     `(e : T1 : T2)` are a parse error, not automatic double-casting.
-  - **Remaining for the final numeric theorem**: extend `rem` to composite
-    squarefree `d` (needs CRT-style reasoning — deliberately deferred,
-    harder scope, not yet attempted, since `prodPrimes(z).divisors`
-    ranges over all squarefree products of admissible primes ≤z, not just
-    primes themselves); sum the resulting per-`d` bound over
+  - **Confirmed by reading Mathlib's `SelbergSieve.lean` source directly**
+    (2026-07-14): `BoundingSieve.errSum muPlus := ∑ d ∈ divisors
+    prodPrimes, |muPlus d| * |rem d|` — sums over EVERY divisor of
+    `prodPrimes(z)`, not just primes, so the composite-`d` extension is
+    genuinely required (not an optional refinement) before `errSum` can
+    be bounded. `rem d := multSum d - nu d * totalMass` with `multSum d :=
+    ∑ n∈support, if d∣n then weights n else 0` — confirms
+    `erdos647_rem_bound`'s construction (weights=1, support=image of
+    product-of-forms map) matches Mathlib's definition exactly.
+  - ✅ **CRT card-product formula DONE (2026-07-14)**: `erdos647_crt_card_two`
+    proves, for coprime `p,M` and residue sets `Sp⊆[0,p)`, `T⊆[0,M)`, that
+    `|{r<p·M : r%p∈Sp ∧ r%M∈T}| = |Sp|·|T|` exactly — a general CRT
+    counting fact (`Finset.card_bij` + `Nat.chineseRemainder` +
+    `Nat.modEq_and_modEq_iff_modEq_mul`), the combinatorial engine for
+    `rootUnionCount(d)=∏_{p∣d}rootUnionCount(p)` on squarefree `d`.
+    Snapshot `proof/Erdos647_CrtCardTwo.lean`.
+  - **Remaining for the final numeric theorem**: use
+    `erdos647_crt_card_two` (by induction on `d`'s prime factors, peeling
+    one prime at a time) to extend `erdos647_rem_bound` from prime `p` to
+    composite squarefree `d`; sum the resulting per-`d` bound over
     `prodPrimes(z).divisors` weighted by the Selberg `λ_d²` structure to
     get the actual `errSum` used by
     `BoundingSieve.siftedSum_le_mainSum_errSum_of_upperMoebius`; combine
