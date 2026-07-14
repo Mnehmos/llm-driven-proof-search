@@ -4,7 +4,7 @@
 
 | Metric | Value |
 |--------|-------|
-| Budget spent | ~$3.50 |
+| Budget spent | ~$5 |
 | Kernel-verified theorems | 4 |
 | Open obligations | 1 (lower bound rigidity) |
 | Phase | 2 — Lower bound core (stuck at 2 fixable bugs) |
@@ -68,4 +68,7 @@
 1. The colored rectangle lemma (Ulam Lemma 5.1) needs re-examination — the core identity cpq × dqr = cpr × dqs is always true, so the rigidity condition is not contradicted by those four elements alone.
 2. Colored KST supersaturation entirely absent from Mathlib.
 3. Several analytic number theory estimates absent or unverified.
-4. **Lower bound rigidity proof**: Architecture confirmed working: `root_theorem` dispatches to `bad_split_ad` and `bad_split_bc` helper lemmas via `submit_module`. The root theorem compiles — it sets up factorization parity, splits into two `by_cases` (ad=2,bc=0 vs ad=0,bc=2), derives divisibility from `padicValNat_dvd_iff`, and calls the helper lemmas. **Remaining**: complete `bad_split_ad` and `bad_split_bc` proofs (each ~80 lines, structurally identical, just with (a,d)↔(b,c) swapped). The `bad_split_ad` proof needs factorization hypotheses (`a.factorization p = 1` etc.) as explicit inputs to derive `Nat.Prime p` via `Nat.factorization_eq_zero_of_not_prime`.
+4. **Lower bound rigidity proof**: Architecture confirmed working: `root_theorem` dispatches to `bad_split_ad` and `bad_split_bc` helper lemmas via `submit_module`. The root theorem compiles — it sets up factorization parity, splits into two `by_cases` (ad=2,bc=0 vs ad=0,bc=2), derives divisibility from `padicValNat_dvd_iff`, and calls the helper lemmas. **Two fixable bugs remain**:
+   - Bug 1: `intro h` on `x ≠ 0` gives `h : ℕ` instead of `h : x = 0` because Lean doesn't unfold `Ne` for `intro`. Fix: use `show ¬(x = 0)` before `intro h` to force unfolding.
+   - Bug 2: `subst ha_eq` where `ha_eq : a = p` may eliminate `p` instead of `a` when both are variables. Fix: use `rw [ha_eq] at *` or `subst ha_eq` with explicit direction.
+   - Key API: `Squarefree.ne_zero`, `Nat.prime_dvd_prime_iff_eq` (returns `p = a`, use `.symm`), `padicValNat_dvd_iff` (needs `haveI : Fact p.Prime`), `Nat.Prime.pos`, `Nat.eq_of_mul_eq_mul_left` (needs `0 < c`), `ext` + `simp` for finsupp equality.
