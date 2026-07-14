@@ -207,6 +207,14 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     for squarefree admissible `d` (combines `crt_card_finset` + inlined
     per-prime admissibility, `∏≤7 ≤ 7^ω(d)`). Snapshot
     `proof/Erdos647_RootUnionCountLe.lean`.
+  - ✅ **ν bridging lemma DONE (2026-07-14)**: `erdos647_nu_eq_prod`
+    confirms the raw combinatorial `ν(d):=rootUnionCount(d)/d` used by
+    `rem_bound_squarefree` equals `∏_{p∣d}ν(p)` — the SAME quantity the
+    abstract `SelbergSieve` framework's `s.nu` computes (via
+    `ArithmeticFunction.prodPrimeFactors_apply`'s unfolding). Confirms
+    the `rem`-bound theorems and the Selberg weight/`lambdaSquared`
+    bounds are talking about the same `ν` for a shared instance. Snapshot
+    `proof/Erdos647_NuEqProd.lean`.
   - **Remaining for the final numeric theorem**: combine
     `erdos647_lambdaSquared_bound` (instantiated with
     `erdos647_selberg_weight_bound`'s pointwise bound) with
