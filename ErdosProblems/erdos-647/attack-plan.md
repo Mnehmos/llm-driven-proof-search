@@ -311,6 +311,14 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     `erdos647_rem_bound` — now a confirmed 3rd instance; the lesson
     generalizes to any proof combining several `set`-bound `Finset.filter`
     locals via multiple downstream `have`s.
+  - ✅ **Our concrete ν(p) = 7/p exactly DONE (2026-07-14)**:
+    `erdos647_nu_eq_seven_div_p` is the direct corollary of the exact
+    rootUnionCount fact, unfolding our own `ν` (from
+    `erdos647_nu_admissible`) via `ArithmeticFunction.prodPrimeFactors_apply`
+    down to `rootUnionCount(p)/p = 7/p` for `p>7, p≠11`. Snapshot
+    `proof/Erdos647_NuEqSevenDivP.lean`. This is the exact per-prime
+    density needed to drive the Mertens-type growth-rate estimate for
+    `L=∏(1-ν(p))⁻¹ ~ (log z)^7`.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
