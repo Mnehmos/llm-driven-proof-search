@@ -329,6 +329,13 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     growth-rate estimate for `L~(log z)^7`, combined with
     `erdos647_mertens_assembly`'s lower bound on `∑1/p` and
     `-log(1-x)≥x`. Snapshot `proof/Erdos647_NuSumGe.lean`.
+  - ✅ **Generic log L ≥ ∑ν(p) bound DONE (2026-07-14)**:
+    `erdos647_L_ge_exp_nu_sum` proves, for ANY `s:SelbergSieve`,
+    `∑_{p∈prodPrimes.primeFactors}ν(p) ≤ log L` (via `Real.log_prod` +
+    the elementary `-log(1-x)≥x`). Fully generic, combines directly with
+    `erdos647_nu_sum_ge_seven_mertens` (once instantiated with our own
+    construction) to get `log L ≥ 7·loglog(z)−C`, i.e. `L≳(log z)^7` —
+    the target growth rate. Snapshot `proof/Erdos647_LGeExpNuSum.lean`.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
