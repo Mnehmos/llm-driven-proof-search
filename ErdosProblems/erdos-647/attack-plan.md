@@ -93,10 +93,30 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     admissible primes ≤z, `weights=1`, `totalMass=z`, and `ν` fully
     admissible — all six structure fields discharged from this campaign's
     own results. Snapshot `proof/Erdos647_BoundingSieveInstance.lean`.
-  - **Remaining for the final numeric theorem** (the instance itself is
-    complete): bound `errSum` by summing
-    `erdos647_residue_count_bound` over each `d`'s root-union, then
-    combine `BoundingSieve.siftedSum_le_mainSum_errSum_of_upperMoebius` +
+  - ✅ **Residue counting bounds DONE (2026-07-14)**: both
+    `erdos647_residue_count_bound` (upper, `≤ X/d+1`) and
+    `erdos647_residue_count_lower_bound` (lower, `≥ X/d` for `r≠0`) are
+    kernel-verified. Snapshots `proof/Erdos647_ResidueCountBound.lean`,
+    `proof/Erdos647_ResidueCountLowerBound.lean`.
+  - ✅ **Forms-divisible-iff bridge DONE (2026-07-14)**:
+    `erdos647_forms_divisible_iff` proves `p ∣ ∏formᵢ(N) ↔` (some
+    `formᵢ(N)≡0 mod p`), via a 6-deep `Nat.Prime.dvd_mul` (Euclid's lemma)
+    case split plus a `key` helper (`p∣c·N-1 ↔ (c·N)%p=1`, via
+    `Nat.div_add_mod` bookkeeping). This connects `multSum(p)` (defined via
+    the actual product-of-forms support) to the same root-union residue
+    set already used to define `ν(p)`, letting the residue-counting bounds
+    above be summed into `rem(p)`. Snapshot
+    `proof/Erdos647_FormsDivisibleIff.lean`. Two transport-format lessons
+    recorded there (episode_step `solve`'s `proof_format` must be
+    `raw_lean_block` for bullet-heavy proofs, and even then sibling
+    top-level tactics must share one column).
+  - **Remaining for the final numeric theorem**: bound `errSum` for
+    PRIME `d` by combining `erdos647_forms_divisible_iff` with the
+    residue-counting bounds (root-union has ≤7 residues mod `p`, each
+    contributing `O(1)` discrepancy from `ν(p)·X`); extend to composite
+    squarefree `d` (needs CRT-style reasoning — deliberately deferred,
+    harder scope, not yet attempted); then combine
+    `BoundingSieve.siftedSum_le_mainSum_errSum_of_upperMoebius` +
     Layer B's `erdos647_selberg_optimal_weight` + Layer A's Mertens
     estimate, choosing an optimal `z=z(x)`, for the final
     `x/(log x)^7`-shaped bound.
