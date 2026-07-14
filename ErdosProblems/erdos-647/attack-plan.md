@@ -336,6 +336,32 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     `erdos647_nu_sum_ge_seven_mertens` (once instantiated with our own
     construction) to get `log L ≥ 7·loglog(z)−C`, i.e. `L≳(log z)^7` —
     the target growth rate. Snapshot `proof/Erdos647_LGeExpNuSum.lean`.
+  - ⚠⚠ **CRITICAL DIAGNOSTIC (2026-07-14): the errSum bound chain may not
+    be tight enough — genuine open question, not yet resolved.** Mathlib's
+    `SelbergSieve.level` field is declared but VESTIGIAL — grepped the
+    whole file: `lambdaSquared` and every downstream theorem
+    (`mainSum_lambdaSquared_eq_sum_mul_sum_sq`,
+    `siftedSum_le_mainSum_errSum_of_upperMoebius`) sum over
+    `prodPrimes.divisors` unrestricted, never truncating `w`'s support to
+    `d≤level` as classical Selberg theory requires for error-term control.
+    `erdos647_selberg_optimal_weight` (Layer B) has no such truncation
+    either. The pointwise bound `|w(d)|≤selbergTerms(d)/ν(d)` used in
+    `errSum_conditional_bound` discards the `μ(d)`-sign cancellation the
+    real optimal weight has, and `∑_{d|prodPrimes(z)}(∏(1+(1-ν(p))⁻¹))²·
+    7^ω(d)` unrestricted is plausibly EXPONENTIAL in `π(z)` (`~29^π(z)`)
+    — reproducing the "Legendre explosion" already ruled out for the pure
+    Möbius shortcut, just smuggled back in via a bound too weak to see
+    Selberg's actual cancellation. **Two possible resolutions, neither
+    attempted yet**: (a) rebuild Layer B's optimal-weight construction
+    with an explicit level-`y` truncation (`w(d):=0` for `d>y`) —
+    substantial rework of every Layer B theorem; (b) find a sharper
+    direct bound on `∑_d|lambdaSquared(w)(d)|·|rem(d)|` using `w`'s
+    actual signed structure, not just `|w(d)|≤...`. **Do not force the
+    final numeric assembly by plugging the unrestricted errSum bound into
+    the Mertens growth rate without resolving this first** — the L/main-
+    term growth-rate chain (`nu_sum_ge_seven_mertens`+`L_ge_exp_nu_sum`+
+    Layer A Mertens) is solid and complete; only the error-term side needs
+    this rework.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
