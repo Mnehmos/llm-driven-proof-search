@@ -392,6 +392,14 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     inversion, `w_R(1)=1`, `mainSum(lambdaSquared w_R)=1/L_R`) — see the
     level-truncation repair plan under the CRITICAL DIAGNOSTIC headline
     at the top of this file.
+  - ✅ **errSum REPAIR, Milestone C piece DONE (2026-07-14):
+    `erdos647_selberg_coeff_bound`** proves the uniform coefficient
+    bound `1+(1-ν(p))⁻¹≤4` for every admissible prime — simpler than
+    planned, since `ν(p)≤7/p≤7/11<2/3` uniformly for ALL primes `p>7`
+    (any prime `p>7` is automatically `≥11`), no need for the exact
+    `ν(11)=6/11` value or a `p=11` case split. Needed for either errSum
+    repair route (level truncation or a sharper signed bound). Snapshot
+    `proof/Erdos647_SelbergCoeffBound.lean`.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
