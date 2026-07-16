@@ -1,12 +1,12 @@
 # Erdős #647 — complete kernel-verified theorem catalog
 
 > **Living inventory. Problem OPEN; global density theorem verified.** Last
-> updated 2026-07-15.
+> updated 2026-07-16.
 >
 > This catalogs the kernel-verified theorem families produced by the Erdős
-> #647 campaign. The portable source currently has 223 top-level theorem
-> declarations across 102 Lean files. Each tracked row
-> row carries the `problem_version_id` — the authoritative lookup key in the
+> #647 campaign. The portable source currently has 239 top-level theorem
+> declarations across 106 Lean files. Each tracked row carries the
+> `problem_version_id` — the authoritative lookup key in the
 > tracked pipeline — plus the exact root statement and, where recorded, the
 > statement hash and episode id. Nothing here resolves the open problem; this
 > is the machine-checked scaffolding *around* it.
@@ -14,7 +14,7 @@
 > **What is portable vs. internal.** The committed `.lean` files are the
 > simplest portable formal artifact: they check against Mathlib without this
 > project's database. The repository now also publishes the complete exports
-> for all 211 related episodes—redacted public summaries, full
+> for all 214 related episodes—redacted public summaries, full
 > Markdown proof dossiers, and structured training JSON—under
 > [dossiers/exports/](dossiers/exports/README.md). The IDs alone still are not
 > an external database API; the committed exports are what makes the audit
@@ -51,6 +51,10 @@ kernel replay rather than a single tracked proof-search episode.
 | [`proof/Erdos647_ConcreteAsymptoticDensity.lean`](proof/Erdos647_ConcreteAsymptoticDensity.lean) | dyadic parameter assembly, explicit large-range bound, and global finite-range closure |
 | [`proof/Erdos647_FormalConjecturesCompatibility.lean`](proof/Erdos647_FormalConjecturesCompatibility.lean) | exact predicate/Finset compatibility and density restatement for the Formal Conjectures expression |
 | [`proof/Erdos647_ShiftDepthInterface.lean`](proof/Erdos647_ShiftDepthInterface.lean) | post-density existence interface: global maximum implies every shift budget; one failure excludes candidacy |
+| [`proof/Erdos647_FiniteBandClosure.lean`](proof/Erdos647_FiniteBandClosure.lean) | exact failed-shift certificate for every `25 ≤ n ≤ 84` |
+| [`proof/Erdos647_CandidateStructuralReduction.lean`](proof/Erdos647_CandidateStructuralReduction.lean) | every candidate is above `84`, divisible by `2520`, and in one of the two four-prime families |
+| [`proof/Erdos647_WindowShiftInterface.lean`](proof/Erdos647_WindowShiftInterface.lean) | exact short-window / fixed-depth-shift equivalence for the infinite-window variant |
+| [`proof/Erdos647_Shift9Refined.lean`](proof/Erdos647_Shift9Refined.lean) | removes the shift-9 square branch and attaches exact residue restrictions |
 
 Terminal statement:
 
@@ -74,7 +78,7 @@ no access to this project's database required.
 
 Committed Lean source:
 
-- 102 `.lean` files under [proof/](proof/), containing 223 top-level theorem
+- 106 `.lean` files under [proof/](proof/), containing 239 top-level theorem
   declarations.
 - Five consolidated modular families under
   [proof/campaign/](proof/campaign/), plus individual analytic, truncation,
@@ -82,7 +86,7 @@ Committed Lean source:
 
 Export and reproduction material:
 
-- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 211 related
+- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 214 related
   problem/episode pairs.
 - [dossiers/exports/manifest.tsv](dossiers/exports/manifest.tsv) records the
   outcome, fidelity, environment, statement hash, timestamps, and step count.
@@ -392,8 +396,8 @@ The supporting generic kernel-verified lemmas are the square-support result
 
 ---
 
-*Counts are explicit: 223 top-level theorem declarations in 102 Lean files and
-211 related proof-search episodes in the export archive (204 kernel-verified,
+*Counts are explicit: 239 top-level theorem declarations in 106 Lean files and
+214 related proof-search episodes in the export archive (207 kernel-verified,
 seven retained non-success histories). These are different metrics—one episode
 can assemble several helper declarations, while some final repository
 compositions are not standalone episodes. The global density theorem is

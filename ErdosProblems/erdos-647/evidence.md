@@ -1,6 +1,6 @@
 # Machine evidence — Erdős #647 campaign
 
-> Living document; last updated 2026-07-15. Tracked episode records below use
+> Living document; last updated 2026-07-16. Tracked episode records below use
 > the MCP proof-search pipeline (dev-attested fidelity basis →
 > `kernel_verified`, the honest ceiling for a dev attestation). The final
 > repository-level composition is recorded separately and is not represented
@@ -42,7 +42,8 @@ larger Erdős-647 candidate exists.
 
 ## Existence-continuation checkpoint
 
-The first post-density interface is independently tracked and replayed:
+Four post-density interfaces are now independently tracked and/or composed
+from tracked source:
 
 | field | value |
 |---|---|
@@ -53,9 +54,48 @@ The first post-density interface is independently tracked and replayed:
 | outcome | **kernel_verified**, `root_proved` |
 | snapshot | [proof/Erdos647_ShiftDepthInterface.lean](proof/Erdos647_ShiftDepthInterface.lean) |
 
-The source module also defines `SurvivesThrough n D` and proves that any one
-failed budget excludes the global condition. This is infrastructure for the
-still-open existence problem, not evidence that the problem has been solved.
+The exact converse—global maximum iff all positive shift budgets—was then
+tracked separately:
+
+| field | value |
+|---|---|
+| statement | the global maximum condition is equivalent to all `0<k<n` shift budgets |
+| problem_version_id | `e997a6ae-30ba-4af3-b49a-39a4c405b2d4` |
+| episode_id | `8bc57f29-adcc-467d-b986-3e060b2d2e3c` |
+| root_statement_hash | `7e1e0ea545ac3f75298bbece75068750bc4036dd40ed53d16886103725cb4556` |
+| outcome | **kernel_verified**, `root_proved` |
+| snapshot | [proof/Erdos647_ShiftDepthInterface.lean](proof/Erdos647_ShiftDepthInterface.lean) |
+
+The finite interval needed by the existence problem is no longer merely
+absorbed into a density constant:
+
+| field | value |
+|---|---|
+| statement | every `25 ≤ n ≤ 84` has a certified failed shift |
+| problem_version_id | `2c7952fa-4342-40ed-8a1d-43b093f585aa` |
+| episode_id | `88a8417d-715f-4d93-aad6-6317e8f1be80` |
+| root_statement_hash | `0b8b7fe73cb4aecbdb9e650fe50ee9e982ecab4d23273c92297fa331c6f8724d` |
+| outcome | **kernel_verified**, `root_proved` |
+| snapshot | [proof/Erdos647_FiniteBandClosure.lean](proof/Erdos647_FiniteBandClosure.lean) |
+
+Finally, the exact adapter for the short-window variant is tracked:
+
+| field | value |
+|---|---|
+| statement | the short-window maximum is equivalent to its finite shift-budget family |
+| problem_version_id | `0c4b9003-af8d-4da4-8fb0-0129d1f85a67` |
+| episode_id | `74fbfc4b-da2f-467c-9d44-d02b6eeb28f4` |
+| root_statement_hash | `bdf2ab2b8d18289e8a6131c18f9fd0da555d7571ecf7f24b8243005adcca5409` |
+| outcome | **kernel_verified**, `root_proved` |
+| snapshot | [proof/Erdos647_WindowShiftInterface.lean](proof/Erdos647_WindowShiftInterface.lean) |
+
+Source composition additionally proves that every candidate is above `84`,
+is divisible by `2520`, and lies in one of the two verified four-prime
+families; see
+[proof/Erdos647_CandidateStructuralReduction.lean](proof/Erdos647_CandidateStructuralReduction.lean).
+The refined shift-9 source removes the square branch and adds exact residue
+restrictions. These are strict reductions of the still-open existence problem,
+not evidence that it has been solved.
 
 The source-level compatibility replay additionally compiled
 [`proof/Erdos647_FormalConjecturesCompatibility.lean`](proof/Erdos647_FormalConjecturesCompatibility.lean)
@@ -70,9 +110,9 @@ compatibility check rather than a forced mixed-version import.
 
 ## Complete proof-search export archive
 
-The repository now includes exports for all 211 related episodes identified by
+The repository now includes exports for all 214 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
-index, and a read-only database closure audit. Of these, 204 report
+index, and a read-only database closure audit. Of these, 207 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.

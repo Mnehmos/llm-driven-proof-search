@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n\n  constructor\n  · intro H k hk0 hkn\n    let f : Fin n → ℕ := fun x =>\n      (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - k, by omega⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  · intro H\n    by_cases hn0 : n = 0\n    · subst n\n      simp\n    · have hnpos : 0 < n := Nat.pos_of_ne_zero hn0\n      letI : Nonempty (Fin n) := Fin.pos_iff_nonempty.mp hnpos\n      apply ciSup_le\n      intro m\n      by_cases hm0 : (m : ℕ) = 0\n      · have hs0 : ArithmeticFunction.sigma 0 (m : ℕ) = 0 := by\n          rw [hm0]\n          native_decide\n        omega\n      · let k := n - (m : ℕ)\n        have hk0 : 0 < k := by\n          dsimp [k]\n          omega\n        have hkn : k < n := by\n          dsimp [k]\n          omega\n        have hk := H k hk0 hkn\n        have hnkm : n - k = (m : ℕ) := by\n          dsimp [k]\n          omega\n        rw [hnkm] at hk\n        omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n\n  constructor\n  · intro H k hk0 hkn\n    let f : Fin n → ℕ := fun x =>\n      (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - k, by omega⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  · intro H\n    by_cases hn0 : n = 0\n    · subst n\n      simp\n    · have hnpos : 0 < n := Nat.pos_of_ne_zero hn0\n      letI : Nonempty (Fin n) := Fin.pos_iff_nonempty.mp hnpos\n      apply ciSup_le\n      intro m\n      by_cases hm0 : (m : ℕ) = 0\n      · have hs0 : ArithmeticFunction.sigma 0 (m : ℕ) = 0 := by\n          rw [hm0]\n          native_decide\n        omega\n      · let k := n - (m : ℕ)\n        have hk0 : 0 < k := by\n          dsimp [k]\n          omega\n        have hkn : k < n := by\n          dsimp [k]\n          omega\n        have hk := H k hk0 hkn\n        have hnkm : n - k = (m : ℕ) := by\n          dsimp [k]\n          omega\n        rw [hnkm] at hk\n        omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ,\n  ((⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 ↔\n    ∀ k : ℕ, 0 < k → k < n →\n      ArithmeticFunction.sigma 0 (n - k) ≤ k + 2)",
+        "module_source_hash": null,
+        "obligation_id": "cd36451f-8b5d-4118-8276-5b3fa2f316aa",
+        "outcome": "kernel_pass",
+        "problem_version_id": "e997a6ae-30ba-4af3-b49a-39a4c405b2d4",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "7e1e0ea545ac3f75298bbece75068750bc4036dd40ed53d16886103725cb4556"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "ca83c14079bc9981eabfff191e720fad724d2a2654d323e54b8241e90f8b9f0f"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

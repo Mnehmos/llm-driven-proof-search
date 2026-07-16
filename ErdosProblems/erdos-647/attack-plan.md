@@ -1,9 +1,9 @@
 # Attack plan — Erdős #647 (living)
 
-> Last updated 2026-07-15. This is the working plan of record; it changes as
+> Last updated 2026-07-16. This is the working plan of record; it changes as
 > results land. Completed milestones move to the whitepaper's campaign log.
 
-## HEADLINE STATUS (2026-07-15)
+## HEADLINE STATUS (2026-07-16)
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,
@@ -19,10 +19,12 @@ nor excludes a larger candidate.
 **The campaign is active again on the original existence question.** The new
 target is individual/eventual impossibility, not another fixed-dimensional
 density estimate: prove that every `n > 24` has some positive shift `k < n`
-with `σ₀(n-k) > k+2`.  The first interface for this phase is now
-kernel-verified: the global maximum condition implies every pointwise shift
-budget `σ₀(n-k)≤k+2`, so a growing-depth obstruction or a direct prime-chain
-contradiction can close the original problem by producing one failed budget.
+with `σ₀(n-k) > k+2`. The global maximum is now kernel-verified to be
+*equivalent* to all of its pointwise shift budgets. The entire interval
+`25 ≤ n ≤ 84` is closed by exact computation, so every remaining hypothetical
+candidate is formally above `84`, divisible by `2520`, and in one of the two
+four-prime families. The short-window variant has likewise been reduced
+exactly to fixed-depth survivor infinitude.
 
 One analytic correction is now part of the proof record. The earlier
 Chebyshev/Mertens lower bound is valid, but its leading coefficient is
@@ -738,6 +740,22 @@ Target: prove `∀ n, 24 < n → ¬Candidate n`, equivalently show that every su
   `11379956-bdc3-4ed9-bef3-3e373c8e85c2`, episode
   `3061458d-df2c-4e48-b05d-76b48209a2f6`, outcome `kernel_verified`.
   Snapshot `proof/Erdos647_ShiftDepthInterface.lean`.
+- ✅ **Exact converse and finite band DONE (2026-07-16):**
+  `full_max_iff_shift_budgets` identifies the global maximum with all positive
+  budgets (episode `8bc57f29-adcc-467d-b986-3e060b2d2e3c`). A second tracked
+  theorem gives an explicit failed shift for every `25 ≤ n ≤ 84` (episode
+  `88a8417d-715f-4d93-aad6-6317e8f1be80`). Consequently every hypothetical
+  candidate has `84 < n`; composing the earlier modular and prime-chain
+  results proves `2520 ∣ n` and membership in one of the two exact four-prime
+  families. Snapshots `proof/Erdos647_FiniteBandClosure.lean` and
+  `proof/Erdos647_CandidateStructuralReduction.lean`.
+- ✅ **Short-window adapter DONE (2026-07-16):**
+  `window_iff_shift_budgets` converts each short-window maximum into the
+  finite budgets through depth `k-1` (episode
+  `74fbfc4b-da2f-467c-9d44-d02b6eeb28f4`). Thus the third Formal Conjectures
+  `sorry` is isolated to the new-mathematics statement that the survivor set
+  is infinite at every fixed depth. Snapshot
+  `proof/Erdos647_WindowShiftInterface.lean`.
 - ✅ **Formal Conjectures predicate compatibility DONE (2026-07-15):**
   `CandidateBound` is definitionally the same maximum expression; the bounded
   candidate Finsets are extensionally equal, and the global density theorem is
@@ -748,10 +766,12 @@ Target: prove `∀ n, 24 < n → ¬Candidate n`, equivalently show that every su
   sufficiently large `n` fails one budget with `k≤D(n)`. A fixed finite list
   of congruences cannot suffice because of the all-avoid obstruction.
 - **Direct chain objective:** extend the verified shift classifications beyond
-  `1,2,3,4,6,8,12` and force an incompatible factorization. The first bounded
-  census target is shift `9`: among `n=2520N` for `N≤100000`, only three
-  values survive shifts `1..8`, and all three fail at `9`. This is search
-  guidance only, not proof; any theorem must handle the all-avoid families.
+  `1,2,3,4,6,8,12` and force an incompatible factorization. Shift `9` is now
+  sharpened: its square branch is impossible; its prime, `3·prime`, and
+  `9·prime` branches force exact residue classes modulo `3`, `9`, and `27`.
+  This is not a closure: explicit parameters survive shifts `1..9` through the
+  `3·prime` branch and first fail at shift `10`. The next useful target is a
+  uniform interaction between shifts `9` and `10`, not more bounded census.
 - **Witness lane:** use computation only to identify structural patterns or a
   genuine counterexample above the established frontier. Finite absence is
   never presented as eventual nonexistence.

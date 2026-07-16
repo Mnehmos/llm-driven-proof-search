@@ -1,9 +1,9 @@
 # Erdős #647 proof-search episode export set
 
-Generated 2026-07-15 from the campaign source, explicit Lean provenance,
+Generated 2026-07-16 from the campaign source, explicit Lean provenance,
 the evidence ledger, and a read-only transitive database closure audit.
 
-Episode count: 211 (204 kernel-verified; seven non-success histories retained
+Episode count: 214 (207 kernel-verified; seven non-success histories retained
 for audit completeness).
 
 - `040cf08c-4190-45d7-8dc0-4f5f8b8697c6` — `KERNEL_VERIFIED`
@@ -108,6 +108,7 @@ for audit completeness).
 - `72447dc9-a1c3-4a92-ab55-4bd463c9fc88` — `KERNEL_VERIFIED`
 - `748fe60f-4951-443a-ab48-1ccb1ec2e782` — `KERNEL_VERIFIED`
 - `74ae7201-fabb-468e-bd1d-83c2da3bb8ef` — `KERNEL_VERIFIED`
+- `74fbfc4b-da2f-467c-9d44-d02b6eeb28f4` — `KERNEL_VERIFIED`
 - `759515ed-b704-4f3d-8b2b-45689f8390b7` — `KERNEL_VERIFIED`
 - `75ae2e6e-3081-4d3c-b977-21c52304131f` — `KERNEL_VERIFIED`
 - `76254e7f-c4ca-45e2-a029-26697df01c16` — `KERNEL_VERIFIED`
@@ -123,8 +124,10 @@ for audit completeness).
 - `8583c95a-69c5-4ea7-99dc-05c68e6d4c7e` — `KERNEL_VERIFIED`
 - `874da7ba-e483-4277-a75e-0796b1e85446` — `KERNEL_VERIFIED`
 - `885dfd33-ebde-4ecc-a118-84d3ee573c7d` — `KERNEL_VERIFIED`
+- `88a8417d-715f-4d93-aad6-6317e8f1be80` — `KERNEL_VERIFIED`
 - `88f161ad-0233-4381-aded-09f76a861a90` — `KERNEL_VERIFIED`
 - `8aec49d1-7f74-423a-9446-411691ebf91f` — `KERNEL_VERIFIED`
+- `8bc57f29-adcc-467d-b986-3e060b2d2e3c` — `KERNEL_VERIFIED`
 - `8f8a0eb1-4969-49a4-82e3-4829b042fadf` — `KERNEL_VERIFIED`
 - `91104d34-5603-480e-8693-a38f699d4a19` — `KERNEL_VERIFIED`
 - `95aff4be-5160-497c-9b1f-b2bcc3ff8162` — `KERNEL_VERIFIED`

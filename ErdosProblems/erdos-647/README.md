@@ -30,11 +30,11 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 | [THEOREM-CATALOG.md](THEOREM-CATALOG.md) | theorem inventory and final assembly map |
 | [attack-plan.md](attack-plan.md) | completed density program and remaining existence directions |
 | [evidence.md](evidence.md) | tracked episode evidence plus the clean repository replay |
-| [dossiers/](dossiers/README.md) | complete 211-episode export archive and indexes |
+| [dossiers/](dossiers/README.md) | complete 214-episode export archive and indexes |
 | [credit.md](credit.md) | attribution, AI disclosure, and honest limits |
-| [proof/](proof/) | 102 Lean files containing 223 top-level theorem declarations |
+| [proof/](proof/) | 106 Lean files containing 239 top-level theorem declarations |
 
-## Headline results — 2026-07-15
+## Headline results — 2026-07-16
 
 1. **Global seventh-power density theorem.**
    [`boundedCandidates_density_global`](proof/Erdos647_ConcreteAsymptoticDensity.lean)
@@ -64,20 +64,23 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
    the all-avoid obstruction showed that bounded congruence trees cannot close
    the frontier.
 
-6. **Complete machine export archive.** All 211 related episodes
+6. **Complete machine export archive.** All 214 related episodes
    are exported in redacted JSON, full Markdown dossier, and structured
    training JSON forms under
-   [dossiers/exports/](dossiers/exports/README.md). Of these, 204 report
+   [dossiers/exports/](dossiers/exports/README.md). Of these, 207 report
    `KERNEL_VERIFIED`; the archive deliberately retains three unfinished,
    three gave-up, and one budget-exhausted trajectory for audit completeness.
    The terminal composition is separately identified as a clean source replay
    rather than invented as an additional tracked episode.
 
-7. **Existence campaign restarted.** `SurvivesThrough n D` packages the
-   first `D` shift budgets. The global candidate condition implies survival
-   through every depth, while any one failed budget rules it out. This is the
-   formal handoff to a growing-depth obstruction or direct prime-chain
-   contradiction; it is not itself a solution of the open problem.
+7. **Existence campaign has an exact first reduction.**
+   [`Erdos647_FiniteBandClosure.lean`](proof/Erdos647_FiniteBandClosure.lean)
+   certifies a failed shift for every `25 ≤ n ≤ 84`. Combining this with the
+   recovered divisibility theorem gives
+   [`candidate_gt84_and_dvd2520`](proof/Erdos647_CandidateStructuralReduction.lean):
+   every hypothetical candidate has `84 < n` and `2520 ∣ n`. The same assembly
+   places it in one of the two verified four-prime families. This is a strict
+   reduction of the open problem, not a solution.
 
 8. **Formal Conjectures predicate compatibility checked.**
    [`Erdos647_FormalConjecturesCompatibility.lean`](proof/Erdos647_FormalConjecturesCompatibility.lean)
@@ -86,6 +89,14 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
    and restates the density theorem over that exact set. The Formal Conjectures
    module independently compiles the matching API in its own pinned toolchain.
    This compatibility result fills none of its three research-open `sorry`s.
+
+9. **The open variants now have exact interfaces.** The global maximum is
+   equivalent to all positive shift budgets, and the short-window maximum is
+   equivalent to the corresponding finite set of budgets. Thus the main
+   theorem is reduced to producing one failed shift for every `n > 84`, while
+   the infinite-window variant is reduced to infinitude of fixed-depth
+   survivor sets. The refined shift-9 theorem additionally deletes its square
+   branch and records the exact surviving residue classes for `N`.
 
 ## Verification snapshot
 

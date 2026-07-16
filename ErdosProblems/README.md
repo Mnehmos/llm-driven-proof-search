@@ -37,8 +37,8 @@ ErdosProblems/
 │   ├── attack-plan.md      completed density program + remaining existence directions
 │   ├── credit.md           Hughes / Kitamura / Idén / Bloom attribution + limits
 │   ├── evidence.md         tracked episodes + clean final replay
-│   ├── dossiers/           full 210-episode export archive
-│   └── proof/              100 Lean files; global density assembly included
+│   ├── dossiers/           full 214-episode export archive
+│   └── proof/              106 Lean files; density and existence reductions included
 └── shared/                 cross-problem infrastructure notes
     ├── corpus-validation.md
     ├── bounty-board.md
@@ -106,8 +106,8 @@ relevant) into a new `erdos-<N>/` folder and link it from the project index.
    bound `|C(X)|≤KX/(log X)^7`. The proof repairs the missing level truncation,
    proves polynomial error control, supplies an elementary seventh-power
    denominator, certifies dyadic parameters, and closes the finite range.
-   The folder publishes 216 theorem declarations and full exports for 210
-   related proof-search episodes: 203 verified successes and seven retained
+   The folder publishes 239 theorem declarations and full exports for 214
+   related proof-search episodes: 207 verified successes and seven retained
    non-success histories.
 
 ## Verify it yourself

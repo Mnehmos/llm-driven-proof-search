@@ -1,7 +1,7 @@
 # Erdős #647 — mapping the wall and formalizing the density frontier
 
 > **Status: GLOBAL DENSITY THEOREM KERNEL-VERIFIED; problem OPEN.** Last
-> updated 2026-07-15. Erdős #647 is unresolved: no larger candidate is known
+> updated 2026-07-16. Erdős #647 is unresolved: no larger candidate is known
 > and none is excluded in full. What is now complete is the formal density
 > theorem `|C(X)| ≪ X/(log X)^7`, including an explicit effective constant.
 
@@ -265,10 +265,10 @@ repaired squarefree remainder was also submitted to the independent exact
 proof-search verifier and returned `kernel_pass`; identifiers and hashes are
 recorded in [evidence.md](evidence.md).
 
-For provenance beyond the source replay, all 211 related campaign
+For provenance beyond the source replay, all 214 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
-training JSON formats. Of these, 204 report `KERNEL_VERIFIED` in the pinned
+training JSON formats. Of these, 207 report `KERNEL_VERIFIED` in the pinned
 environment; seven non-success histories are retained for audit completeness.
 
 This proves a density-zero result with the claimed seventh logarithmic power.
@@ -281,10 +281,10 @@ exclusion.
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **223 top-level theorem
-  declarations across 102 Lean files** under `proof/`. This count includes
-  helper and assembly theorems; it is not presented as 223 independent
-  mathematical discoveries or 223 standalone tracked episodes.
+- Portable proof source currently contains **239 top-level theorem
+  declarations across 106 Lean files** under `proof/`. This count includes
+  helper and assembly theorems; it is not presented as 239 independent
+  mathematical discoveries or 239 standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base
   sieve, the bridging-closure layer, the Theorem-2 formalization, the
   extended negative result, the Mertens infrastructure, the explicit
@@ -310,13 +310,17 @@ is.
 
 This folder is a living workspace, not a museum. The density program is no
 longer an open invitation; it has landed. The original existence campaign is
-active again. Its first new formal interface is
+  active again. Its first new formal interface is
 [`Erdos647_ShiftDepthInterface.lean`](proof/Erdos647_ShiftDepthInterface.lean):
-the global maximum condition implies every budget
+the global maximum condition is equivalent to every budget
 `σ₀(n-k)≤k+2`, and therefore a single failed budget excludes an individual
-candidate. This makes the next proof target precise: produce such a failure
-at a depth that may grow with `n`, or force it from the verified prime-chain
-classifications. Useful next directions are:
+candidate. The interval `25≤n≤84` is now closed exactly; every remaining
+hypothetical candidate is above `84`, divisible by `2520`, and lies in one of
+the two verified four-prime families. The short-window formulation is also
+equivalent to fixed-depth survival, isolating that variant to an infinitude
+statement. This makes the next proof target precise: produce a failure at a
+depth that may grow with `n`, or force it from the prime-chain classifications.
+Useful next directions are:
 
 Predicate compatibility with the upstream-style open formalization is also
 mechanically recorded in
@@ -331,7 +335,7 @@ the same proposition as the existential question and cannot replace its
 2. **Upstream the reusable sieve lemmas** — the level-truncated optimal
    weight, coefficient/support bounds, finite Euler-product comparison, and
    generic two-parameter assembly are Mathlib-shaped contributions.
-3. **Close the shift-depth obstruction** — prove that every `n>24` fails a
+3. **Close the shift-depth obstruction** — prove that every `n>84` fails a
    budget at some `k<n`, ideally with an explicit growing bound `k≤D(n)`.
    Density zero is not emptiness, and bounded congruence trees cannot close
    the remaining classes.

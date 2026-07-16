@@ -1,6 +1,6 @@
 # Credit & disclosure — Erdős #647
 
-> Last updated 2026-07-15. The global seventh-power density theorem is
+> Last updated 2026-07-16. The global seventh-power density theorem is
 > kernel-verified; the original existence problem remains open.
 
 ## Mathematics
@@ -45,7 +45,10 @@
   finite-range closure.
 - The global theorem `|C(X)|≤K·X/(log X)^7` for every natural `X`, with
   explicit effective `K`.
-- A complete public export archive for all 211 related episodes: 204
+- Exact post-density interfaces: full maximum iff all shift budgets, certified
+  closure of `25≤n≤84`, the `n>84`/`2520∣n`/prime-family reduction, and a
+  short-window iff fixed-depth-shift adapter.
+- A complete public export archive for all 214 related episodes: 207
   kernel-verified successes and seven retained non-success histories.
 
 ## Tools and authorship
@@ -68,9 +71,9 @@
 - Theorem 2's mathematics and the density target are Hughes–Kitamura
   mathematics. Our contribution is the independent Lean reconstruction,
   truncation-gap diagnosis and repair, explicit constants, and final assembly.
-- The 211 proof-search episodes have `fidelity_status = attested`: Lean checks
+- The 214 proof-search episodes have `fidelity_status = attested`: Lean checks
   project-authored formal statements, but this is not neutral-corpus
-  certification. Kernel verification applies to 204 of those episodes; the
+  certification. Kernel verification applies to 207 of those episodes; the
   other seven are retained as explicit negative or unfinished trajectories.
 - The terminal density theorem is supported by a clean transitive source
   replay. It is not misrepresented as an additional standalone tracked

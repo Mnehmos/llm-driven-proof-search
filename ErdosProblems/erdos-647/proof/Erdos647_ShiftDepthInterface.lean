@@ -22,6 +22,14 @@ The main bridge was kernel-verified through the tracked proof-search pipeline:
 * root statement hash:
   `df1b2ec8493146e374e83d3c293fd3a25f7c6d4f4c4d48f1049a9050c3a6faa9`
 * outcome: `kernel_verified`
+
+The exact converse `full_max_iff_shift_budgets` was independently tracked:
+
+* problem version: `e997a6ae-30ba-4af3-b49a-39a4c405b2d4`
+* episode: `8bc57f29-adcc-467d-b986-3e060b2d2e3c`
+* root statement hash:
+  `7e1e0ea545ac3f75298bbece75068750bc4036dd40ed53d16886103725cb4556`
+* outcome: `kernel_verified`
 -/
 
 namespace Erdos647
@@ -53,12 +61,77 @@ theorem full_max_implies_shift_budgets :
   dsimp [f, m] at hm
   omega
 
+/-- The maximum condition is exactly equivalent to all positive shift budgets. -/
+theorem full_max_iff_shift_budgets (n : ℕ) :
+    ((⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 ↔
+      ∀ k : ℕ, 0 < k → k < n →
+        ArithmeticFunction.sigma 0 (n - k) ≤ k + 2) := by
+  constructor
+  · exact full_max_implies_shift_budgets n
+  · intro H
+    by_cases hn0 : n = 0
+    · subst n
+      simp
+    · have hnpos : 0 < n := Nat.pos_of_ne_zero hn0
+      letI : Nonempty (Fin n) := Fin.pos_iff_nonempty.mp hnpos
+      apply ciSup_le
+      intro m
+      by_cases hm0 : (m : ℕ) = 0
+      · have hs0 : ArithmeticFunction.sigma 0 (m : ℕ) = 0 := by
+          rw [hm0]
+          native_decide
+        omega
+      · let k := n - (m : ℕ)
+        have hk0 : 0 < k := by
+          dsimp [k]
+          omega
+        have hkn : k < n := by
+          dsimp [k]
+          omega
+        have hk := H k hk0 hkn
+        have hnkm : n - k = (m : ℕ) := by
+          dsimp [k]
+          omega
+        rw [hnkm] at hk
+        omega
+
 /-- A number satisfying the global maximum condition survives every depth. -/
 theorem full_max_implies_survivesThrough {n : ℕ}
     (H : (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2)
     (D : ℕ) : SurvivesThrough n D := by
   intro k hk0 _ hkn
   exact full_max_implies_shift_budgets n H k hk0 hkn
+
+/-- Surviving through the full available depth is exactly the maximum condition. -/
+theorem full_max_iff_survivesThrough_full (n : ℕ) :
+    ((⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 ↔
+      SurvivesThrough n (n - 1)) := by
+  rw [full_max_iff_shift_budgets]
+  constructor
+  · intro H k hk0 _ hkn
+    exact H k hk0 hkn
+  · intro H k hk0 hkn
+    exact H k hk0 (by omega) hkn
+
+/-- The original existential asks exactly for a full-depth survivor above `24`. -/
+theorem exists_full_max_iff_exists_full_depth_survivor :
+    (∃ n > 24,
+      (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2) ↔
+      ∃ n, 24 < n ∧ SurvivesThrough n (n - 1) := by
+  constructor
+  · rintro ⟨n, hn24, hn⟩
+    exact ⟨n, hn24, (full_max_iff_survivesThrough_full n).mp hn⟩
+  · rintro ⟨n, hn24, hn⟩
+    exact ⟨n, hn24, (full_max_iff_survivesThrough_full n).mpr hn⟩
+
+/-- Failure of the maximum condition is exactly witnessed by one bad shift. -/
+theorem not_full_max_iff_exists_shift_failure (n : ℕ) :
+    (¬(⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2) ↔
+      ∃ k : ℕ, 0 < k ∧ k < n ∧
+        k + 2 < ArithmeticFunction.sigma 0 (n - k) := by
+  rw [full_max_iff_shift_budgets]
+  push Not
+  rfl
 
 /-- Any failed budget, at any finite depth, excludes the global condition. -/
 theorem not_full_max_of_depth_failure {n D : ℕ}
