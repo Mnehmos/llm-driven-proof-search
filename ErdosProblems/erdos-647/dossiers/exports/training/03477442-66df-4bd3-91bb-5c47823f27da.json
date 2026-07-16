@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro A hprime k hk\nhave hp720720 := hprime 720720 (by native_decide)\nhave hA : 0 < A := by\n  by_contra h\n  have hA0 : A = 0 := Nat.eq_zero_of_not_pos h\n  subst A\n  norm_num at hp720720\nhave hsigma_prime : ∀ p : ℕ, p.Prime → ArithmeticFunction.sigma 0 p = 2 := by\n  intro p hp\n  simpa using (ArithmeticFunction.sigma_zero_apply_prime_pow (i := 1) hp)\nhave hshift : ∀ k c : ℕ,\n    1 ≤ k → k ≤ 16 → 45045 ≤ c → k * c = 720720 →\n    Nat.Prime (c * A - 1) →\n    ArithmeticFunction.sigma 0 (2520 * (286 * A) - k) ≤ k + 2 := by\n  intro j c hj1 hj16 hc hjc hp\n  have htotal : 2520 * (286 * A) = j * (c * A) := by\n    calc\n      2520 * (286 * A) = 720720 * A := by ring\n      _ = (j * c) * A := by rw [hjc]\n      _ = j * (c * A) := by ring\n  have hfactor : 2520 * (286 * A) - j = j * (c * A - 1) := by\n    rw [Nat.mul_sub_left_distrib, mul_one]\n    exact congrArg (fun x => x - j) htotal\n  have hcA : c ≤ c * A := by\n    nth_rewrite 1 [← mul_one c]\n    exact Nat.mul_le_mul_left c hA\n  have hcop : Nat.Coprime j (c * A - 1) := by\n    refine ((hp.coprime_iff_not_dvd).mpr ?_).symm\n    intro hd\n    have hle := Nat.le_of_dvd (by omega : 0 < j) hd\n    omega\n  have hsigmaJ : ArithmeticFunction.sigma 0 j * 2 ≤ j + 2 := by\n    interval_cases j <;> native_decide\n  rw [hfactor, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,\n    hsigma_prime _ hp]\n  exact hsigmaJ\nsimp only [Finset.mem_Icc] at hk\nhave hk1 : 1 ≤ k := hk.1\nhave hk16 : k ≤ 16 := hk.2\ninterval_cases k\n· exact hshift 1 720720 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 720720 (by native_decide))\n· exact hshift 2 360360 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 360360 (by native_decide))\n· exact hshift 3 240240 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 240240 (by native_decide))\n· exact hshift 4 180180 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 180180 (by native_decide))\n· exact hshift 5 144144 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 144144 (by native_decide))\n· exact hshift 6 120120 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 120120 (by native_decide))\n· exact hshift 7 102960 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 102960 (by native_decide))\n· exact hshift 8 90090 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 90090 (by native_decide))\n· exact hshift 9 80080 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 80080 (by native_decide))\n· exact hshift 10 72072 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 72072 (by native_decide))\n· exact hshift 11 65520 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 65520 (by native_decide))\n· exact hshift 12 60060 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 60060 (by native_decide))\n· exact hshift 13 55440 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 55440 (by native_decide))\n· exact hshift 14 51480 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 51480 (by native_decide))\n· exact hshift 15 48048 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 48048 (by native_decide))\n· exact hshift 16 45045 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 45045 (by native_decide))",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro A hprime k hk\nhave hp720720 := hprime 720720 (by native_decide)\nhave hA : 0 < A := by\n  by_contra h\n  have hA0 : A = 0 := Nat.eq_zero_of_not_pos h\n  subst A\n  norm_num at hp720720\nhave hsigma_prime : ∀ p : ℕ, p.Prime → ArithmeticFunction.sigma 0 p = 2 := by\n  intro p hp\n  simpa using (ArithmeticFunction.sigma_zero_apply_prime_pow (i := 1) hp)\nhave hshift : ∀ k c : ℕ,\n    1 ≤ k → k ≤ 16 → 45045 ≤ c → k * c = 720720 →\n    Nat.Prime (c * A - 1) →\n    ArithmeticFunction.sigma 0 (2520 * (286 * A) - k) ≤ k + 2 := by\n  intro j c hj1 hj16 hc hjc hp\n  have htotal : 2520 * (286 * A) = j * (c * A) := by\n    calc\n      2520 * (286 * A) = 720720 * A := by ring\n      _ = (j * c) * A := by rw [hjc]\n      _ = j * (c * A) := by ring\n  have hfactor : 2520 * (286 * A) - j = j * (c * A - 1) := by\n    rw [Nat.mul_sub_left_distrib, mul_one]\n    exact congrArg (fun x => x - j) htotal\n  have hcA : c ≤ c * A := by\n    nth_rewrite 1 [← mul_one c]\n    exact Nat.mul_le_mul_left c hA\n  have hcop : Nat.Coprime j (c * A - 1) := by\n    refine ((hp.coprime_iff_not_dvd).mpr ?_).symm\n    intro hd\n    have hle := Nat.le_of_dvd (by omega : 0 < j) hd\n    omega\n  have hsigmaJ : ArithmeticFunction.sigma 0 j * 2 ≤ j + 2 := by\n    interval_cases j <;> native_decide\n  rw [hfactor, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,\n    hsigma_prime _ hp]\n  exact hsigmaJ\nsimp only [Finset.mem_Icc] at hk\nhave hk1 : 1 ≤ k := hk.1\nhave hk16 : k ≤ 16 := hk.2\ninterval_cases k\n· exact hshift 1 720720 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 720720 (by native_decide))\n· exact hshift 2 360360 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 360360 (by native_decide))\n· exact hshift 3 240240 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 240240 (by native_decide))\n· exact hshift 4 180180 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 180180 (by native_decide))\n· exact hshift 5 144144 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 144144 (by native_decide))\n· exact hshift 6 120120 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 120120 (by native_decide))\n· exact hshift 7 102960 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 102960 (by native_decide))\n· exact hshift 8 90090 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 90090 (by native_decide))\n· exact hshift 9 80080 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 80080 (by native_decide))\n· exact hshift 10 72072 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 72072 (by native_decide))\n· exact hshift 11 65520 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 65520 (by native_decide))\n· exact hshift 12 60060 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 60060 (by native_decide))\n· exact hshift 13 55440 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 55440 (by native_decide))\n· exact hshift 14 51480 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 51480 (by native_decide))\n· exact hshift 15 48048 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 48048 (by native_decide))\n· exact hshift 16 45045 (by norm_num) (by norm_num) (by norm_num) (by norm_num)\n    (hprime 45045 (by native_decide))",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ A : ℕ,\n      (∀ c ∈ [720720, 360360, 240240, 180180, 144144, 120120, 102960, 90090, 80080, 72072, 60060, 51480, 48048, 65520, 55440, 45045].toFinset, Nat.Prime (c * A - 1)) →\n      ∀ k ∈ Finset.Icc 1 16,\n        ArithmeticFunction.sigma 0 (2520 * (286 * A) - k) ≤ k + 2",
+        "module_source_hash": null,
+        "obligation_id": "308d4c91-bf15-473a-9b61-80af927f3e26",
+        "outcome": "kernel_pass",
+        "problem_version_id": "daff2ca3-9498-434f-a556-e3c23694accc",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "43cb5b301e1e595c17ecbcc05e4bb9116526fee26a2f44b20284ab51d9b5be0f"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "fe30d67d6717169c33d0e200aa6497f0f107a6dc2a8be535ed99e97173cd8e0a"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n hn\n  let f : ℕ → ℕ × Bool := fun d =>\n    if d ≤ Nat.sqrt n then (d - 1, false) else (n / d - 1, true)\n  let target : Finset (ℕ × Bool) :=\n    (Finset.range (Nat.sqrt n)).product (Finset.univ : Finset Bool)\n  have hmaps : Set.MapsTo f (n.divisors : Set ℕ) (target : Set (ℕ × Bool)) := by\n    intro d hd\n    have hdmem : d ∈ n.divisors := hd\n    have hdpos : 0 < d := Nat.pos_of_mem_divisors hdmem\n    have hddvd : d ∣ n := Nat.dvd_of_mem_divisors hdmem\n    by_cases hsmall : d ≤ Nat.sqrt n\n    · simp [f, target, hsmall]\n      omega\n    · have hmul : d * (n / d) = n := Nat.mul_div_cancel' hddvd\n      have hpair := Nat.le_sqrt_of_eq_mul hmul.symm\n      have hquot : n / d ≤ Nat.sqrt n := by\n        rcases hpair with hd | hq\n        · exact False.elim (hsmall hd)\n        · exact hq\n      have hqpos : 0 < n / d :=\n        Nat.div_pos (Nat.le_of_dvd hn hddvd) hdpos\n      simp [f, target, hsmall]\n      omega\n  have hinj : Set.InjOn f (n.divisors : Set ℕ) := by\n    intro a ha b hb hab\n    have hamem : a ∈ n.divisors := ha\n    have hbmem : b ∈ n.divisors := hb\n    have hapos : 0 < a := Nat.pos_of_mem_divisors hamem\n    have hbpos : 0 < b := Nat.pos_of_mem_divisors hbmem\n    have hadvd : a ∣ n := Nat.dvd_of_mem_divisors hamem\n    have hbdvd : b ∣ n := Nat.dvd_of_mem_divisors hbmem\n    by_cases haS : a ≤ Nat.sqrt n\n    · by_cases hbS : b ≤ Nat.sqrt n\n      · simp [f, haS, hbS] at hab\n        omega\n      · simp [f, haS, hbS] at hab\n    · by_cases hbS : b ≤ Nat.sqrt n\n      · simp [f, haS, hbS] at hab\n      · have haqpos : 0 < n / a :=\n          Nat.div_pos (Nat.le_of_dvd hn hadvd) hapos\n        have hbqpos : 0 < n / b :=\n          Nat.div_pos (Nat.le_of_dvd hn hbdvd) hbpos\n        have hq : n / a = n / b := by\n          simp [f, haS, hbS] at hab\n          omega\n        have hmula : a * (n / a) = n := Nat.mul_div_cancel' hadvd\n        have hmulb : b * (n / b) = n := Nat.mul_div_cancel' hbdvd\n        have hmuleq : a * (n / a) = b * (n / a) := by\n          rw [hmula, hq, hmulb]\n        exact Nat.eq_of_mul_eq_mul_right haqpos hmuleq\n  have hcard := Finset.card_le_card_of_injOn f hmaps hinj\n  dsimp [target] at hcard\n  simpa [Finset.card_product, Nat.mul_comm] using hcard",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n hn\n  let f : ℕ → ℕ × Bool := fun d =>\n    if d ≤ Nat.sqrt n then (d - 1, false) else (n / d - 1, true)\n  let target : Finset (ℕ × Bool) :=\n    (Finset.range (Nat.sqrt n)).product (Finset.univ : Finset Bool)\n  have hmaps : Set.MapsTo f (n.divisors : Set ℕ) (target : Set (ℕ × Bool)) := by\n    intro d hd\n    have hdmem : d ∈ n.divisors := hd\n    have hdpos : 0 < d := Nat.pos_of_mem_divisors hdmem\n    have hddvd : d ∣ n := Nat.dvd_of_mem_divisors hdmem\n    by_cases hsmall : d ≤ Nat.sqrt n\n    · simp [f, target, hsmall]\n      omega\n    · have hmul : d * (n / d) = n := Nat.mul_div_cancel' hddvd\n      have hpair := Nat.le_sqrt_of_eq_mul hmul.symm\n      have hquot : n / d ≤ Nat.sqrt n := by\n        rcases hpair with hd | hq\n        · exact False.elim (hsmall hd)\n        · exact hq\n      have hqpos : 0 < n / d :=\n        Nat.div_pos (Nat.le_of_dvd hn hddvd) hdpos\n      simp [f, target, hsmall]\n      omega\n  have hinj : Set.InjOn f (n.divisors : Set ℕ) := by\n    intro a ha b hb hab\n    have hamem : a ∈ n.divisors := ha\n    have hbmem : b ∈ n.divisors := hb\n    have hapos : 0 < a := Nat.pos_of_mem_divisors hamem\n    have hbpos : 0 < b := Nat.pos_of_mem_divisors hbmem\n    have hadvd : a ∣ n := Nat.dvd_of_mem_divisors hamem\n    have hbdvd : b ∣ n := Nat.dvd_of_mem_divisors hbmem\n    by_cases haS : a ≤ Nat.sqrt n\n    · by_cases hbS : b ≤ Nat.sqrt n\n      · simp [f, haS, hbS] at hab\n        omega\n      · simp [f, haS, hbS] at hab\n    · by_cases hbS : b ≤ Nat.sqrt n\n      · simp [f, haS, hbS] at hab\n      · have haqpos : 0 < n / a :=\n          Nat.div_pos (Nat.le_of_dvd hn hadvd) hapos\n        have hbqpos : 0 < n / b :=\n          Nat.div_pos (Nat.le_of_dvd hn hbdvd) hbpos\n        have hq : n / a = n / b := by\n          simp [f, haS, hbS] at hab\n          omega\n        have hmula : a * (n / a) = n := Nat.mul_div_cancel' hadvd\n        have hmulb : b * (n / b) = n := Nat.mul_div_cancel' hbdvd\n        have hmuleq : a * (n / a) = b * (n / a) := by\n          rw [hmula, hq, hmulb]\n        exact Nat.eq_of_mul_eq_mul_right haqpos hmuleq\n  have hcard := Finset.card_le_card_of_injOn f hmaps hinj\n  dsimp [target] at hcard\n  simpa [Finset.card_product, Nat.mul_comm] using hcard",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 0 < n → n.divisors.card ≤ 2 * Nat.sqrt n",
+        "module_source_hash": null,
+        "obligation_id": "9c4b4fc3-38bf-4f86-93f9-fa5a03482f3d",
+        "outcome": "kernel_pass",
+        "problem_version_id": "5e4145ae-fcc6-4abf-a406-3799f26ca68f",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "cfeb6fc408b21357235defeaead012f71bc6c3eef28c147cb9eb7df3bb48dd8f"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "8042dfd37418705b62304aca21d7eeab0c110f4b1cfdb7235325e40e8c489104"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

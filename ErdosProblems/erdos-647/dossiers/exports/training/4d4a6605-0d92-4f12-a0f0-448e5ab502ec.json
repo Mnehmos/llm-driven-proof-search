@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro x p e B hx hp hpow hbudget\nhave hsub : (p ^ e).divisors ⊆ x.divisors := by\n  intro d hd\n  rw [Nat.mem_divisors] at hd ⊢\n  exact ⟨hd.1.trans hpow, hx⟩\nhave hcard : (p ^ e).divisors.card ≤ x.divisors.card :=\n  Finset.card_le_card hsub\nhave hsigma : ArithmeticFunction.sigma 0 (p ^ e) ≤\n    ArithmeticFunction.sigma 0 x := by\n  simpa [ArithmeticFunction.sigma_zero_apply] using hcard\nrw [ArithmeticFunction.sigma_zero_apply_prime_pow hp] at hsigma\nomega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro x p e B hx hp hpow hbudget\nhave hsub : (p ^ e).divisors ⊆ x.divisors := by\n  intro d hd\n  rw [Nat.mem_divisors] at hd ⊢\n  exact ⟨hd.1.trans hpow, hx⟩\nhave hcard : (p ^ e).divisors.card ≤ x.divisors.card :=\n  Finset.card_le_card hsub\nhave hsigma : ArithmeticFunction.sigma 0 (p ^ e) ≤\n    ArithmeticFunction.sigma 0 x := by\n  simpa [ArithmeticFunction.sigma_zero_apply] using hcard\nrw [ArithmeticFunction.sigma_zero_apply_prime_pow hp] at hsigma\nomega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ x p e B : ℕ, x ≠ 0 → Nat.Prime p → p ^ e ∣ x → ArithmeticFunction.sigma 0 x ≤ B → e < B",
+        "module_source_hash": null,
+        "obligation_id": "7a8baf9f-9709-44c3-ac20-8b2fe3b2b40c",
+        "outcome": "kernel_pass",
+        "problem_version_id": "4f75b91a-8e28-48a4-a315-24202a76e298",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "b12a35215e6bae5f6d8f236f2856df34dd9a29cb6fc53563299adb01b39b19c3"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "aaf008525d0d21e7cc4f9dc6759475b65015c3e0c309e9fa95fd85469150ee3b"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro p hp\nrefine ⟨⟨0, hp.pos⟩, ?_⟩\nintro c hc hroot\nchange (c * 0) % p = 1 % p at hroot\nsimp [Nat.mod_eq_of_lt hp.one_lt] at hroot",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro p hp\nrefine ⟨⟨0, hp.pos⟩, ?_⟩\nintro c hc hroot\nchange (c * 0) % p = 1 % p at hroot\nsimp [Nat.mod_eq_of_lt hp.one_lt] at hroot",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ p : ℕ, p.Prime →\n  ∃ a : Fin p, ∀ c ∈\n    [720720, 360360, 240240, 180180, 144144, 120120, 102960, 90090,\n      80080, 72072, 60060, 51480, 48048, 65520, 55440, 45045].toFinset,\n    ¬ Nat.ModEq p (c * (a : ℕ)) 1",
+        "module_source_hash": null,
+        "obligation_id": "04915a6f-d58c-427b-94ff-fcc4b91e127e",
+        "outcome": "kernel_pass",
+        "problem_version_id": "8c9a99a7-40db-4ef9-8003-3adf48744aad",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "167246af180257b67cc7de86bd11ae6b8766c7d4a1e622657d64e8b7a1b6dcc9"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "69af89c54d26111a056b75a9ca181af10f94e85204000957603221bbda2973c0"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

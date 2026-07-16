@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  have haffine : ∀ M e : ℕ, 1 ≤ M → 315 * M - 1 ≠ 2 ^ e := by\n    intro M e hM heq\n    have hadd : 315 * M = 2 ^ e + 1 := by omega\n    have hz3 : (2 : ZMod 3) ^ e = 2 := by\n      have h := congrArg (fun x : ℕ => (x : ZMod 3)) hadd\n      push_cast at h\n      have h315 : (315 : ZMod 3) = 0 := by native_decide\n      rw [h315, zero_mul] at h\n      calc\n        (2 : ZMod 3) ^ e = -1 := by linear_combination -h\n        _ = 2 := by native_decide\n    have hz5 : (2 : ZMod 5) ^ e = 4 := by\n      have h := congrArg (fun x : ℕ => (x : ZMod 5)) hadd\n      push_cast at h\n      have h315 : (315 : ZMod 5) = 0 := by native_decide\n      rw [h315, zero_mul] at h\n      calc\n        (2 : ZMod 5) ^ e = -1 := by linear_combination -h\n        _ = 4 := by native_decide\n    have he2 : e % 2 = 1 := by\n      have hedecomp : e = 2 * (e / 2) + e % 2 := by omega\n      rw [hedecomp, pow_add, pow_mul] at hz3\n      have hsq : (2 : ZMod 3) ^ 2 = 1 := by native_decide\n      rw [hsq, one_pow, one_mul] at hz3\n      have hlt : e % 2 < 2 := Nat.mod_lt e (by norm_num)\n      interval_cases h : e % 2\n      · exfalso\n        exact (by native_decide : (1 : ZMod 3) ≠ 2) hz3\n      · rfl\n    have he4 : e % 4 = 2 := by\n      have hedecomp : e = 4 * (e / 4) + e % 4 := by omega\n      rw [hedecomp, pow_add, pow_mul] at hz5\n      have hfour : (2 : ZMod 5) ^ 4 = 1 := by native_decide\n      rw [hfour, one_pow, one_mul] at hz5\n      have hlt : e % 4 < 4 := Nat.mod_lt e (by norm_num)\n      interval_cases h : e % 4\n      · exfalso\n        exact (by native_decide : (1 : ZMod 5) ≠ 4) hz5\n      · exfalso\n        exact (by native_decide : (2 : ZMod 5) ≠ 4) hz5\n      · rfl\n      · exfalso\n        exact (by native_decide : (8 : ZMod 5) ≠ 4) hz5\n    have h2decomp := Nat.mod_add_div e 2\n    have h4decomp := Nat.mod_add_div e 4\n    omega\n  intro M hM hbudget h32\n  set T := 315 * M - 1 with hT\n  have hbudgetT : ArithmeticFunction.sigma 0 (16 * T) ≤ 18 := by\n    simpa [T] using hbudget\n  have hT2 : 2 ≤ T := by dsimp [T]; omega\n  have hT0 : T ≠ 0 := by omega\n  have hnopow : ∀ e : ℕ, T ≠ 2 ^ e := by\n    intro e\n    dsimp [T]\n    exact haffine M e hM\n  have h2T : 2 ∣ T := dvd_trans (by norm_num) h32\n  have hother : ∃ p : ℕ, Nat.Prime p ∧ p ∣ T ∧ p ≠ 2 := by\n    by_contra hnone\n    push Not at hnone\n    have hpow := Nat.eq_prime_pow_of_unique_prime_dvd hT0\n      (fun {p} hp hpd => hnone p hp hpd)\n    exact hnopow _ hpow\n  obtain ⟨p, hp, hpT, hpne⟩ := hother\n  have hpnot32 : ¬ p ∣ 32 := by\n    intro hp32\n    have h32eq : (32 : ℕ) = 2 ^ 5 := by norm_num\n    rw [h32eq] at hp32\n    have hp2 : p ∣ 2 := hp.dvd_of_dvd_pow hp32\n    exact hpne ((Nat.prime_dvd_prime_iff_eq hp Nat.prime_two).mp hp2)\n  have hcop32p : Nat.Coprime 32 p :=\n    ((hp.coprime_iff_not_dvd).mpr hpnot32).symm\n  have h32pT : 32 * p ∣ T :=\n    hcop32p.mul_dvd_of_dvd_of_dvd h32 hpT\n  have h512p : 512 * p ∣ 16 * T := by\n    have h := Nat.mul_dvd_mul_left 16 h32pT\n    convert h using 1\n    · ring\n  have hcop2p : Nat.Coprime 2 p :=\n    (Nat.coprime_primes Nat.prime_two hp).mpr (Ne.symm hpne)\n  have hcop512p : Nat.Coprime (2 ^ 9) p := hcop2p.pow_left 9\n  have hs512p : ArithmeticFunction.sigma 0 (512 * p) = 20 := by\n    rw [show 512 * p = 2 ^ 9 * p by norm_num,\n      ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop512p,\n      ArithmeticFunction.sigma_zero_apply_prime_pow Nat.prime_two,\n      show p = p ^ 1 by simp,\n      ArithmeticFunction.sigma_zero_apply_prime_pow hp]\n    norm_num\n  have hfull0 : 16 * T ≠ 0 := by omega\n  have hsub : (512 * p).divisors ⊆ (16 * T).divisors := by\n    intro d hd\n    rw [Nat.mem_divisors] at hd ⊢\n    exact ⟨hd.1.trans h512p, hfull0⟩\n  have hmono : ArithmeticFunction.sigma 0 (512 * p) ≤\n      ArithmeticFunction.sigma 0 (16 * T) := by\n    rw [ArithmeticFunction.sigma_zero_apply,\n      ArithmeticFunction.sigma_zero_apply]\n    exact Finset.card_le_card hsub\n  rw [hs512p] at hmono\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  have haffine : ∀ M e : ℕ, 1 ≤ M → 315 * M - 1 ≠ 2 ^ e := by\n    intro M e hM heq\n    have hadd : 315 * M = 2 ^ e + 1 := by omega\n    have hz3 : (2 : ZMod 3) ^ e = 2 := by\n      have h := congrArg (fun x : ℕ => (x : ZMod 3)) hadd\n      push_cast at h\n      have h315 : (315 : ZMod 3) = 0 := by native_decide\n      rw [h315, zero_mul] at h\n      calc\n        (2 : ZMod 3) ^ e = -1 := by linear_combination -h\n        _ = 2 := by native_decide\n    have hz5 : (2 : ZMod 5) ^ e = 4 := by\n      have h := congrArg (fun x : ℕ => (x : ZMod 5)) hadd\n      push_cast at h\n      have h315 : (315 : ZMod 5) = 0 := by native_decide\n      rw [h315, zero_mul] at h\n      calc\n        (2 : ZMod 5) ^ e = -1 := by linear_combination -h\n        _ = 4 := by native_decide\n    have he2 : e % 2 = 1 := by\n      have hedecomp : e = 2 * (e / 2) + e % 2 := by omega\n      rw [hedecomp, pow_add, pow_mul] at hz3\n      have hsq : (2 : ZMod 3) ^ 2 = 1 := by native_decide\n      rw [hsq, one_pow, one_mul] at hz3\n      have hlt : e % 2 < 2 := Nat.mod_lt e (by norm_num)\n      interval_cases h : e % 2\n      · exfalso\n        exact (by native_decide : (1 : ZMod 3) ≠ 2) hz3\n      · rfl\n    have he4 : e % 4 = 2 := by\n      have hedecomp : e = 4 * (e / 4) + e % 4 := by omega\n      rw [hedecomp, pow_add, pow_mul] at hz5\n      have hfour : (2 : ZMod 5) ^ 4 = 1 := by native_decide\n      rw [hfour, one_pow, one_mul] at hz5\n      have hlt : e % 4 < 4 := Nat.mod_lt e (by norm_num)\n      interval_cases h : e % 4\n      · exfalso\n        exact (by native_decide : (1 : ZMod 5) ≠ 4) hz5\n      · exfalso\n        exact (by native_decide : (2 : ZMod 5) ≠ 4) hz5\n      · rfl\n      · exfalso\n        exact (by native_decide : (8 : ZMod 5) ≠ 4) hz5\n    have h2decomp := Nat.mod_add_div e 2\n    have h4decomp := Nat.mod_add_div e 4\n    omega\n  intro M hM hbudget h32\n  set T := 315 * M - 1 with hT\n  have hbudgetT : ArithmeticFunction.sigma 0 (16 * T) ≤ 18 := by\n    simpa [T] using hbudget\n  have hT2 : 2 ≤ T := by dsimp [T]; omega\n  have hT0 : T ≠ 0 := by omega\n  have hnopow : ∀ e : ℕ, T ≠ 2 ^ e := by\n    intro e\n    dsimp [T]\n    exact haffine M e hM\n  have h2T : 2 ∣ T := dvd_trans (by norm_num) h32\n  have hother : ∃ p : ℕ, Nat.Prime p ∧ p ∣ T ∧ p ≠ 2 := by\n    by_contra hnone\n    push Not at hnone\n    have hpow := Nat.eq_prime_pow_of_unique_prime_dvd hT0\n      (fun {p} hp hpd => hnone p hp hpd)\n    exact hnopow _ hpow\n  obtain ⟨p, hp, hpT, hpne⟩ := hother\n  have hpnot32 : ¬ p ∣ 32 := by\n    intro hp32\n    have h32eq : (32 : ℕ) = 2 ^ 5 := by norm_num\n    rw [h32eq] at hp32\n    have hp2 : p ∣ 2 := hp.dvd_of_dvd_pow hp32\n    exact hpne ((Nat.prime_dvd_prime_iff_eq hp Nat.prime_two).mp hp2)\n  have hcop32p : Nat.Coprime 32 p :=\n    ((hp.coprime_iff_not_dvd).mpr hpnot32).symm\n  have h32pT : 32 * p ∣ T :=\n    hcop32p.mul_dvd_of_dvd_of_dvd h32 hpT\n  have h512p : 512 * p ∣ 16 * T := by\n    have h := Nat.mul_dvd_mul_left 16 h32pT\n    convert h using 1\n    · ring\n  have hcop2p : Nat.Coprime 2 p :=\n    (Nat.coprime_primes Nat.prime_two hp).mpr (Ne.symm hpne)\n  have hcop512p : Nat.Coprime (2 ^ 9) p := hcop2p.pow_left 9\n  have hs512p : ArithmeticFunction.sigma 0 (512 * p) = 20 := by\n    rw [show 512 * p = 2 ^ 9 * p by norm_num,\n      ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop512p,\n      ArithmeticFunction.sigma_zero_apply_prime_pow Nat.prime_two,\n      show p = p ^ 1 by simp,\n      ArithmeticFunction.sigma_zero_apply_prime_pow hp]\n    norm_num\n  have hfull0 : 16 * T ≠ 0 := by omega\n  have hsub : (512 * p).divisors ⊆ (16 * T).divisors := by\n    intro d hd\n    rw [Nat.mem_divisors] at hd ⊢\n    exact ⟨hd.1.trans h512p, hfull0⟩\n  have hmono : ArithmeticFunction.sigma 0 (512 * p) ≤\n      ArithmeticFunction.sigma 0 (16 * T) := by\n    rw [ArithmeticFunction.sigma_zero_apply,\n      ArithmeticFunction.sigma_zero_apply]\n    exact Finset.card_le_card hsub\n  rw [hs512p] at hmono\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ M : ℕ, 1 ≤ M →\n  ArithmeticFunction.sigma 0 (16 * (315 * M - 1)) ≤ 18 →\n  ¬ 32 ∣ 315 * M - 1",
+        "module_source_hash": null,
+        "obligation_id": "6e5557cd-628e-4291-86ee-23d16292976a",
+        "outcome": "kernel_pass",
+        "problem_version_id": "dccdc909-b5f0-469c-a08e-399bb7bd1df1",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "cdb4a94a9bac222bb03cbbf7c85d8005df99af26f592bf5897cc4435e9df8571"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "eed0be492253ed61b3130f714a5d5cf4f280e227f8d608e4582ee217c9a73c96"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

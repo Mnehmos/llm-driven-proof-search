@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro n\nby_cases hn0 : n = 0\n· simp [hn0]\nby_cases hn1 : n = 1\n· simp [hn1]\nhave hnpos : 0 < n := Nat.pos_of_ne_zero hn0\nhave hn2 : 2 ≤ n := by omega\nhave hnmem : n ∈ n.divisors :=\n  Nat.mem_divisors.mpr ⟨dvd_rfl, hn0⟩\nhave hsub : n.divisors.erase n ⊆ Finset.Icc 1 (n / 2) := by\n  intro d hd\n  simp only [Finset.mem_erase, Nat.mem_divisors] at hd\n  rcases hd with ⟨hdne, hdn, _⟩\n  have hdpos : 0 < d := Nat.pos_of_dvd_of_pos hdn hnpos\n  have hdlt : d < n := lt_of_le_of_ne (Nat.le_of_dvd hnpos hdn) hdne\n  have htwod : d * 2 ≤ n := by\n    obtain ⟨q, hq⟩ := hdn\n    have hq2 : 2 ≤ q := by\n      by_contra hqnot\n      have hqle : q ≤ 1 := by omega\n      interval_cases q <;> simp_all\n    rw [hq]\n    exact Nat.mul_le_mul_left d hq2\n  exact Finset.mem_Icc.mpr\n    ⟨hdpos, (Nat.le_div_iff_mul_le (by norm_num : 0 < 2)).2 htwod⟩\nhave hcard := Finset.card_le_card hsub\nrw [Nat.card_Icc] at hcard\nhave herase : (n.divisors.erase n).card + 1 = n.divisors.card := by\n  exact Finset.card_erase_add_one hnmem\nhave hdouble : 2 * (n.divisors.erase n).card ≤ n := by\n  calc\n    2 * (n.divisors.erase n).card ≤ 2 * (n / 2) :=\n      Nat.mul_le_mul_left 2 hcard\n    _ ≤ n := Nat.mul_div_le n 2\nomega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro n\nby_cases hn0 : n = 0\n· simp [hn0]\nby_cases hn1 : n = 1\n· simp [hn1]\nhave hnpos : 0 < n := Nat.pos_of_ne_zero hn0\nhave hn2 : 2 ≤ n := by omega\nhave hnmem : n ∈ n.divisors :=\n  Nat.mem_divisors.mpr ⟨dvd_rfl, hn0⟩\nhave hsub : n.divisors.erase n ⊆ Finset.Icc 1 (n / 2) := by\n  intro d hd\n  simp only [Finset.mem_erase, Nat.mem_divisors] at hd\n  rcases hd with ⟨hdne, hdn, _⟩\n  have hdpos : 0 < d := Nat.pos_of_dvd_of_pos hdn hnpos\n  have hdlt : d < n := lt_of_le_of_ne (Nat.le_of_dvd hnpos hdn) hdne\n  have htwod : d * 2 ≤ n := by\n    obtain ⟨q, hq⟩ := hdn\n    have hq2 : 2 ≤ q := by\n      by_contra hqnot\n      have hqle : q ≤ 1 := by omega\n      interval_cases q <;> simp_all\n    rw [hq]\n    exact Nat.mul_le_mul_left d hq2\n  exact Finset.mem_Icc.mpr\n    ⟨hdpos, (Nat.le_div_iff_mul_le (by norm_num : 0 < 2)).2 htwod⟩\nhave hcard := Finset.card_le_card hsub\nrw [Nat.card_Icc] at hcard\nhave herase : (n.divisors.erase n).card + 1 = n.divisors.card := by\n  exact Finset.card_erase_add_one hnmem\nhave hdouble : 2 * (n.divisors.erase n).card ≤ n := by\n  calc\n    2 * (n.divisors.erase n).card ≤ 2 * (n / 2) :=\n      Nat.mul_le_mul_left 2 hcard\n    _ ≤ n := Nat.mul_div_le n 2\nomega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 2 * n.divisors.card ≤ n + 2",
+        "module_source_hash": null,
+        "obligation_id": "cd36426d-a649-4bda-88a8-c6748a91bc80",
+        "outcome": "kernel_pass",
+        "problem_version_id": "997ec74c-eed2-4b57-b231-f56cc22e9f75",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "73aa208d57544a01f4e7d2cd5e8aaa15616b176075d5740dedec58eb1c4543c1"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "a26a85bfde7f9d9aafb798306677776f07713f6e8774aa652c5d2c5db64b83bc"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}
