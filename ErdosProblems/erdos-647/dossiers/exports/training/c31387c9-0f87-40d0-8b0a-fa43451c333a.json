@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro a b c d N g h1 h2\nhave ha : g ∣ a * (c * N + d) := Dvd.dvd.mul_left h2 a\nhave hc : g ∣ c * (a * N + b) := Dvd.dvd.mul_left h1 c\nhave h3 : g ∣ a * (c * N + d) - c * (a * N + b) := dvd_sub ha hc\nhave h4 : a * (c * N + d) - c * (a * N + b) = a * d - c * b := by ring\nrwa [h4] at h3",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro a b c d N g h1 h2\nhave ha : g ∣ a * (c * N + d) := Dvd.dvd.mul_left h2 a\nhave hc : g ∣ c * (a * N + b) := Dvd.dvd.mul_left h1 c\nhave h3 : g ∣ a * (c * N + d) - c * (a * N + b) := dvd_sub ha hc\nhave h4 : a * (c * N + d) - c * (a * N + b) = a * d - c * b := by ring\nrwa [h4] at h3",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (a b c d N g : ℤ), g ∣ a * N + b → g ∣ c * N + d → g ∣ a * d - c * b",
+        "module_source_hash": null,
+        "obligation_id": "572c7382-a7c8-429e-a261-461f18cd1b13",
+        "outcome": "kernel_pass",
+        "problem_version_id": "ef11f0f3-eb84-4499-b445-d0518121c5f2",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "2c28aaa3e5678c00e99af020ab2c661c3254c42fe23655ca37bf63e1f55dacab"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "cf729558c886411a530270310c88fcaad1bfd3315bfa73ddec7ba0ca9663c45e"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

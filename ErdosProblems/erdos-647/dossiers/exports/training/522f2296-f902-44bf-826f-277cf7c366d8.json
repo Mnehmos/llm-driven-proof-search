@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  classical\n  intro W H P hH hP hinj\n  let primes : Finset ℕ := Finset.univ.image P\n  have hcard : primes.card = W := by\n    dsimp [primes]\n    rw [Finset.card_image_iff.mpr hinj.injOn]\n    simp\n  have hprime : ∀ p ∈ primes, p.Prime := by\n    intro p hp\n    dsimp [primes] at hp\n    simp only [Finset.mem_image] at hp\n    obtain ⟨i, _, rfl⟩ := hp\n    exact (hP i).1\n  have hsubset : primes ⊆ H.primeFactors := by\n    intro p hp\n    have hpimage := hp\n    dsimp [primes] at hpimage\n    simp only [Finset.mem_image] at hpimage\n    obtain ⟨i, _, rfl⟩ := hpimage\n    exact Nat.mem_primeFactors.mpr\n      ⟨(hP i).1, (hP i).2.2, ne_of_gt hH⟩\n  have hprodDvd : (∏ p ∈ primes, p) ∣ H := by\n    exact (Finset.prod_dvd_prod_of_subset primes H.primeFactors\n      (fun p => p) hsubset).trans (Nat.prod_primeFactors_dvd H)\n  calc\n    (W + 1) ^ W = (W + 1) ^ primes.card := by rw [hcard]\n    _ = ∏ p ∈ primes, (W + 1) := by simp\n    _ ≤ ∏ p ∈ primes, p := by\n      apply Finset.prod_le_prod'\n      intro p hp\n      have hpW : W < p := by\n        dsimp [primes] at hp\n        simp only [Finset.mem_image] at hp\n        obtain ⟨i, _, rfl⟩ := hp\n        exact (hP i).2.1\n      omega\n    _ ≤ H := Nat.le_of_dvd hH hprodDvd",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  classical\n  intro W H P hH hP hinj\n  let primes : Finset ℕ := Finset.univ.image P\n  have hcard : primes.card = W := by\n    dsimp [primes]\n    rw [Finset.card_image_iff.mpr hinj.injOn]\n    simp\n  have hprime : ∀ p ∈ primes, p.Prime := by\n    intro p hp\n    dsimp [primes] at hp\n    simp only [Finset.mem_image] at hp\n    obtain ⟨i, _, rfl⟩ := hp\n    exact (hP i).1\n  have hsubset : primes ⊆ H.primeFactors := by\n    intro p hp\n    have hpimage := hp\n    dsimp [primes] at hpimage\n    simp only [Finset.mem_image] at hpimage\n    obtain ⟨i, _, rfl⟩ := hpimage\n    exact Nat.mem_primeFactors.mpr\n      ⟨(hP i).1, (hP i).2.2, ne_of_gt hH⟩\n  have hprodDvd : (∏ p ∈ primes, p) ∣ H := by\n    exact (Finset.prod_dvd_prod_of_subset primes H.primeFactors\n      (fun p => p) hsubset).trans (Nat.prod_primeFactors_dvd H)\n  calc\n    (W + 1) ^ W = (W + 1) ^ primes.card := by rw [hcard]\n    _ = ∏ p ∈ primes, (W + 1) := by simp\n    _ ≤ ∏ p ∈ primes, p := by\n      apply Finset.prod_le_prod'\n      intro p hp\n      have hpW : W < p := by\n        dsimp [primes] at hp\n        simp only [Finset.mem_image] at hp\n        obtain ⟨i, _, rfl⟩ := hp\n        exact (hP i).2.1\n      omega\n    _ ≤ H := Nat.le_of_dvd hH hprodDvd",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (W H : ℕ) (P : Fin W → ℕ),\n      0 < H →\n      (∀ i : Fin W, (P i).Prime ∧ W < P i ∧ P i ∣ H) →\n      Function.Injective P →\n      (W + 1) ^ W ≤ H",
+        "module_source_hash": null,
+        "obligation_id": "505ca7d4-20af-4a67-babb-13cc98d7d0ca",
+        "outcome": "kernel_pass",
+        "problem_version_id": "b31522a1-256b-4f90-8085-37bb393b0a1b",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "4d129e29cd375a4d3a9647788207d58abecac39007863d7364f0d97f67538240"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "36c56ce3421cb5a65f53a0745bd3bf361e7eaac7b1ffe9ee2f80837991a43f50"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

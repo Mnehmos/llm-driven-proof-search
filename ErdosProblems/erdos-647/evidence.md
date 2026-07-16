@@ -166,6 +166,83 @@ The witness proofs use explicit prime factorizations and multiplicativity of
 program. These are strict reductions and obstruction certificates for the
 still-open existence problem, not evidence that it has been solved.
 
+### Power-prefix, block, factorization, and novelty batch (2026-07-16)
+
+| result | problem_version_id | episode_id | outcome |
+|---|---|---|---|
+| generic rough power bound | `3485cd6c-1875-42e9-9125-20c656a39b49` | `44b3b927-ae01-4478-8f0b-43f57b871112` | **kernel_verified** |
+| generic all-shift prefix bridge | `426b9c04-44df-4dbb-b2b0-5be9d5985c65` | `a5663754-f659-425d-9ed2-797a14e6f45b` | **kernel_verified** |
+| excess shift lies in generic prefix | `5a951bb5-aa70-435d-ab19-e09d9efc8af3` | `081bad92-4417-4ecc-ac20-b1163f8787c0` | **kernel_verified** |
+| exact candidate from generic prefix | `729ddf23-c41f-4006-a3e9-a02ede66e7b0` | `fffbd7ef-df32-471c-b2c5-57246a86d0a2` | **kernel_verified** |
+| divisor transport across `2520N-k` | `0a9d617d-7ccf-4d61-b24c-fd8e9cb98ebc` | `f2d12a4a-4591-4894-9985-744928091a00` | **kernel_verified** |
+| exact shifted `gcd` class | `80655568-e511-4b2a-bb75-323cb62ed186` | `d32e0f26-8d19-4ce7-8eb4-36f049af57ce` | **kernel_verified** |
+| small-prime class cube bound | `ec3b4486-6f8d-49f5-961b-601f73ed0aec` | `05cc4956-b712-4c07-80df-3d9f9976f347` | **kernel_verified** |
+| shifted gcd-class cube bound | `06c149c9-648c-4f7a-a7ef-f7e02cddb9f1` | `49d6e0f2-48e5-4a20-a667-b292a0f3cc24` | **kernel_verified** |
+| gcd-class excess prefix | `91a93bb5-9cce-4716-9439-c08c58cb1219` | `dd804d15-12b3-4b79-a51f-df444d46a368` | **kernel_verified** |
+| candidate from gcd-class cube prefix | `3d1991c6-042b-43d6-a8cd-5a3a62218165` | `a5be3ba2-ae6c-49b6-801b-07bf14d0b79b` | **kernel_verified** |
+| exact arbitrary-block prefix iff | `a958f713-e614-4f6f-8cb1-7cee63ceac4f` | `bd495411-637a-4442-8618-25266c535a43` | **kernel_verified** |
+| exact candidate iff block prefix | `39ea138e-842a-4758-90fe-eb11135aa239` | `7f4f33c1-8a25-4b44-8db6-3c74bea6a18b` | **kernel_verified** |
+| factorization-data soundness | `ae3a7e5a-d259-42f1-8f56-d9b880cf2961` | `ac5c8417-b427-4d6b-a69e-55b17e0d17d0` | **kernel_verified** |
+| factorization-batch soundness | `c339958e-a432-4ac7-b0e8-fef64bf29ed8` | `5a454c61-c939-4f00-9a34-a3001751ead8` | **kernel_verified** |
+| end-to-end candidate batch certificate | `e3f5efd7-c500-43a2-a263-aab73836831c` | `22e0e381-4bb0-4658-9b17-8e3415ff17d0` | **kernel_verified** |
+| pairwise block produces novel primes | `cc66c3da-fe7c-42fd-b493-5b1b5e71a0ca` | `89a875c4-8854-4ad7-b1f3-1953bf797918` | **kernel_verified** |
+| shared host gives exponential bound | `169f1332-6dae-4fb5-a544-d16849465b0d` | `1b13572b-7738-4822-b046-358ca49a8ad8` | **kernel_verified** |
+| global fourth-power divisor bound | `c3c5cc7b-572b-41d5-bbca-679db593cb34` | `a611bfbf-b9eb-4550-a5a6-789104debf2e` | **kernel_verified** |
+| candidate from fourth-root prefix | `1f1a1468-b300-4bae-833b-2246b01a364e` | `4d5a491a-e67e-4ec2-a2cc-f3f1739272ed` | **kernel_verified** |
+| generic local constants | `ae91b365-010a-43a3-80e8-7f473e124f1c` | `9839cc5d-d4f7-4f35-bdc0-b6d18c4da0cc` | **kernel_verified** |
+| finite local constants | `826f66c3-0bed-4bfa-9f67-75292db3309d` | `c8c2d6e3-4ead-4931-a9fc-53b10ef5eddb` | **kernel_verified** |
+| exact local numerator/denominator ratios | `a5450168-bfbd-4d08-b0cc-91ab3fb445a4` | `2a2dcc3b-783c-48d0-89fd-9b5bed501916` | **kernel_verified** |
+| finite exact-ratio product bound | `0e1dd653-15d2-415b-9f74-6892c18911ab` | `11ce561a-d5ad-4225-ae5f-cb8b1f32afa6` | **kernel_verified** |
+
+The nine modules contain 31 top-level theorem declarations. Twenty-three
+roots above were independently tracked; eight supporting declarations were
+checked as part of their source modules and are not assigned fabricated
+standalone episodes. A hole audit found no `sorry`, `admit`, or `axiom` in
+these modules.
+
+These records prove exact reductions and certificate soundness. They do not
+provide a candidate, a universal failed shift, or a proof that the conditional
+pairwise-coprime/shared-host hypotheses arise from every hypothetical
+candidate. Accordingly, none of the three Formal Conjectures `sorry`s is
+closed.
+
+### Large-factor, CRT re-entry, and second-layer continuation (2026-07-16)
+
+The following 30 roots were re-read directly from the proof-search store while
+building the export archive. Every listed episode reports
+`KERNEL_VERIFIED`, `kernel_verified = true`, one accepted step, and the pinned
+environment hash. Exact problem IDs, statement hashes, timestamps, and full
+trajectories are recorded in the export manifest and per-episode artifacts.
+
+| source/result group | episode IDs | outcome |
+|---|---|---|
+| smooth-number bound and large-prime extraction | `7518e92a-0ba9-4cec-9136-0eca9ae697d2`, `6299d4d7-d39a-44cc-97ca-40840e989e5c` | **kernel_verified** |
+| shift-gap gcd transport, injectivity, and host bound | `3e3a35df-8d76-42fa-8323-e6af0aa7c2d6`, `644db370-4230-4bf7-bc84-42c2530f42ae`, `5e865863-6979-4f24-975f-843595edfe10` | **kernel_verified** |
+| fifth-power divisor bound and exact prefix bridge | `21024f54-e6bb-4e11-8912-e3d715cf9a8a`, `bf1de66d-1115-46c3-a902-c78596f8c984` | **kernel_verified** |
+| finite-catalog escape chain | `bd5d7e2a-1de2-4f7c-bd31-c3a8ccf53bee`, `2a9302f6-16ed-4951-b774-bc9ce773b891`, `d37cd80e-d06c-4364-8623-01b413fa7ce7` | **kernel_verified** |
+| primorial escape specialization | `31ba0909-6d0a-4a7d-a1fd-5db9b5987479` | **kernel_verified** |
+| hybrid cubic/fourth/fifth prefix | `788ce5b5-fd30-4fc7-bd69-d73741195819` | **kernel_verified** |
+| block production and shared-host accumulation | `89548463-5d2f-4d59-b2b9-61da4cc90823`, `cd4d5dd1-defd-4e21-bf64-651832299806`, `8fd6a3b7-39fd-40ee-b4b9-81141eec9f58`, `522f2296-f902-44bf-826f-277cf7c366d8` | **kernel_verified** |
+| divisor lower bound, CRT remainder arithmetic, and exact candidate sandwich | `dbaf459e-7de3-4049-878b-0b6b0c4bf201`, `26aec94e-2c97-4018-a881-a55ea4e73b33`, `63caad59-40e2-494c-9820-8bd4cd140c1c` | **kernel_verified** |
+| pair-product dichotomy | `4cbc17df-28dd-4420-ad45-e4c7d5e7eb64` | **kernel_verified** |
+| prime/cofactor peel and transferred budget | `da4d5b5b-314f-4204-8dc6-b917fd969062`, `cf96c53e-9e2b-48d0-a5cf-cae17267c149` | **kernel_verified** |
+| general `t`-subset product selection | `4ab8fa09-47fc-4155-b825-0f6c83f78393` | **kernel_verified** |
+| cofactor gcd and repeated-odd-prime rigidity | `1611cd40-d0d3-4631-9c8d-4b5c82f52e82`, `15d19ef3-0de0-49a0-ab99-51b00d024fd1` | **kernel_verified** |
+| second-layer large-prime injectivity | `5f3b332c-a77c-41a3-bbce-1df5cd67c5ec` | **kernel_verified** |
+| smooth-cofactor size bound | `b29f042a-6df4-45ce-b333-93f608c20664` | **kernel_verified** |
+| deletion of two exceptional indices | `bfd9dcb2-564e-4deb-b494-a7e4cffce319` | **kernel_verified** |
+| conditional second-layer catalog assembly | `d50528e3-f045-4a4a-ae5f-df336cc05a8b` | **kernel_verified** |
+| uniqueness of a nonsmooth square-small cofactor | `09aa8061-de5e-4466-b815-82a8d7bf55c2` | **kernel_verified** |
+
+The mathematical output is an exact alternative, not a terminal exclusion.
+A subset product below `n` creates the re-entry shift
+`h = n mod ∏Pᵢ` and the sandwich `2^|I| ≤ τ(n-h) ≤ h+2`; the strict reverse
+inequality excludes candidacy. In the no-cross-product branch, at most one
+first-layer square exception and one nonsmooth-cofactor exception remain, so
+a conditional assembly retains at least `W-2` smooth cofactors with explicit
+size and divisor-budget bounds. No verified theorem yet proves that either
+branch contradicts every candidate.
+
 ### Limit and infinite-window hard cores
 
 The limit module isolates the exact missing uniform statement:
@@ -215,12 +292,16 @@ compatibility check rather than a forced mixed-version import.
 
 ## Complete proof-search export archive
 
-The repository now includes exports for all 227 related episodes identified by
+The repository now includes exports for all 317 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
-index, and a read-only database closure audit. Of these, 220 report
+index, and a read-only database closure audit. Of these, 310 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.
+Portable source currently contains 452 top-level theorem declarations and
+five top-level lemma declarations across 169 Lean files; including 45
+definitions gives 502 declarations. Those source counts and the 317 episode
+count measure different things.
 
 - [export manifest](dossiers/exports/manifest.tsv)
 - [public summaries](dossiers/exports/public_summary/)

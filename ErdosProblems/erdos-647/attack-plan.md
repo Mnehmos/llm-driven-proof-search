@@ -1,9 +1,40 @@
 # Attack plan — Erdős #647 (living)
 
-> Last updated 2026-07-15. This is the working plan of record; it changes as
+> Last updated 2026-07-16. This is the working plan of record; it changes as
 > results land. Completed milestones move to the whitepaper's campaign log.
 
-## HEADLINE STATUS (2026-07-15)
+## HEADLINE STATUS (2026-07-16)
+
+**No Formal Conjectures `sorry` is closed yet.** The main existence
+declaration is nevertheless reduced to a sharply smaller, executable
+obligation. Candidatehood is exactly equivalent to all shift budgets; the
+finite range `25 ≤ n ≤ 84` is excluded; every remaining candidate is above
+`84`, divisible by `2520`, and lies in the verified Hughes prime-chain
+families. The third, infinite-window declaration remains separate and already
+contains Sophie Germain infinitude at its first open depth.
+
+**The positive/exclusion window now has a hybrid finite prefix.** In addition
+to the sharp class-sensitive cubic and global fourth-power bounds, the
+kernel-verified estimate `τ(n)^5≤147700800n` supplies a fifth-root test. The
+exact candidate bridge checks only shifts where all three tests remain
+inconclusive. This strengthens fixed-candidate certification but still gives
+a prefix growing with `n`, not a uniform proof.
+
+**The certificate path is end-to-end.** A verified finite batch checker now
+accepts shift-indexed lists of distinct prime powers, checks primality, exact
+products, coverage of the required power-prefix set, and each divisor budget,
+then certifies the exact Formal Conjectures supremum expression. Search remains
+steering only; a future witness must arrive with a batch that Lean rechecks.
+
+**The negative lane now has an exact product/re-entry alternative.** Large
+prime factors cannot repeat across a width-`W` block because common divisors
+divide shift gaps. If a selected subset product `Q` is below `n`, the CRT
+re-entry shift `h=n mod Q` satisfies `2^|I|≤τ(n-h)≤h+2`; the strict reverse
+inequality is a complete exclusion certificate. In the no-cross-product
+branch, prime peeling and two one-element exception bounds leave at least
+`W-2` smooth, explicitly bounded second-layer cofactors. The remaining seam is
+to force a violating re-entry remainder or contradict that smooth cofactor
+population uniformly.
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,
@@ -740,6 +771,10 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
 Target: prove `∀ n, 24 < n → ¬Candidate n`, equivalently show that every such
 `n` has a failed shift budget.
 
+Formal Conjectures closure count: **0 of 3 research `sorry`s closed**. The new
+results sharpen and mechanize their interfaces but do not prove existence,
+nonexistence, convergence, or Sophie Germain infinitude.
+
 - ✅ **Shift-depth interface DONE (2026-07-15):**
   `full_max_implies_shift_budgets` converts the global `ciSup` condition into
   `σ₀(n-k)≤k+2` for every `0<k<n`. `SurvivesThrough n D` packages the first
@@ -770,6 +805,65 @@ Target: prove `∀ n, 24 < n → ¬Candidate n`, equivalently show that every su
   restated over the exact Formal Conjectures set. Both sides compile in their
   independently pinned toolchains. This fills none of the research-open
   `sorry`s. Snapshot `proof/Erdos647_FormalConjecturesCompatibility.lean`.
+- ✅ **Generic local-factor and power-prefix compression DONE (2026-07-16):**
+  `erdos647_rough_power_bound` proves `τ(m)^r≤m` for `2^r`-rough `m`.
+  Four generic local-factor theorems turn arbitrary prime-power inequalities
+  into global natural-constant or exact integral-ratio bounds. The prefix
+  theorems then reduce every budget to the finite region
+  `A(B+k)^r<C(n-k)`, localize every excess shift there, and directly certify
+  the exact Formal Conjectures candidate predicate.
+- ✅ **Exact `2520` class-sensitive cube prefix DONE (2026-07-16):**
+  `gcd(2520N-k,2520)=gcd(k,2520)`, and
+  `35·τ(2520N-k)^3≤C(k)(2520N-k)` with exact local factors at
+  `2,3,5,7`. The generic ratio theorem now subsumes the coefficient table
+  `(8,3,8/5,8/7)` without rational arithmetic.
+- ✅ **Arbitrary-block production equivalence DONE (2026-07-16):** every
+  positive shift has unique coordinates `k=block·q+s`, `0<s≤block`, and all
+  global shift budgets are iff the corresponding local power-prefix checks.
+  At `block=2520` this is the exact blockwise interface sought by the
+  growing-gauntlet lane. Distinct cells give distinct shifted values, but this
+  alone does not give distinct prime factors.
+- ✅ **Verified factorization-batch checker DONE (2026-07-16):** finite
+  prefix checks can be discharged by supplied prime-power lists. The checker
+  proves prime-base distinctness, exact products, exact divisor counts,
+  required-shift coverage, and an end-to-end candidate theorem. It is a
+  proof-producing witness verifier, not a search oracle.
+- ✅ **Conditional block novelty/shared-host theorem DONE (2026-07-16):**
+  pairwise-coprime block values avoiding an old prime catalog produce one
+  distinct new prime per cell. If those primes divide one positive host `H`,
+  then `2^block.card≤H`.
+- ✅ **Fourth-root prefix DONE (2026-07-16):** `τ(n)^4≤19680n`, hence only
+  `(k+2)^4<19680(n-k)` requires explicit checking for a fixed candidate.
+- ✅ **Fifth-root and hybrid prefix DONE (2026-07-16):**
+  `τ(n)^5≤147700800n`; the exact candidate bridge now requires explicit checks
+  only where the sharp cubic, fourth-power, and fifth-power tests are all
+  inconclusive.
+- ✅ **Finite-catalog escape DONE (2026-07-16):** every sufficiently large
+  hypothetical candidate has a bounded shift carrying a prime outside any
+  prescribed finite prime set. The primorial specialization produces a prime
+  above every fixed cutoff. This proves continual novelty, not fast enough
+  accumulation by itself.
+- ✅ **Shift-gap large-factor novelty DONE (2026-07-16):** every common divisor
+  of `n-k₁` and `n-k₂` divides `k₂-k₁`. Thus factors larger than a width-`W`
+  block cannot repeat, without assuming the shifted values are pairwise
+  coprime. Smoothness escape plus the divisor budget supplies an injective
+  large-prime family whenever the shifted values cross their smooth bounds.
+- ✅ **Subset-product / CRT re-entry DONE (2026-07-16):** pair and general
+  `t`-subset dichotomies identify a selected product `Q<n`. The re-entry shift
+  `h=n mod Q` then satisfies the exact candidate sandwich
+  `2^|I|≤τ(n-h)≤h+2`; `h+2<2^|I|` is a complete exclusion certificate.
+- ✅ **Conditional second-layer catalog DONE (2026-07-16):** in the
+  no-cross-product branch, square-scale prime peeling transfers the budget to
+  cofactors. At most one first-layer square exception and one nonsmooth
+  square-small cofactor exception occur. Removing them leaves at least `W-2`
+  controlled, `W`-smooth cofactors with
+  `qᵢ≤W^((1+i)/2)`. Cofactor gcds divide shift gaps; repeated cofactors with
+  odd prime complements force twice the cofactor to divide the gap.
+- **Current hard seam:** close one side of this verified alternative uniformly.
+  Either force a subset whose CRT remainder violates
+  `2^|I|≤h+2`, or prove that the resulting `W-2` smooth, size-controlled
+  second-layer cofactors cannot coexist for arbitrarily large candidate
+  blocks. No present theorem supplies that terminal contradiction.
 - **Growing-depth objective:** iterate the generic factor/adic transition,
   rather than hand-proving an unrelated theorem at every shift, to seek a
   function `D(n)→∞` for which every sufficiently large `n` fails one budget

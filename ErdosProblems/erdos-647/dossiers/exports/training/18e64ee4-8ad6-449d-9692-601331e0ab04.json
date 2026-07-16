@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro m\ninduction m using Nat.strong_induction_on with\n| _ m ih =>\n  intro hm hrough\n  by_cases h1 : m = 1\n  · subst h1\n    native_decide\n  · have hm2 : 2 ≤ m := by omega\n    have hp : m.minFac.Prime := Nat.minFac_prime h1\n    have hpd : m.minFac ∣ m := Nat.minFac_dvd m\n    have hp11 : 11 ≤ m.minFac := hrough _ hp hpd\n    set P := m.minFac with hPdef\n    clear_value P\n    obtain ⟨a, q, hqnd, heq⟩ := Nat.exists_eq_pow_mul_and_not_dvd (show m ≠ 0 by omega) P hp.ne_one\n    have ha1 : 1 ≤ a := by\n      by_contra h0\n      push_neg at h0\n      have ha0 : a = 0 := by omega\n      rw [ha0, pow_zero, one_mul] at heq\n      rw [heq] at hpd\n      exact hqnd hpd\n    have hqpos : 1 ≤ q := by\n      rcases Nat.eq_zero_or_pos q with h0 | h0\n      · rw [h0, mul_zero] at heq\n        omega\n      · exact h0\n    have hpalt : 2 ≤ P ^ a := by\n      have := Nat.le_self_pow (by omega : a ≠ 0) P\n      omega\n    have hqlt : q < m := by\n      have h2 : 1 * q < P ^ a * q := by\n        apply Nat.mul_lt_mul_of_lt_of_le (by omega) (le_refl q)\n        omega\n      calc q = 1 * q := (one_mul q).symm\n        _ < P ^ a * q := h2\n        _ = m := heq.symm\n    have hqrough : ∀ p : ℕ, p.Prime → p ∣ q → 11 ≤ p := by\n      intro p hpp hpq\n      refine hrough p hpp ?_\n      rw [heq]\n      exact Dvd.dvd.mul_left hpq _\n    have hIH := ih q hqlt hqpos hqrough\n    have hT1 : ∀ b : ℕ, (b + 1) ^ 3 ≤ P ^ b := by\n      intro b\n      induction b with\n      | zero => simp\n      | succ n ihn =>\n        have hstep : (n + 2) ^ 3 ≤ 8 * (n + 1) ^ 3 := by\n          have h2 : n + 2 ≤ 2 * (n + 1) := by omega\n          calc (n + 2) ^ 3 ≤ (2 * (n + 1)) ^ 3 := Nat.pow_le_pow_left h2 3\n            _ = 8 * (n + 1) ^ 3 := by ring\n        calc (n + 1 + 1) ^ 3 = (n + 2) ^ 3 := by ring_nf\n          _ ≤ 8 * (n + 1) ^ 3 := hstep\n          _ ≤ 8 * P ^ n := Nat.mul_le_mul_left 8 ihn\n          _ ≤ P * P ^ n := Nat.mul_le_mul_right _ (by omega)\n          _ = P ^ (n + 1) := by rw [pow_succ]; ring\n    have hcop : Nat.Coprime (P ^ a) q := Nat.Coprime.pow_left _ ((hp.coprime_iff_not_dvd).mpr hqnd)\n    have hs : ArithmeticFunction.sigma 0 (P ^ a) = a + 1 := by\n      rw [ArithmeticFunction.sigma_zero_apply, Nat.divisors_prime_pow hp, Finset.card_map, Finset.card_range]\n    have hsig : ArithmeticFunction.sigma 0 m = (a + 1) * ArithmeticFunction.sigma 0 q := by\n      rw [heq, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop, hs]\n    calc (ArithmeticFunction.sigma 0 m) ^ 3\n        = (a + 1) ^ 3 * (ArithmeticFunction.sigma 0 q) ^ 3 := by rw [hsig]; ring\n      _ ≤ P ^ a * q := Nat.mul_le_mul (hT1 a) hIH\n      _ = m := heq.symm",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro m\ninduction m using Nat.strong_induction_on with\n| _ m ih =>\n  intro hm hrough\n  by_cases h1 : m = 1\n  · subst h1\n    native_decide\n  · have hm2 : 2 ≤ m := by omega\n    have hp : m.minFac.Prime := Nat.minFac_prime h1\n    have hpd : m.minFac ∣ m := Nat.minFac_dvd m\n    have hp11 : 11 ≤ m.minFac := hrough _ hp hpd\n    set P := m.minFac with hPdef\n    clear_value P\n    obtain ⟨a, q, hqnd, heq⟩ := Nat.exists_eq_pow_mul_and_not_dvd (show m ≠ 0 by omega) P hp.ne_one\n    have ha1 : 1 ≤ a := by\n      by_contra h0\n      push_neg at h0\n      have ha0 : a = 0 := by omega\n      rw [ha0, pow_zero, one_mul] at heq\n      rw [heq] at hpd\n      exact hqnd hpd\n    have hqpos : 1 ≤ q := by\n      rcases Nat.eq_zero_or_pos q with h0 | h0\n      · rw [h0, mul_zero] at heq\n        omega\n      · exact h0\n    have hpalt : 2 ≤ P ^ a := by\n      have := Nat.le_self_pow (by omega : a ≠ 0) P\n      omega\n    have hqlt : q < m := by\n      have h2 : 1 * q < P ^ a * q := by\n        apply Nat.mul_lt_mul_of_lt_of_le (by omega) (le_refl q)\n        omega\n      calc q = 1 * q := (one_mul q).symm\n        _ < P ^ a * q := h2\n        _ = m := heq.symm\n    have hqrough : ∀ p : ℕ, p.Prime → p ∣ q → 11 ≤ p := by\n      intro p hpp hpq\n      refine hrough p hpp ?_\n      rw [heq]\n      exact Dvd.dvd.mul_left hpq _\n    have hIH := ih q hqlt hqpos hqrough\n    have hT1 : ∀ b : ℕ, (b + 1) ^ 3 ≤ P ^ b := by\n      intro b\n      induction b with\n      | zero => simp\n      | succ n ihn =>\n        have hstep : (n + 2) ^ 3 ≤ 8 * (n + 1) ^ 3 := by\n          have h2 : n + 2 ≤ 2 * (n + 1) := by omega\n          calc (n + 2) ^ 3 ≤ (2 * (n + 1)) ^ 3 := Nat.pow_le_pow_left h2 3\n            _ = 8 * (n + 1) ^ 3 := by ring\n        calc (n + 1 + 1) ^ 3 = (n + 2) ^ 3 := by ring_nf\n          _ ≤ 8 * (n + 1) ^ 3 := hstep\n          _ ≤ 8 * P ^ n := Nat.mul_le_mul_left 8 ihn\n          _ ≤ P * P ^ n := Nat.mul_le_mul_right _ (by omega)\n          _ = P ^ (n + 1) := by rw [pow_succ]; ring\n    have hcop : Nat.Coprime (P ^ a) q := Nat.Coprime.pow_left _ ((hp.coprime_iff_not_dvd).mpr hqnd)\n    have hs : ArithmeticFunction.sigma 0 (P ^ a) = a + 1 := by\n      rw [ArithmeticFunction.sigma_zero_apply, Nat.divisors_prime_pow hp, Finset.card_map, Finset.card_range]\n    have hsig : ArithmeticFunction.sigma 0 m = (a + 1) * ArithmeticFunction.sigma 0 q := by\n      rw [heq, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop, hs]\n    calc (ArithmeticFunction.sigma 0 m) ^ 3\n        = (a + 1) ^ 3 * (ArithmeticFunction.sigma 0 q) ^ 3 := by rw [hsig]; ring\n      _ ≤ P ^ a * q := Nat.mul_le_mul (hT1 a) hIH\n      _ = m := heq.symm",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ m : ℕ, 1 ≤ m → (∀ p : ℕ, p.Prime → p ∣ m → 11 ≤ p) → (ArithmeticFunction.sigma 0 m) ^ 3 ≤ m",
+        "module_source_hash": null,
+        "obligation_id": "c8631ca3-3b67-42e2-ad16-fceccaa5ef36",
+        "outcome": "kernel_pass",
+        "problem_version_id": "a5d294e3-3e54-4cbd-b560-ad089596d057",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "2095ed35da9d7f1324a66da07e672f4abc14a95e634ac90d984d22ab45c51d16"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "693848baee6a8ea0529b98b768e9239288423dce6f63617f04332a78a46fe2ef"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

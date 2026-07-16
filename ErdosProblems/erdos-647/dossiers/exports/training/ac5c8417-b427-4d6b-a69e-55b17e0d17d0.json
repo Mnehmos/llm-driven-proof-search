@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro value fs\n  induction fs generalizing value with\n  | nil =>\n    intro hcheck\n    have hvalid :\n        [].Pairwise (fun x y : ℕ × ℕ => x.1 ≠ y.1) ∧\n          (∀ pe ∈ ([] : List (ℕ × ℕ)), pe.1.Prime) ∧\n          (([].map fun pe : ℕ × ℕ => pe.1 ^ pe.2).prod = value) :=\n      of_decide_eq_true hcheck\n    simp only [List.map_nil, List.prod_nil] at hvalid ⊢\n    rcases hvalid with ⟨_, _, rfl⟩\n    native_decide\n  | cons hd tl ih =>\n    rcases hd with ⟨p, a⟩\n    intro hcheck\n    have hvalid :\n        ((p, a) :: tl).Pairwise (fun x y : ℕ × ℕ => x.1 ≠ y.1) ∧\n          (∀ pe ∈ (p, a) :: tl, pe.1.Prime) ∧\n          ((((p, a) :: tl).map fun pe => pe.1 ^ pe.2).prod = value) :=\n      of_decide_eq_true hcheck\n    rcases hvalid with ⟨hpair, hprimes, hprod⟩\n    have hp : p.Prime := hprimes (p, a) (by simp)\n    have hpairTail : tl.Pairwise (fun x y : ℕ × ℕ => x.1 ≠ y.1) :=\n      (List.pairwise_cons.mp hpair).2\n    have hdistinct : ∀ pe ∈ tl, p ≠ pe.1 :=\n      (List.pairwise_cons.mp hpair).1\n    have hprimesTail : ∀ pe ∈ tl, pe.1.Prime := by\n      intro pe hmem\n      exact hprimes pe (by simp [hmem])\n    have htailCheck :\n        decide\n          (tl.Pairwise (fun x y : ℕ × ℕ => x.1 ≠ y.1) ∧\n            (∀ pe ∈ tl, pe.1.Prime) ∧\n            (tl.map fun pe => pe.1 ^ pe.2).prod =\n              (tl.map fun pe => pe.1 ^ pe.2).prod) = true := by\n      apply decide_eq_true\n      exact ⟨hpairTail, hprimesTail, rfl⟩\n    have htailSigma := ih (tl.map fun pe => pe.1 ^ pe.2).prod htailCheck\n    have hcopBase : Nat.Coprime p (tl.map fun pe => pe.1 ^ pe.2).prod := by\n      rw [Nat.coprime_list_prod_right_iff]\n      intro qpow hqpow\n      simp only [List.mem_map] at hqpow\n      obtain ⟨qe, hqemem, rfl⟩ := hqpow\n      rcases qe with ⟨q, e⟩\n      have hqprime : q.Prime := hprimesTail (q, e) hqemem\n      have hpq : p ≠ q := hdistinct (q, e) hqemem\n      exact ((Nat.coprime_primes hp hqprime).mpr hpq).pow_right e\n    have hcop : Nat.Coprime (p ^ a) (tl.map fun pe => pe.1 ^ pe.2).prod :=\n      hcopBase.pow_left a\n    rw [← hprod]\n    simp only [List.map_cons, List.prod_cons]\n    rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,\n      ArithmeticFunction.sigma_zero_apply_prime_pow hp, htailSigma]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro value fs\n  induction fs generalizing value with\n  | nil =>\n    intro hcheck\n    have hvalid :\n        [].Pairwise (fun x y : ℕ × ℕ => x.1 ≠ y.1) ∧\n          (∀ pe ∈ ([] : List (ℕ × ℕ)), pe.1.Prime) ∧\n          (([].map fun pe : ℕ × ℕ => pe.1 ^ pe.2).prod = value) :=\n      of_decide_eq_true hcheck\n    simp only [List.map_nil, List.prod_nil] at hvalid ⊢\n    rcases hvalid with ⟨_, _, rfl⟩\n    native_decide\n  | cons hd tl ih =>\n    rcases hd with ⟨p, a⟩\n    intro hcheck\n    have hvalid :\n        ((p, a) :: tl).Pairwise (fun x y : ℕ × ℕ => x.1 ≠ y.1) ∧\n          (∀ pe ∈ (p, a) :: tl, pe.1.Prime) ∧\n          ((((p, a) :: tl).map fun pe => pe.1 ^ pe.2).prod = value) :=\n      of_decide_eq_true hcheck\n    rcases hvalid with ⟨hpair, hprimes, hprod⟩\n    have hp : p.Prime := hprimes (p, a) (by simp)\n    have hpairTail : tl.Pairwise (fun x y : ℕ × ℕ => x.1 ≠ y.1) :=\n      (List.pairwise_cons.mp hpair).2\n    have hdistinct : ∀ pe ∈ tl, p ≠ pe.1 :=\n      (List.pairwise_cons.mp hpair).1\n    have hprimesTail : ∀ pe ∈ tl, pe.1.Prime := by\n      intro pe hmem\n      exact hprimes pe (by simp [hmem])\n    have htailCheck :\n        decide\n          (tl.Pairwise (fun x y : ℕ × ℕ => x.1 ≠ y.1) ∧\n            (∀ pe ∈ tl, pe.1.Prime) ∧\n            (tl.map fun pe => pe.1 ^ pe.2).prod =\n              (tl.map fun pe => pe.1 ^ pe.2).prod) = true := by\n      apply decide_eq_true\n      exact ⟨hpairTail, hprimesTail, rfl⟩\n    have htailSigma := ih (tl.map fun pe => pe.1 ^ pe.2).prod htailCheck\n    have hcopBase : Nat.Coprime p (tl.map fun pe => pe.1 ^ pe.2).prod := by\n      rw [Nat.coprime_list_prod_right_iff]\n      intro qpow hqpow\n      simp only [List.mem_map] at hqpow\n      obtain ⟨qe, hqemem, rfl⟩ := hqpow\n      rcases qe with ⟨q, e⟩\n      have hqprime : q.Prime := hprimesTail (q, e) hqemem\n      have hpq : p ≠ q := hdistinct (q, e) hqemem\n      exact ((Nat.coprime_primes hp hqprime).mpr hpq).pow_right e\n    have hcop : Nat.Coprime (p ^ a) (tl.map fun pe => pe.1 ^ pe.2).prod :=\n      hcopBase.pow_left a\n    rw [← hprod]\n    simp only [List.map_cons, List.prod_cons]\n    rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,\n      ArithmeticFunction.sigma_zero_apply_prime_pow hp, htailSigma]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (value : ℕ) (fs : List (ℕ × ℕ)),\n      decide\n        (fs.Pairwise (fun x y => x.1 ≠ y.1) ∧\n          (∀ pe ∈ fs, pe.1.Prime) ∧\n          (fs.map fun pe => pe.1 ^ pe.2).prod = value) = true →\n      ArithmeticFunction.sigma 0 value =\n        (fs.map fun pe => pe.2 + 1).prod",
+        "module_source_hash": null,
+        "obligation_id": "4226edfe-95c4-45aa-8453-a668e779d1d5",
+        "outcome": "kernel_pass",
+        "problem_version_id": "ae3a7e5a-d259-42f1-8f56-d9b880cf2961",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "c74c6cb9eed3d984c226fc7a1949e55016ec2fe7a20798eae544c2194aadd4d8"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "1c7a62bdf117608eb3a4ab16d90e4562ac30f9740d5442049cd09905e2862dcc"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

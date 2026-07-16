@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro m W B hm hW hbudget hlarge\n  by_contra hnone\n  push Not at hnone\n  have hsmooth : ∀ p : ℕ, p.Prime → p ∣ m → p ≤ W := by\n    intro p hp hpdvd\n    exact hnone p hp hpdvd\n  have honeadd : ∀ (s : Finset ℕ) (a : ℕ → ℕ),\n      1 + s.sum a ≤ s.prod (fun x => a x + 1) := by\n    intro s a\n    induction s using Finset.induction_on with\n    | empty => simp\n    | @insert x s hx ih =>\n        rw [Finset.sum_insert hx, Finset.prod_insert hx]\n        have hprod : 1 ≤ s.prod (fun y => a y + 1) := by\n          exact Finset.one_le_prod (fun y _ => by omega)\n        have hmul : a x ≤ s.prod (fun y => a y + 1) * a x := by\n          simpa [one_mul] using Nat.mul_le_mul_right (a x) hprod\n        calc\n          1 + (a x + s.sum a) = a x + (1 + s.sum a) := by omega\n          _ ≤ a x + s.prod (fun y => a y + 1) := Nat.add_le_add_left ih _\n          _ ≤ s.prod (fun y => a y + 1) * a x +\n                s.prod (fun y => a y + 1) := Nat.add_le_add_right hmul _\n          _ = (a x + 1) * s.prod (fun y => a y + 1) := by ring\n  have hm0 : m ≠ 0 := by omega\n  have hsigma : ArithmeticFunction.sigma 0 m =\n      m.primeFactors.prod (fun p => m.factorization p + 1) := by\n    rw [ArithmeticFunction.sigma_eq_prod_primeFactors_sum_range_factorization_pow_mul hm0]\n    simp\n  have hmprod : m.primeFactors.prod (fun p =>\n      p ^ (m.factorization p)) = m := by\n    rw [← Nat.prod_factorization_eq_prod_primeFactors]\n    exact Nat.prod_factorization_pow_eq_self hm0\n  have hsum : m.primeFactors.sum m.factorization ≤\n      ArithmeticFunction.sigma 0 m - 1 := by\n    have h := honeadd m.primeFactors m.factorization\n    rw [← hsigma] at h\n    omega\n  have hsmoothbound : m ≤ W ^ (ArithmeticFunction.sigma 0 m - 1) := by\n    calc\n      m = m.primeFactors.prod (fun p => p ^ (m.factorization p)) := hmprod.symm\n      _ ≤ m.primeFactors.prod (fun p => W ^ (m.factorization p)) := by\n        apply Finset.prod_le_prod'\n        intro p hp\n        exact Nat.pow_le_pow_left\n          (hsmooth p (Nat.prime_of_mem_primeFactors hp)\n            (Nat.dvd_of_mem_primeFactors hp)) _\n      _ = W ^ m.primeFactors.sum m.factorization := by\n        exact Finset.prod_pow_eq_pow_sum _ _ _\n      _ ≤ W ^ (ArithmeticFunction.sigma 0 m - 1) :=\n        pow_le_pow_right' hW hsum\n  have hbudgetpow : W ^ (ArithmeticFunction.sigma 0 m - 1) ≤ W ^ (B - 1) :=\n    pow_le_pow_right' hW (Nat.sub_le_sub_right hbudget 1)\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro m W B hm hW hbudget hlarge\n  by_contra hnone\n  push Not at hnone\n  have hsmooth : ∀ p : ℕ, p.Prime → p ∣ m → p ≤ W := by\n    intro p hp hpdvd\n    exact hnone p hp hpdvd\n  have honeadd : ∀ (s : Finset ℕ) (a : ℕ → ℕ),\n      1 + s.sum a ≤ s.prod (fun x => a x + 1) := by\n    intro s a\n    induction s using Finset.induction_on with\n    | empty => simp\n    | @insert x s hx ih =>\n        rw [Finset.sum_insert hx, Finset.prod_insert hx]\n        have hprod : 1 ≤ s.prod (fun y => a y + 1) := by\n          exact Finset.one_le_prod (fun y _ => by omega)\n        have hmul : a x ≤ s.prod (fun y => a y + 1) * a x := by\n          simpa [one_mul] using Nat.mul_le_mul_right (a x) hprod\n        calc\n          1 + (a x + s.sum a) = a x + (1 + s.sum a) := by omega\n          _ ≤ a x + s.prod (fun y => a y + 1) := Nat.add_le_add_left ih _\n          _ ≤ s.prod (fun y => a y + 1) * a x +\n                s.prod (fun y => a y + 1) := Nat.add_le_add_right hmul _\n          _ = (a x + 1) * s.prod (fun y => a y + 1) := by ring\n  have hm0 : m ≠ 0 := by omega\n  have hsigma : ArithmeticFunction.sigma 0 m =\n      m.primeFactors.prod (fun p => m.factorization p + 1) := by\n    rw [ArithmeticFunction.sigma_eq_prod_primeFactors_sum_range_factorization_pow_mul hm0]\n    simp\n  have hmprod : m.primeFactors.prod (fun p =>\n      p ^ (m.factorization p)) = m := by\n    rw [← Nat.prod_factorization_eq_prod_primeFactors]\n    exact Nat.prod_factorization_pow_eq_self hm0\n  have hsum : m.primeFactors.sum m.factorization ≤\n      ArithmeticFunction.sigma 0 m - 1 := by\n    have h := honeadd m.primeFactors m.factorization\n    rw [← hsigma] at h\n    omega\n  have hsmoothbound : m ≤ W ^ (ArithmeticFunction.sigma 0 m - 1) := by\n    calc\n      m = m.primeFactors.prod (fun p => p ^ (m.factorization p)) := hmprod.symm\n      _ ≤ m.primeFactors.prod (fun p => W ^ (m.factorization p)) := by\n        apply Finset.prod_le_prod'\n        intro p hp\n        exact Nat.pow_le_pow_left\n          (hsmooth p (Nat.prime_of_mem_primeFactors hp)\n            (Nat.dvd_of_mem_primeFactors hp)) _\n      _ = W ^ m.primeFactors.sum m.factorization := by\n        exact Finset.prod_pow_eq_pow_sum _ _ _\n      _ ≤ W ^ (ArithmeticFunction.sigma 0 m - 1) :=\n        pow_le_pow_right' hW hsum\n  have hbudgetpow : W ^ (ArithmeticFunction.sigma 0 m - 1) ≤ W ^ (B - 1) :=\n    pow_le_pow_right' hW (Nat.sub_le_sub_right hbudget 1)\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (m W B : ℕ),\n  0 < m →\n  1 ≤ W →\n  ArithmeticFunction.sigma 0 m ≤ B →\n  W ^ (B - 1) < m →\n  ∃ p : ℕ, p.Prime ∧ p ∣ m ∧ W < p",
+        "module_source_hash": null,
+        "obligation_id": "593fe9d6-c4a7-406a-9e5e-3d77b3efe14c",
+        "outcome": "kernel_pass",
+        "problem_version_id": "d80aa6f4-d447-4b35-8a01-448bf767f73a",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "8d933db24b4c58eaea9e7db1dc73ec0fd9af07e01d14521aa853d859b53d153e"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "1666acd65357e8bfd877828373d74c9f230dd98903b277c14afa67647ec1dc23"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

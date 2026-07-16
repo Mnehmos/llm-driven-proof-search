@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro ca cb N d hN hcb hcbca hda hdb\nhave hca1 : 1 ≤ ca * N := Nat.one_le_iff_ne_zero.mpr (Nat.mul_ne_zero (by omega) (by omega))\nhave hcb1 : 1 ≤ cb * N := Nat.one_le_iff_ne_zero.mpr (Nat.mul_ne_zero (by omega) (by omega))\nhave hdaZ : (d:ℤ) ∣ (ca:ℤ) * N - 1 := by\n  have := Int.natCast_dvd_natCast.mpr hda\n  rwa [Nat.cast_sub hca1, Nat.cast_mul, Nat.cast_one] at this\nhave hdbZ : (d:ℤ) ∣ (cb:ℤ) * N - 1 := by\n  have := Int.natCast_dvd_natCast.mpr hdb\n  rwa [Nat.cast_sub hcb1, Nat.cast_mul, Nat.cast_one] at this\nhave hkey : (d:ℤ) ∣ (ca:ℤ) - cb := by\n  have h1 : (d:ℤ) ∣ (cb:ℤ) * ((ca:ℤ) * N - 1) := Dvd.dvd.mul_left hdaZ cb\n  have h2 : (d:ℤ) ∣ (ca:ℤ) * ((cb:ℤ) * N - 1) := Dvd.dvd.mul_left hdbZ ca\n  have h3 : (d:ℤ) ∣ (cb:ℤ) * ((ca:ℤ) * N - 1) - (ca:ℤ) * ((cb:ℤ) * N - 1) := dvd_sub h1 h2\n  have h4 : (cb:ℤ) * ((ca:ℤ) * N - 1) - (ca:ℤ) * ((cb:ℤ) * N - 1) = (ca:ℤ) - cb := by ring\n  rwa [h4] at h3\nhave hcast : ((ca - cb : ℕ) : ℤ) = (ca : ℤ) - cb := Nat.cast_sub hcbca\nhave hfinal : (d:ℤ) ∣ ((ca - cb : ℕ) : ℤ) := by rw [hcast]; exact hkey\nexact Int.natCast_dvd_natCast.mp hfinal",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro ca cb N d hN hcb hcbca hda hdb\nhave hca1 : 1 ≤ ca * N := Nat.one_le_iff_ne_zero.mpr (Nat.mul_ne_zero (by omega) (by omega))\nhave hcb1 : 1 ≤ cb * N := Nat.one_le_iff_ne_zero.mpr (Nat.mul_ne_zero (by omega) (by omega))\nhave hdaZ : (d:ℤ) ∣ (ca:ℤ) * N - 1 := by\n  have := Int.natCast_dvd_natCast.mpr hda\n  rwa [Nat.cast_sub hca1, Nat.cast_mul, Nat.cast_one] at this\nhave hdbZ : (d:ℤ) ∣ (cb:ℤ) * N - 1 := by\n  have := Int.natCast_dvd_natCast.mpr hdb\n  rwa [Nat.cast_sub hcb1, Nat.cast_mul, Nat.cast_one] at this\nhave hkey : (d:ℤ) ∣ (ca:ℤ) - cb := by\n  have h1 : (d:ℤ) ∣ (cb:ℤ) * ((ca:ℤ) * N - 1) := Dvd.dvd.mul_left hdaZ cb\n  have h2 : (d:ℤ) ∣ (ca:ℤ) * ((cb:ℤ) * N - 1) := Dvd.dvd.mul_left hdbZ ca\n  have h3 : (d:ℤ) ∣ (cb:ℤ) * ((ca:ℤ) * N - 1) - (ca:ℤ) * ((cb:ℤ) * N - 1) := dvd_sub h1 h2\n  have h4 : (cb:ℤ) * ((ca:ℤ) * N - 1) - (ca:ℤ) * ((cb:ℤ) * N - 1) = (ca:ℤ) - cb := by ring\n  rwa [h4] at h3\nhave hcast : ((ca - cb : ℕ) : ℤ) = (ca : ℤ) - cb := Nat.cast_sub hcbca\nhave hfinal : (d:ℤ) ∣ ((ca - cb : ℕ) : ℤ) := by rw [hcast]; exact hkey\nexact Int.natCast_dvd_natCast.mp hfinal",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (ca cb N d : ℕ), 1 ≤ N → 1 ≤ cb → cb ≤ ca → d ∣ ca * N - 1 → d ∣ cb * N - 1 → d ∣ ca - cb",
+        "module_source_hash": null,
+        "obligation_id": "fa9dea2c-a3b0-40de-9c0d-4b82a49b09cb",
+        "outcome": "kernel_pass",
+        "problem_version_id": "45d4f893-f0d5-4cfb-979e-6c8b91fc8c4e",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "14a462d512e80a1199db32661fc1831b6a05dae060b6781d8d1b4563f859b803"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "d5c0c368dcab1acaca4f5d05e8139f23955ebeabb4265940d9f45aee33b4649e"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

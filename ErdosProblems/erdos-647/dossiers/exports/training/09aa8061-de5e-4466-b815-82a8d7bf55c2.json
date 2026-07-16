@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "classical\nhave hdistinct :\n    ∀ {n K W : ℕ} (q : Fin W → ℕ) (i j : Fin W) {r s : ℕ},\n      K + W ≤ n →\n      (∀ u : Fin W, q u ∣ n - (K + (u : ℕ))) →\n      i ≠ j →\n      Nat.Prime r → W < r → r ∣ q i →\n      Nat.Prime s → W < s → s ∣ q j →\n      r ≠ s := by\n  intro n K W q i j r s hKW hq hij hrprime hrW hri\n    hsprime hsW hsj hrs\n  have hcoe : (i : ℕ) ≠ (j : ℕ) := by\n    intro h\n    apply hij\n    exact Fin.ext h\n  rcases lt_or_gt_of_ne hcoe with hijlt | hjilt\n  · have hjn : K + (j : ℕ) < n := by\n      have hjW := j.isLt\n      omega\n    have hrshift_i : r ∣ n - (K + (i : ℕ)) := hri.trans (hq i)\n    have hrshift_j : r ∣ n - (K + (j : ℕ)) := by\n      rw [hrs]\n      exact hsj.trans (hq j)\n    have hrgap : r ∣ (j : ℕ) - (i : ℕ) := by\n      have h := Nat.dvd_sub hrshift_i hrshift_j\n      have hdiff :\n          (n - (K + (i : ℕ))) - (n - (K + (j : ℕ))) =\n            (j : ℕ) - (i : ℕ) := by omega\n      rwa [hdiff] at h\n    have hgap_pos : 0 < (j : ℕ) - (i : ℕ) := by omega\n    have hrle : r ≤ (j : ℕ) - (i : ℕ) :=\n      Nat.le_of_dvd hgap_pos hrgap\n    have hjW := j.isLt\n    omega\n  · have hin : K + (i : ℕ) < n := by\n      have hiW := i.isLt\n      omega\n    have hsshift_j : s ∣ n - (K + (j : ℕ)) := hsj.trans (hq j)\n    have hsshift_i : s ∣ n - (K + (i : ℕ)) := by\n      rw [← hrs]\n      exact hri.trans (hq i)\n    have hsgap : s ∣ (i : ℕ) - (j : ℕ) := by\n      have h := Nat.dvd_sub hsshift_j hsshift_i\n      have hdiff :\n          (n - (K + (j : ℕ))) - (n - (K + (i : ℕ))) =\n            (i : ℕ) - (j : ℕ) := by omega\n      rwa [hdiff] at h\n    have hgap_pos : 0 < (i : ℕ) - (j : ℕ) := by omega\n    have hsle : s ≤ (i : ℕ) - (j : ℕ) :=\n      Nat.le_of_dvd hgap_pos hsgap\n    have hiW := i.isLt\n    omega\nhave hproduct :\n    ∀ {a b n : ℕ}, a ^ 2 < n → b ^ 2 < n → a * b < n := by\n  intro a b n ha hb\n  rcases le_total a b with hab | hba\n  · have hmul : a * b ≤ b * b := Nat.mul_le_mul_right b hab\n    exact hmul.trans_lt (by simpa [pow_two] using hb)\n  · have hmul : a * b ≤ a * a := Nat.mul_le_mul_left a hba\n    exact hmul.trans_lt (by simpa [pow_two] using ha)\nintro n K W q hKW hq hno\ndsimp\napply Finset.card_le_one.mpr\nintro i hi j hj\nsimp only [Finset.mem_filter, Finset.mem_univ, true_and] at hi hj\nby_contra hij\nobtain ⟨hi_sq, r, hrprime, hrW, hri⟩ := hi\nobtain ⟨hj_sq, s, hsprime, hsW, hsj⟩ := hj\nhave hrs : r ≠ s :=\n  hdistinct q i j hKW hq hij\n    hrprime hrW hri hsprime hsW hsj\nhave hqprod : q i * q j < n :=\n  hproduct hi_sq hj_sq\nhave hshift_i : 0 < n - (K + (i : ℕ)) := by\n  have hiW := i.isLt\n  omega\nhave hshift_j : 0 < n - (K + (j : ℕ)) := by\n  have hjW := j.isLt\n  omega\nhave hqi_pos : 0 < q i := Nat.pos_of_dvd_of_pos (hq i) hshift_i\nhave hqj_pos : 0 < q j := Nat.pos_of_dvd_of_pos (hq j) hshift_j\nhave hrle : r ≤ q i := Nat.le_of_dvd hqi_pos hri\nhave hsle : s ≤ q j := Nat.le_of_dvd hqj_pos hsj\nhave hrsprod : r * s ≤ q i * q j := Nat.mul_le_mul hrle hsle\nexact hno i j r s hij hrprime hrW hri hsprime hsW hsj hrs\n  (hrsprod.trans_lt hqprod)",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "classical\nhave hdistinct :\n    ∀ {n K W : ℕ} (q : Fin W → ℕ) (i j : Fin W) {r s : ℕ},\n      K + W ≤ n →\n      (∀ u : Fin W, q u ∣ n - (K + (u : ℕ))) →\n      i ≠ j →\n      Nat.Prime r → W < r → r ∣ q i →\n      Nat.Prime s → W < s → s ∣ q j →\n      r ≠ s := by\n  intro n K W q i j r s hKW hq hij hrprime hrW hri\n    hsprime hsW hsj hrs\n  have hcoe : (i : ℕ) ≠ (j : ℕ) := by\n    intro h\n    apply hij\n    exact Fin.ext h\n  rcases lt_or_gt_of_ne hcoe with hijlt | hjilt\n  · have hjn : K + (j : ℕ) < n := by\n      have hjW := j.isLt\n      omega\n    have hrshift_i : r ∣ n - (K + (i : ℕ)) := hri.trans (hq i)\n    have hrshift_j : r ∣ n - (K + (j : ℕ)) := by\n      rw [hrs]\n      exact hsj.trans (hq j)\n    have hrgap : r ∣ (j : ℕ) - (i : ℕ) := by\n      have h := Nat.dvd_sub hrshift_i hrshift_j\n      have hdiff :\n          (n - (K + (i : ℕ))) - (n - (K + (j : ℕ))) =\n            (j : ℕ) - (i : ℕ) := by omega\n      rwa [hdiff] at h\n    have hgap_pos : 0 < (j : ℕ) - (i : ℕ) := by omega\n    have hrle : r ≤ (j : ℕ) - (i : ℕ) :=\n      Nat.le_of_dvd hgap_pos hrgap\n    have hjW := j.isLt\n    omega\n  · have hin : K + (i : ℕ) < n := by\n      have hiW := i.isLt\n      omega\n    have hsshift_j : s ∣ n - (K + (j : ℕ)) := hsj.trans (hq j)\n    have hsshift_i : s ∣ n - (K + (i : ℕ)) := by\n      rw [← hrs]\n      exact hri.trans (hq i)\n    have hsgap : s ∣ (i : ℕ) - (j : ℕ) := by\n      have h := Nat.dvd_sub hsshift_j hsshift_i\n      have hdiff :\n          (n - (K + (j : ℕ))) - (n - (K + (i : ℕ))) =\n            (i : ℕ) - (j : ℕ) := by omega\n      rwa [hdiff] at h\n    have hgap_pos : 0 < (i : ℕ) - (j : ℕ) := by omega\n    have hsle : s ≤ (i : ℕ) - (j : ℕ) :=\n      Nat.le_of_dvd hgap_pos hsgap\n    have hiW := i.isLt\n    omega\nhave hproduct :\n    ∀ {a b n : ℕ}, a ^ 2 < n → b ^ 2 < n → a * b < n := by\n  intro a b n ha hb\n  rcases le_total a b with hab | hba\n  · have hmul : a * b ≤ b * b := Nat.mul_le_mul_right b hab\n    exact hmul.trans_lt (by simpa [pow_two] using hb)\n  · have hmul : a * b ≤ a * a := Nat.mul_le_mul_left a hba\n    exact hmul.trans_lt (by simpa [pow_two] using ha)\nintro n K W q hKW hq hno\ndsimp\napply Finset.card_le_one.mpr\nintro i hi j hj\nsimp only [Finset.mem_filter, Finset.mem_univ, true_and] at hi hj\nby_contra hij\nobtain ⟨hi_sq, r, hrprime, hrW, hri⟩ := hi\nobtain ⟨hj_sq, s, hsprime, hsW, hsj⟩ := hj\nhave hrs : r ≠ s :=\n  hdistinct q i j hKW hq hij\n    hrprime hrW hri hsprime hsW hsj\nhave hqprod : q i * q j < n :=\n  hproduct hi_sq hj_sq\nhave hshift_i : 0 < n - (K + (i : ℕ)) := by\n  have hiW := i.isLt\n  omega\nhave hshift_j : 0 < n - (K + (j : ℕ)) := by\n  have hjW := j.isLt\n  omega\nhave hqi_pos : 0 < q i := Nat.pos_of_dvd_of_pos (hq i) hshift_i\nhave hqj_pos : 0 < q j := Nat.pos_of_dvd_of_pos (hq j) hshift_j\nhave hrle : r ≤ q i := Nat.le_of_dvd hqi_pos hri\nhave hsle : s ≤ q j := Nat.le_of_dvd hqj_pos hsj\nhave hrsprod : r * s ≤ q i * q j := Nat.mul_le_mul hrle hsle\nexact hno i j r s hij hrprime hrW hri hsprime hsW hsj hrs\n  (hrsprod.trans_lt hqprod)",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (n K W : ℕ) (q : Fin W → ℕ),\n  K + W ≤ n →\n  (∀ i : Fin W, q i ∣ n - (K + (i : ℕ))) →\n  (∀ (i j : Fin W) (r s : ℕ),\n    i ≠ j →\n    Nat.Prime r → W < r → r ∣ q i →\n    Nat.Prime s → W < s → s ∣ q j →\n    r ≠ s → ¬ r * s < n) →\n  let S := @Finset.filter (Fin W)\n    (fun i : Fin W =>\n      (q i) ^ 2 < n ∧\n        ∃ r : ℕ, Nat.Prime r ∧ W < r ∧ r ∣ q i)\n    (Classical.decPred _)\n    Finset.univ\n  S.card ≤ 1",
+        "module_source_hash": null,
+        "obligation_id": "ac8fcebb-5038-4d58-ba4b-32c5e05e4f01",
+        "outcome": "kernel_pass",
+        "problem_version_id": "a8c2aa39-9bb1-4079-9c4f-166c12155df3",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "4e4436410270a822217b9c5f3cab8013406e97d750317c095a0533e3760fe316"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "e05a8294eda171e87dc0759741a736d6559910fb3e89c5c792aea5e7a5104f15"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro r A C B n k hr hA hdiv hk0 hkn hfail\n  by_contra hprefix\n  push_neg at hprefix\n  have hmpos : 1 ≤ n - k := by omega\n  have hbound := hdiv (n - k) hmpos\n  have hmul :\n      A * (ArithmeticFunction.sigma 0 (n - k)) ^ r ≤\n        A * (B + k) ^ r := hbound.trans hprefix\n  have hpows :\n      (ArithmeticFunction.sigma 0 (n - k)) ^ r ≤ (B + k) ^ r :=\n    le_of_mul_le_mul_left hmul hA\n  have hbudget : ArithmeticFunction.sigma 0 (n - k) ≤ B + k :=\n    (Nat.pow_le_pow_iff_left (Nat.ne_of_gt hr)).mp hpows\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro r A C B n k hr hA hdiv hk0 hkn hfail\n  by_contra hprefix\n  push_neg at hprefix\n  have hmpos : 1 ≤ n - k := by omega\n  have hbound := hdiv (n - k) hmpos\n  have hmul :\n      A * (ArithmeticFunction.sigma 0 (n - k)) ^ r ≤\n        A * (B + k) ^ r := hbound.trans hprefix\n  have hpows :\n      (ArithmeticFunction.sigma 0 (n - k)) ^ r ≤ (B + k) ^ r :=\n    le_of_mul_le_mul_left hmul hA\n  have hbudget : ArithmeticFunction.sigma 0 (n - k) ≤ B + k :=\n    (Nat.pow_le_pow_iff_left (Nat.ne_of_gt hr)).mp hpows\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ r A C B n k : ℕ,\n      0 < r →\n      0 < A →\n      (∀ m : ℕ, 1 ≤ m →\n        A * (ArithmeticFunction.sigma 0 m) ^ r ≤ C * m) →\n      0 < k →\n      k < n →\n      B + k < ArithmeticFunction.sigma 0 (n - k) →\n      A * (B + k) ^ r < C * (n - k)",
+        "module_source_hash": null,
+        "obligation_id": "57c8f6e4-6ae7-4baf-abee-022e8d9d7a2b",
+        "outcome": "kernel_pass",
+        "problem_version_id": "5a951bb5-aa70-435d-ab19-e09d9efc8af3",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "d787f7f71abaf04848971da9ca4386dd84542f428380dd2833cdcbc5052b1f75"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "b89fa0ba5bc542c10b5f4b9be0806cdb92d707f1977ec58792915f11470f8c5e"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

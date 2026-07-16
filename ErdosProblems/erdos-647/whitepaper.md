@@ -265,10 +265,10 @@ repaired squarefree remainder was also submitted to the independent exact
 proof-search verifier and returned `kernel_pass`; identifiers and hashes are
 recorded in [evidence.md](evidence.md).
 
-For provenance beyond the source replay, all 227 related campaign
+For provenance beyond the source replay, all 317 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
-training JSON formats. Of these, 220 report `KERNEL_VERIFIED` in the pinned
+training JSON formats. Of these, 310 report `KERNEL_VERIFIED` in the pinned
 environment; seven non-success histories are retained for audit completeness.
 
 This proves a density-zero result with the claimed seventh logarithmic power.
@@ -321,16 +321,179 @@ global induction or growing-depth invariant proving that this transition
 cannot continue indefinitely for a candidate. No such termination theorem is
 claimed here.
 
+### 3.8 Power-prefix compression and block production (2026-07-16)
+
+The next abstraction compresses the number of shifts requiring explicit
+arithmetic. For every positive `r`, if each prime divisor of `m` is at least
+`2^r`, then
+
+```text
+τ(m)^r ≤ m.
+```
+
+More generally, [`Erdos647_GenericLocalPowerBound.lean`](proof/Erdos647_GenericLocalPowerBound.lean)
+turns a finite table of verified local prime-power inequalities into a global
+bound. It supports natural constants and an exact integral
+denominator/numerator form. The latter recovers coefficients such as `8/5`
+and `8/7` without formal rational arithmetic. A bound
+`A·τ(m)^r≤C·m` implies that a failed budget `B+k<τ(n-k)` can occur only inside
+
+```text
+A(B+k)^r < C(n-k).
+```
+
+Thus a finite prefix certifies all shifts for any fixed `n`, and the `B=2`
+corollary directly certifies the exact supremum predicate appearing in Formal
+Conjectures.
+
+For `n=2520N`, small-prime divisibility is known exactly:
+`gcd(2520N-k,2520)=gcd(k,2520)`. Peeling `2,3,5,7` gives
+
+```text
+35·τ(2520N-k)^3 ≤ C(k)(2520N-k),
+```
+
+where
+
+```text
+C(k) =
+  (if 2∣k then 8 else 1)
+  (if 3∣k then 3 else 1)
+  (if 5∣k then 8 else 5)
+  (if 7∣k then 8 else 7).
+```
+
+The normalized local constants are `(8,3,8/5,8/7)`. This is stronger than
+using the worst class uniformly.
+
+Every positive shift also has unique block coordinates
+`k=block·q+s`, `0<s≤block`. The formal block theorem proves an exact iff
+between all global budgets and the local class-sensitive prefix cells
+`block·(N-q)-s`. Different coordinates produce different shifted values,
+although distinctness of values does not imply distinctness of prime factors.
+
+An executable factorization checker closes the finite-certification seam.
+For each required shift it checks a supplied list of distinct prime powers,
+their exact product, and the resulting divisor count. A batch theorem proves
+coverage of the entire prefix, and an end-to-end theorem converts a successful
+batch into the exact candidate supremum condition. The kernel verifies the
+factorization data; it need not run an unbounded factoring algorithm.
+
+Two further theorems isolate the hoped-for accumulation mechanism. A
+pairwise-coprime block of values greater than one produces one distinct prime
+per cell, disjoint from any avoided older catalog. If all those primes divide
+one positive host `H`, then
+
+```text
+2^block.card ≤ H.
+```
+
+The unresolved step is deriving sufficiently large pairwise-coprime blocks
+and a shared host uniformly from candidacy.
+
+Finally, the explicit global estimate
+
+```text
+τ(n)^4 ≤ 19680n
+```
+
+reduces the universal prefix to the fourth-root region
+
+```text
+(k+2)^4 < 19680(n-k).
+```
+
+This is a substantial compression for fixed-candidate certification, but the
+prefix still grows with `n`. No theorem here supplies a universal
+contradiction or a larger candidate. All three Formal Conjectures research
+declarations remain open.
+
+### 3.9 Large-factor accumulation, CRT re-entry, and the second layer (2026-07-16)
+
+The next continuation replaces the pairwise-coprime-block hope by a weaker
+fact that is available for every pair of shifts. For `k₁≤k₂<n`,
+
+```text
+gcd(n-k₁,n-k₂) = gcd(n-k₁,k₂-k₁).
+```
+
+Therefore every common divisor divides the shift gap. In a width-`W` block,
+chosen prime factors larger than `W` cannot repeat, even when the shifted
+values themselves are not pairwise coprime. This is the exact non-reuse
+mechanism in `Erdos647_ShiftDifferenceNovelty.lean`.
+
+The divisor budget supplies those factors through a smooth-number
+alternative. If every prime divisor of a positive `m` is at most `W`, then
+
+```text
+m ≤ W^(τ(m)-1).
+```
+
+Hence a shifted value larger than its allowed smooth threshold has a prime
+factor above `W`. The block assembly selects one such prime per coordinate
+and proves injectivity. Separately, the fifth-power estimate
+`τ(m)^5≤147700800m` and the hybrid cubic/fourth/fifth prefix reduce the
+explicit checks needed for any fixed candidate. A finite prime catalog also
+cannot stabilize the process: once `n` exceeds its product by enough, a
+bounded shift has a prime divisor outside the catalog. The primorial
+specialization gives a factor above every fixed cutoff.
+
+Distinct large primes become useful when a subset product is below `n`.
+The pair and general `t`-subset dichotomies formalize exactly this alternative.
+For a selected index set `I`, put
+
+```text
+Q = ∏ i∈I, Pᵢ,     h = n mod Q.
+```
+
+When `Q<n`, the remainder is a genuine positive re-entry shift beyond the
+original block, every `Pᵢ` divides `n-h`, and candidacy forces
+
+```text
+2^|I| ≤ τ(n-h) ≤ h+2.
+```
+
+Thus `h+2<2^|I|` is a complete kernel-checkable exclusion certificate. This
+is a real feedback loop from many earlier shifts into one later shift, not
+merely a cardinality heuristic.
+
+The complementary no-small-product branch now has a second layer. Except for
+at most one first-layer square exception, a selected prime `Pᵢ` can be peeled
+from `n-(1+i)=Pᵢqᵢ`, giving `qᵢ<Pᵢ`, coprimality, and
+`2τ(qᵢ)≤i+3`. Under the no-cross-product hypothesis, at most one square-small
+cofactor can contain a prime above `W`: two such primes would be distinct by
+the shift-gap argument, and their product would re-enter below `n`. Deleting
+the two exceptional indices leaves at least `W-2` coordinates with
+
+```text
+qᵢ² < n,
+every prime divisor of qᵢ at most W,
+qᵢ ≤ W^((1+i)/2).
+```
+
+This conclusion is assembled in
+`Erdos647_SecondLayerCatalogAssembly.lean`. The auxiliary gap-rigidity
+theorems show that common cofactor divisors divide the coordinate gap; equal
+cofactors with odd prime complements force twice the cofactor to divide that
+gap.
+
+The remaining barrier is now precise. One must either force a re-entry subset
+whose remainder violates `2^|I|≤h+2`, or prove that the large family of
+smooth, size-controlled second-layer cofactors cannot coexist for a candidate.
+Neither conclusion is currently proved. The original existence theorem, the
+limit theorem, and the infinite-window theorem remain the same three open
+Formal Conjectures declarations.
+
 ## 4. Scoreboard (honest)
 
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **284 top-level theorem
-  declarations and four top-level helper lemmas across 116 Lean files** under
-  `proof/`. This count includes helper and assembly theorems; it is not
-  presented as 288 independent mathematical discoveries or 288 standalone
-  tracked episodes.
+- Portable proof source currently contains **452 top-level theorem
+  declarations and five top-level helper lemmas across 169 Lean files** under
+  `proof/`. Including 45 definitions gives 502 declarations. These counts
+  include helper and assembly declarations; they are not presented as 502
+  independent mathematical discoveries or 502 standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base
   sieve, the bridging-closure layer, the Theorem-2 formalization, the
   extended negative result, the Mertens infrastructure, the explicit

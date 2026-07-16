@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro n S hprime hprod H\nset M := ∏ q ∈ S, q with hMdef\nhave hMpos : 0 < M := by\n  rw [hMdef]\n  apply Finset.prod_pos\n  intro p hp\n  exact (hprime p hp).pos\nhave hMn : M + 1 < n := by simpa [M] using hprod\nhave hbudget : ∀ k : ℕ, 0 < k → k < n →\n    ArithmeticFunction.sigma 0 (n - k) ≤ k + 2 := by\n  intro k hk0 hkn\n  let f : Fin n → ℕ := fun x =>\n    (x : ℕ) + ArithmeticFunction.sigma 0 x\n  have hbdd : BddAbove (Set.range f) := by\n    refine ⟨2 * n, ?_⟩\n    rintro y ⟨x, rfl⟩\n    dsimp [f]\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hc := Nat.card_divisors_le_self (x : ℕ)\n    have hx : (x : ℕ) < n := x.isLt\n    omega\n  let m : Fin n := ⟨n - k, by omega⟩\n  have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n  dsimp [f, m] at hm\n  omega\nlet r := (n - 1) % M\nobtain ⟨k, hkpos, hkM, hkn, hd⟩ :\n    ∃ k, 0 < k ∧ k ≤ M ∧ k < n ∧ M ∣ (n - k - 1) := by\n  by_cases hr : r = 0\n  · refine ⟨M, hMpos, le_rfl, by omega, ?_⟩\n    have hd : M ∣ n - 1 := Nat.dvd_iff_mod_eq_zero.2 hr\n    have heq : n - M - 1 = (n - 1) - M := by omega\n    rw [heq]\n    exact Nat.dvd_sub hd (dvd_refl M)\n  · have hrpos : 0 < r := Nat.pos_of_ne_zero hr\n    have hrlt : r < M := Nat.mod_lt _ hMpos\n    refine ⟨r, hrpos, hrlt.le, by omega, ?_⟩\n    have hdecomp : n - 1 = M * ((n - 1) / M) + r := by\n      simpa [r, Nat.add_comm] using (Nat.mod_add_div (n - 1) M).symm\n    refine ⟨(n - 1) / M, ?_⟩\n    omega\nhave hmgt : 1 < n - k := by omega\nobtain ⟨q, hq⟩ := hd\nhave hmrepr : n - k = 1 + M * q := by omega\nhave hcop : Nat.Coprime M (n - k) := by\n  rw [hmrepr]\n  exact (Nat.coprime_add_mul_left_right M 1 q).2 (Nat.coprime_one_right M)\nobtain ⟨p, hpprime, hpdvd⟩ := Nat.exists_prime_and_dvd (by omega : n - k ≠ 1)\nhave hpnotM : ¬ p ∣ M := by\n  intro hpM\n  have hMp : Nat.Coprime M p := hcop.coprime_dvd_right hpdvd\n  have hpone : p = 1 := Nat.eq_one_of_dvd_coprimes hMp hpM (dvd_refl p)\n  exact hpprime.ne_one hpone\nhave hpnotS : p ∉ S := by\n  intro hpS\n  apply hpnotM\n  rw [hMdef]\n  simpa using Finset.dvd_prod_of_mem id hpS\nhave hτ := hbudget k hkpos hkn\nrefine ⟨k, p, hkpos, ?_, hkn, hpprime, hpdvd, hpnotS, ?_⟩\n· simpa [M] using hkM\n· simpa [M] using (show ArithmeticFunction.sigma 0 (n - k) ≤ M + 2 by omega)",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro n S hprime hprod H\nset M := ∏ q ∈ S, q with hMdef\nhave hMpos : 0 < M := by\n  rw [hMdef]\n  apply Finset.prod_pos\n  intro p hp\n  exact (hprime p hp).pos\nhave hMn : M + 1 < n := by simpa [M] using hprod\nhave hbudget : ∀ k : ℕ, 0 < k → k < n →\n    ArithmeticFunction.sigma 0 (n - k) ≤ k + 2 := by\n  intro k hk0 hkn\n  let f : Fin n → ℕ := fun x =>\n    (x : ℕ) + ArithmeticFunction.sigma 0 x\n  have hbdd : BddAbove (Set.range f) := by\n    refine ⟨2 * n, ?_⟩\n    rintro y ⟨x, rfl⟩\n    dsimp [f]\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hc := Nat.card_divisors_le_self (x : ℕ)\n    have hx : (x : ℕ) < n := x.isLt\n    omega\n  let m : Fin n := ⟨n - k, by omega⟩\n  have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n  dsimp [f, m] at hm\n  omega\nlet r := (n - 1) % M\nobtain ⟨k, hkpos, hkM, hkn, hd⟩ :\n    ∃ k, 0 < k ∧ k ≤ M ∧ k < n ∧ M ∣ (n - k - 1) := by\n  by_cases hr : r = 0\n  · refine ⟨M, hMpos, le_rfl, by omega, ?_⟩\n    have hd : M ∣ n - 1 := Nat.dvd_iff_mod_eq_zero.2 hr\n    have heq : n - M - 1 = (n - 1) - M := by omega\n    rw [heq]\n    exact Nat.dvd_sub hd (dvd_refl M)\n  · have hrpos : 0 < r := Nat.pos_of_ne_zero hr\n    have hrlt : r < M := Nat.mod_lt _ hMpos\n    refine ⟨r, hrpos, hrlt.le, by omega, ?_⟩\n    have hdecomp : n - 1 = M * ((n - 1) / M) + r := by\n      simpa [r, Nat.add_comm] using (Nat.mod_add_div (n - 1) M).symm\n    refine ⟨(n - 1) / M, ?_⟩\n    omega\nhave hmgt : 1 < n - k := by omega\nobtain ⟨q, hq⟩ := hd\nhave hmrepr : n - k = 1 + M * q := by omega\nhave hcop : Nat.Coprime M (n - k) := by\n  rw [hmrepr]\n  exact (Nat.coprime_add_mul_left_right M 1 q).2 (Nat.coprime_one_right M)\nobtain ⟨p, hpprime, hpdvd⟩ := Nat.exists_prime_and_dvd (by omega : n - k ≠ 1)\nhave hpnotM : ¬ p ∣ M := by\n  intro hpM\n  have hMp : Nat.Coprime M p := hcop.coprime_dvd_right hpdvd\n  have hpone : p = 1 := Nat.eq_one_of_dvd_coprimes hMp hpM (dvd_refl p)\n  exact hpprime.ne_one hpone\nhave hpnotS : p ∉ S := by\n  intro hpS\n  apply hpnotM\n  rw [hMdef]\n  simpa using Finset.dvd_prod_of_mem id hpS\nhave hτ := hbudget k hkpos hkn\nrefine ⟨k, p, hkpos, ?_, hkn, hpprime, hpdvd, hpnotS, ?_⟩\n· simpa [M] using hkM\n· simpa [M] using (show ArithmeticFunction.sigma 0 (n - k) ≤ M + 2 by omega)",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (n : ℕ) (S : Finset ℕ),\n  (∀ p ∈ S, Nat.Prime p) →\n  (∏ p ∈ S, p) + 1 < n →\n  (⨆ m : Fin n,\n    (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 →\n  ∃ k p : ℕ,\n    0 < k ∧ k ≤ ∏ q ∈ S, q ∧ k < n ∧\n    Nat.Prime p ∧ p ∣ n - k ∧ p ∉ S ∧\n    ArithmeticFunction.sigma 0 (n - k) ≤ (∏ q ∈ S, q) + 2",
+        "module_source_hash": null,
+        "obligation_id": "c13a1691-f54b-4ca0-987e-c6a903102c7d",
+        "outcome": "kernel_pass",
+        "problem_version_id": "20ca3fff-6c15-4524-923d-04127f8834db",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "a5880b21ecc4dcf6dab75b792738cfe96430ba17c27cd8eeac7939104e058db3"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "fa1901e95ac6609036aae70f2af5fc66251b94d8a6fcc588f5de5970ed61dea2"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

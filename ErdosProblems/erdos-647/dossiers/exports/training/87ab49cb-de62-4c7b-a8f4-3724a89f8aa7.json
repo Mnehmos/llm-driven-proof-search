@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro c d p t h1 h2 h3 hp\nrcases hp.eq_one_or_self_of_dvd p h2 with h4 | h4 <;> omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro c d p t h1 h2 h3 hp\nrcases hp.eq_one_or_self_of_dvd p h2 with h4 | h4 <;> omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (c d p t : ℕ), 1 < p → p ∣ c * t + d → p < c * t + d → ¬ Nat.Prime (c * t + d)",
+        "module_source_hash": null,
+        "obligation_id": "d6efd977-5771-4b3e-b06e-1dee5105b546",
+        "outcome": "kernel_pass",
+        "problem_version_id": "839dc458-4adc-4382-880d-f03e9b741869",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "93161030548948b561218f426dff6f8eaed396673013df374a5e0100f479be33"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "51e8e16130426790909f0afdd9a79739a9711e87348499d3ccfab7c4ade87d78"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

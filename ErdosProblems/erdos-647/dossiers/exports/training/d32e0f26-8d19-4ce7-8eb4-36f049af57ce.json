@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro N k hkn\n  have hiff : ∀ N' k' p : ℕ, k' ≤ 2520 * N' → p ∣ 2520 →\n      (p ∣ 2520 * N' - k' ↔ p ∣ k') := by\n    intro N' k' p hkn' hp'\n    have hbase : p ∣ 2520 * N' := Dvd.dvd.mul_right hp' N'\n    constructor\n    · intro hshift\n      have h := Nat.dvd_sub hbase hshift\n      rwa [show 2520 * N' - (2520 * N' - k') = k' by omega] at h\n    · intro hk'\n      exact Nat.dvd_sub hbase hk'\n  apply Nat.dvd_antisymm\n  · apply Nat.dvd_gcd\n    · exact (hiff N k (Nat.gcd (2520 * N - k) 2520)\n        hkn (Nat.gcd_dvd_right _ _)).mp (Nat.gcd_dvd_left _ _)\n    · exact Nat.gcd_dvd_right _ _\n  · apply Nat.dvd_gcd\n    · exact (hiff N k (Nat.gcd k 2520)\n        hkn (Nat.gcd_dvd_right _ _)).mpr (Nat.gcd_dvd_left _ _)\n    · exact Nat.gcd_dvd_right _ _",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro N k hkn\n  have hiff : ∀ N' k' p : ℕ, k' ≤ 2520 * N' → p ∣ 2520 →\n      (p ∣ 2520 * N' - k' ↔ p ∣ k') := by\n    intro N' k' p hkn' hp'\n    have hbase : p ∣ 2520 * N' := Dvd.dvd.mul_right hp' N'\n    constructor\n    · intro hshift\n      have h := Nat.dvd_sub hbase hshift\n      rwa [show 2520 * N' - (2520 * N' - k') = k' by omega] at h\n    · intro hk'\n      exact Nat.dvd_sub hbase hk'\n  apply Nat.dvd_antisymm\n  · apply Nat.dvd_gcd\n    · exact (hiff N k (Nat.gcd (2520 * N - k) 2520)\n        hkn (Nat.gcd_dvd_right _ _)).mp (Nat.gcd_dvd_left _ _)\n    · exact Nat.gcd_dvd_right _ _\n  · apply Nat.dvd_gcd\n    · exact (hiff N k (Nat.gcd k 2520)\n        hkn (Nat.gcd_dvd_right _ _)).mpr (Nat.gcd_dvd_left _ _)\n    · exact Nat.gcd_dvd_right _ _",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ N k : ℕ, k ≤ 2520 * N →\n      Nat.gcd (2520 * N - k) 2520 = Nat.gcd k 2520",
+        "module_source_hash": null,
+        "obligation_id": "30714383-1fd6-41ec-9c4c-a6b53e17cfe6",
+        "outcome": "kernel_pass",
+        "problem_version_id": "80655568-e511-4b2a-bb75-323cb62ed186",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "11c7ebee0179d2d86b4965341a58125ea74135f63a82f687bb5ef0ed43c4d063"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "187d27a992d666050a5ac522218deb37603ba4749c997c070a250eae771904eb"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

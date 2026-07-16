@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro n W hprim H\nhave hMpos : 0 < primorial W := primorial_pos W\nhave hbudget : ∀ k : ℕ, 0 < k → k < n →\n    ArithmeticFunction.sigma 0 (n - k) ≤ k + 2 := by\n  intro k hk0 hkn\n  let f : Fin n → ℕ := fun x =>\n    (x : ℕ) + ArithmeticFunction.sigma 0 x\n  have hbdd : BddAbove (Set.range f) := by\n    refine ⟨2 * n, ?_⟩\n    rintro y ⟨x, rfl⟩\n    dsimp [f]\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hc := Nat.card_divisors_le_self (x : ℕ)\n    have hx : (x : ℕ) < n := x.isLt\n    omega\n  let m : Fin n := ⟨n - k, by omega⟩\n  have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n  dsimp [f, m] at hm\n  omega\nlet r := (n - 1) % primorial W\nobtain ⟨k, hkpos, hkM, hkn, hd⟩ :\n    ∃ k, 0 < k ∧ k ≤ primorial W ∧ k < n ∧\n      primorial W ∣ (n - k - 1) := by\n  by_cases hr : r = 0\n  · refine ⟨primorial W, hMpos, le_rfl, by omega, ?_⟩\n    have hd : primorial W ∣ n - 1 := Nat.dvd_iff_mod_eq_zero.2 hr\n    have heq : n - primorial W - 1 = (n - 1) - primorial W := by\n      omega\n    rw [heq]\n    exact Nat.dvd_sub hd (dvd_refl (primorial W))\n  · have hrpos : 0 < r := Nat.pos_of_ne_zero hr\n    have hrlt : r < primorial W := Nat.mod_lt _ hMpos\n    refine ⟨r, hrpos, hrlt.le, by omega, ?_⟩\n    have hdecomp :\n        n - 1 = primorial W * ((n - 1) / primorial W) + r := by\n      simpa [r, Nat.add_comm] using\n        (Nat.mod_add_div (n - 1) (primorial W)).symm\n    refine ⟨(n - 1) / primorial W, ?_⟩\n    omega\nhave hmgt : 1 < n - k := by omega\nobtain ⟨q, hq⟩ := hd\nhave hmrepr : n - k = 1 + primorial W * q := by omega\nhave hcop : Nat.Coprime (primorial W) (n - k) := by\n  rw [hmrepr]\n  exact\n    (Nat.coprime_add_mul_left_right (primorial W) 1 q).2\n      (Nat.coprime_one_right (primorial W))\nobtain ⟨p, hpprime, hpdvd⟩ :=\n  Nat.exists_prime_and_dvd (by omega : n - k ≠ 1)\nhave hpnot : ¬ p ∣ primorial W := by\n  intro hpM\n  have hMp : Nat.Coprime (primorial W) p :=\n    hcop.coprime_dvd_right hpdvd\n  have hpone : p = 1 :=\n    Nat.eq_one_of_dvd_coprimes hMp hpM (dvd_refl p)\n  exact hpprime.ne_one hpone\nhave hpW : W < p := by\n  exact lt_of_not_ge fun hp_le =>\n    hpnot (hpprime.dvd_primorial_iff.2 hp_le)\nhave hτ := hbudget k hkpos hkn\nrefine ⟨k, p, hkpos, hkM, hkn, hmgt, hpprime, hpW, hpdvd, ?_⟩\nomega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro n W hprim H\nhave hMpos : 0 < primorial W := primorial_pos W\nhave hbudget : ∀ k : ℕ, 0 < k → k < n →\n    ArithmeticFunction.sigma 0 (n - k) ≤ k + 2 := by\n  intro k hk0 hkn\n  let f : Fin n → ℕ := fun x =>\n    (x : ℕ) + ArithmeticFunction.sigma 0 x\n  have hbdd : BddAbove (Set.range f) := by\n    refine ⟨2 * n, ?_⟩\n    rintro y ⟨x, rfl⟩\n    dsimp [f]\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hc := Nat.card_divisors_le_self (x : ℕ)\n    have hx : (x : ℕ) < n := x.isLt\n    omega\n  let m : Fin n := ⟨n - k, by omega⟩\n  have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n  dsimp [f, m] at hm\n  omega\nlet r := (n - 1) % primorial W\nobtain ⟨k, hkpos, hkM, hkn, hd⟩ :\n    ∃ k, 0 < k ∧ k ≤ primorial W ∧ k < n ∧\n      primorial W ∣ (n - k - 1) := by\n  by_cases hr : r = 0\n  · refine ⟨primorial W, hMpos, le_rfl, by omega, ?_⟩\n    have hd : primorial W ∣ n - 1 := Nat.dvd_iff_mod_eq_zero.2 hr\n    have heq : n - primorial W - 1 = (n - 1) - primorial W := by\n      omega\n    rw [heq]\n    exact Nat.dvd_sub hd (dvd_refl (primorial W))\n  · have hrpos : 0 < r := Nat.pos_of_ne_zero hr\n    have hrlt : r < primorial W := Nat.mod_lt _ hMpos\n    refine ⟨r, hrpos, hrlt.le, by omega, ?_⟩\n    have hdecomp :\n        n - 1 = primorial W * ((n - 1) / primorial W) + r := by\n      simpa [r, Nat.add_comm] using\n        (Nat.mod_add_div (n - 1) (primorial W)).symm\n    refine ⟨(n - 1) / primorial W, ?_⟩\n    omega\nhave hmgt : 1 < n - k := by omega\nobtain ⟨q, hq⟩ := hd\nhave hmrepr : n - k = 1 + primorial W * q := by omega\nhave hcop : Nat.Coprime (primorial W) (n - k) := by\n  rw [hmrepr]\n  exact\n    (Nat.coprime_add_mul_left_right (primorial W) 1 q).2\n      (Nat.coprime_one_right (primorial W))\nobtain ⟨p, hpprime, hpdvd⟩ :=\n  Nat.exists_prime_and_dvd (by omega : n - k ≠ 1)\nhave hpnot : ¬ p ∣ primorial W := by\n  intro hpM\n  have hMp : Nat.Coprime (primorial W) p :=\n    hcop.coprime_dvd_right hpdvd\n  have hpone : p = 1 :=\n    Nat.eq_one_of_dvd_coprimes hMp hpM (dvd_refl p)\n  exact hpprime.ne_one hpone\nhave hpW : W < p := by\n  exact lt_of_not_ge fun hp_le =>\n    hpnot (hpprime.dvd_primorial_iff.2 hp_le)\nhave hτ := hbudget k hkpos hkn\nrefine ⟨k, p, hkpos, hkM, hkn, hmgt, hpprime, hpW, hpdvd, ?_⟩\nomega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n W : ℕ,\n      primorial W + 1 < n →\n      (⨆ m : Fin n,\n        (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 →\n      ∃ k p : ℕ,\n        0 < k ∧ k ≤ primorial W ∧ k < n ∧ 1 < n - k ∧\n        Nat.Prime p ∧ W < p ∧ p ∣ n - k ∧\n        ArithmeticFunction.sigma 0 (n - k) ≤ primorial W + 2",
+        "module_source_hash": null,
+        "obligation_id": "55a14430-27d8-4253-baaa-e352700948d8",
+        "outcome": "kernel_pass",
+        "problem_version_id": "646b4846-4b44-4b79-aa40-1ef523f09fe4",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "64ffdfc202847fa6e56f202d507f1d68e8f2b6aba01b0a401dab69c4728598ce"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "0a9f292b88625026fcad513fb66939293807e3a0249923f0670307d2dfd264ab"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

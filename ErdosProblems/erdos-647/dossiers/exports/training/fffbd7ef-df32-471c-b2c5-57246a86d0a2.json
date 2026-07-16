@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro r A C n hr hA hn hdiv hprefix\n  haveI : Nonempty (Fin n) := ⟨⟨0, hn⟩⟩\n  have hbudget : ∀ k : ℕ, 0 < k → k < n →\n      ArithmeticFunction.sigma 0 (n - k) ≤ k + 2 := by\n    intro k hk0 hkn\n    by_cases hk : A * (k + 2) ^ r < C * (n - k)\n    · exact hprefix k hk0 hkn hk\n    · push_neg at hk\n      have hmpos : 1 ≤ n - k := by omega\n      have hbound := hdiv (n - k) hmpos\n      have hmul :\n          A * (ArithmeticFunction.sigma 0 (n - k)) ^ r ≤\n            A * (k + 2) ^ r := hbound.trans hk\n      have hpows :\n          (ArithmeticFunction.sigma 0 (n - k)) ^ r ≤ (k + 2) ^ r :=\n        le_of_mul_le_mul_left hmul hA\n      exact (Nat.pow_le_pow_iff_left (Nat.ne_of_gt hr)).mp hpows\n  apply ciSup_le\n  intro m\n  rcases Nat.eq_zero_or_pos (m : ℕ) with hm0 | hmpos\n  · rw [hm0]\n    simp\n  · have hmn : (m : ℕ) < n := m.isLt\n    have hk0 : 0 < n - (m : ℕ) := by omega\n    have hkn : n - (m : ℕ) < n := by omega\n    have hb := hbudget (n - (m : ℕ)) hk0 hkn\n    have hmk : n - (n - (m : ℕ)) = (m : ℕ) := by omega\n    rw [hmk] at hb\n    omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro r A C n hr hA hn hdiv hprefix\n  haveI : Nonempty (Fin n) := ⟨⟨0, hn⟩⟩\n  have hbudget : ∀ k : ℕ, 0 < k → k < n →\n      ArithmeticFunction.sigma 0 (n - k) ≤ k + 2 := by\n    intro k hk0 hkn\n    by_cases hk : A * (k + 2) ^ r < C * (n - k)\n    · exact hprefix k hk0 hkn hk\n    · push_neg at hk\n      have hmpos : 1 ≤ n - k := by omega\n      have hbound := hdiv (n - k) hmpos\n      have hmul :\n          A * (ArithmeticFunction.sigma 0 (n - k)) ^ r ≤\n            A * (k + 2) ^ r := hbound.trans hk\n      have hpows :\n          (ArithmeticFunction.sigma 0 (n - k)) ^ r ≤ (k + 2) ^ r :=\n        le_of_mul_le_mul_left hmul hA\n      exact (Nat.pow_le_pow_iff_left (Nat.ne_of_gt hr)).mp hpows\n  apply ciSup_le\n  intro m\n  rcases Nat.eq_zero_or_pos (m : ℕ) with hm0 | hmpos\n  · rw [hm0]\n    simp\n  · have hmn : (m : ℕ) < n := m.isLt\n    have hk0 : 0 < n - (m : ℕ) := by omega\n    have hkn : n - (m : ℕ) < n := by omega\n    have hb := hbudget (n - (m : ℕ)) hk0 hkn\n    have hmk : n - (n - (m : ℕ)) = (m : ℕ) := by omega\n    rw [hmk] at hb\n    omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ r A C n : ℕ,\n      0 < r →\n      0 < A →\n      0 < n →\n      (∀ m : ℕ, 1 ≤ m →\n        A * (ArithmeticFunction.sigma 0 m) ^ r ≤ C * m) →\n      (∀ k : ℕ, 0 < k → k < n →\n        A * (k + 2) ^ r < C * (n - k) →\n        ArithmeticFunction.sigma 0 (n - k) ≤ k + 2) →\n      (⨆ m : Fin n,\n        (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2",
+        "module_source_hash": null,
+        "obligation_id": "33672f54-3562-4677-a0e6-eb938af6c950",
+        "outcome": "kernel_pass",
+        "problem_version_id": "729ddf23-c41f-4006-a3e9-a02ede66e7b0",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "80774e97d9da7ebb2fd2ea10374af7f73d9dce246b0ee0a79d77ea97b3261532"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "048a7b80085349e8ec33063baefe03446c3b8b443773cb1d925f949d21b805b3"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

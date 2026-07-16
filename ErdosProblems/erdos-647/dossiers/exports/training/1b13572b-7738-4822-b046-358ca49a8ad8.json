@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro block H hH hlarge hcop hhost\n  let primes := block.image Nat.minFac\n  have hinj : Set.InjOn Nat.minFac (block : Set ℕ) := by\n    intro m hm n hn hfac\n    simp only [Finset.mem_coe] at hm hn\n    by_contra hmn\n    have hmnCop : Nat.Coprime m n := hcop m hm n hn hmn\n    have hmPrime : m.minFac.Prime := Nat.minFac_prime (ne_of_gt (hlarge m hm))\n    have hmDvd : m.minFac ∣ m := Nat.minFac_dvd m\n    have hnDvd : m.minFac ∣ n := by\n      rw [hfac]\n      exact Nat.minFac_dvd n\n    exact hmPrime.ne_one (Nat.eq_one_of_dvd_coprimes hmnCop hmDvd hnDvd)\n  have hcard : primes.card = block.card := by\n    dsimp [primes]\n    exact Finset.card_image_iff.mpr hinj\n  have hprime : ∀ p ∈ primes, p.Prime := by\n    intro p hp\n    dsimp [primes] at hp\n    simp only [Finset.mem_image] at hp\n    obtain ⟨m, hm, rfl⟩ := hp\n    exact Nat.minFac_prime (ne_of_gt (hlarge m hm))\n  have hsubset : primes ⊆ H.primeFactors := by\n    intro p hp\n    have hpPrime : p.Prime := hprime p hp\n    dsimp [primes] at hp\n    simp only [Finset.mem_image] at hp\n    obtain ⟨m, hm, rfl⟩ := hp\n    exact Nat.mem_primeFactors.mpr\n      ⟨hpPrime, hhost m hm, ne_of_gt hH⟩\n  have hprodDvd : (∏ p ∈ primes, p) ∣ H := by\n    exact (Finset.prod_dvd_prod_of_subset primes H.primeFactors (fun p => p) hsubset).trans\n      (Nat.prod_primeFactors_dvd H)\n  calc\n    2 ^ block.card = 2 ^ primes.card := by rw [hcard]\n    _ = ∏ p ∈ primes, 2 := by simp\n    _ ≤ ∏ p ∈ primes, p := by\n      apply Finset.prod_le_prod'\n      intro p hp\n      exact (hprime p hp).two_le\n    _ ≤ H := Nat.le_of_dvd hH hprodDvd",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro block H hH hlarge hcop hhost\n  let primes := block.image Nat.minFac\n  have hinj : Set.InjOn Nat.minFac (block : Set ℕ) := by\n    intro m hm n hn hfac\n    simp only [Finset.mem_coe] at hm hn\n    by_contra hmn\n    have hmnCop : Nat.Coprime m n := hcop m hm n hn hmn\n    have hmPrime : m.minFac.Prime := Nat.minFac_prime (ne_of_gt (hlarge m hm))\n    have hmDvd : m.minFac ∣ m := Nat.minFac_dvd m\n    have hnDvd : m.minFac ∣ n := by\n      rw [hfac]\n      exact Nat.minFac_dvd n\n    exact hmPrime.ne_one (Nat.eq_one_of_dvd_coprimes hmnCop hmDvd hnDvd)\n  have hcard : primes.card = block.card := by\n    dsimp [primes]\n    exact Finset.card_image_iff.mpr hinj\n  have hprime : ∀ p ∈ primes, p.Prime := by\n    intro p hp\n    dsimp [primes] at hp\n    simp only [Finset.mem_image] at hp\n    obtain ⟨m, hm, rfl⟩ := hp\n    exact Nat.minFac_prime (ne_of_gt (hlarge m hm))\n  have hsubset : primes ⊆ H.primeFactors := by\n    intro p hp\n    have hpPrime : p.Prime := hprime p hp\n    dsimp [primes] at hp\n    simp only [Finset.mem_image] at hp\n    obtain ⟨m, hm, rfl⟩ := hp\n    exact Nat.mem_primeFactors.mpr\n      ⟨hpPrime, hhost m hm, ne_of_gt hH⟩\n  have hprodDvd : (∏ p ∈ primes, p) ∣ H := by\n    exact (Finset.prod_dvd_prod_of_subset primes H.primeFactors (fun p => p) hsubset).trans\n      (Nat.prod_primeFactors_dvd H)\n  calc\n    2 ^ block.card = 2 ^ primes.card := by rw [hcard]\n    _ = ∏ p ∈ primes, 2 := by simp\n    _ ≤ ∏ p ∈ primes, p := by\n      apply Finset.prod_le_prod'\n      intro p hp\n      exact (hprime p hp).two_le\n    _ ≤ H := Nat.le_of_dvd hH hprodDvd",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (block : Finset ℕ) (H : ℕ),\n      0 < H →\n      (∀ m ∈ block, 1 < m) →\n      (∀ m ∈ block, ∀ n ∈ block, m ≠ n → Nat.Coprime m n) →\n      (∀ m ∈ block, m.minFac ∣ H) →\n      2 ^ block.card ≤ H",
+        "module_source_hash": null,
+        "obligation_id": "d4a504cb-1d3e-4ac1-9878-b299b2d5f977",
+        "outcome": "kernel_pass",
+        "problem_version_id": "169f1332-6dae-4fb5-a544-d16849465b0d",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "d7c77eeae0ffb1e2aa4593afe724a15614f1de8b8f9269aed3906f930442ce45"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "39edaa4ac0d2ea38bffb7cf188d97a7d12e9d6e7876c6f55ca6998c8eb9be19a"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

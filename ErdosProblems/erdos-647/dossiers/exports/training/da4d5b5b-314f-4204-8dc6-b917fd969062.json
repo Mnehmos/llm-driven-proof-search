@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro m p t hm hp hpd hlt\nobtain ⟨a, q, hpq, hfac⟩ :=\n  Nat.exists_eq_pow_mul_and_not_dvd (show m ≠ 0 by omega) p hp.ne_one\nhave hqpos : 0 < q := by\n  rcases Nat.eq_zero_or_pos q with hq | hq\n  · rw [hq, mul_zero] at hfac\n    omega\n  · exact hq\nhave ha1 : 1 ≤ a := by\n  by_contra ha\n  push Not at ha\n  have ha0 : a = 0 := by omega\n  rw [ha0, pow_zero, one_mul] at hfac\n  rw [hfac] at hpd\n  exact hpq hpd\nhave hpow_le : p ^ a ≤ m := by\n  calc\n    p ^ a = p ^ a * 1 := by simp\n    _ ≤ p ^ a * q := Nat.mul_le_mul_left _ hqpos\n    _ = m := hfac.symm\nhave hat : a < t := by\n  by_contra hat\n  push Not at hat\n  have hpow_mono : p ^ t ≤ p ^ a := Nat.pow_le_pow_right hp.pos hat\n  omega\nhave hcop : Nat.Coprime (p ^ a) q :=\n  (hp.coprime_iff_not_dvd.mpr hpq).pow_left a\nhave hsigma : ArithmeticFunction.sigma 0 m =\n    (a + 1) * ArithmeticFunction.sigma 0 q := by\n  calc\n    ArithmeticFunction.sigma 0 m =\n        ArithmeticFunction.sigma 0 (p ^ a * q) := by rw [hfac]\n    _ = ArithmeticFunction.sigma 0 (p ^ a) *\n        ArithmeticFunction.sigma 0 q :=\n      ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n    _ = (a + 1) * ArithmeticFunction.sigma 0 q := by\n      rw [ArithmeticFunction.sigma_zero_apply_prime_pow hp]\nexact ⟨a, q, ha1, hat, hpq, hfac, hcop, hsigma⟩",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro m p t hm hp hpd hlt\nobtain ⟨a, q, hpq, hfac⟩ :=\n  Nat.exists_eq_pow_mul_and_not_dvd (show m ≠ 0 by omega) p hp.ne_one\nhave hqpos : 0 < q := by\n  rcases Nat.eq_zero_or_pos q with hq | hq\n  · rw [hq, mul_zero] at hfac\n    omega\n  · exact hq\nhave ha1 : 1 ≤ a := by\n  by_contra ha\n  push Not at ha\n  have ha0 : a = 0 := by omega\n  rw [ha0, pow_zero, one_mul] at hfac\n  rw [hfac] at hpd\n  exact hpq hpd\nhave hpow_le : p ^ a ≤ m := by\n  calc\n    p ^ a = p ^ a * 1 := by simp\n    _ ≤ p ^ a * q := Nat.mul_le_mul_left _ hqpos\n    _ = m := hfac.symm\nhave hat : a < t := by\n  by_contra hat\n  push Not at hat\n  have hpow_mono : p ^ t ≤ p ^ a := Nat.pow_le_pow_right hp.pos hat\n  omega\nhave hcop : Nat.Coprime (p ^ a) q :=\n  (hp.coprime_iff_not_dvd.mpr hpq).pow_left a\nhave hsigma : ArithmeticFunction.sigma 0 m =\n    (a + 1) * ArithmeticFunction.sigma 0 q := by\n  calc\n    ArithmeticFunction.sigma 0 m =\n        ArithmeticFunction.sigma 0 (p ^ a * q) := by rw [hfac]\n    _ = ArithmeticFunction.sigma 0 (p ^ a) *\n        ArithmeticFunction.sigma 0 q :=\n      ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n    _ = (a + 1) * ArithmeticFunction.sigma 0 q := by\n      rw [ArithmeticFunction.sigma_zero_apply_prime_pow hp]\nexact ⟨a, q, ha1, hat, hpq, hfac, hcop, hsigma⟩",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ {m p t : ℕ},\n      0 < m → Nat.Prime p → p ∣ m → m < p ^ t →\n      ∃ a q : ℕ,\n        1 ≤ a ∧ a < t ∧ ¬ p ∣ q ∧\n        m = p ^ a * q ∧\n        Nat.Coprime (p ^ a) q ∧\n        ArithmeticFunction.sigma 0 m =\n          (a + 1) * ArithmeticFunction.sigma 0 q",
+        "module_source_hash": null,
+        "obligation_id": "a837dc7c-a7f3-4bb0-9ccf-5d880912e558",
+        "outcome": "kernel_pass",
+        "problem_version_id": "04c0d0c3-a94a-4fa6-b761-201b047c2fec",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "d26a4107aea6d15b0f9a1776e90d23a63e233dfdfeecec5d3bbd099462d950d7"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "184cb85edb1cfb302b2ae3487cdb89b23dae15f28598c63e22dfd76e8889f1b9"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

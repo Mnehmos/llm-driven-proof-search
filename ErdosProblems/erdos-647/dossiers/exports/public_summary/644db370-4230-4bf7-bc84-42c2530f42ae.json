@@ -1,0 +1,31 @@
+{
+  "benchmark_suite": null,
+  "benchmark_upstream_problem_id": null,
+  "certified": false,
+  "completed_at": "2026-07-16T19:50:24.124561300+00:00",
+  "created_at": "2026-07-16T19:49:44.254463800+00:00",
+  "environment_hash": "9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d",
+  "episode_id": "644db370-4230-4bf7-bc84-42c2530f42ae",
+  "fidelity_basis": null,
+  "fidelity_status": "attested",
+  "formal_target_matched": false,
+  "import_manifest_hash": "aaf21893d520a78dee0787a1bcaf939ee6b922265ff670c272e2e1d450dd29a7",
+  "interactive_sessions": {
+    "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
+    "proof_body_redacted": true,
+    "session_count": 0,
+    "sessions": []
+  },
+  "kernel_verified": true,
+  "mode": "public_summary",
+  "obligation_counts_by_status": {
+    "proved": 1
+  },
+  "outcome": "KERNEL_VERIFIED",
+  "proof_body_redacted": true,
+  "root_formal_statement": "∀ (n : ℕ) (shifts : Finset ℕ) (factor : ℕ → ℕ),\n  (∀ k ∈ shifts, k < n) →\n  (∀ k ∈ shifts, factor k ∣ n - k) →\n  (∀ k₁ ∈ shifts, ∀ k₂ ∈ shifts, k₁ < k₂ → k₂ - k₁ < factor k₁) →\n  Set.InjOn factor (shifts : Set ℕ) ∧\n    (shifts.image factor).card = shifts.card",
+  "step_count": 1,
+  "trajectory_event_count": 3,
+  "trajectory_first_hash": "6f59a4d0bb2636989c46dca55da852fabee99ff37a6bdc0fe154d4f192daac7d",
+  "trajectory_last_hash": "c2368e9933439d1b7b17c1d4650e33a3c10f23d8dec580c02f6ff2876b75a361"
+}

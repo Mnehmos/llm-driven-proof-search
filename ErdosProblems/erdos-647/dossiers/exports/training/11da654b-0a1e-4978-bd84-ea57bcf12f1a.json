@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro n k f m B hf hm heq hcop hbud\nhave hmul : ArithmeticFunction.sigma 0 (n - k) = ArithmeticFunction.sigma 0 f * ArithmeticFunction.sigma 0 m := by\n  rw [heq]\n  exact ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\nrw [hmul] at hbud\nhave htf : 0 < ArithmeticFunction.sigma 0 f := by\n  rw [ArithmeticFunction.sigma_zero_apply]\n  exact Finset.card_pos.mpr ⟨f, Nat.mem_divisors_self f hf.ne'⟩\nrefine ⟨hbud, ?_⟩\nrw [Nat.le_div_iff_mul_le htf]\ncalc ArithmeticFunction.sigma 0 m * ArithmeticFunction.sigma 0 f\n    = ArithmeticFunction.sigma 0 f * ArithmeticFunction.sigma 0 m := by ring\n  _ ≤ B + k := hbud",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro n k f m B hf hm heq hcop hbud\nhave hmul : ArithmeticFunction.sigma 0 (n - k) = ArithmeticFunction.sigma 0 f * ArithmeticFunction.sigma 0 m := by\n  rw [heq]\n  exact ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\nrw [hmul] at hbud\nhave htf : 0 < ArithmeticFunction.sigma 0 f := by\n  rw [ArithmeticFunction.sigma_zero_apply]\n  exact Finset.card_pos.mpr ⟨f, Nat.mem_divisors_self f hf.ne'⟩\nrefine ⟨hbud, ?_⟩\nrw [Nat.le_div_iff_mul_le htf]\ncalc ArithmeticFunction.sigma 0 m * ArithmeticFunction.sigma 0 f\n    = ArithmeticFunction.sigma 0 f * ArithmeticFunction.sigma 0 m := by ring\n  _ ≤ B + k := hbud",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (n k f m B : ℕ), 0 < f → 0 < m → n - k = f * m → Nat.Coprime f m → ArithmeticFunction.sigma 0 (n - k) ≤ B + k → ArithmeticFunction.sigma 0 f * ArithmeticFunction.sigma 0 m ≤ B + k ∧ ArithmeticFunction.sigma 0 m ≤ (B + k) / ArithmeticFunction.sigma 0 f",
+        "module_source_hash": null,
+        "obligation_id": "cf76a8f5-d581-4c17-81de-db9c81f5f380",
+        "outcome": "kernel_pass",
+        "problem_version_id": "4d4d4991-bc9a-4565-b860-f25f9094cbdd",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "b794b95a0ef630f76ee861235917a5972e9318bd6dcd4b012d5961aab3a1af76"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "27b8e9c6d4fb98cc193e25541b09d571e902a837724c7a4760325b7ef6a678a8"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

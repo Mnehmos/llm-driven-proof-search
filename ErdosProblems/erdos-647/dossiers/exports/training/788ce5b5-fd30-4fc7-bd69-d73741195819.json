@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro n hcube hfourth hfifth hn hprefix\nhaveI : Nonempty (Fin n) := ⟨⟨0, hn⟩⟩\nhave hbudget : ∀ k : ℕ, 0 < k → k < n →\n    ArithmeticFunction.sigma 0 (n - k) ≤ k + 2 := by\n  intro k hk0 hkn\n  by_cases h3 : 35 * (k + 2) ^ 3 < 1536 * (n - k)\n  · by_cases h4 : (k + 2) ^ 4 < 19680 * (n - k)\n    · by_cases h5 : (k + 2) ^ 5 < 147700800 * (n - k)\n      · exact hprefix k hk0 hkn h3 h4 h5\n      · push Not at h5\n        have hmpos : 1 ≤ n - k := by omega\n        have hbound := hfifth (n - k) hmpos\n        have hpows :\n            (ArithmeticFunction.sigma 0 (n - k)) ^ 5 ≤ (k + 2) ^ 5 :=\n          hbound.trans h5\n        exact (Nat.pow_le_pow_iff_left (by norm_num : 5 ≠ 0)).mp hpows\n    · push Not at h4\n      have hmpos : 1 ≤ n - k := by omega\n      have hbound := hfourth (n - k) hmpos\n      have hpows :\n          (ArithmeticFunction.sigma 0 (n - k)) ^ 4 ≤ (k + 2) ^ 4 :=\n        hbound.trans h4\n      exact (Nat.pow_le_pow_iff_left (by norm_num : 4 ≠ 0)).mp hpows\n  · push Not at h3\n    have hmpos : 1 ≤ n - k := by omega\n    have hbound := hcube (n - k) hmpos\n    have hpows :\n        35 * (ArithmeticFunction.sigma 0 (n - k)) ^ 3 ≤\n          35 * (k + 2) ^ 3 :=\n      hbound.trans h3\n    have hcubes :\n        (ArithmeticFunction.sigma 0 (n - k)) ^ 3 ≤ (k + 2) ^ 3 := by\n      omega\n    exact (Nat.pow_le_pow_iff_left (by norm_num : 3 ≠ 0)).mp hcubes\napply ciSup_le\nintro m\nrcases Nat.eq_zero_or_pos (m : ℕ) with hm0 | hmpos\n· rw [hm0]\n  simp\n· have hmn : (m : ℕ) < n := m.isLt\n  have hk0 : 0 < n - (m : ℕ) := by omega\n  have hkn : n - (m : ℕ) < n := by omega\n  have hb := hbudget (n - (m : ℕ)) hk0 hkn\n  have hmk : n - (n - (m : ℕ)) = (m : ℕ) := by omega\n  rw [hmk] at hb\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro n hcube hfourth hfifth hn hprefix\nhaveI : Nonempty (Fin n) := ⟨⟨0, hn⟩⟩\nhave hbudget : ∀ k : ℕ, 0 < k → k < n →\n    ArithmeticFunction.sigma 0 (n - k) ≤ k + 2 := by\n  intro k hk0 hkn\n  by_cases h3 : 35 * (k + 2) ^ 3 < 1536 * (n - k)\n  · by_cases h4 : (k + 2) ^ 4 < 19680 * (n - k)\n    · by_cases h5 : (k + 2) ^ 5 < 147700800 * (n - k)\n      · exact hprefix k hk0 hkn h3 h4 h5\n      · push Not at h5\n        have hmpos : 1 ≤ n - k := by omega\n        have hbound := hfifth (n - k) hmpos\n        have hpows :\n            (ArithmeticFunction.sigma 0 (n - k)) ^ 5 ≤ (k + 2) ^ 5 :=\n          hbound.trans h5\n        exact (Nat.pow_le_pow_iff_left (by norm_num : 5 ≠ 0)).mp hpows\n    · push Not at h4\n      have hmpos : 1 ≤ n - k := by omega\n      have hbound := hfourth (n - k) hmpos\n      have hpows :\n          (ArithmeticFunction.sigma 0 (n - k)) ^ 4 ≤ (k + 2) ^ 4 :=\n        hbound.trans h4\n      exact (Nat.pow_le_pow_iff_left (by norm_num : 4 ≠ 0)).mp hpows\n  · push Not at h3\n    have hmpos : 1 ≤ n - k := by omega\n    have hbound := hcube (n - k) hmpos\n    have hpows :\n        35 * (ArithmeticFunction.sigma 0 (n - k)) ^ 3 ≤\n          35 * (k + 2) ^ 3 :=\n      hbound.trans h3\n    have hcubes :\n        (ArithmeticFunction.sigma 0 (n - k)) ^ 3 ≤ (k + 2) ^ 3 := by\n      omega\n    exact (Nat.pow_le_pow_iff_left (by norm_num : 3 ≠ 0)).mp hcubes\napply ciSup_le\nintro m\nrcases Nat.eq_zero_or_pos (m : ℕ) with hm0 | hmpos\n· rw [hm0]\n  simp\n· have hmn : (m : ℕ) < n := m.isLt\n  have hk0 : 0 < n - (m : ℕ) := by omega\n  have hkn : n - (m : ℕ) < n := by omega\n  have hb := hbudget (n - (m : ℕ)) hk0 hkn\n  have hmk : n - (n - (m : ℕ)) = (m : ℕ) := by omega\n  rw [hmk] at hb\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ,\n      (∀ m : ℕ, 1 ≤ m →\n        35 * (ArithmeticFunction.sigma 0 m) ^ 3 ≤ 1536 * m) →\n      (∀ m : ℕ, 1 ≤ m →\n        (ArithmeticFunction.sigma 0 m) ^ 4 ≤ 19680 * m) →\n      (∀ m : ℕ, 1 ≤ m →\n        (ArithmeticFunction.sigma 0 m) ^ 5 ≤ 147700800 * m) →\n      0 < n →\n      (∀ k : ℕ, 0 < k → k < n →\n        35 * (k + 2) ^ 3 < 1536 * (n - k) →\n        (k + 2) ^ 4 < 19680 * (n - k) →\n        (k + 2) ^ 5 < 147700800 * (n - k) →\n        ArithmeticFunction.sigma 0 (n - k) ≤ k + 2) →\n      (⨆ m : Fin n,\n        (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2",
+        "module_source_hash": null,
+        "obligation_id": "72625251-2a7e-4f9f-9e87-1e9e04bca54a",
+        "outcome": "kernel_pass",
+        "problem_version_id": "8f106b39-3517-45b3-931d-963f361e7854",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "2c8209c8fc0ecd9402fff3f4e6bae897f65a1e111c2735324a33d27a21bde981"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "f98a0ef0e93dbdef080970308fe9c47ea5c6482ea41cc7b4f70c33a1fc79e90c"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

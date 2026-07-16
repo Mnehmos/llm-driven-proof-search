@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro n W P\nhave hproduct : ∀ {a b n : ℕ}, a ^ 2 < n → b ^ 2 < n → a * b < n := by\n  intro a b n ha hb\n  rcases le_total a b with hab | hba\n  · have hmul : a * b ≤ b * b := Nat.mul_le_mul_right b hab\n    exact hmul.trans_lt (by simpa [pow_two] using hb)\n  · have hmul : a * b ≤ a * a := Nat.mul_le_mul_left a hba\n    exact hmul.trans_lt (by simpa [pow_two] using ha)\nby_cases hp : ∃ i j : Fin W, i ≠ j ∧ P i * P j < n\n· exact Or.inl hp\n· right\n  apply Finset.card_le_one.mpr\n  intro i hi j hj\n  simp only [Finset.mem_filter, Finset.mem_univ, true_and] at hi hj\n  by_contra hij\n  exact hp ⟨i, j, hij, hproduct hi hj⟩",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro n W P\nhave hproduct : ∀ {a b n : ℕ}, a ^ 2 < n → b ^ 2 < n → a * b < n := by\n  intro a b n ha hb\n  rcases le_total a b with hab | hba\n  · have hmul : a * b ≤ b * b := Nat.mul_le_mul_right b hab\n    exact hmul.trans_lt (by simpa [pow_two] using hb)\n  · have hmul : a * b ≤ a * a := Nat.mul_le_mul_left a hba\n    exact hmul.trans_lt (by simpa [pow_two] using ha)\nby_cases hp : ∃ i j : Fin W, i ≠ j ∧ P i * P j < n\n· exact Or.inl hp\n· right\n  apply Finset.card_le_one.mpr\n  intro i hi j hj\n  simp only [Finset.mem_filter, Finset.mem_univ, true_and] at hi hj\n  by_contra hij\n  exact hp ⟨i, j, hij, hproduct hi hj⟩",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (n W : ℕ) (P : Fin W → ℕ),\n      (∃ i j : Fin W, i ≠ j ∧ P i * P j < n) ∨\n        (Finset.univ.filter fun i : Fin W => (P i) ^ 2 < n).card ≤ 1",
+        "module_source_hash": null,
+        "obligation_id": "c25da51b-797b-43b2-a1e0-fd85e62b7d01",
+        "outcome": "kernel_pass",
+        "problem_version_id": "8ae9bbe4-91cd-4206-a4a1-ac0e3b018774",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "f6d5f14ed6a6d4f2ffdca42063809f745c7faf9e0380d61420ed22bbc926e299"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "ef2c8a28724ed3becdcccf1fa3fa978f08da9660ce306c778694b657143ed9ba"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

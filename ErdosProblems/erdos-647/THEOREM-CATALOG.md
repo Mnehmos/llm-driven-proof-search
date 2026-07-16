@@ -1,21 +1,22 @@
 # Erdős #647 — complete kernel-verified theorem catalog
 
 > **Living inventory. Problem OPEN; global density theorem verified.** Last
-> updated 2026-07-15.
+> updated 2026-07-16.
 >
 > This catalogs the kernel-checked and source-replayed theorem families produced by the Erdős
-> #647 campaign. The portable source currently has 284 top-level theorem
-> declarations and four top-level helper lemmas across 116 Lean files (288
+> #647 campaign. The portable source currently has 452 top-level theorem
+> declarations and five top-level helper lemmas across 169 Lean files (457
 > theorem/lemma declarations total). Each tracked row carries the
 > `problem_version_id` — the authoritative lookup key in the
 > tracked pipeline — plus the exact root statement and, where recorded, the
-> statement hash and episode id. Nothing here resolves the open problem; this
-> is the machine-checked scaffolding *around* it.
+> statement hash and episode id. **Original Formal Conjectures closure remains
+> `0/3`.** Nothing here resolves the open problem; this is the machine-checked
+> scaffolding *around* it.
 >
 > **What is portable vs. internal.** The committed `.lean` files are the
 > simplest portable formal artifact: they check against Mathlib without this
 > project's database. The repository now also publishes the complete exports
-> for all 227 related episodes—redacted public summaries, full
+> for all 317 related episodes—redacted public summaries, full
 > Markdown proof dossiers, and structured training JSON—under
 > [dossiers/exports/](dossiers/exports/README.md). The IDs alone still are not
 > an external database API; the committed exports are what makes the audit
@@ -66,6 +67,32 @@ kernel replay rather than a single tracked proof-search episode.
 | [`proof/Erdos647_Shift16Refined.lean`](proof/Erdos647_Shift16Refined.lean) | family-sensitive 2-adic stress test and explicit residual branch |
 | [`proof/Erdos647_LimitShiftInterface.lean`](proof/Erdos647_LimitShiftInterface.lean) | exact eventual-shift-excess form of the limit variant, plus an unbounded prime-power subsequence |
 | [`proof/Erdos647_InfiniteWindowFrontier.lean`](proof/Erdos647_InfiniteWindowFrontier.lean) | unconditional window depths below two and exact depth-two/Sophie-Germain infinitude equivalence |
+| [`proof/Erdos647_RoughPowerBound.lean`](proof/Erdos647_RoughPowerBound.lean) | generic rough `r`-power divisor bound |
+| [`proof/Erdos647_GenericLocalPowerBound.lean`](proof/Erdos647_GenericLocalPowerBound.lean) | generic local constants and exact finite numerator/denominator products |
+| [`proof/Erdos647_GenericPowerPrefix.lean`](proof/Erdos647_GenericPowerPrefix.lean) | generic prefix, excess-shift converse, and exact candidate bridge |
+| [`proof/Erdos647_ShiftGcdClass.lean`](proof/Erdos647_ShiftGcdClass.lean) | exact transport of the `2520` gcd class from `k` to `2520N-k` |
+| [`proof/Erdos647_GcdClassCubeBound.lean`](proof/Erdos647_GcdClassCubeBound.lean) | exact class-sensitive cube bound and candidate prefix |
+| [`proof/Erdos647_ArbitraryBlockPowerPrefix.lean`](proof/Erdos647_ArbitraryBlockPowerPrefix.lean) | exact arbitrary-block prefix equivalence and coordinate injectivity |
+| [`proof/Erdos647_FactorizationCertificate.lean`](proof/Erdos647_FactorizationCertificate.lean) | executable factorization/batch checker and end-to-end candidate soundness |
+| [`proof/Erdos647_PairwiseCoprimeBlockNovelty.lean`](proof/Erdos647_PairwiseCoprimeBlockNovelty.lean) | conditional prime novelty and shared-host exponential bound |
+| [`proof/Erdos647_FourthPowerDivisorBound.lean`](proof/Erdos647_FourthPowerDivisorBound.lean) | `τ(n)^4≤19680n` and fourth-root candidate prefix |
+| [`proof/Erdos647_FifthPowerDivisorBound.lean`](proof/Erdos647_FifthPowerDivisorBound.lean) | `τ(n)^5≤147700800n` and fifth-root candidate prefix |
+| [`proof/Erdos647_HybridPowerPrefix.lean`](proof/Erdos647_HybridPowerPrefix.lean) | hybrid cube/fourth/fifth-power prefix assembled directly over the candidate predicate |
+| [`proof/Erdos647_SmoothLargePrimeFactor.lean`](proof/Erdos647_SmoothLargePrimeFactor.lean) | smooth-number power bound and extraction of a prime factor larger than the block width |
+| [`proof/Erdos647_ShiftDifferenceNovelty.lean`](proof/Erdos647_ShiftDifferenceNovelty.lean) | exact shift-gap gcd transport, large-factor non-reuse, injectivity, and shared-host growth |
+| [`proof/Erdos647_BlockLargePrimeNovelty.lean`](proof/Erdos647_BlockLargePrimeNovelty.lean) | block budgets plus smoothness escape produce distinct large primes |
+| [`proof/Erdos647_FiniteCatalogEscape.lean`](proof/Erdos647_FiniteCatalogEscape.lean) | every sufficiently large exact candidate escapes any fixed finite prime catalog |
+| [`proof/Erdos647_PrimorialCandidateEscape.lean`](proof/Erdos647_PrimorialCandidateEscape.lean) | primorial specialization of finite-catalog escape with the matching shift budget |
+| [`proof/Erdos647_PrimeProductDichotomy.lean`](proof/Erdos647_PrimeProductDichotomy.lean) | pair-product re-entry or at most one square-small coordinate |
+| [`proof/Erdos647_TSubsetProductDichotomy.lean`](proof/Erdos647_TSubsetProductDichotomy.lean) | general `t`-subset product re-entry or fewer than `t` power-small coordinates |
+| [`proof/Erdos647_CRTReentryExclusion.lean`](proof/Erdos647_CRTReentryExclusion.lean) | CRT remainder re-entry, divisor-count sandwich, and exact candidate exclusion certificate |
+| [`proof/Erdos647_LargePrimeCofactor.lean`](proof/Erdos647_LargePrimeCofactor.lean) | square/power-scale large-prime cofactor reduction and shifted divisor budget |
+| [`proof/Erdos647_CofactorGapRigidity.lean`](proof/Erdos647_CofactorGapRigidity.lean) | cofactor gcds and repeated odd cofactors are rigidly bounded by shift gaps |
+| [`proof/Erdos647_CofactorLargePrimeNovelty.lean`](proof/Erdos647_CofactorLargePrimeNovelty.lean) | second-layer primes larger than the block width are distinct across cofactors |
+| [`proof/Erdos647_SmoothCofactorBound.lean`](proof/Erdos647_SmoothCofactorBound.lean) | explicit size bound for a smooth cofactor under its doubled divisor budget |
+| [`proof/Erdos647_NonsmoothCofactorException.lean`](proof/Erdos647_NonsmoothCofactorException.lean) | at most one square-small cofactor can carry a new large prime under no-cross-pair exclusion |
+| [`proof/Erdos647_TwoExceptionalIndices.lean`](proof/Erdos647_TwoExceptionalIndices.lean) | deleting the two one-element exceptional catalogs leaves at least `W−2` indices |
+| [`proof/Erdos647_SecondLayerCatalogAssembly.lean`](proof/Erdos647_SecondLayerCatalogAssembly.lean) | conditional assembly of a `W−2`-sized catalog of controlled smooth cofactors |
 
 Terminal statement:
 
@@ -89,15 +116,15 @@ no access to this project's database required.
 
 Committed Lean source:
 
-- 116 `.lean` files under [proof/](proof/), containing 284 top-level theorem
-  declarations and four top-level helper lemmas (288 declarations total).
+- 169 `.lean` files under [proof/](proof/), containing 452 top-level theorem
+  declarations and five top-level helper lemmas (457 declarations total).
 - Five consolidated modular families under
   [proof/campaign/](proof/campaign/), plus individual analytic, truncation,
   candidate-transport, and final-assembly modules in the parent directory.
 
 Export and reproduction material:
 
-- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 227 related
+- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 317 related
   problem/episode pairs.
 - [dossiers/exports/manifest.tsv](dossiers/exports/manifest.tsv) records the
   outcome, fidelity, environment, statement hash, timestamps, and step count.
@@ -117,7 +144,9 @@ Export and reproduction material:
 | 7 | Layer A (quantitative-Mertens infra) | 5 | Abel-summation identity and explicit analytic bounds; valid infrastructure, though the final seventh-power proof uses the stronger Euler-product route |
 | 8 | Level-truncated Selberg repair and assembly | 36 | hard support, polynomial error, denominator preservation, parameter certification, and concrete candidate transport |
 | 9 | Post-density existence and variant frontier | 49 | generic shift-factor/adic induction, shifts 9–16 as concrete frontiers and stress tests, exact depth witnesses, the eventual-excess limit interface, and the depth-two/Sophie-Germain equivalence |
-| | **Selected-family total** | **~194** | The repository-wide exact count is 288 theorem/lemma declarations; the table groups the campaign's principal publication families rather than every helper. |
+| 10 | Power-prefix, block, and certificate architecture | 31 | arbitrary-power local-factor products, exact block reindexing, executable factorization batches, fourth-root compression, and the conditional novelty/shared-host seam |
+| 11 | Large-factor novelty, CRT re-entry, and second-layer catalogs | 59 | fifth/hybrid prefix compression, finite-catalog escape, `t`-subset product alternatives, CRT exclusion, and the conditional smooth-cofactor catalog after two exceptions |
+| | **Selected-family subtotal** | **not additive** | The exact repository-wide count is 457 theorem/lemma declarations; family rows are publication groupings and may overlap. |
 
 ---
 
@@ -429,6 +458,42 @@ statements.
 | [`proof/Erdos647_LimitShiftInterface.lean`](proof/Erdos647_LimitShiftInterface.lean) | 4 theorems | convergence to `atTop` is equivalent to eventual arbitrarily large shift excess. Prime powers prove an explicit unbounded subsequence and non-`BddAbove`, not convergence. The exact adapter episode `3baedfa9-85ed-48b0-b477-18faa0d9e47f` is **kernel_verified**. |
 | [`proof/Erdos647_InfiniteWindowFrontier.lean`](proof/Erdos647_InfiniteWindowFrontier.lean) | 5 theorems + 4 lemmas | window sizes at most two are unconditional; above `n>10`, depth-two survivors are exactly `n=2q+2` with `q` and `2q+1` prime; infinitude at depth two is therefore equivalent to infinitude of Sophie Germain primes. Episodes `e7b81c9f-8b1e-41c5-a760-d9aba712bb16` and `7cf0660b-3dac-48f3-8294-7b22d8e9f593` are **kernel_verified**; the converse and final equivalence source-compiled in the pinned environment, and the exact iff is stated directly over the Formal Conjectures window expression. |
 
+## Family 10 — power-prefix, block-production, and certificate architecture
+
+| source | declarations | independently tracked roots |
+|---|---:|---:|
+| `Erdos647_RoughPowerBound.lean` | 1 | 1 |
+| `Erdos647_GenericLocalPowerBound.lean` | 4 | 4 |
+| `Erdos647_GenericPowerPrefix.lean` | 3 | 3 |
+| `Erdos647_ShiftGcdClass.lean` | 2 | 2 |
+| `Erdos647_GcdClassCubeBound.lean` | 4 | 4 |
+| `Erdos647_ArbitraryBlockPowerPrefix.lean` | 4 | 2 |
+| `Erdos647_FactorizationCertificate.lean` | 9 | 3 |
+| `Erdos647_PairwiseCoprimeBlockNovelty.lean` | 2 | 2 |
+| `Erdos647_FourthPowerDivisorBound.lean` | 2 | 2 |
+| **Total** | **31** | **23** |
+
+This family compresses the all-shift candidate condition in three ways.
+First, generic and class-sensitive divisor-power inequalities show that only
+a finite prefix can violate a shift budget. The exact local-ratio theorem
+turns finitely many verified prime-power inequalities into a global bound and
+subsumes the `35·τ(m)^3` class coefficient without rational arithmetic.
+Second, unique block coordinates turn the full shift family into an exactly
+equivalent family of local block/rung checks. Third, the executable
+factorization checker supplies a small kernel-sound certificate format for
+those checks.
+
+The pairwise-coprime theorem isolates a possible negative mechanism:
+sufficiently many suitable cells produce distinct new primes, and a common
+host for them must be exponentially large. Neither pairwise-coprime block
+production nor the common-host premise has yet been derived uniformly from
+candidacy.
+
+The fourth-power theorem reduces the universal explicit prefix to fourth-root
+scale, but the prefix still grows with `n`. Thus this family closes formal
+assembly and compression problems, not the original existence problem. The
+three Formal Conjectures research declarations remain open.
+
 The central development here is no longer “one more shift.” The framework
 isolates a reusable transition: factorization → coprime budget division →
 prime-factor control → one exceptional next-adic congruence. Shifts 14–16 are
@@ -442,12 +507,52 @@ must upgrade sparse unboundedness to an eventual uniform statement. The first
 open infinite-window depth is already the classical Sophie Germain infinitude
 problem.
 
+## Family 11 — large-factor novelty, CRT re-entry, and second-layer catalogs
+
+This continuation turns the power-prefix architecture into two reusable
+accumulation layers.  At the first layer, divisor budgets force primes beyond
+a chosen smoothness width; exact shift-difference identities prevent reuse;
+finite-catalog and primorial theorems make the resulting novelty explicit.
+Product dichotomies then identify the precise subset input needed for a CRT
+re-entry shift and its divisor-count exclusion certificate.
+
+At the second layer, removing a square-scale prime leaves a proper coprime
+cofactor with a halved divisor budget.  Gap rigidity and large-prime novelty
+control interactions between those cofactors, while the smooth/nonsmooth
+dichotomy leaves at most one additional exceptional coordinate.  Deleting the
+two exceptional catalogs yields the conditional `W−2` second-layer catalog.
+These are genuine new reductions and accumulation interfaces, but every
+terminal assembly still has an explicit unproved global premise.  **Original
+Formal Conjectures closure remains `0/3`.**
+
+| source | declarations | tracked roots | verified result and status |
+|---|---:|---:|---|
+| [`proof/Erdos647_FifthPowerDivisorBound.lean`](proof/Erdos647_FifthPowerDivisorBound.lean) | 2 theorems | 2 | `τ(n)^5≤147700800n` and the exact fifth-root candidate prefix; both roots are **kernel_verified**. |
+| [`proof/Erdos647_HybridPowerPrefix.lean`](proof/Erdos647_HybridPowerPrefix.lean) | 6 theorems | 1 | sharp cube, fourth-, and fifth-power bounds feed a hybrid candidate prefix; the compact assembly root is **kernel_verified**, and the unconditional source composition replays in the pinned project. |
+| [`proof/Erdos647_SmoothLargePrimeFactor.lean`](proof/Erdos647_SmoothLargePrimeFactor.lean) | 4 theorems + 1 lemma | 2 | a positive smooth number is power-bounded by its divisor budget; exceeding that bound produces a prime factor larger than `W`. Both strongest roots are **kernel_verified**. |
+| [`proof/Erdos647_ShiftDifferenceNovelty.lean`](proof/Erdos647_ShiftDifferenceNovelty.lean) | 7 theorems | 3 | exact shifted-value gcd transport, large-factor non-reuse, finite injectivity, and exponential shared-host accumulation; all three strongest roots are **kernel_verified**. |
+| [`proof/Erdos647_BlockLargePrimeNovelty.lean`](proof/Erdos647_BlockLargePrimeNovelty.lean) | 4 theorems | 4 | consecutive candidate budgets plus smoothness escape produce distinct large prime factors, with exact candidate/scalar bridges and a shared-host product bound; all four roots are **kernel_verified**. |
+| [`proof/Erdos647_FiniteCatalogEscape.lean`](proof/Erdos647_FiniteCatalogEscape.lean) | 6 theorems | 3 | every exact candidate beyond a finite catalog product has a bounded positive shift carrying a prime outside that catalog; all three strongest roots are **kernel_verified**. |
+| [`proof/Erdos647_PrimorialCandidateEscape.lean`](proof/Erdos647_PrimorialCandidateEscape.lean) | 1 theorem | 1 | the primorial specialization exposes a prime larger than `W` together with the matching candidate shift budget; **kernel_verified**. |
+| [`proof/Erdos647_PrimeProductDichotomy.lean`](proof/Erdos647_PrimeProductDichotomy.lean) | 4 theorems | 1 | either two distinct selected factors have product below `n`, or at most one coordinate has square below `n`; the strongest arbitrary-family root is **kernel_verified**. |
+| [`proof/Erdos647_TSubsetProductDichotomy.lean`](proof/Erdos647_TSubsetProductDichotomy.lean) | 2 theorems | 1 | `t` individually power-small entries yield a `t`-subset product below `n`, otherwise fewer than `t` such entries exist; the constructive root is **kernel_verified**. |
+| [`proof/Erdos647_CRTReentryExclusion.lean`](proof/Erdos647_CRTReentryExclusion.lean) | 6 theorems | 3 | distinct prime divisors force `2^|I|` divisors, the CRT remainder re-enters the shift condition, and a strict sandwich excludes candidacy; three roots are **kernel_verified**, with numerical corollaries source-replayed. |
+| [`proof/Erdos647_LargePrimeCofactor.lean`](proof/Erdos647_LargePrimeCofactor.lean) | 3 theorems | 2 | square- and power-scale prime removal gives exact factorization, coprimality, and divisor-count splitting, then transports the halved budget to a candidate shift; both strongest roots are **kernel_verified**. |
+| [`proof/Erdos647_CofactorGapRigidity.lean`](proof/Erdos647_CofactorGapRigidity.lean) | 3 theorems | 2 | cofactor gcds divide the shift gap, while a repeated positive cofactor with odd complementary primes forces `2q` to divide that gap; both strongest roots are **kernel_verified**. |
+| [`proof/Erdos647_CofactorLargePrimeNovelty.lean`](proof/Erdos647_CofactorLargePrimeNovelty.lean) | 2 theorems | 1 | primes larger than the block width cannot repeat across second-layer cofactors, yielding an injective cofactor-prime family; **kernel_verified**. |
+| [`proof/Erdos647_SmoothCofactorBound.lean`](proof/Erdos647_SmoothCofactorBound.lean) | 3 theorems | 1 | a positive `W`-smooth cofactor obeys `q≤W^(τ(q)−1)` and, under the doubled budget, `q≤W^(k/2)`; the combined root is **kernel_verified**. |
+| [`proof/Erdos647_NonsmoothCofactorException.lean`](proof/Erdos647_NonsmoothCofactorException.lean) | 3 theorems | 1 | distinct block coordinates have distinct large cofactor primes; under the no-cross-pair hypothesis, at most one square-small cofactor is nonsmooth; **kernel_verified**. |
+| [`proof/Erdos647_TwoExceptionalIndices.lean`](proof/Erdos647_TwoExceptionalIndices.lean) | 1 theorem | 1 | deleting two exceptional subsets of cardinality at most one leaves at least `W−2` block coordinates; **kernel_verified**. |
+| [`proof/Erdos647_SecondLayerCatalogAssembly.lean`](proof/Erdos647_SecondLayerCatalogAssembly.lean) | 1 theorem | 1 | conditionally assembles at least `W−2` coordinates with prime/cofactor factorization, coprimality, square-smallness, smoothness, and explicit cofactor size; **kernel_verified**. |
+| **Continuation total** | **58 theorems + 1 lemma** | **30** | The 30 new exports are all **kernel_verified**; this table adds the exact 17-module continuation beyond the previous catalog checkpoint. |
+
 ---
 
-*Counts are explicit: 284 top-level theorem declarations plus four top-level
-helper lemmas in 116 Lean files, and 227 related proof-search episodes in the
-export archive (220 kernel-verified,
+*Counts are explicit: 452 top-level theorem declarations plus five top-level
+helper lemmas in 169 Lean files, and 317 related proof-search episodes in the
+export archive (310 kernel-verified,
 seven retained non-success histories). These are different metrics—one episode
 can assemble several helper declarations, while some final repository
 compositions are not standalone episodes. The global density theorem is
-complete; the original existence problem remains open.*
+complete; original Formal Conjectures closure remains 0/3 and the existence
+problem remains open.*

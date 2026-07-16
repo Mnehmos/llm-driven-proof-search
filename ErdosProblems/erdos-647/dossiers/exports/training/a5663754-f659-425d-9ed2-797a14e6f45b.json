@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro r A C B n hr hA hdiv hprefix k hk0 hkn\n  by_cases hk : A * (B + k) ^ r < C * (n - k)\n  · exact hprefix k hk0 hkn hk\n  · push_neg at hk\n    have hmpos : 1 ≤ n - k := by omega\n    have hbound := hdiv (n - k) hmpos\n    have hmul :\n        A * (ArithmeticFunction.sigma 0 (n - k)) ^ r ≤\n          A * (B + k) ^ r := hbound.trans hk\n    have hpows :\n        (ArithmeticFunction.sigma 0 (n - k)) ^ r ≤ (B + k) ^ r :=\n      le_of_mul_le_mul_left hmul hA\n    exact (Nat.pow_le_pow_iff_left (Nat.ne_of_gt hr)).mp hpows",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro r A C B n hr hA hdiv hprefix k hk0 hkn\n  by_cases hk : A * (B + k) ^ r < C * (n - k)\n  · exact hprefix k hk0 hkn hk\n  · push_neg at hk\n    have hmpos : 1 ≤ n - k := by omega\n    have hbound := hdiv (n - k) hmpos\n    have hmul :\n        A * (ArithmeticFunction.sigma 0 (n - k)) ^ r ≤\n          A * (B + k) ^ r := hbound.trans hk\n    have hpows :\n        (ArithmeticFunction.sigma 0 (n - k)) ^ r ≤ (B + k) ^ r :=\n      le_of_mul_le_mul_left hmul hA\n    exact (Nat.pow_le_pow_iff_left (Nat.ne_of_gt hr)).mp hpows",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ r A C B n : ℕ,\n      0 < r →\n      0 < A →\n      (∀ m : ℕ, 1 ≤ m →\n        A * (ArithmeticFunction.sigma 0 m) ^ r ≤ C * m) →\n      (∀ k : ℕ, 0 < k → k < n →\n        A * (B + k) ^ r < C * (n - k) →\n        ArithmeticFunction.sigma 0 (n - k) ≤ B + k) →\n      ∀ k : ℕ, 0 < k → k < n →\n        ArithmeticFunction.sigma 0 (n - k) ≤ B + k",
+        "module_source_hash": null,
+        "obligation_id": "989d931a-782c-411f-bd17-20c0d99945e0",
+        "outcome": "kernel_pass",
+        "problem_version_id": "426b9c04-44df-4dbb-b2b0-5be9d5985c65",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "397f561238bb658ab3654db83f1f1571ed33a1b046365d8d1a6f63ed68734199"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "b542c8cec285f5524b41d84609de60d3f252aa84b278eb85c76cce03091381ad"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,19 +1,19 @@
 # Erdős #647 proof-search exports
 
-Generated 2026-07-15 from the tracked proof-search environment.
+Generated 2026-07-16 from the tracked proof-search environment.
 
-This directory is the complete export archive for all 247 related episodes
+This directory is the complete export archive for all 317 related episodes
 identified by campaign source, explicit Lean provenance, the evidence ledger,
 and a read-only transitive closure over matching problem and statement hashes.
 
 ## Outcome inventory
 
-- 240 episodes report `KERNEL_VERIFIED` and `kernel_verified = true`.
-- Three unfinished episodes report `IN_PROGRESS`.
-- Three terminated unsuccessful episodes report `GAVE_UP`.
-- One truncated episode reports `budget_exhausted`.
+- 310 episodes report `KERNEL_VERIFIED` and `kernel_verified = true`.
+- 3 unfinished episodes report `IN_PROGRESS`.
+- 3 terminated unsuccessful episodes report `GAVE_UP`.
+- 1 truncated episode reports `budget_exhausted`.
 
-Keeping the seven non-success histories is intentional: they preserve abandoned,
+Keeping the 7 non-success histories is intentional: they preserve abandoned,
 unfinished, and budget-limited routes instead of presenting only successful
 trajectories.
 
@@ -28,7 +28,7 @@ trajectories.
 - `training/`: structured JSON trajectory exports, including accepted proof
   actions, negative histories, and verifier metadata.
 
-All 247 exports report `fidelity_status = attested` and environment
+All 317 exports report `fidelity_status = attested` and environment
 `9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d`.
 
 The fidelity label matters: these are project-authored formal statements checked

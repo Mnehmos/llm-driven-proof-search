@@ -1,0 +1,31 @@
+{
+  "benchmark_suite": null,
+  "benchmark_upstream_problem_id": null,
+  "certified": false,
+  "completed_at": "2026-07-16T14:39:36.657340300+00:00",
+  "created_at": "2026-07-16T14:38:45.497521300+00:00",
+  "environment_hash": "9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d",
+  "episode_id": "92b32ec3-18e7-4807-91a1-71a47c10e9fb",
+  "fidelity_basis": null,
+  "fidelity_status": "attested",
+  "formal_target_matched": false,
+  "import_manifest_hash": "aaf21893d520a78dee0787a1bcaf939ee6b922265ff670c272e2e1d450dd29a7",
+  "interactive_sessions": {
+    "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
+    "proof_body_redacted": true,
+    "session_count": 0,
+    "sessions": []
+  },
+  "kernel_verified": true,
+  "mode": "public_summary",
+  "obligation_counts_by_status": {
+    "proved": 1
+  },
+  "outcome": "KERNEL_VERIFIED",
+  "proof_body_redacted": true,
+  "root_formal_statement": "∀ (a b N p : ℕ), 1 ≤ a → 1 < p → p ∣ a * N + b → Nat.Prime (a * N + b) → a * N + b = p ∧ N ≤ p",
+  "step_count": 1,
+  "trajectory_event_count": 3,
+  "trajectory_first_hash": "05326ed8d3471334ce09a40629a9278888cb8eb7b4be5c7704c981434afc97bc",
+  "trajectory_last_hash": "17f522a846e9405d0da26df96473b49152bbf7f7b32bd6557d95b90a887ad42d"
+}
