@@ -2,7 +2,7 @@
 
 This directory contains the proof-search provenance layer for the campaign.
 
-- [exports/](exports/README.md): complete 319-episode archive in public-summary,
+- [exports/](exports/README.md): complete 322-episode archive in public-summary,
   full Markdown, and structured training formats.
 - [episode-index.tsv](episode-index.tsv): compact problem/episode lookup index,
   now extended from the original 104 modular rows to all 322 related episodes.

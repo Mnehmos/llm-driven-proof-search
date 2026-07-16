@@ -91,7 +91,8 @@
   so every positive parameter supplies four pairwise distinct shifted-value
   prime factors; the associated rung-5 and rung-10 5-adic depths cannot both
   be positive, sharpening the total base-gauntlet adic bound from `4B+20` to
-  `3B+14`.
+  `3B+14`. A candidate-facing source-checked assembly now returns that sharper
+  bound directly from the four relevant shift budgets.
 - General `t`-subset product selection and an exact CRT re-entry certificate:
   whenever a selected prime product lies below `n`, its residue supplies a
   new shift with the kernel-checked sandwich
@@ -107,8 +108,8 @@
   prefix.
 - A complete public export archive for all 322 related episodes: 315
   kernel-verified successes and seven retained non-success histories.
-- The final checkpoint contains 172 Lean files with 457 actual theorem
-  declarations and five lemma declarations (462 theorem/lemma declarations
+- The final checkpoint contains 172 Lean files with 458 actual theorem
+  declarations and five lemma declarations (463 theorem/lemma declarations
   total).
 
 ## Tools and authorship
@@ -153,7 +154,7 @@
   truncation-gap diagnosis and repair, explicit constants, and final assembly.
 - The 322 proof-search episodes have `fidelity_status = attested`: Lean checks
   project-authored formal statements, but this is not neutral-corpus
-  certification. Kernel verification applies to 312 of those episodes; the
+  certification. Kernel verification applies to 315 of those episodes; the
   other seven are retained as explicit negative or unfinished trajectories.
 - The terminal density theorem is supported by a clean transitive source
   replay. It is not misrepresented as an additional standalone tracked

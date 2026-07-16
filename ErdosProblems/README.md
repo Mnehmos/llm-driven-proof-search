@@ -37,7 +37,7 @@ ErdosProblems/
 │   ├── attack-plan.md      completed density program + remaining existence directions
 │   ├── credit.md           Hughes / Kitamura / Idén / Bloom attribution + limits
 │   ├── evidence.md         tracked episodes + clean final replay
-│   ├── dossiers/           full 319-episode export archive
+│   ├── dossiers/           full 322-episode export archive
 │   └── proof/              172 Lean files; density and existence reductions included
 └── shared/                 cross-problem infrastructure notes
     ├── corpus-validation.md
@@ -106,7 +106,7 @@ relevant) into a new `erdos-<N>/` folder and link it from the project index.
    bound `|C(X)|≤KX/(log X)^7`. The proof repairs the missing level truncation,
    proves polynomial error control, supplies an elementary seventh-power
    denominator, certifies dyadic parameters, and closes the finite range.
-    The folder publishes 462 theorem/lemma declarations (509 declarations when
+    The folder publishes 463 theorem/lemma declarations (510 declarations when
     47 definitions, including two private helpers, are included) and full
     exports for 322 related proof-search episodes: 315 verified successes and
     seven retained non-success histories.

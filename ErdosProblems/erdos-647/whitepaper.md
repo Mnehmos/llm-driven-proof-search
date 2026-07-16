@@ -268,7 +268,7 @@ recorded in [evidence.md](evidence.md).
 For provenance beyond the source replay, all 322 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
-training JSON formats. Of these, 312 report `KERNEL_VERIFIED` in the pinned
+training JSON formats. Of these, 315 report `KERNEL_VERIFIED` in the pinned
 environment; seven non-success histories are retained for audit completeness.
 
 This proves a density-zero result with the claimed seventh logarithmic power.
@@ -497,7 +497,11 @@ four-rung subsystem. Moreover, if `5^a₅` divides `504N-1` and `5^a₁₀`
 divides `252N-1`, then `a₅=0` or `a₁₀=0`: the 5-adic escape branches at
 rungs 5 and 10 cannot occur simultaneously. Combining this with the existing
 individual bounds sharpens the base-gauntlet total from `4B+20` to `3B+14`;
-at the main problem's `B=2`, the maximum falls from `28` to `20`. It is a structural increment,
+at the main problem's `B=2`, the maximum falls from `28` to `20`.
+`Erdos647_BaseGauntletAdicBoundary.lean` now exposes this sharpened total
+directly from the four candidate shift budgets. The integrated corollary is
+source-checked in the pinned Lean project; the incompatibility and arithmetic
+bound it assembles are independently tracked kernel-verified roots. It is a structural increment,
 not a global
 contradiction.
 
@@ -513,11 +517,11 @@ Formal Conjectures declarations.
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **457 actual theorem
+- Portable proof source currently contains **458 actual theorem
   declarations and five top-level helper lemmas across 172 Lean files** under
   `proof/`. Including 47 definitions (45 public and two private helpers) gives
-  509 declarations. These counts include helper and assembly declarations;
-  they are not presented as 503 independent mathematical discoveries or 503
+  510 declarations. These counts include helper and assembly declarations;
+  they are not presented as 510 independent mathematical discoveries or 510
   standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base
   sieve, the bridging-closure layer, the Theorem-2 formalization, the

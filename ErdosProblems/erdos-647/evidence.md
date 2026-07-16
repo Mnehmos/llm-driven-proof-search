@@ -152,7 +152,10 @@ strongest source additionally proves that selected prime factors are pairwise
 distinct and that the four shifted values always supply four distinct primes.
 The second tracked root removes the simultaneous positive-depth 5-adic branch
 at rungs 5 and 10; the third lowers the corresponding total depth bound from
-`4B+20` to `3B+14`. No global failed-shift conclusion is being inferred from
+`4B+20` to `3B+14`. The candidate-facing corollary
+`erdos647_base_gauntlet_adic_boundary_sharpened` composes those results with
+the four shift budgets and compiles in the pinned project. It is recorded as
+a source-checked assembly theorem, not as an additional tracked episode. No global failed-shift conclusion is being inferred from
 this local clique.
 
 Shift 13 now has its own exact refinement:
@@ -312,14 +315,14 @@ compatibility check rather than a forced mixed-version import.
 
 The repository now includes exports for all 322 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
-index, and a read-only database closure audit. Of these, 312 report
+index, and a read-only database closure audit. Of these, 315 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.
-Portable source currently contains 457 actual theorem declarations and five
+Portable source currently contains 458 actual theorem declarations and five
 top-level lemma declarations across 172 Lean files; including 47 definitions
-(45 public and two private helpers) gives 509 declarations. Those source counts
-and the 319 episode count measure different things.
+(45 public and two private helpers) gives 510 declarations. Those source counts
+and the 322 episode count measure different things.
 
 - [export manifest](dossiers/exports/manifest.tsv)
 - [public summaries](dossiers/exports/public_summary/)

@@ -865,7 +865,10 @@ nonexistence, convergence, or Sophie Germain infinitude.
   Consequently the base-block total adic-depth bound sharpens from `4B+20`
   to `3B+14`, tracked as episode
   `9d536e7d-f76b-4d89-9763-7b63728a8c2c`; at `B=2`, this is `20` rather
-  than `28`.
+  than `28`. The source-checked theorem
+  `erdos647_base_gauntlet_adic_boundary_sharpened` now returns that improved
+  total directly from the candidate's four shift budgets. It is an integrated
+  assembly corollary, not a newly claimed tracked root.
   The next seam is to connect this forced novelty to one common host, a CRT
   re-entry violation, or another global accumulation mechanism.
 - ✅ **Subset-product / CRT re-entry DONE (2026-07-16):** pair and general
