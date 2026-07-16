@@ -848,6 +848,12 @@ nonexistence, convergence, or Sophie Germain infinitude.
   block cannot repeat, without assuming the shifted values are pairwise
   coprime. Smoothness escape plus the divisor budget supplies an injective
   large-prime family whenever the shifted values cross their smooth bounds.
+- ✅ **Concrete rung-5/rung-7 non-reuse DONE (2026-07-16):** the exact relation
+  `5(504N-1)-7(360N-1)=2`, together with oddness, proves
+  `Coprime (504N-1) (360N-1)` for `N≥1`. Both roots are tracked
+  `kernel_verified` and replay cleanly. This is the first pair-specific
+  cross-rung incompatibility; extending such incompatibilities into a global
+  failed-shift theorem remains open.
 - ✅ **Subset-product / CRT re-entry DONE (2026-07-16):** pair and general
   `t`-subset dichotomies identify a selected product `Q<n`. The re-entry shift
   `h=n mod Q` then satisfies the exact candidate sandwich

@@ -83,6 +83,9 @@
   budgeted shifts into an injective family of primes larger than the block
   width, including a scalar endpoint interface and the quantitative
   `(W+1)^W` shared-host bound.
+- The first concrete cross-rung factor non-reuse theorem: the exact relation
+  `5(504N-1)-7(360N-1)=2` and parity imply that the rung-5 and rung-7 values
+  are coprime for every positive `N`.
 - General `t`-subset product selection and an exact CRT re-entry certificate:
   whenever a selected prime product lies below `n`, its residue supplies a
   new shift with the kernel-checked sandwich
@@ -96,10 +99,10 @@
   not a contradiction.
 - The explicit global bound `τ(n)^4≤19680n` and its fourth-root candidate
   prefix.
-- A complete public export archive for all 317 related episodes: 310
+- A complete public export archive for all 319 related episodes: 312
   kernel-verified successes and seven retained non-success histories.
-- The final checkpoint contains 169 Lean files with 449 actual theorem
-  declarations and five lemma declarations (454 theorem/lemma declarations
+- The final checkpoint contains 171 Lean files with 451 actual theorem
+  declarations and five lemma declarations (456 theorem/lemma declarations
   total).
 
 ## Tools and authorship
@@ -142,9 +145,9 @@
 - Theorem 2's mathematics and the density target are Hughes–Kitamura
   mathematics. Our contribution is the independent Lean reconstruction,
   truncation-gap diagnosis and repair, explicit constants, and final assembly.
-- The 317 proof-search episodes have `fidelity_status = attested`: Lean checks
+- The 319 proof-search episodes have `fidelity_status = attested`: Lean checks
   project-authored formal statements, but this is not neutral-corpus
-  certification. Kernel verification applies to 310 of those episodes; the
+  certification. Kernel verification applies to 312 of those episodes; the
   other seven are retained as explicit negative or unfinished trajectories.
 - The terminal density theorem is supported by a clean transitive source
   replay. It is not misrepresented as an additional standalone tracked

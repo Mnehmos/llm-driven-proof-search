@@ -4,8 +4,8 @@
 > updated 2026-07-16.
 >
 > This catalogs the kernel-checked and source-replayed theorem families produced by the Erdős
-> #647 campaign. The portable source currently has 449 actual theorem
-> declarations and five top-level helper lemmas across 169 Lean files (454
+> #647 campaign. The portable source currently has 451 actual theorem
+> declarations and five top-level helper lemmas across 171 Lean files (456
 > theorem/lemma declarations total). Each tracked row carries the
 > `problem_version_id` — the authoritative lookup key in the
 > tracked pipeline — plus the exact root statement and, where recorded, the
@@ -16,7 +16,7 @@
 > **What is portable vs. internal.** The committed `.lean` files are the
 > simplest portable formal artifact: they check against Mathlib without this
 > project's database. The repository now also publishes the complete exports
-> for all 317 related episodes—redacted public summaries, full
+> for all 319 related episodes—redacted public summaries, full
 > Markdown proof dossiers, and structured training JSON—under
 > [dossiers/exports/](dossiers/exports/README.md). The IDs alone still are not
 > an external database API; the committed exports are what makes the audit
@@ -116,15 +116,15 @@ no access to this project's database required.
 
 Committed Lean source:
 
-- 169 `.lean` files under [proof/](proof/), containing 449 actual theorem
-  declarations and five top-level helper lemmas (454 declarations total).
+- 171 `.lean` files under [proof/](proof/), containing 451 actual theorem
+  declarations and five top-level helper lemmas (456 declarations total).
 - Five consolidated modular families under
   [proof/campaign/](proof/campaign/), plus individual analytic, truncation,
   candidate-transport, and final-assembly modules in the parent directory.
 
 Export and reproduction material:
 
-- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 317 related
+- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 319 related
   problem/episode pairs.
 - [dossiers/exports/manifest.tsv](dossiers/exports/manifest.tsv) records the
   outcome, fidelity, environment, statement hash, timestamps, and step count.
@@ -145,8 +145,8 @@ Export and reproduction material:
 | 8 | Level-truncated Selberg repair and assembly | 36 | hard support, polynomial error, denominator preservation, parameter certification, and concrete candidate transport |
 | 9 | Post-density existence and variant frontier | 49 | generic shift-factor/adic induction, shifts 9–16 as concrete frontiers and stress tests, exact depth witnesses, the eventual-excess limit interface, and the depth-two/Sophie-Germain equivalence |
 | 10 | Power-prefix, block, and certificate architecture | 31 | arbitrary-power local-factor products, exact block reindexing, executable factorization batches, fourth-root compression, and the conditional novelty/shared-host seam |
-| 11 | Large-factor novelty, CRT re-entry, and second-layer catalogs | 59 | fifth/hybrid prefix compression, finite-catalog escape, `t`-subset product alternatives, CRT exclusion, and the conditional smooth-cofactor catalog after two exceptions |
-| | **Selected-family subtotal** | **not additive** | The exact repository-wide count is 454 theorem/lemma declarations; family rows are publication groupings and may overlap. |
+| 11 | Large-factor novelty, CRT re-entry, and second-layer catalogs | 61 | fifth/hybrid prefix compression, finite-catalog escape, `t`-subset product alternatives, CRT exclusion, the conditional smooth-cofactor catalog, and the first cross-rung coprimality theorem |
+| | **Selected-family subtotal** | **not additive** | The exact repository-wide count is 456 theorem/lemma declarations; family rows are publication groupings and may overlap. |
 
 ---
 
@@ -544,13 +544,15 @@ Formal Conjectures closure remains `0/3`.**
 | [`proof/Erdos647_NonsmoothCofactorException.lean`](proof/Erdos647_NonsmoothCofactorException.lean) | 3 theorems | 1 | distinct block coordinates have distinct large cofactor primes; under the no-cross-pair hypothesis, at most one square-small cofactor is nonsmooth; **kernel_verified**. |
 | [`proof/Erdos647_TwoExceptionalIndices.lean`](proof/Erdos647_TwoExceptionalIndices.lean) | 1 theorem | 1 | deleting two exceptional subsets of cardinality at most one leaves at least `W−2` block coordinates; **kernel_verified**. |
 | [`proof/Erdos647_SecondLayerCatalogAssembly.lean`](proof/Erdos647_SecondLayerCatalogAssembly.lean) | 1 theorem | 1 | conditionally assembles at least `W−2` coordinates with prime/cofactor factorization, coprimality, square-smallness, smoothness, and explicit cofactor size; **kernel_verified**. |
-| **Continuation total** | **58 theorems + 1 lemma** | **30** | The 30 new exports are all **kernel_verified**; this table adds the exact 17-module continuation beyond the previous catalog checkpoint. |
+| [`proof/Erdos647_Rung5Rung7Relation.lean`](proof/Erdos647_Rung5Rung7Relation.lean) | 1 theorem | 1 | proves the exact Bézout relation `5(504N−1)−7(360N−1)=2`; **kernel_verified**. |
+| [`proof/Erdos647_Rung5Rung7Coprime.lean`](proof/Erdos647_Rung5Rung7Coprime.lean) | 1 theorem | 1 | combines that relation with parity to prove `Coprime (504N−1) (360N−1)`, the first concrete cross-rung factor non-reuse result; **kernel_verified**. |
+| **Continuation total** | **60 theorems + 1 lemma** | **32** | The 32 new exports are all **kernel_verified**; this table adds the exact 19-module continuation beyond the previous catalog checkpoint. |
 
 ---
 
-*Counts are explicit: 449 actual theorem declarations plus five top-level
-helper lemmas in 169 Lean files, and 317 related proof-search episodes in the
-export archive (310 kernel-verified,
+*Counts are explicit: 451 actual theorem declarations plus five top-level
+helper lemmas in 171 Lean files, and 319 related proof-search episodes in the
+export archive (312 kernel-verified,
 seven retained non-success histories). These are different metrics—one episode
 can assemble several helper declarations, while some final repository
 compositions are not standalone episodes. The global density theorem is

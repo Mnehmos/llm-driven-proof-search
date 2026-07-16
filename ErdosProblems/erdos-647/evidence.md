@@ -137,6 +137,17 @@ shift-specific work is the exact affine factorization, parity/family input,
 and finite exceptional-digit enumeration. No theorem yet proves that the
 generic transition terminates for every candidate.
 
+The first concrete cross-rung non-reuse pair is independently tracked:
+
+| result | problem_version_id | episode_id | outcome |
+|---|---|---|---|
+| exact rung-5/rung-7 Bézout relation | `94bf7925-d131-45bf-a92c-980ae335dd12` | `ee02d203-8df1-4e28-9ec6-9d870909f52b` | **kernel_verified**, `root_proved`; replay matched 1/1 events |
+| coprimality of `504N-1` and `360N-1` | `70b88b83-6ac4-480f-b906-2b31c0befe47` | `227e1560-c30a-41f3-904e-91716252a014` | **kernel_verified**, `root_proved`; replay matched 6/6 events |
+
+Both sources also compile directly in the pinned `lean-checker`. They prove
+factor non-reuse for this pair only; no global failed-shift conclusion is
+being inferred from them.
+
 Shift 13 now has its own exact refinement:
 
 | result | problem_version_id | episode_id | outcome |
@@ -292,16 +303,16 @@ compatibility check rather than a forced mixed-version import.
 
 ## Complete proof-search export archive
 
-The repository now includes exports for all 317 related episodes identified by
+The repository now includes exports for all 319 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
-index, and a read-only database closure audit. Of these, 310 report
+index, and a read-only database closure audit. Of these, 312 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.
-Portable source currently contains 449 actual theorem declarations and five
-top-level lemma declarations across 169 Lean files; including 47 definitions
-(45 public and two private helpers) gives 501 declarations. Those source counts
-and the 317 episode count measure different things.
+Portable source currently contains 451 actual theorem declarations and five
+top-level lemma declarations across 171 Lean files; including 47 definitions
+(45 public and two private helpers) gives 503 declarations. Those source counts
+and the 319 episode count measure different things.
 
 - [export manifest](dossiers/exports/manifest.tsv)
 - [public summaries](dossiers/exports/public_summary/)
