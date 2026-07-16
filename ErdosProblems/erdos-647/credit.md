@@ -86,6 +86,10 @@
 - The first concrete cross-rung factor non-reuse theorem: the exact relation
   `5(504N-1)-7(360N-1)=2` and parity imply that the rung-5 and rung-7 values
   are coprime for every positive `N`.
+- The complete four-rung extension: the reduced cofactors at shifts
+  `5,7,9,10` are pairwise coprime by six explicit positive Bézout identities,
+  so every positive parameter supplies four pairwise distinct shifted-value
+  prime factors.
 - General `t`-subset product selection and an exact CRT re-entry certificate:
   whenever a selected prime product lies below `n`, its residue supplies a
   new shift with the kernel-checked sandwich
@@ -99,10 +103,10 @@
   not a contradiction.
 - The explicit global bound `τ(n)^4≤19680n` and its fourth-root candidate
   prefix.
-- A complete public export archive for all 319 related episodes: 312
+- A complete public export archive for all 320 related episodes: 313
   kernel-verified successes and seven retained non-success histories.
-- The final checkpoint contains 171 Lean files with 451 actual theorem
-  declarations and five lemma declarations (456 theorem/lemma declarations
+- The final checkpoint contains 172 Lean files with 455 actual theorem
+  declarations and five lemma declarations (460 theorem/lemma declarations
   total).
 
 ## Tools and authorship
@@ -145,7 +149,7 @@
 - Theorem 2's mathematics and the density target are Hughes–Kitamura
   mathematics. Our contribution is the independent Lean reconstruction,
   truncation-gap diagnosis and repair, explicit constants, and final assembly.
-- The 319 proof-search episodes have `fidelity_status = attested`: Lean checks
+- The 320 proof-search episodes have `fidelity_status = attested`: Lean checks
   project-authored formal statements, but this is not neutral-corpus
   certification. Kernel verification applies to 312 of those episodes; the
   other seven are retained as explicit negative or unfinished trajectories.

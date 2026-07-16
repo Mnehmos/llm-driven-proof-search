@@ -854,6 +854,13 @@ nonexistence, convergence, or Sophie Germain infinitude.
   `kernel_verified` and replay cleanly. This is the first pair-specific
   cross-rung incompatibility; extending such incompatibilities into a global
   failed-shift theorem remains open.
+- ✅ **Four-rung coprimality clique DONE (2026-07-16):** six explicit positive
+  Bézout identities prove that `504N-1`, `360N-1`, `280N-1`, and `252N-1`
+  are pairwise coprime for every `N≥1`. Thus the shifts `5,7,9,10` always
+  supply four pairwise distinct prime factors. The six-edge root is tracked
+  `kernel_verified` as episode `4a5b8d82-e89c-4893-8599-b6279c502a96`.
+  The next seam is to connect this forced novelty to one common host, a CRT
+  re-entry violation, or another global accumulation mechanism.
 - ✅ **Subset-product / CRT re-entry DONE (2026-07-16):** pair and general
   `t`-subset dichotomies identify a selected product `Q<n`. The re-entry shift
   `h=n mod Q` then satisfies the exact candidate sandwich

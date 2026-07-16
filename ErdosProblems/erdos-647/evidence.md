@@ -143,10 +143,12 @@ The first concrete cross-rung non-reuse pair is independently tracked:
 |---|---|---|---|
 | exact rung-5/rung-7 Bézout relation | `94bf7925-d131-45bf-a92c-980ae335dd12` | `ee02d203-8df1-4e28-9ec6-9d870909f52b` | **kernel_verified**, `root_proved`; replay matched 1/1 events |
 | coprimality of `504N-1` and `360N-1` | `70b88b83-6ac4-480f-b906-2b31c0befe47` | `227e1560-c30a-41f3-904e-91716252a014` | **kernel_verified**, `root_proved`; replay matched 6/6 events |
+| pairwise coprimality of all four reduced rung cofactors | `6d108ae2-23ca-4766-9122-665a27ba65a3` | `4a5b8d82-e89c-4893-8599-b6279c502a96` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `0b42b302-cda4-4746-bbb9-ecadba82dd56` **kernel_pass** |
 
-Both sources also compile directly in the pinned `lean-checker`. They prove
-factor non-reuse for this pair only; no global failed-shift conclusion is
-being inferred from them.
+All three sources also compile directly in the pinned `lean-checker`. The
+strongest source additionally proves that selected prime factors are pairwise
+distinct and that the four shifted values always supply four distinct primes.
+No global failed-shift conclusion is being inferred from this local clique.
 
 Shift 13 now has its own exact refinement:
 
@@ -303,15 +305,15 @@ compatibility check rather than a forced mixed-version import.
 
 ## Complete proof-search export archive
 
-The repository now includes exports for all 319 related episodes identified by
+The repository now includes exports for all 320 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
 index, and a read-only database closure audit. Of these, 312 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.
-Portable source currently contains 451 actual theorem declarations and five
-top-level lemma declarations across 171 Lean files; including 47 definitions
-(45 public and two private helpers) gives 503 declarations. Those source counts
+Portable source currently contains 455 actual theorem declarations and five
+top-level lemma declarations across 172 Lean files; including 47 definitions
+(45 public and two private helpers) gives 507 declarations. Those source counts
 and the 319 episode count measure different things.
 
 - [export manifest](dossiers/exports/manifest.tsv)

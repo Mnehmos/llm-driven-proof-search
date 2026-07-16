@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro N hN\n  have hcop : ∀ A C u v : ℕ, u * A = v * C + 1 → Nat.Coprime A C := by\n    intro A C u v hrel\n    apply Nat.coprime_of_dvd'\n    intro p hp hpA hpC\n    have hpUA : p ∣ u * A := Dvd.dvd.mul_left hpA u\n    have hpVC : p ∣ v * C := Dvd.dvd.mul_left hpC v\n    have hpVC1 : p ∣ v * C + 1 := hrel ▸ hpUA\n    exact (Nat.dvd_add_right hpVC).mp hpVC1\n  let M := N - 1\n  have hNM : N = M + 1 := by dsimp [M]; omega\n  have h504 : 504 * N - 1 = 504 * M + 503 := by dsimp [M]; omega\n  have h360 : 360 * N - 1 = 360 * M + 359 := by dsimp [M]; omega\n  have h280 : 280 * N - 1 = 280 * M + 279 := by dsimp [M]; omega\n  have h252 : 252 * N - 1 = 252 * M + 251 := by dsimp [M]; omega\n  have h57 : 900 * N * (504 * N - 1) =\n      (1260 * N + 1) * (360 * N - 1) + 1 := by\n    rw [h504, h360, hNM]\n    ring\n  have h59 : 350 * N * (504 * N - 1) =\n      (630 * N + 1) * (280 * N - 1) + 1 := by\n    rw [h504, h280, hNM]\n    ring\n  have h510 : 1 * (504 * N - 1) =\n      2 * (252 * N - 1) + 1 := by omega\n  have h79 : 980 * N * (360 * N - 1) =\n      (1260 * N + 1) * (280 * N - 1) + 1 := by\n    rw [h360, h280, hNM]\n    ring\n  have h710 : 588 * N * (360 * N - 1) =\n      (840 * N + 1) * (252 * N - 1) + 1 := by\n    rw [h360, h252, hNM]\n    ring\n  have h910 : 9 * (280 * N - 1) =\n      10 * (252 * N - 1) + 1 := by omega\n  exact ⟨\n    hcop _ _ (900 * N) (1260 * N + 1) h57,\n    hcop _ _ (350 * N) (630 * N + 1) h59,\n    hcop _ _ 1 2 h510,\n    hcop _ _ (980 * N) (1260 * N + 1) h79,\n    hcop _ _ (588 * N) (840 * N + 1) h710,\n    hcop _ _ 9 10 h910⟩",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro N hN\n  have hcop : ∀ A C u v : ℕ, u * A = v * C + 1 → Nat.Coprime A C := by\n    intro A C u v hrel\n    apply Nat.coprime_of_dvd'\n    intro p hp hpA hpC\n    have hpUA : p ∣ u * A := Dvd.dvd.mul_left hpA u\n    have hpVC : p ∣ v * C := Dvd.dvd.mul_left hpC v\n    have hpVC1 : p ∣ v * C + 1 := hrel ▸ hpUA\n    exact (Nat.dvd_add_right hpVC).mp hpVC1\n  let M := N - 1\n  have hNM : N = M + 1 := by dsimp [M]; omega\n  have h504 : 504 * N - 1 = 504 * M + 503 := by dsimp [M]; omega\n  have h360 : 360 * N - 1 = 360 * M + 359 := by dsimp [M]; omega\n  have h280 : 280 * N - 1 = 280 * M + 279 := by dsimp [M]; omega\n  have h252 : 252 * N - 1 = 252 * M + 251 := by dsimp [M]; omega\n  have h57 : 900 * N * (504 * N - 1) =\n      (1260 * N + 1) * (360 * N - 1) + 1 := by\n    rw [h504, h360, hNM]\n    ring\n  have h59 : 350 * N * (504 * N - 1) =\n      (630 * N + 1) * (280 * N - 1) + 1 := by\n    rw [h504, h280, hNM]\n    ring\n  have h510 : 1 * (504 * N - 1) =\n      2 * (252 * N - 1) + 1 := by omega\n  have h79 : 980 * N * (360 * N - 1) =\n      (1260 * N + 1) * (280 * N - 1) + 1 := by\n    rw [h360, h280, hNM]\n    ring\n  have h710 : 588 * N * (360 * N - 1) =\n      (840 * N + 1) * (252 * N - 1) + 1 := by\n    rw [h360, h252, hNM]\n    ring\n  have h910 : 9 * (280 * N - 1) =\n      10 * (252 * N - 1) + 1 := by omega\n  exact ⟨\n    hcop _ _ (900 * N) (1260 * N + 1) h57,\n    hcop _ _ (350 * N) (630 * N + 1) h59,\n    hcop _ _ 1 2 h510,\n    hcop _ _ (980 * N) (1260 * N + 1) h79,\n    hcop _ _ (588 * N) (840 * N + 1) h710,\n    hcop _ _ 9 10 h910⟩",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ N : ℕ, 1 ≤ N →\n      Nat.Coprime (504 * N - 1) (360 * N - 1) ∧\n      Nat.Coprime (504 * N - 1) (280 * N - 1) ∧\n      Nat.Coprime (504 * N - 1) (252 * N - 1) ∧\n      Nat.Coprime (360 * N - 1) (280 * N - 1) ∧\n      Nat.Coprime (360 * N - 1) (252 * N - 1) ∧\n      Nat.Coprime (280 * N - 1) (252 * N - 1)",
+        "module_source_hash": null,
+        "obligation_id": "6b571e0b-6f58-46b1-a5f0-dfbb4e34507a",
+        "outcome": "kernel_pass",
+        "problem_version_id": "6d108ae2-23ca-4766-9122-665a27ba65a3",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "f96395d0ec4f87c2f33741e1642943aee82a55665a13e07a22e2f6925d8c85ee"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "a6f9e625a2848663091b28361348d5297ab902299605a504e98dc05e26c5bead"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}
