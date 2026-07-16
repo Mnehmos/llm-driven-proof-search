@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro n k₁ k₂ hk₁k₂ hk₂n\napply Nat.dvd_antisymm\n· apply Nat.dvd_gcd\n  · exact Nat.gcd_dvd_left _ _\n  · have h := Nat.dvd_sub\n      (Nat.gcd_dvd_left (n - k₁) (n - k₂))\n      (Nat.gcd_dvd_right (n - k₁) (n - k₂))\n    have hgap : (n - k₁) - (n - k₂) = k₂ - k₁ := by omega\n    rwa [hgap] at h\n· apply Nat.dvd_gcd\n  · exact Nat.gcd_dvd_left _ _\n  · have h := Nat.dvd_sub\n      (Nat.gcd_dvd_left (n - k₁) (k₂ - k₁))\n      (Nat.gcd_dvd_right (n - k₁) (k₂ - k₁))\n    have hshift : (n - k₁) - (k₂ - k₁) = n - k₂ := by omega\n    rwa [hshift] at h",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro n k₁ k₂ hk₁k₂ hk₂n\napply Nat.dvd_antisymm\n· apply Nat.dvd_gcd\n  · exact Nat.gcd_dvd_left _ _\n  · have h := Nat.dvd_sub\n      (Nat.gcd_dvd_left (n - k₁) (n - k₂))\n      (Nat.gcd_dvd_right (n - k₁) (n - k₂))\n    have hgap : (n - k₁) - (n - k₂) = k₂ - k₁ := by omega\n    rwa [hgap] at h\n· apply Nat.dvd_gcd\n  · exact Nat.gcd_dvd_left _ _\n  · have h := Nat.dvd_sub\n      (Nat.gcd_dvd_left (n - k₁) (k₂ - k₁))\n      (Nat.gcd_dvd_right (n - k₁) (k₂ - k₁))\n    have hshift : (n - k₁) - (k₂ - k₁) = n - k₂ := by omega\n    rwa [hshift] at h",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n k₁ k₂ : ℕ, k₁ ≤ k₂ → k₂ < n →\n  Nat.gcd (n - k₁) (n - k₂) = Nat.gcd (n - k₁) (k₂ - k₁)",
+        "module_source_hash": null,
+        "obligation_id": "2020da5a-05c3-4134-a71b-4220b00d7d8e",
+        "outcome": "kernel_pass",
+        "problem_version_id": "014f5c3b-3287-4c91-8819-50d360817dbf",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "180fddff638fa431117e9a1aaa289c12154122ea6ac02b3729dc48ae937765be"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "07af9c29134084ebb911b9b8c50be6bde01862aeaf3353848a2bfe7e4b133b43"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

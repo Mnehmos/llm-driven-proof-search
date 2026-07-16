@@ -13,19 +13,12 @@ finite range `25 ≤ n ≤ 84` is excluded; every remaining candidate is above
 families. The third, infinite-window declaration remains separate and already
 contains Sophie Germain infinitude at its first open depth.
 
-**The positive/exclusion window is now fourth-root scale.** The generic
-rough-power theorem proves `τ(m)^r ≤ m` when every prime divisor of `m` is at
-least `2^r`. A generic excess-`B` power-prefix interface transports any bound
-`A·τ(m)^r ≤ C·m` into both failed-shift localization and the exact supremum
-candidate predicate. The first non-cubic all-integer instance is now
-kernel-verified:
-
-`τ(n)^4 ≤ 19680·n` for every `n ≥ 1`.
-
-Consequently it is enough to check the shifts satisfying
-`(k+2)^4 < 19680·(n-k)`, an explicit `O(n^(1/4))` window. For the cubic
-specialization, the exact gcd class of `k` against `2520` gives the sharper
-coefficient table `(8,3,8/5,8/7)` prime by prime.
+**The positive/exclusion window now has a hybrid finite prefix.** In addition
+to the sharp class-sensitive cubic and global fourth-power bounds, the
+kernel-verified estimate `τ(n)^5≤147700800n` supplies a fifth-root test. The
+exact candidate bridge checks only shifts where all three tests remain
+inconclusive. This strengthens fixed-candidate certification but still gives
+a prefix growing with `n`, not a uniform proof.
 
 **The certificate path is end-to-end.** A verified finite batch checker now
 accepts shift-indexed lists of distinct prime powers, checks primality, exact
@@ -33,16 +26,15 @@ products, coverage of the required power-prefix set, and each divisor budget,
 then certifies the exact Formal Conjectures supremum expression. Search remains
 steering only; a future witness must arrive with a batch that Lean rechecks.
 
-**The negative lane has an exact arbitrary-block interface and a precise
-remaining seam.** Global excess-`B` survival is equivalent to the canonical
-class-sensitive prefix checks in every block `k = block·q+s`; those coordinates
-and shifted values are injective. Pairwise-coprime blocks canonically produce
-one distinct prime per value, and a verified shared-host theorem shows that if
-all produced primes divide one positive host `H`, then `2^(block.card) ≤ H`.
-What is still missing is the genuinely arithmetic production theorem forcing
-the surviving block primes/adic digits into such a bounded shared host (or an
-equivalent reusable structure). Coordinate novelty or fixed finite gauntlets
-alone do not supply that premise.
+**The negative lane now has an exact product/re-entry alternative.** Large
+prime factors cannot repeat across a width-`W` block because common divisors
+divide shift gaps. If a selected subset product `Q` is below `n`, the CRT
+re-entry shift `h=n mod Q` satisfies `2^|I|≤τ(n-h)≤h+2`; the strict reverse
+inequality is a complete exclusion certificate. In the no-cross-product
+branch, prime peeling and two one-element exception bounds leave at least
+`W-2` smooth, explicitly bounded second-layer cofactors. The remaining seam is
+to force a violating re-entry remainder or contradict that smooth cofactor
+population uniformly.
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,
@@ -842,11 +834,36 @@ nonexistence, convergence, or Sophie Germain infinitude.
   then `2^block.card≤H`.
 - ✅ **Fourth-root prefix DONE (2026-07-16):** `τ(n)^4≤19680n`, hence only
   `(k+2)^4<19680(n-k)` requires explicit checking for a fixed candidate.
-- **Current hard seam:** derive, uniformly from candidate hypotheses, either
-  arbitrarily long pairwise-coprime block families plus a shared host, or an
-  equivalent accumulation mechanism forcing one budget failure. The block
-  iff, injectivity, batch checker, and fourth-root window do not themselves
-  supply that theorem.
+- ✅ **Fifth-root and hybrid prefix DONE (2026-07-16):**
+  `τ(n)^5≤147700800n`; the exact candidate bridge now requires explicit checks
+  only where the sharp cubic, fourth-power, and fifth-power tests are all
+  inconclusive.
+- ✅ **Finite-catalog escape DONE (2026-07-16):** every sufficiently large
+  hypothetical candidate has a bounded shift carrying a prime outside any
+  prescribed finite prime set. The primorial specialization produces a prime
+  above every fixed cutoff. This proves continual novelty, not fast enough
+  accumulation by itself.
+- ✅ **Shift-gap large-factor novelty DONE (2026-07-16):** every common divisor
+  of `n-k₁` and `n-k₂` divides `k₂-k₁`. Thus factors larger than a width-`W`
+  block cannot repeat, without assuming the shifted values are pairwise
+  coprime. Smoothness escape plus the divisor budget supplies an injective
+  large-prime family whenever the shifted values cross their smooth bounds.
+- ✅ **Subset-product / CRT re-entry DONE (2026-07-16):** pair and general
+  `t`-subset dichotomies identify a selected product `Q<n`. The re-entry shift
+  `h=n mod Q` then satisfies the exact candidate sandwich
+  `2^|I|≤τ(n-h)≤h+2`; `h+2<2^|I|` is a complete exclusion certificate.
+- ✅ **Conditional second-layer catalog DONE (2026-07-16):** in the
+  no-cross-product branch, square-scale prime peeling transfers the budget to
+  cofactors. At most one first-layer square exception and one nonsmooth
+  square-small cofactor exception occur. Removing them leaves at least `W-2`
+  controlled, `W`-smooth cofactors with
+  `qᵢ≤W^((1+i)/2)`. Cofactor gcds divide shift gaps; repeated cofactors with
+  odd prime complements force twice the cofactor to divide the gap.
+- **Current hard seam:** close one side of this verified alternative uniformly.
+  Either force a subset whose CRT remainder violates
+  `2^|I|≤h+2`, or prove that the resulting `W-2` smooth, size-controlled
+  second-layer cofactors cannot coexist for arbitrarily large candidate
+  blocks. No present theorem supplies that terminal contradiction.
 - **Growing-depth objective:** iterate the generic factor/adic transition,
   rather than hand-proving an unrelated theorem at every shift, to seek a
   function `D(n)→∞` for which every sufficiently large `n` fails one budget

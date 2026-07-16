@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "have hOddGap :\n    ∀ {n k l p r q : ℕ},\n      0 < q → k < l →\n      Odd p → Odd r →\n      n - k = p * q → n - l = r * q →\n      2 * q ∣ l - k := by\n  intro n k l p r q hq hkl hpOdd hrOdd hkfac hlfac\n  obtain ⟨a, ha⟩ := hpOdd\n  obtain ⟨b, hb⟩ := hrOdd\n  have hrpos : 0 < r := by omega\n  have hnlpos : 0 < n - l := by\n    rw [hlfac]\n    exact Nat.mul_pos hrpos hq\n  have hln : l < n := Nat.sub_pos_iff_lt.mp hnlpos\n  have hshiftlt : n - l < n - k := by omega\n  have hprodlt : r * q < p * q := by\n    rw [← hlfac, ← hkfac]\n    exact hshiftlt\n  have hrp : r < p := Nat.lt_of_mul_lt_mul_right hprodlt\n  have heven : 2 ∣ p - r := by\n    refine ⟨a - b, ?_⟩\n    omega\n  have hmul : 2 * q ∣ (p - r) * q :=\n    Nat.mul_dvd_mul_right heven q\n  have hgap : l - k = (p - r) * q := by\n    calc\n      l - k = (n - k) - (n - l) := by omega\n      _ = p * q - r * q := by rw [hkfac, hlfac]\n      _ = (p - r) * q := by rw [Nat.sub_mul]\n  rwa [hgap]\nintro n k l p r q hq hkl hp hr hp2 hr2 hkfac hlfac\nexact hOddGap\n  hq hkl (hp.odd_of_ne_two hp2) (hr.odd_of_ne_two hr2) hkfac hlfac",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "have hOddGap :\n    ∀ {n k l p r q : ℕ},\n      0 < q → k < l →\n      Odd p → Odd r →\n      n - k = p * q → n - l = r * q →\n      2 * q ∣ l - k := by\n  intro n k l p r q hq hkl hpOdd hrOdd hkfac hlfac\n  obtain ⟨a, ha⟩ := hpOdd\n  obtain ⟨b, hb⟩ := hrOdd\n  have hrpos : 0 < r := by omega\n  have hnlpos : 0 < n - l := by\n    rw [hlfac]\n    exact Nat.mul_pos hrpos hq\n  have hln : l < n := Nat.sub_pos_iff_lt.mp hnlpos\n  have hshiftlt : n - l < n - k := by omega\n  have hprodlt : r * q < p * q := by\n    rw [← hlfac, ← hkfac]\n    exact hshiftlt\n  have hrp : r < p := Nat.lt_of_mul_lt_mul_right hprodlt\n  have heven : 2 ∣ p - r := by\n    refine ⟨a - b, ?_⟩\n    omega\n  have hmul : 2 * q ∣ (p - r) * q :=\n    Nat.mul_dvd_mul_right heven q\n  have hgap : l - k = (p - r) * q := by\n    calc\n      l - k = (n - k) - (n - l) := by omega\n      _ = p * q - r * q := by rw [hkfac, hlfac]\n      _ = (p - r) * q := by rw [Nat.sub_mul]\n  rwa [hgap]\nintro n k l p r q hq hkl hp hr hp2 hr2 hkfac hlfac\nexact hOddGap\n  hq hkl (hp.odd_of_ne_two hp2) (hr.odd_of_ne_two hr2) hkfac hlfac",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ {n k l p r q : ℕ},\n      0 < q → k < l →\n      p.Prime → r.Prime →\n      p ≠ 2 → r ≠ 2 →\n      n - k = p * q → n - l = r * q →\n      2 * q ∣ l - k",
+        "module_source_hash": null,
+        "obligation_id": "85c750ad-7021-421e-b573-5146a65af461",
+        "outcome": "kernel_pass",
+        "problem_version_id": "e9b2f6ae-f1ed-420c-a0de-4499a83bbe2b",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "105e08a48b0ffb95212809baa65f2c31bb6dfaf348a5a4472675b86dedf9036a"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "1d7de7ac27104f4d01bdff99e760191bbb2cd95e9afaa8ebf6bdc631bdb59d46"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "have hcore_theorem : ∀ {m p : ℕ},\n      0 < m → Nat.Prime p → p ∣ m → m < p ^ 2 →\n      let q := m / p\n      m = p * q ∧\n        q < p ∧\n        Nat.Coprime p q ∧\n        ArithmeticFunction.sigma 0 m =\n          2 * ArithmeticFunction.sigma 0 q := by\n  intro m p hm hp hpd hsq\n  dsimp\n  have hfac : p * (m / p) = m := Nat.mul_div_cancel' hpd\n  have hq_lt : m / p < p := by\n    rw [Nat.div_lt_iff_lt_mul hp.pos]\n    simpa [pow_two] using hsq\n  have hp_le_m : p ≤ m := Nat.le_of_dvd hm hpd\n  have hqpos : 0 < m / p := Nat.div_pos hp_le_m hp.pos\n  have hcop : Nat.Coprime p (m / p) := by\n    apply hp.coprime_iff_not_dvd.mpr\n    intro hpq\n    have hpleq : p ≤ m / p := Nat.le_of_dvd hqpos hpq\n    omega\n  have hsigp : ArithmeticFunction.sigma 0 p = 2 := by\n    simpa using\n      (ArithmeticFunction.sigma_zero_apply_prime_pow (p := p) (i := 1) hp)\n  refine ⟨hfac.symm, hq_lt, hcop, ?_⟩\n  calc\n    ArithmeticFunction.sigma 0 m =\n        ArithmeticFunction.sigma 0 (p * (m / p)) := by rw [hfac]\n    _ = ArithmeticFunction.sigma 0 p *\n        ArithmeticFunction.sigma 0 (m / p) :=\n      ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n    _ = 2 * ArithmeticFunction.sigma 0 (m / p) := by rw [hsigp]\nintro n k p hk hkn hp hpd hn_sq hbudget\nhave hmpos : 0 < n - k := by omega\nhave hm_sq : n - k < p ^ 2 := by omega\nhave hcore := hcore_theorem hmpos hp hpd hm_sq\ndsimp at hcore ⊢\nrcases hcore with ⟨hfac, hq_lt, hcop, hsigma⟩\nrefine ⟨hfac, hq_lt, hcop, ?_⟩\nrw [← hsigma]\nexact hbudget",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "have hcore_theorem : ∀ {m p : ℕ},\n      0 < m → Nat.Prime p → p ∣ m → m < p ^ 2 →\n      let q := m / p\n      m = p * q ∧\n        q < p ∧\n        Nat.Coprime p q ∧\n        ArithmeticFunction.sigma 0 m =\n          2 * ArithmeticFunction.sigma 0 q := by\n  intro m p hm hp hpd hsq\n  dsimp\n  have hfac : p * (m / p) = m := Nat.mul_div_cancel' hpd\n  have hq_lt : m / p < p := by\n    rw [Nat.div_lt_iff_lt_mul hp.pos]\n    simpa [pow_two] using hsq\n  have hp_le_m : p ≤ m := Nat.le_of_dvd hm hpd\n  have hqpos : 0 < m / p := Nat.div_pos hp_le_m hp.pos\n  have hcop : Nat.Coprime p (m / p) := by\n    apply hp.coprime_iff_not_dvd.mpr\n    intro hpq\n    have hpleq : p ≤ m / p := Nat.le_of_dvd hqpos hpq\n    omega\n  have hsigp : ArithmeticFunction.sigma 0 p = 2 := by\n    simpa using\n      (ArithmeticFunction.sigma_zero_apply_prime_pow (p := p) (i := 1) hp)\n  refine ⟨hfac.symm, hq_lt, hcop, ?_⟩\n  calc\n    ArithmeticFunction.sigma 0 m =\n        ArithmeticFunction.sigma 0 (p * (m / p)) := by rw [hfac]\n    _ = ArithmeticFunction.sigma 0 p *\n        ArithmeticFunction.sigma 0 (m / p) :=\n      ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n    _ = 2 * ArithmeticFunction.sigma 0 (m / p) := by rw [hsigp]\nintro n k p hk hkn hp hpd hn_sq hbudget\nhave hmpos : 0 < n - k := by omega\nhave hm_sq : n - k < p ^ 2 := by omega\nhave hcore := hcore_theorem hmpos hp hpd hm_sq\ndsimp at hcore ⊢\nrcases hcore with ⟨hfac, hq_lt, hcop, hsigma⟩\nrefine ⟨hfac, hq_lt, hcop, ?_⟩\nrw [← hsigma]\nexact hbudget",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ {n k p : ℕ},\n      0 < k → k < n →\n      Nat.Prime p → p ∣ n - k → n ≤ p ^ 2 →\n      ArithmeticFunction.sigma 0 (n - k) ≤ k + 2 →\n      let q := (n - k) / p\n      n - k = p * q ∧\n        q < p ∧\n        Nat.Coprime p q ∧\n        2 * ArithmeticFunction.sigma 0 q ≤ k + 2",
+        "module_source_hash": null,
+        "obligation_id": "6377e01d-2279-4331-b86c-46a47e5ba460",
+        "outcome": "kernel_pass",
+        "problem_version_id": "3b815ec3-a985-4180-931f-f6ec9295855f",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "0a47b168a3b92156cde20b891f1e717137a148401c37dc2c8a7adc462434ea89"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "7a247baa2aafd0415d76ec54e005fa002ecca4b755efca062a1d4dc005bd114e"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

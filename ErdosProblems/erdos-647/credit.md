@@ -78,10 +78,28 @@
   predicate.
 - Conditional pairwise-coprime novelty and shared-host accumulation theorems,
   isolating the hypotheses still needed by the growing-gauntlet lane.
+- A smooth-number large-factor alternative and exact shift-difference
+  non-reuse theorem. Together they turn a sufficiently large block of
+  budgeted shifts into an injective family of primes larger than the block
+  width, including a scalar endpoint interface and the quantitative
+  `(W+1)^W` shared-host bound.
+- General `t`-subset product selection and an exact CRT re-entry certificate:
+  whenever a selected prime product lies below `n`, its residue supplies a
+  new shift with the kernel-checked sandwich
+  `2^|I| ≤ τ(n-h) ≤ h+2`. The complementary product-large branch is retained
+  explicitly rather than assumed away.
+- A conditional second-layer cofactor catalog. After at most one square-scale
+  exception and one nonsmooth-cofactor exception, at least `W-2` coordinates
+  have positive proper coprime cofactors with `q²<n`, all prime factors at
+  most `W`, and `q≤W^((1+i)/2)`. Large primes selected from those cofactors
+  obey the same shift-gap injectivity law. These are structural reductions,
+  not a contradiction.
 - The explicit global bound `τ(n)^4≤19680n` and its fourth-root candidate
   prefix.
-- A complete public export archive for all 287 related episodes: 280
+- A complete public export archive for all 317 related episodes: 310
   kernel-verified successes and seven retained non-success histories.
+- The final checkpoint contains 169 Lean files with 452 theorem declarations
+  and five lemma declarations (457 theorem/lemma declarations total).
 
 ## Tools and authorship
 
@@ -109,10 +127,12 @@
   for an open theorem.
 - The power-prefix theorems reduce verification for each fixed `n` to a
   finite growing prefix; they do not give a uniform proof for all `n`.
-- Coordinate injectivity is not prime-factor novelty. The novelty theorem
-  requires pairwise coprimality and catalog avoidance, and the exponential
-  host bound additionally requires a common host. These hypotheses have not
-  been derived uniformly from candidacy.
+- Coordinate injectivity alone is not prime-factor novelty. The newer
+  large-factor theorem does prove prime novelty once every selected factor is
+  larger than the block width, but its power-escape or second-layer catalog
+  hypotheses have not been derived uniformly from every hypothetical
+  candidate. CRT re-entry likewise requires a nontrivial selected product
+  below `n`; only singleton availability is automatic.
 - The factorization checker is a proof-producing verifier for supplied data,
   not evidence that a suitable candidate exists.
 - Formal Conjectures closure status remains **0 of 3**: none of the original
@@ -121,9 +141,9 @@
 - Theorem 2's mathematics and the density target are Hughes–Kitamura
   mathematics. Our contribution is the independent Lean reconstruction,
   truncation-gap diagnosis and repair, explicit constants, and final assembly.
-- The 287 proof-search episodes have `fidelity_status = attested`: Lean checks
+- The 317 proof-search episodes have `fidelity_status = attested`: Lean checks
   project-authored formal statements, but this is not neutral-corpus
-  certification. Kernel verification applies to 280 of those episodes; the
+  certification. Kernel verification applies to 310 of those episodes; the
   other seven are retained as explicit negative or unfinished trajectories.
 - The terminal density theorem is supported by a clean transitive source
   replay. It is not misrepresented as an additional standalone tracked

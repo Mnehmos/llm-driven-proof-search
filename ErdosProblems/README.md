@@ -37,8 +37,8 @@ ErdosProblems/
 │   ├── attack-plan.md      completed density program + remaining existence directions
 │   ├── credit.md           Hughes / Kitamura / Idén / Bloom attribution + limits
 │   ├── evidence.md         tracked episodes + clean final replay
-│   ├── dossiers/           full 214-episode export archive
-│   └── proof/              106 Lean files; density and existence reductions included
+│   ├── dossiers/           full 317-episode export archive
+│   └── proof/              169 Lean files; density and existence reductions included
 └── shared/                 cross-problem infrastructure notes
     ├── corpus-validation.md
     ├── bounty-board.md
@@ -106,9 +106,13 @@ relevant) into a new `erdos-<N>/` folder and link it from the project index.
    bound `|C(X)|≤KX/(log X)^7`. The proof repairs the missing level truncation,
    proves polynomial error control, supplies an elementary seventh-power
    denominator, certifies dyadic parameters, and closes the finite range.
-   The folder publishes 239 theorem declarations and full exports for 214
-   related proof-search episodes: 207 verified successes and seven retained
-   non-success histories.
+   The folder publishes 457 theorem/lemma declarations (502 declarations when
+   45 definitions are included) and full exports for 317 related proof-search
+   episodes: 310 verified successes and seven retained non-success histories.
+   The later existence work proves finite-catalog escape, large-prime
+   non-reuse, subset-product/CRT re-entry reductions, and a conditional
+   second-layer cofactor catalog. These sharpen the remaining problem but do
+   not replace any of the three open Formal Conjectures declarations.
 
 ## Verify it yourself
 
@@ -121,7 +125,7 @@ Exit 0 = Lean's kernel accepts every step. No trust in the authors required.
 
 ## Status of open problems
 
-**None of #1, #1052, or #349 is resolved by this repository — all three
+**None of #1, #1052, #349, or #647 is resolved by this repository — all four
 remain OPEN on erdosproblems.com.** Every proof in this repo targets a
 *different, already-known* companion fact that lives in the same corpus
 file as the open question, never the open question itself. See each

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "classical\nintro n W t P ht hcard\nlet good : Finset (Fin W) :=\n  Finset.univ.filter (fun i : Fin W => (P i) ^ t < n)\nhave hcard' : t <= good.card := by simpa [good] using hcard\nobtain ⟨I, hIsub, hIcard⟩ := Finset.exists_subset_card_eq hcard'\nhave hInonempty : I.Nonempty := Finset.card_pos.mp (by omega)\nhave hvalsNonempty : (I.image P).Nonempty := by\n  obtain ⟨i, hi⟩ := hInonempty\n  exact ⟨P i, Finset.mem_image.mpr ⟨i, hi, rfl⟩⟩\nlet M : Nat := (I.image P).max' hvalsNonempty\nhave hMmem : M ∈ I.image P := by\n  dsimp [M]\n  exact Finset.max'_mem _ _\nhave hMgood : M ^ t < n := by\n  obtain ⟨i, hiI, hiM⟩ := Finset.mem_image.mp hMmem\n  have hiGood : i ∈ good := hIsub hiI\n  have hiPower : (P i) ^ t < n := by\n    simpa [good] using hiGood\n  rwa [hiM] at hiPower\nrefine ⟨I, hIcard, ?_⟩\ncalc\n  (∏ i ∈ I, P i) <= ∏ i ∈ I, M := by\n    apply Finset.prod_le_prod'\n    intro i hi\n    dsimp [M]\n    exact (I.image P).le_max' (P i)\n      (Finset.mem_image.mpr ⟨i, hi, rfl⟩)\n  _ = M ^ I.card := by simp\n  _ = M ^ t := by rw [hIcard]\n  _ < n := hMgood",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "classical\nintro n W t P ht hcard\nlet good : Finset (Fin W) :=\n  Finset.univ.filter (fun i : Fin W => (P i) ^ t < n)\nhave hcard' : t <= good.card := by simpa [good] using hcard\nobtain ⟨I, hIsub, hIcard⟩ := Finset.exists_subset_card_eq hcard'\nhave hInonempty : I.Nonempty := Finset.card_pos.mp (by omega)\nhave hvalsNonempty : (I.image P).Nonempty := by\n  obtain ⟨i, hi⟩ := hInonempty\n  exact ⟨P i, Finset.mem_image.mpr ⟨i, hi, rfl⟩⟩\nlet M : Nat := (I.image P).max' hvalsNonempty\nhave hMmem : M ∈ I.image P := by\n  dsimp [M]\n  exact Finset.max'_mem _ _\nhave hMgood : M ^ t < n := by\n  obtain ⟨i, hiI, hiM⟩ := Finset.mem_image.mp hMmem\n  have hiGood : i ∈ good := hIsub hiI\n  have hiPower : (P i) ^ t < n := by\n    simpa [good] using hiGood\n  rwa [hiM] at hiPower\nrefine ⟨I, hIcard, ?_⟩\ncalc\n  (∏ i ∈ I, P i) <= ∏ i ∈ I, M := by\n    apply Finset.prod_le_prod'\n    intro i hi\n    dsimp [M]\n    exact (I.image P).le_max' (P i)\n      (Finset.mem_image.mpr ⟨i, hi, rfl⟩)\n  _ = M ^ I.card := by simp\n  _ = M ^ t := by rw [hIcard]\n  _ < n := hMgood",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "forall (n W t : Nat) (P : Fin W -> Nat),\n      0 < t ->\n      t <= (Finset.univ.filter (fun i : Fin W => (P i) ^ t < n)).card ->\n      exists I : Finset (Fin W),\n        I.card = t /\\ (∏ i ∈ I, P i) < n",
+        "module_source_hash": null,
+        "obligation_id": "81cdde7d-eed8-4cc6-b0e1-ab3f59488826",
+        "outcome": "kernel_pass",
+        "problem_version_id": "e11ff87b-6ef0-4467-b49c-537f10bb4b70",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "0ab423d3600367e3ad041fc060fdb842f1faffe219b4e5942ac322a4f7dc1c51"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "f8fd30215c6f29637e55b89d5f52b83fb454335a1db960ca28022688985cd8fd"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

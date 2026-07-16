@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "have hdistinct : forall (n W k1 k2 q1 q2 r1 r2 : Nat),\n      k1 < k2 ->\n      k2 < n ->\n      k2 - k1 <= W ->\n      q1 ∣ n - k1 ->\n      q2 ∣ n - k2 ->\n      r1.Prime ->\n      r1 ∣ q1 ->\n      W < r1 ->\n      r2.Prime ->\n      r2 ∣ q2 ->\n      W < r2 ->\n      r1 ≠ r2 := by\n  intro n W k1 k2 q1 q2 r1 r2 hk12 hk2n hgap hq1 hq2\n    hr1prime hr1q1 hr1large hr2prime hr2q2 hr2large heq\n  have hr1shift1 : r1 ∣ n - k1 := hr1q1.trans hq1\n  have hr1shift2 : r1 ∣ n - k2 := by\n    rw [heq]\n    exact hr2q2.trans hq2\n  have hr1gap : r1 ∣ k2 - k1 := by\n    have h := Nat.dvd_sub hr1shift1 hr1shift2\n    have hdiff : (n - k1) - (n - k2) = k2 - k1 := by omega\n    rwa [hdiff] at h\n  have hgapPos : 0 < k2 - k1 := by omega\n  have hr1le : r1 <= k2 - k1 := Nat.le_of_dvd hgapPos hr1gap\n  omega\nintro n K W q r hKW hq hr i j hij\nby_contra hne\nhave hcoe : (i : Nat) ≠ (j : Nat) := by\n  intro h\n  apply hne\n  exact Fin.ext h\nrcases lt_or_gt_of_ne hcoe with hijlt | hjilt\n· have hjW : (j : Nat) < W := j.isLt\n  have hjn : K + (j : Nat) < n := by omega\n  have hgap : (K + (j : Nat)) - (K + (i : Nat)) <= W := by omega\n  exact hdistinct\n    n W (K + (i : Nat)) (K + (j : Nat))\n    (q i) (q j) (r i) (r j)\n    (by omega) hjn hgap (hq i) (hq j)\n    (hr i).1 (hr i).2.1 (hr i).2.2\n    (hr j).1 (hr j).2.1 (hr j).2.2 hij\n· have hiW : (i : Nat) < W := i.isLt\n  have hin : K + (i : Nat) < n := by omega\n  have hgap : (K + (i : Nat)) - (K + (j : Nat)) <= W := by omega\n  have hne' : r j ≠ r i :=\n    hdistinct\n      n W (K + (j : Nat)) (K + (i : Nat))\n      (q j) (q i) (r j) (r i)\n      (by omega) hin hgap (hq j) (hq i)\n      (hr j).1 (hr j).2.1 (hr j).2.2\n      (hr i).1 (hr i).2.1 (hr i).2.2\n  exact hne' hij.symm",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "have hdistinct : forall (n W k1 k2 q1 q2 r1 r2 : Nat),\n      k1 < k2 ->\n      k2 < n ->\n      k2 - k1 <= W ->\n      q1 ∣ n - k1 ->\n      q2 ∣ n - k2 ->\n      r1.Prime ->\n      r1 ∣ q1 ->\n      W < r1 ->\n      r2.Prime ->\n      r2 ∣ q2 ->\n      W < r2 ->\n      r1 ≠ r2 := by\n  intro n W k1 k2 q1 q2 r1 r2 hk12 hk2n hgap hq1 hq2\n    hr1prime hr1q1 hr1large hr2prime hr2q2 hr2large heq\n  have hr1shift1 : r1 ∣ n - k1 := hr1q1.trans hq1\n  have hr1shift2 : r1 ∣ n - k2 := by\n    rw [heq]\n    exact hr2q2.trans hq2\n  have hr1gap : r1 ∣ k2 - k1 := by\n    have h := Nat.dvd_sub hr1shift1 hr1shift2\n    have hdiff : (n - k1) - (n - k2) = k2 - k1 := by omega\n    rwa [hdiff] at h\n  have hgapPos : 0 < k2 - k1 := by omega\n  have hr1le : r1 <= k2 - k1 := Nat.le_of_dvd hgapPos hr1gap\n  omega\nintro n K W q r hKW hq hr i j hij\nby_contra hne\nhave hcoe : (i : Nat) ≠ (j : Nat) := by\n  intro h\n  apply hne\n  exact Fin.ext h\nrcases lt_or_gt_of_ne hcoe with hijlt | hjilt\n· have hjW : (j : Nat) < W := j.isLt\n  have hjn : K + (j : Nat) < n := by omega\n  have hgap : (K + (j : Nat)) - (K + (i : Nat)) <= W := by omega\n  exact hdistinct\n    n W (K + (i : Nat)) (K + (j : Nat))\n    (q i) (q j) (r i) (r j)\n    (by omega) hjn hgap (hq i) (hq j)\n    (hr i).1 (hr i).2.1 (hr i).2.2\n    (hr j).1 (hr j).2.1 (hr j).2.2 hij\n· have hiW : (i : Nat) < W := i.isLt\n  have hin : K + (i : Nat) < n := by omega\n  have hgap : (K + (i : Nat)) - (K + (j : Nat)) <= W := by omega\n  have hne' : r j ≠ r i :=\n    hdistinct\n      n W (K + (j : Nat)) (K + (i : Nat))\n      (q j) (q i) (r j) (r i)\n      (by omega) hin hgap (hq j) (hq i)\n      (hr j).1 (hr j).2.1 (hr j).2.2\n      (hr i).1 (hr i).2.1 (hr i).2.2\n  exact hne' hij.symm",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "forall (n K W : Nat) (q r : Fin W -> Nat),\n      K + W <= n ->\n      (forall i : Fin W, q i ∣ n - (K + (i : Nat))) ->\n      (forall i : Fin W,\n        (r i).Prime /\\ r i ∣ q i /\\ W < r i) ->\n      Function.Injective r",
+        "module_source_hash": null,
+        "obligation_id": "6893d9cd-009d-45f4-906c-30be568b7a28",
+        "outcome": "kernel_pass",
+        "problem_version_id": "d4ec93d0-d1e3-4795-9e78-e16218b8d08d",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "98961511386661ef5278869e6cbca3db524dbb7d1b161aa1e0584c184175277a"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "1bd01709f38a10843693445067cd031520bfd0d3d96586e9efa08636e7bfdf02"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

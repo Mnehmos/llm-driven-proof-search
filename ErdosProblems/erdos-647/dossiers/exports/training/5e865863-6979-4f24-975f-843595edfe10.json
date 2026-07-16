@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro n shifts factor H hH hlt hfactor hlarge\nhave hinj : Set.InjOn factor (shifts : Set ℕ) := by\n  intro k₁ hk₁ k₂ hk₂ heq\n  simp only [Finset.mem_coe] at hk₁ hk₂\n  by_contra hkne\n  rcases lt_or_gt_of_ne hkne with hk₁k₂ | hk₂k₁\n  · have hk₂n : k₂ < n := hlt k₂ hk₂\n    have hd₁ : factor k₁ ∣ n - k₁ := (hfactor k₁ hk₁).2.1\n    have hd₂ : factor k₁ ∣ n - k₂ := by\n      simpa [heq] using (hfactor k₂ hk₂).2.1\n    have hgap : factor k₁ ∣ k₂ - k₁ := by\n      have h := Nat.dvd_sub hd₁ hd₂\n      have hgap_eq : (n - k₁) - (n - k₂) = k₂ - k₁ := by omega\n      rwa [hgap_eq] at h\n    have hgap_pos : 0 < k₂ - k₁ := by omega\n    have hle := Nat.le_of_dvd hgap_pos hgap\n    exact (not_lt_of_ge hle) (hlarge k₁ hk₁ k₂ hk₂ hk₁k₂)\n  · have hk₁n : k₁ < n := hlt k₁ hk₁\n    have hd₁ : factor k₂ ∣ n - k₂ := (hfactor k₂ hk₂).2.1\n    have hd₂ : factor k₂ ∣ n - k₁ := by\n      simpa [heq] using (hfactor k₁ hk₁).2.1\n    have hgap : factor k₂ ∣ k₁ - k₂ := by\n      have h := Nat.dvd_sub hd₁ hd₂\n      have hgap_eq : (n - k₂) - (n - k₁) = k₁ - k₂ := by omega\n      rwa [hgap_eq] at h\n    have hgap_pos : 0 < k₁ - k₂ := by omega\n    have hle := Nat.le_of_dvd hgap_pos hgap\n    exact (not_lt_of_ge hle) (hlarge k₂ hk₂ k₁ hk₁ hk₂k₁)\nlet primes := shifts.image factor\nhave hcard : primes.card = shifts.card := by\n  dsimp [primes]\n  exact Finset.card_image_iff.mpr hinj\nhave hprime : ∀ p ∈ primes, p.Prime := by\n  intro p hp\n  dsimp [primes] at hp\n  simp only [Finset.mem_image] at hp\n  obtain ⟨k, hk, rfl⟩ := hp\n  exact (hfactor k hk).1\nhave hsubset : primes ⊆ H.primeFactors := by\n  intro p hp\n  have hpPrime : p.Prime := hprime p hp\n  dsimp [primes] at hp\n  simp only [Finset.mem_image] at hp\n  obtain ⟨k, hk, rfl⟩ := hp\n  exact Nat.mem_primeFactors.mpr\n    ⟨hpPrime, (hfactor k hk).2.2, ne_of_gt hH⟩\nhave hprodDvd : (∏ p ∈ primes, p) ∣ H := by\n  exact (Finset.prod_dvd_prod_of_subset primes H.primeFactors\n    (fun p => p) hsubset).trans (Nat.prod_primeFactors_dvd H)\ncalc\n  2 ^ shifts.card = 2 ^ primes.card := by rw [hcard]\n  _ = ∏ p ∈ primes, 2 := by simp\n  _ ≤ ∏ p ∈ primes, p := by\n    apply Finset.prod_le_prod'\n    intro p hp\n    exact (hprime p hp).two_le\n  _ ≤ H := Nat.le_of_dvd hH hprodDvd",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro n shifts factor H hH hlt hfactor hlarge\nhave hinj : Set.InjOn factor (shifts : Set ℕ) := by\n  intro k₁ hk₁ k₂ hk₂ heq\n  simp only [Finset.mem_coe] at hk₁ hk₂\n  by_contra hkne\n  rcases lt_or_gt_of_ne hkne with hk₁k₂ | hk₂k₁\n  · have hk₂n : k₂ < n := hlt k₂ hk₂\n    have hd₁ : factor k₁ ∣ n - k₁ := (hfactor k₁ hk₁).2.1\n    have hd₂ : factor k₁ ∣ n - k₂ := by\n      simpa [heq] using (hfactor k₂ hk₂).2.1\n    have hgap : factor k₁ ∣ k₂ - k₁ := by\n      have h := Nat.dvd_sub hd₁ hd₂\n      have hgap_eq : (n - k₁) - (n - k₂) = k₂ - k₁ := by omega\n      rwa [hgap_eq] at h\n    have hgap_pos : 0 < k₂ - k₁ := by omega\n    have hle := Nat.le_of_dvd hgap_pos hgap\n    exact (not_lt_of_ge hle) (hlarge k₁ hk₁ k₂ hk₂ hk₁k₂)\n  · have hk₁n : k₁ < n := hlt k₁ hk₁\n    have hd₁ : factor k₂ ∣ n - k₂ := (hfactor k₂ hk₂).2.1\n    have hd₂ : factor k₂ ∣ n - k₁ := by\n      simpa [heq] using (hfactor k₁ hk₁).2.1\n    have hgap : factor k₂ ∣ k₁ - k₂ := by\n      have h := Nat.dvd_sub hd₁ hd₂\n      have hgap_eq : (n - k₂) - (n - k₁) = k₁ - k₂ := by omega\n      rwa [hgap_eq] at h\n    have hgap_pos : 0 < k₁ - k₂ := by omega\n    have hle := Nat.le_of_dvd hgap_pos hgap\n    exact (not_lt_of_ge hle) (hlarge k₂ hk₂ k₁ hk₁ hk₂k₁)\nlet primes := shifts.image factor\nhave hcard : primes.card = shifts.card := by\n  dsimp [primes]\n  exact Finset.card_image_iff.mpr hinj\nhave hprime : ∀ p ∈ primes, p.Prime := by\n  intro p hp\n  dsimp [primes] at hp\n  simp only [Finset.mem_image] at hp\n  obtain ⟨k, hk, rfl⟩ := hp\n  exact (hfactor k hk).1\nhave hsubset : primes ⊆ H.primeFactors := by\n  intro p hp\n  have hpPrime : p.Prime := hprime p hp\n  dsimp [primes] at hp\n  simp only [Finset.mem_image] at hp\n  obtain ⟨k, hk, rfl⟩ := hp\n  exact Nat.mem_primeFactors.mpr\n    ⟨hpPrime, (hfactor k hk).2.2, ne_of_gt hH⟩\nhave hprodDvd : (∏ p ∈ primes, p) ∣ H := by\n  exact (Finset.prod_dvd_prod_of_subset primes H.primeFactors\n    (fun p => p) hsubset).trans (Nat.prod_primeFactors_dvd H)\ncalc\n  2 ^ shifts.card = 2 ^ primes.card := by rw [hcard]\n  _ = ∏ p ∈ primes, 2 := by simp\n  _ ≤ ∏ p ∈ primes, p := by\n    apply Finset.prod_le_prod'\n    intro p hp\n    exact (hprime p hp).two_le\n  _ ≤ H := Nat.le_of_dvd hH hprodDvd",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (n : ℕ) (shifts : Finset ℕ) (factor : ℕ → ℕ) (H : ℕ),\n  0 < H →\n  (∀ k ∈ shifts, k < n) →\n  (∀ k ∈ shifts,\n    (factor k).Prime ∧ factor k ∣ n - k ∧ factor k ∣ H) →\n  (∀ k₁ ∈ shifts, ∀ k₂ ∈ shifts,\n    k₁ < k₂ → k₂ - k₁ < factor k₁) →\n  2 ^ shifts.card ≤ H",
+        "module_source_hash": null,
+        "obligation_id": "972c8c2d-0611-476b-992f-bb95859b2608",
+        "outcome": "kernel_pass",
+        "problem_version_id": "3f78f80a-f7d3-484a-b8d7-1548757fda96",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "690dee8209ad2f6e2c5c8c47d7b60416ff1c4146ca1ed73ad7db1639c4406a1b"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "a5c3e255b7b12881ffd638c166e7ad417195c157c01ec7a8c3663bc5189bad10"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro W A B hA hB\n  have hAB : (A ∪ B).card ≤ A.card + B.card :=\n    Finset.card_union_le A B\n  have hsub : A ∪ B ⊆ (Finset.univ : Finset (Fin W)) :=\n    Finset.subset_univ _\n  have hpartition := Finset.card_sdiff_add_card_eq_card hsub\n  have huniv : (Finset.univ : Finset (Fin W)).card = W := by simp\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro W A B hA hB\n  have hAB : (A ∪ B).card ≤ A.card + B.card :=\n    Finset.card_union_le A B\n  have hsub : A ∪ B ⊆ (Finset.univ : Finset (Fin W)) :=\n    Finset.subset_univ _\n  have hpartition := Finset.card_sdiff_add_card_eq_card hsub\n  have huniv : (Finset.univ : Finset (Fin W)).card = W := by simp\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (W : ℕ) (A B : Finset (Fin W)),\n      A.card ≤ 1 → B.card ≤ 1 →\n      W ≤ (Finset.univ \\ (A ∪ B)).card + 2",
+        "module_source_hash": null,
+        "obligation_id": "ac504f0c-88b6-4830-a56f-02c75c5b78ed",
+        "outcome": "kernel_pass",
+        "problem_version_id": "83cca71d-9412-40b7-950b-39a7d70cf31c",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "e16aa2a7df868e330230201711d3c71e3ff6f0ab2fff74e24e10a8141aecf00a"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "e8334a3fb4646c4313f50c3d9e508287a1f8b8a37e807f7be6027fddd3af6b57"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

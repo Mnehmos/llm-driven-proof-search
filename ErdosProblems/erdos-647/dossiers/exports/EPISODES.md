@@ -3,7 +3,7 @@
 Generated 2026-07-16 from the campaign source, explicit Lean provenance,
 the evidence ledger, and a read-only transitive database closure audit.
 
-Episode count: 287 (280 kernel-verified; 7 non-success histories retained
+Episode count: 317 (310 kernel-verified; 7 non-success histories retained
 for audit completeness).
 
 - `0232fe34-07cf-4e9a-98c4-019dd746d6e5` - `KERNEL_VERIFIED`
@@ -293,3 +293,36 @@ for audit completeness).
 - `fbf2047c-f3aa-4a54-9529-8ab7ecdd81e5` - `KERNEL_VERIFIED`
 - `fe3d50d3-e401-435b-8602-b0ea7d8ee69c` - `KERNEL_VERIFIED`
 - `fffbd7ef-df32-471c-b2c5-57246a86d0a2` - `KERNEL_VERIFIED`
+
+## 2026-07-16 continuation additions
+
+- `09aa8061-de5e-4466-b815-82a8d7bf55c2` - `KERNEL_VERIFIED`
+- `15d19ef3-0de0-49a0-ab99-51b00d024fd1` - `KERNEL_VERIFIED`
+- `1611cd40-d0d3-4631-9c8d-4b5c82f52e82` - `KERNEL_VERIFIED`
+- `21024f54-e6bb-4e11-8912-e3d715cf9a8a` - `KERNEL_VERIFIED`
+- `26aec94e-2c97-4018-a881-a55ea4e73b33` - `KERNEL_VERIFIED`
+- `2a9302f6-16ed-4951-b774-bc9ce773b891` - `KERNEL_VERIFIED`
+- `31ba0909-6d0a-4a7d-a1fd-5db9b5987479` - `KERNEL_VERIFIED`
+- `3e3a35df-8d76-42fa-8323-e6af0aa7c2d6` - `KERNEL_VERIFIED`
+- `4ab8fa09-47fc-4155-b825-0f6c83f78393` - `KERNEL_VERIFIED`
+- `4cbc17df-28dd-4420-ad45-e4c7d5e7eb64` - `KERNEL_VERIFIED`
+- `522f2296-f902-44bf-826f-277cf7c366d8` - `KERNEL_VERIFIED`
+- `5e865863-6979-4f24-975f-843595edfe10` - `KERNEL_VERIFIED`
+- `5f3b332c-a77c-41a3-bbce-1df5cd67c5ec` - `KERNEL_VERIFIED`
+- `6299d4d7-d39a-44cc-97ca-40840e989e5c` - `KERNEL_VERIFIED`
+- `63caad59-40e2-494c-9820-8bd4cd140c1c` - `KERNEL_VERIFIED`
+- `644db370-4230-4bf7-bc84-42c2530f42ae` - `KERNEL_VERIFIED`
+- `7518e92a-0ba9-4cec-9136-0eca9ae697d2` - `KERNEL_VERIFIED`
+- `788ce5b5-fd30-4fc7-bd69-d73741195819` - `KERNEL_VERIFIED`
+- `89548463-5d2f-4d59-b2b9-61da4cc90823` - `KERNEL_VERIFIED`
+- `8fd6a3b7-39fd-40ee-b4b9-81141eec9f58` - `KERNEL_VERIFIED`
+- `b29f042a-6df4-45ce-b333-93f608c20664` - `KERNEL_VERIFIED`
+- `bd5d7e2a-1de2-4f7c-bd31-c3a8ccf53bee` - `KERNEL_VERIFIED`
+- `bf1de66d-1115-46c3-a902-c78596f8c984` - `KERNEL_VERIFIED`
+- `bfd9dcb2-564e-4deb-b494-a7e4cffce319` - `KERNEL_VERIFIED`
+- `cd4d5dd1-defd-4e21-bf64-651832299806` - `KERNEL_VERIFIED`
+- `cf96c53e-9e2b-48d0-a5cf-cae17267c149` - `KERNEL_VERIFIED`
+- `d37cd80e-d06c-4364-8623-01b413fa7ce7` - `KERNEL_VERIFIED`
+- `d50528e3-f045-4a4a-ae5f-df336cc05a8b` - `KERNEL_VERIFIED`
+- `da4d5b5b-314f-4204-8dc6-b917fd969062` - `KERNEL_VERIFIED`
+- `dbaf459e-7de3-4049-878b-0b6b0c4bf201` - `KERNEL_VERIFIED`

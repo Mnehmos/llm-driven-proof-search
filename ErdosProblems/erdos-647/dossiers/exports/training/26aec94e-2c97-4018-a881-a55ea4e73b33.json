@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "classical\nintro n W I P hW hI hinj hP hQn\nlet Q : ℕ := ∏ i ∈ I, P i\nhave hQpos : 0 < Q := by\n  dsimp [Q]\n  exact Finset.prod_pos fun i hi => (hP i hi).1.pos\nhave hPiQ : ∀ i ∈ I, P i ∣ Q := by\n  intro i hi\n  dsimp [Q]\n  exact Finset.dvd_prod_of_mem P hi\nhave hPinot : ∀ i ∈ I, ¬P i ∣ n := by\n  intro i hi hPin\n  have hPiltQ : P i ≤ Q := Nat.le_of_dvd hQpos (hPiQ i hi)\n  have hPiltN : P i < n := lt_of_le_of_lt hPiltQ hQn\n  have hiW : (i : ℕ) < W := i.isLt\n  have hWP : W < P i := (hP i hi).2.1\n  have hshiftltP : 1 + (i : ℕ) < P i := by omega\n  have hshiftltN : 1 + (i : ℕ) < n :=\n    lt_trans hshiftltP hPiltN\n  have hdifference : P i ∣ n - (n - (1 + (i : ℕ))) :=\n    Nat.dvd_sub hPin (hP i hi).2.2\n  have hshiftDvd : P i ∣ 1 + (i : ℕ) := by\n    convert hdifference using 1\n    all_goals omega\n  have hPileShift : P i ≤ 1 + (i : ℕ) :=\n    Nat.le_of_dvd (by omega) hshiftDvd\n  omega\nhave hsquarefree : Squarefree Q := by\n  dsimp [Q]\n  apply Finset.squarefree_prod_of_pairwise_isCoprime\n  · intro i hi j hj hij\n    apply Nat.coprime_iff_isRelPrime.mp\n    apply ((hP i hi).1.coprime_iff_not_dvd).mpr\n    intro hdvd\n    have hPeq : P i = P j :=\n      (Nat.prime_dvd_prime_iff_eq (hP i hi).1 (hP j hj).1).mp hdvd\n    exact hij (hinj hPeq)\n  · intro i hi\n    exact (hP i hi).1.squarefree\nhave hcoprime : Nat.Coprime Q n := by\n  dsimp [Q]\n  rw [Nat.coprime_prod_left_iff]\n  intro i hi\n  exact ((hP i hi).1.coprime_iff_not_dvd).mpr (hPinot i hi)\nhave hQnotdvd : ¬Q ∣ n := by\n  intro hQdvd\n  obtain ⟨i, hi⟩ := hI\n  exact hPinot i hi ((hPiQ i hi).trans hQdvd)\nhave hresidue : ∀ i ∈ I, (n % Q) % P i = 1 + (i : ℕ) := by\n  intro i hi\n  have hiW : (i : ℕ) < W := i.isLt\n  have hWP : W < P i := (hP i hi).2.1\n  have hshiftltP : 1 + (i : ℕ) < P i := by omega\n  have hPiltQ : P i ≤ Q := Nat.le_of_dvd hQpos (hPiQ i hi)\n  have hPiltN : P i < n := lt_of_le_of_lt hPiltQ hQn\n  have hshiftltN : 1 + (i : ℕ) < n :=\n    lt_trans hshiftltP hPiltN\n  have hsplit : n = 1 + (i : ℕ) + (n - (1 + (i : ℕ))) := by\n    omega\n  have hmodzero : (n - (1 + (i : ℕ))) % P i = 0 :=\n    Nat.dvd_iff_mod_eq_zero.mp (hP i hi).2.2\n  calc\n    (n % Q) % P i = n % P i := Nat.mod_mod_of_dvd n (hPiQ i hi)\n    _ = (1 + (i : ℕ) + (n - (1 + (i : ℕ)))) % P i := by rw [← hsplit]\n    _ = 1 + (i : ℕ) := by\n      simpa [Nat.add_mod, hmodzero] using\n        (Nat.mod_eq_of_lt hshiftltP)\nhave hremainder_large : 2 ≤ I.card → W < n % Q := by\n  intro hcard\n  have hone : 1 < I.card := by omega\n  obtain ⟨i, hi, j, hj, hij⟩ := Finset.one_lt_card.mp hone\n  by_contra hnot\n  have hrleW : n % Q ≤ W := by omega\n  have hri : n % Q = 1 + (i : ℕ) := by\n    have hlt : n % Q < P i := lt_of_le_of_lt hrleW (hP i hi).2.1\n    simpa [Nat.mod_eq_of_lt hlt] using hresidue i hi\n  have hrj : n % Q = 1 + (j : ℕ) := by\n    have hlt : n % Q < P j := lt_of_le_of_lt hrleW (hP j hj).2.1\n    simpa [Nat.mod_eq_of_lt hlt] using hresidue j hj\n  apply hij\n  apply Fin.ext\n  omega\nsimpa [Q] using\n  And.intro hsquarefree\n    (And.intro hcoprime\n      (And.intro hQnotdvd (And.intro hresidue hremainder_large)))",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "classical\nintro n W I P hW hI hinj hP hQn\nlet Q : ℕ := ∏ i ∈ I, P i\nhave hQpos : 0 < Q := by\n  dsimp [Q]\n  exact Finset.prod_pos fun i hi => (hP i hi).1.pos\nhave hPiQ : ∀ i ∈ I, P i ∣ Q := by\n  intro i hi\n  dsimp [Q]\n  exact Finset.dvd_prod_of_mem P hi\nhave hPinot : ∀ i ∈ I, ¬P i ∣ n := by\n  intro i hi hPin\n  have hPiltQ : P i ≤ Q := Nat.le_of_dvd hQpos (hPiQ i hi)\n  have hPiltN : P i < n := lt_of_le_of_lt hPiltQ hQn\n  have hiW : (i : ℕ) < W := i.isLt\n  have hWP : W < P i := (hP i hi).2.1\n  have hshiftltP : 1 + (i : ℕ) < P i := by omega\n  have hshiftltN : 1 + (i : ℕ) < n :=\n    lt_trans hshiftltP hPiltN\n  have hdifference : P i ∣ n - (n - (1 + (i : ℕ))) :=\n    Nat.dvd_sub hPin (hP i hi).2.2\n  have hshiftDvd : P i ∣ 1 + (i : ℕ) := by\n    convert hdifference using 1\n    all_goals omega\n  have hPileShift : P i ≤ 1 + (i : ℕ) :=\n    Nat.le_of_dvd (by omega) hshiftDvd\n  omega\nhave hsquarefree : Squarefree Q := by\n  dsimp [Q]\n  apply Finset.squarefree_prod_of_pairwise_isCoprime\n  · intro i hi j hj hij\n    apply Nat.coprime_iff_isRelPrime.mp\n    apply ((hP i hi).1.coprime_iff_not_dvd).mpr\n    intro hdvd\n    have hPeq : P i = P j :=\n      (Nat.prime_dvd_prime_iff_eq (hP i hi).1 (hP j hj).1).mp hdvd\n    exact hij (hinj hPeq)\n  · intro i hi\n    exact (hP i hi).1.squarefree\nhave hcoprime : Nat.Coprime Q n := by\n  dsimp [Q]\n  rw [Nat.coprime_prod_left_iff]\n  intro i hi\n  exact ((hP i hi).1.coprime_iff_not_dvd).mpr (hPinot i hi)\nhave hQnotdvd : ¬Q ∣ n := by\n  intro hQdvd\n  obtain ⟨i, hi⟩ := hI\n  exact hPinot i hi ((hPiQ i hi).trans hQdvd)\nhave hresidue : ∀ i ∈ I, (n % Q) % P i = 1 + (i : ℕ) := by\n  intro i hi\n  have hiW : (i : ℕ) < W := i.isLt\n  have hWP : W < P i := (hP i hi).2.1\n  have hshiftltP : 1 + (i : ℕ) < P i := by omega\n  have hPiltQ : P i ≤ Q := Nat.le_of_dvd hQpos (hPiQ i hi)\n  have hPiltN : P i < n := lt_of_le_of_lt hPiltQ hQn\n  have hshiftltN : 1 + (i : ℕ) < n :=\n    lt_trans hshiftltP hPiltN\n  have hsplit : n = 1 + (i : ℕ) + (n - (1 + (i : ℕ))) := by\n    omega\n  have hmodzero : (n - (1 + (i : ℕ))) % P i = 0 :=\n    Nat.dvd_iff_mod_eq_zero.mp (hP i hi).2.2\n  calc\n    (n % Q) % P i = n % P i := Nat.mod_mod_of_dvd n (hPiQ i hi)\n    _ = (1 + (i : ℕ) + (n - (1 + (i : ℕ)))) % P i := by rw [← hsplit]\n    _ = 1 + (i : ℕ) := by\n      simpa [Nat.add_mod, hmodzero] using\n        (Nat.mod_eq_of_lt hshiftltP)\nhave hremainder_large : 2 ≤ I.card → W < n % Q := by\n  intro hcard\n  have hone : 1 < I.card := by omega\n  obtain ⟨i, hi, j, hj, hij⟩ := Finset.one_lt_card.mp hone\n  by_contra hnot\n  have hrleW : n % Q ≤ W := by omega\n  have hri : n % Q = 1 + (i : ℕ) := by\n    have hlt : n % Q < P i := lt_of_le_of_lt hrleW (hP i hi).2.1\n    simpa [Nat.mod_eq_of_lt hlt] using hresidue i hi\n  have hrj : n % Q = 1 + (j : ℕ) := by\n    have hlt : n % Q < P j := lt_of_le_of_lt hrleW (hP j hj).2.1\n    simpa [Nat.mod_eq_of_lt hlt] using hresidue j hj\n  apply hij\n  apply Fin.ext\n  omega\nsimpa [Q] using\n  And.intro hsquarefree\n    (And.intro hcoprime\n      (And.intro hQnotdvd (And.intro hresidue hremainder_large)))",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (n W : ℕ) (I : Finset (Fin W)) (P : Fin W → ℕ),\n      1 ≤ W →\n      I.Nonempty →\n      Function.Injective P →\n      (∀ i ∈ I,\n        (P i).Prime ∧ W < P i ∧ P i ∣ n - (1 + (i : ℕ))) →\n      (∏ i ∈ I, P i) < n →\n      Squarefree (∏ i ∈ I, P i) ∧\n        Nat.Coprime (∏ i ∈ I, P i) n ∧\n        ¬(∏ i ∈ I, P i) ∣ n ∧\n        (∀ i ∈ I,\n          (n % (∏ j ∈ I, P j)) % P i = 1 + (i : ℕ)) ∧\n        (2 ≤ I.card → W < n % (∏ i ∈ I, P i))",
+        "module_source_hash": null,
+        "obligation_id": "daa010fd-6fd9-45f5-95c6-fa576705ff74",
+        "outcome": "kernel_pass",
+        "problem_version_id": "34756065-a1fc-4104-9c13-b51103dd4a4a",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "51622c81128fd8bee8fe143e3fbec95eb00f10f7335023bfd0e0aeee797e0729"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "00103451c59e5da924eb3d57694c4edabef088e8c9f29f3b9ceda25fadfa9a12"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

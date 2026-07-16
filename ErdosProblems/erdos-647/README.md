@@ -30,9 +30,9 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 | [THEOREM-CATALOG.md](THEOREM-CATALOG.md) | theorem inventory and final assembly map |
 | [attack-plan.md](attack-plan.md) | completed density program and remaining existence directions |
 | [evidence.md](evidence.md) | tracked episode evidence plus the clean repository replay |
-| [dossiers/](dossiers/README.md) | complete 287-episode export archive and indexes |
+| [dossiers/](dossiers/README.md) | complete 317-episode export archive and indexes |
 | [credit.md](credit.md) | attribution, AI disclosure, and honest limits |
-| [proof/](proof/) | 152 Lean files containing 388 top-level theorems and four helper lemmas (392 declarations total) |
+| [proof/](proof/) | 169 Lean files containing 452 top-level theorems and five helper lemmas (457 theorem/lemma declarations total) |
 
 ## Headline results — 2026-07-16
 
@@ -64,10 +64,10 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
    the all-avoid obstruction showed that bounded congruence trees cannot close
    the frontier.
 
-6. **Complete machine export archive.** All 287 related episodes
+6. **Complete machine export archive.** All 317 related episodes
    are exported in redacted JSON, full Markdown dossier, and structured
    training JSON forms under
-   [dossiers/exports/](dossiers/exports/README.md). Of these, 280 report
+   [dossiers/exports/](dossiers/exports/README.md). Of these, 310 report
    `KERNEL_VERIFIED`; the archive deliberately retains three unfinished,
    three gave-up, and one budget-exhausted trajectory for audit completeness.
    The terminal composition is separately identified as a clean source replay
@@ -190,6 +190,60 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
     fixed candidate only shifts satisfying `(k+2)^4 < 19680(n-k)` require
     explicit checking.
 
+19. **The finite prefix is compressed again, and the three bounds are combined.**
+    [`Erdos647_FifthPowerDivisorBound.lean`](proof/Erdos647_FifthPowerDivisorBound.lean)
+    proves `τ(n)^5 ≤ 147700800n`.
+    [`Erdos647_HybridPowerPrefix.lean`](proof/Erdos647_HybridPowerPrefix.lean)
+    requires an explicit check only where the sharp cubic, fourth-power, and
+    fifth-power tests all remain inconclusive. This is a stronger finite
+    certificate for each fixed `n`, not a uniform exclusion.
+
+20. **Every sufficiently large candidate escapes every fixed prime catalog.**
+    [`Erdos647_FiniteCatalogEscape.lean`](proof/Erdos647_FiniteCatalogEscape.lean)
+    constructs a bounded shift whose value has a prime factor outside any
+    prescribed finite catalog; the theorem is stated directly for the Formal
+    Conjectures candidate expression. The primorial specialization in
+    [`Erdos647_PrimorialCandidateEscape.lean`](proof/Erdos647_PrimorialCandidateEscape.lean)
+    produces a prime larger than any fixed cutoff. Thus a hypothetical
+    candidate must keep introducing primes; no fixed catalog can contain its
+    entire shift structure.
+
+21. **Large-prime non-reuse no longer needs pairwise-coprime shifted values.**
+    [`Erdos647_ShiftDifferenceNovelty.lean`](proof/Erdos647_ShiftDifferenceNovelty.lean)
+    proves that any common divisor of `n-k₁` and `n-k₂` divides
+    `k₂-k₁`. Consequently selected factors larger than a block's width are
+    automatically distinct. The smooth-number alternative in
+    [`Erdos647_SmoothLargePrimeFactor.lean`](proof/Erdos647_SmoothLargePrimeFactor.lean)
+    and its block assembly in
+    [`Erdos647_BlockLargePrimeNovelty.lean`](proof/Erdos647_BlockLargePrimeNovelty.lean)
+    turn sufficiently large budgeted shifts into an injective family of large
+    primes, with the usual exponential bound if a common host is available.
+
+22. **Subset products now feed an exact CRT re-entry certificate.**
+    [`Erdos647_PrimeProductDichotomy.lean`](proof/Erdos647_PrimeProductDichotomy.lean)
+    and
+    [`Erdos647_TSubsetProductDichotomy.lean`](proof/Erdos647_TSubsetProductDichotomy.lean)
+    isolate when a product of selected large primes is below `n`.
+    [`Erdos647_CRTReentryExclusion.lean`](proof/Erdos647_CRTReentryExclusion.lean)
+    then uses `h=n mod ∏Pᵢ` as a new shift and proves the exact candidate
+    sandwich `2^|I| ≤ τ(n-h) ≤ h+2`. Hence `h+2<2^|I|` is a
+    kernel-checkable non-candidacy certificate.
+
+23. **The no-reentry branch has a conditional second-layer catalog.**
+    [`Erdos647_LargePrimeCofactor.lean`](proof/Erdos647_LargePrimeCofactor.lean)
+    peels a square-scale prime and transfers the budget to its cofactor.
+    [`Erdos647_NonsmoothCofactorException.lean`](proof/Erdos647_NonsmoothCofactorException.lean)
+    proves that at most one square-small cofactor can contain a prime larger
+    than the block width under the no-cross-product hypothesis. Together with
+    [`Erdos647_TwoExceptionalIndices.lean`](proof/Erdos647_TwoExceptionalIndices.lean),
+    [`Erdos647_SmoothCofactorBound.lean`](proof/Erdos647_SmoothCofactorBound.lean),
+    and
+    [`Erdos647_SecondLayerCatalogAssembly.lean`](proof/Erdos647_SecondLayerCatalogAssembly.lean),
+    this leaves at least `W-2` controlled, `W`-smooth cofactors satisfying
+    `qᵢ≤W^((1+i)/2)`. Cofactor gcd and repetition constraints are recorded in
+    [`Erdos647_CofactorGapRigidity.lean`](proof/Erdos647_CofactorGapRigidity.lean).
+    This is the current structural frontier, not a contradiction.
+
 ## Verification snapshot
 
 - Pinned environment:
@@ -197,9 +251,17 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 - Complete density dependency replay: 42 modules plus
   `proof/campaign/family2-classifications.lean`, exit code 0
 - No `sorry`, `admit`, or added axiom in the final assembly
+- Portable source contains 452 top-level theorem declarations and five
+  top-level lemma declarations across 169 Lean files; including 45 definitions
+  gives 502 declarations. These are source declarations, not 502 independent
+  tracked discoveries.
 - The 2026-07-16 power-prefix/block/certificate batch contains 31 theorem
   declarations in nine modules. Twenty-three roots were independently
   tracked `kernel_verified`; the remaining eight are source-compiled helpers.
+- The later large-prime, CRT re-entry, and second-layer continuation contributes
+  30 additional tracked roots. Direct proof-search export confirms all 30 are
+  `KERNEL_VERIFIED` in the pinned environment; their full, public-summary,
+  and training artifacts are included in the 317-episode archive.
 - None of these results closes a Formal Conjectures declaration. All three
   research-open `sorry`s remain explicit.
 - Generated `.olean` files are not committed

@@ -265,10 +265,10 @@ repaired squarefree remainder was also submitted to the independent exact
 proof-search verifier and returned `kernel_pass`; identifiers and hashes are
 recorded in [evidence.md](evidence.md).
 
-For provenance beyond the source replay, all 287 related campaign
+For provenance beyond the source replay, all 317 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
-training JSON formats. Of these, 280 report `KERNEL_VERIFIED` in the pinned
+training JSON formats. Of these, 310 report `KERNEL_VERIFIED` in the pinned
 environment; seven non-success histories are retained for audit completeness.
 
 This proves a density-zero result with the claimed seventh logarithmic power.
@@ -408,16 +408,92 @@ prefix still grows with `n`. No theorem here supplies a universal
 contradiction or a larger candidate. All three Formal Conjectures research
 declarations remain open.
 
+### 3.9 Large-factor accumulation, CRT re-entry, and the second layer (2026-07-16)
+
+The next continuation replaces the pairwise-coprime-block hope by a weaker
+fact that is available for every pair of shifts. For `k₁≤k₂<n`,
+
+```text
+gcd(n-k₁,n-k₂) = gcd(n-k₁,k₂-k₁).
+```
+
+Therefore every common divisor divides the shift gap. In a width-`W` block,
+chosen prime factors larger than `W` cannot repeat, even when the shifted
+values themselves are not pairwise coprime. This is the exact non-reuse
+mechanism in `Erdos647_ShiftDifferenceNovelty.lean`.
+
+The divisor budget supplies those factors through a smooth-number
+alternative. If every prime divisor of a positive `m` is at most `W`, then
+
+```text
+m ≤ W^(τ(m)-1).
+```
+
+Hence a shifted value larger than its allowed smooth threshold has a prime
+factor above `W`. The block assembly selects one such prime per coordinate
+and proves injectivity. Separately, the fifth-power estimate
+`τ(m)^5≤147700800m` and the hybrid cubic/fourth/fifth prefix reduce the
+explicit checks needed for any fixed candidate. A finite prime catalog also
+cannot stabilize the process: once `n` exceeds its product by enough, a
+bounded shift has a prime divisor outside the catalog. The primorial
+specialization gives a factor above every fixed cutoff.
+
+Distinct large primes become useful when a subset product is below `n`.
+The pair and general `t`-subset dichotomies formalize exactly this alternative.
+For a selected index set `I`, put
+
+```text
+Q = ∏ i∈I, Pᵢ,     h = n mod Q.
+```
+
+When `Q<n`, the remainder is a genuine positive re-entry shift beyond the
+original block, every `Pᵢ` divides `n-h`, and candidacy forces
+
+```text
+2^|I| ≤ τ(n-h) ≤ h+2.
+```
+
+Thus `h+2<2^|I|` is a complete kernel-checkable exclusion certificate. This
+is a real feedback loop from many earlier shifts into one later shift, not
+merely a cardinality heuristic.
+
+The complementary no-small-product branch now has a second layer. Except for
+at most one first-layer square exception, a selected prime `Pᵢ` can be peeled
+from `n-(1+i)=Pᵢqᵢ`, giving `qᵢ<Pᵢ`, coprimality, and
+`2τ(qᵢ)≤i+3`. Under the no-cross-product hypothesis, at most one square-small
+cofactor can contain a prime above `W`: two such primes would be distinct by
+the shift-gap argument, and their product would re-enter below `n`. Deleting
+the two exceptional indices leaves at least `W-2` coordinates with
+
+```text
+qᵢ² < n,
+every prime divisor of qᵢ at most W,
+qᵢ ≤ W^((1+i)/2).
+```
+
+This conclusion is assembled in
+`Erdos647_SecondLayerCatalogAssembly.lean`. The auxiliary gap-rigidity
+theorems show that common cofactor divisors divide the coordinate gap; equal
+cofactors with odd prime complements force twice the cofactor to divide that
+gap.
+
+The remaining barrier is now precise. One must either force a re-entry subset
+whose remainder violates `2^|I|≤h+2`, or prove that the large family of
+smooth, size-controlled second-layer cofactors cannot coexist for a candidate.
+Neither conclusion is currently proved. The original existence theorem, the
+limit theorem, and the infinite-window theorem remain the same three open
+Formal Conjectures declarations.
+
 ## 4. Scoreboard (honest)
 
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **388 top-level theorem
-  declarations and four top-level helper lemmas across 152 Lean files** under
-  `proof/`. This count includes helper and assembly theorems; it is not
-  presented as 392 independent mathematical discoveries or 392 standalone
-  tracked episodes.
+- Portable proof source currently contains **452 top-level theorem
+  declarations and five top-level helper lemmas across 169 Lean files** under
+  `proof/`. Including 45 definitions gives 502 declarations. These counts
+  include helper and assembly declarations; they are not presented as 502
+  independent mathematical discoveries or 502 standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base
   sieve, the bridging-closure layer, the Theorem-2 formalization, the
   extended negative result, the Mertens infrastructure, the explicit

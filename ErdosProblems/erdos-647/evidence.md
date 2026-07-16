@@ -206,6 +206,43 @@ pairwise-coprime/shared-host hypotheses arise from every hypothetical
 candidate. Accordingly, none of the three Formal Conjectures `sorry`s is
 closed.
 
+### Large-factor, CRT re-entry, and second-layer continuation (2026-07-16)
+
+The following 30 roots were re-read directly from the proof-search store while
+building the export archive. Every listed episode reports
+`KERNEL_VERIFIED`, `kernel_verified = true`, one accepted step, and the pinned
+environment hash. Exact problem IDs, statement hashes, timestamps, and full
+trajectories are recorded in the export manifest and per-episode artifacts.
+
+| source/result group | episode IDs | outcome |
+|---|---|---|
+| smooth-number bound and large-prime extraction | `7518e92a-0ba9-4cec-9136-0eca9ae697d2`, `6299d4d7-d39a-44cc-97ca-40840e989e5c` | **kernel_verified** |
+| shift-gap gcd transport, injectivity, and host bound | `3e3a35df-8d76-42fa-8323-e6af0aa7c2d6`, `644db370-4230-4bf7-bc84-42c2530f42ae`, `5e865863-6979-4f24-975f-843595edfe10` | **kernel_verified** |
+| fifth-power divisor bound and exact prefix bridge | `21024f54-e6bb-4e11-8912-e3d715cf9a8a`, `bf1de66d-1115-46c3-a902-c78596f8c984` | **kernel_verified** |
+| finite-catalog escape chain | `bd5d7e2a-1de2-4f7c-bd31-c3a8ccf53bee`, `2a9302f6-16ed-4951-b774-bc9ce773b891`, `d37cd80e-d06c-4364-8623-01b413fa7ce7` | **kernel_verified** |
+| primorial escape specialization | `31ba0909-6d0a-4a7d-a1fd-5db9b5987479` | **kernel_verified** |
+| hybrid cubic/fourth/fifth prefix | `788ce5b5-fd30-4fc7-bd69-d73741195819` | **kernel_verified** |
+| block production and shared-host accumulation | `89548463-5d2f-4d59-b2b9-61da4cc90823`, `cd4d5dd1-defd-4e21-bf64-651832299806`, `8fd6a3b7-39fd-40ee-b4b9-81141eec9f58`, `522f2296-f902-44bf-826f-277cf7c366d8` | **kernel_verified** |
+| divisor lower bound, CRT remainder arithmetic, and exact candidate sandwich | `dbaf459e-7de3-4049-878b-0b6b0c4bf201`, `26aec94e-2c97-4018-a881-a55ea4e73b33`, `63caad59-40e2-494c-9820-8bd4cd140c1c` | **kernel_verified** |
+| pair-product dichotomy | `4cbc17df-28dd-4420-ad45-e4c7d5e7eb64` | **kernel_verified** |
+| prime/cofactor peel and transferred budget | `da4d5b5b-314f-4204-8dc6-b917fd969062`, `cf96c53e-9e2b-48d0-a5cf-cae17267c149` | **kernel_verified** |
+| general `t`-subset product selection | `4ab8fa09-47fc-4155-b825-0f6c83f78393` | **kernel_verified** |
+| cofactor gcd and repeated-odd-prime rigidity | `1611cd40-d0d3-4631-9c8d-4b5c82f52e82`, `15d19ef3-0de0-49a0-ab99-51b00d024fd1` | **kernel_verified** |
+| second-layer large-prime injectivity | `5f3b332c-a77c-41a3-bbce-1df5cd67c5ec` | **kernel_verified** |
+| smooth-cofactor size bound | `b29f042a-6df4-45ce-b333-93f608c20664` | **kernel_verified** |
+| deletion of two exceptional indices | `bfd9dcb2-564e-4deb-b494-a7e4cffce319` | **kernel_verified** |
+| conditional second-layer catalog assembly | `d50528e3-f045-4a4a-ae5f-df336cc05a8b` | **kernel_verified** |
+| uniqueness of a nonsmooth square-small cofactor | `09aa8061-de5e-4466-b815-82a8d7bf55c2` | **kernel_verified** |
+
+The mathematical output is an exact alternative, not a terminal exclusion.
+A subset product below `n` creates the re-entry shift
+`h = n mod ∏Pᵢ` and the sandwich `2^|I| ≤ τ(n-h) ≤ h+2`; the strict reverse
+inequality excludes candidacy. In the no-cross-product branch, at most one
+first-layer square exception and one nonsmooth-cofactor exception remain, so
+a conditional assembly retains at least `W-2` smooth cofactors with explicit
+size and divisor-budget bounds. No verified theorem yet proves that either
+branch contradicts every candidate.
+
 ### Limit and infinite-window hard cores
 
 The limit module isolates the exact missing uniform statement:
@@ -255,12 +292,16 @@ compatibility check rather than a forced mixed-version import.
 
 ## Complete proof-search export archive
 
-The repository now includes exports for all 287 related episodes identified by
+The repository now includes exports for all 317 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
-index, and a read-only database closure audit. Of these, 280 report
+index, and a read-only database closure audit. Of these, 310 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.
+Portable source currently contains 452 top-level theorem declarations and
+five top-level lemma declarations across 169 Lean files; including 45
+definitions gives 502 declarations. Those source counts and the 317 episode
+count measure different things.
 
 - [export manifest](dossiers/exports/manifest.tsv)
 - [public summaries](dossiers/exports/public_summary/)
