@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro k hk\n  by_cases hk2 : k = 2\n  · subst k\n    have hprime : {p : ℕ | p.Prime}.Infinite := Nat.infinite_setOf_prime\n    have hinj : Set.InjOn (fun p : ℕ => p + 1) {p : ℕ | p.Prime} := by\n      intro a _ b _ hab\n      exact Nat.add_right_cancel hab\n    have himage : ((fun p : ℕ => p + 1) '' {p : ℕ | p.Prime}).Infinite :=\n      (Set.infinite_image_iff hinj).2 hprime\n    apply himage.mono\n    rintro n ⟨p, hp, rfl⟩\n    intro j hj0 hjD hjn\n    have hj : j = 1 := by omega\n    subst j\n    have hsigma : ArithmeticFunction.sigma 0 p = 2 := by\n      simpa using (ArithmeticFunction.sigma_zero_apply_prime_pow (i := 1) hp)\n    simpa [hsigma]\n  · have hk1 : k ≤ 1 := by omega\n    have hall :\n        {n : ℕ | ∀ j : ℕ, 0 < j → j ≤ k - 1 → j < n →\n          ArithmeticFunction.sigma 0 (n - j) ≤ j + 2} = Set.univ := by\n      ext n\n      simp only [Set.mem_setOf_eq, Set.mem_univ, iff_true]\n      intro j hj0 hjD\n      omega\n    rw [hall]\n    exact Set.infinite_univ",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro k hk\n  by_cases hk2 : k = 2\n  · subst k\n    have hprime : {p : ℕ | p.Prime}.Infinite := Nat.infinite_setOf_prime\n    have hinj : Set.InjOn (fun p : ℕ => p + 1) {p : ℕ | p.Prime} := by\n      intro a _ b _ hab\n      exact Nat.add_right_cancel hab\n    have himage : ((fun p : ℕ => p + 1) '' {p : ℕ | p.Prime}).Infinite :=\n      (Set.infinite_image_iff hinj).2 hprime\n    apply himage.mono\n    rintro n ⟨p, hp, rfl⟩\n    intro j hj0 hjD hjn\n    have hj : j = 1 := by omega\n    subst j\n    have hsigma : ArithmeticFunction.sigma 0 p = 2 := by\n      simpa using (ArithmeticFunction.sigma_zero_apply_prime_pow (i := 1) hp)\n    simpa [hsigma]\n  · have hk1 : k ≤ 1 := by omega\n    have hall :\n        {n : ℕ | ∀ j : ℕ, 0 < j → j ≤ k - 1 → j < n →\n          ArithmeticFunction.sigma 0 (n - j) ≤ j + 2} = Set.univ := by\n      ext n\n      simp only [Set.mem_setOf_eq, Set.mem_univ, iff_true]\n      intro j hj0 hjD\n      omega\n    rw [hall]\n    exact Set.infinite_univ",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ k : ℕ, k ≤ 2 → {n | ∀ j : ℕ, 0 < j → j ≤ k - 1 → j < n → ArithmeticFunction.sigma 0 (n - j) ≤ j + 2}.Infinite",
+        "module_source_hash": null,
+        "obligation_id": "709c2328-6f33-427c-8486-1cc8b05f28c5",
+        "outcome": "kernel_pass",
+        "problem_version_id": "f1717863-2574-48c0-a9d1-ae3a7b223fb9",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "f75671442707b06a9e65ad08223184bb71259632d0d73be570890957efd963f8"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "97eb4e3c9220812d85ce8ef328758c728b3671b61d0d6876ec89010888f0f58c"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -3,10 +3,11 @@
 > **Living inventory. Problem OPEN; global density theorem verified.** Last
 > updated 2026-07-15.
 >
-> This catalogs the kernel-verified theorem families produced by the Erdős
-> #647 campaign. The portable source currently has 216 top-level theorem
-> declarations across 100 Lean files. Each tracked row
-> row carries the `problem_version_id` — the authoritative lookup key in the
+> This catalogs the kernel-checked and source-replayed theorem families produced by the Erdős
+> #647 campaign. The portable source currently has 284 top-level theorem
+> declarations and four top-level helper lemmas across 116 Lean files (288
+> theorem/lemma declarations total). Each tracked row carries the
+> `problem_version_id` — the authoritative lookup key in the
 > tracked pipeline — plus the exact root statement and, where recorded, the
 > statement hash and episode id. Nothing here resolves the open problem; this
 > is the machine-checked scaffolding *around* it.
@@ -14,7 +15,7 @@
 > **What is portable vs. internal.** The committed `.lean` files are the
 > simplest portable formal artifact: they check against Mathlib without this
 > project's database. The repository now also publishes the complete exports
-> for all 210 related episodes—redacted public summaries, full
+> for all 227 related episodes—redacted public summaries, full
 > Markdown proof dossiers, and structured training JSON—under
 > [dossiers/exports/](dossiers/exports/README.md). The IDs alone still are not
 > an external database API; the committed exports are what makes the audit
@@ -49,6 +50,22 @@ kernel replay rather than a single tracked proof-search episode.
 | [`proof/Erdos647_ConcreteDenominatorLower.lean`](proof/Erdos647_ConcreteDenominatorLower.lean) | `(16/77)^7 (log z)^7 ≤ L` for the concrete denominator |
 | [`proof/Erdos647_ConcreteR20LogDensity.lean`](proof/Erdos647_ConcreteR20LogDensity.lean) | concrete `X/(log z)^7` estimate |
 | [`proof/Erdos647_ConcreteAsymptoticDensity.lean`](proof/Erdos647_ConcreteAsymptoticDensity.lean) | dyadic parameter assembly, explicit large-range bound, and global finite-range closure |
+| [`proof/Erdos647_FormalConjecturesCompatibility.lean`](proof/Erdos647_FormalConjecturesCompatibility.lean) | exact predicate/Finset compatibility and density restatement for the Formal Conjectures expression |
+| [`proof/Erdos647_ShiftDepthInterface.lean`](proof/Erdos647_ShiftDepthInterface.lean) | post-density existence interface: global maximum implies every shift budget; one failure excludes candidacy |
+| [`proof/Erdos647_FiniteBandClosure.lean`](proof/Erdos647_FiniteBandClosure.lean) | exact failed-shift certificate for every `25 ≤ n ≤ 84` |
+| [`proof/Erdos647_CandidateStructuralReduction.lean`](proof/Erdos647_CandidateStructuralReduction.lean) | every candidate is above `84`, divisible by `2520`, and in one of the two four-prime families |
+| [`proof/Erdos647_WindowShiftInterface.lean`](proof/Erdos647_WindowShiftInterface.lean) | exact short-window / fixed-depth-shift equivalence for the infinite-window variant |
+| [`proof/Erdos647_Shift9Refined.lean`](proof/Erdos647_Shift9Refined.lean) | removes the shift-9 square branch and attaches exact residue restrictions |
+| [`proof/Erdos647_Shift910Frontier.lean`](proof/Erdos647_Shift910Frontier.lean) | exact two-family × shift-9 × shift-10 residue/parity frontier |
+| [`proof/Erdos647_Shift10FrontierWitness.lean`](proof/Erdos647_Shift10FrontierWitness.lean) | exact seven-prime witness surviving shifts 1–10 and failing shift 11 |
+| [`proof/Erdos647_Shift12FrontierWitness.lean`](proof/Erdos647_Shift12FrontierWitness.lean) | exact seven-prime witness surviving shifts 1–12 and failing shift 13 |
+| [`proof/Erdos647_Shift13Refined.lean`](proof/Erdos647_Shift13Refined.lean) | prime-factor-cardinality and first 13-adic refinement of the shift-13 branch |
+| [`proof/Erdos647_ShiftFactorFramework.lean`](proof/Erdos647_ShiftFactorFramework.lean) | generic coprime/prime-power budget peel, cofactor prime-factor bound, and next-adic modular lift |
+| [`proof/Erdos647_Shift14Refined.lean`](proof/Erdos647_Shift14Refined.lean) | exact two-layer 7-adic stress test of the generic framework |
+| [`proof/Erdos647_Shift15Refined.lean`](proof/Erdos647_Shift15Refined.lean) | exact two-layer 5-adic stress test, with one residual class modulo 125 |
+| [`proof/Erdos647_Shift16Refined.lean`](proof/Erdos647_Shift16Refined.lean) | family-sensitive 2-adic stress test and explicit residual branch |
+| [`proof/Erdos647_LimitShiftInterface.lean`](proof/Erdos647_LimitShiftInterface.lean) | exact eventual-shift-excess form of the limit variant, plus an unbounded prime-power subsequence |
+| [`proof/Erdos647_InfiniteWindowFrontier.lean`](proof/Erdos647_InfiniteWindowFrontier.lean) | unconditional window depths below two and exact depth-two/Sophie-Germain infinitude equivalence |
 
 Terminal statement:
 
@@ -72,15 +89,15 @@ no access to this project's database required.
 
 Committed Lean source:
 
-- 100 `.lean` files under [proof/](proof/), containing 216 top-level theorem
-  declarations.
+- 116 `.lean` files under [proof/](proof/), containing 284 top-level theorem
+  declarations and four top-level helper lemmas (288 declarations total).
 - Five consolidated modular families under
   [proof/campaign/](proof/campaign/), plus individual analytic, truncation,
   candidate-transport, and final-assembly modules in the parent directory.
 
 Export and reproduction material:
 
-- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 210 related
+- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 227 related
   problem/episode pairs.
 - [dossiers/exports/manifest.tsv](dossiers/exports/manifest.tsv) records the
   outcome, fidelity, environment, statement hash, timestamps, and step count.
@@ -98,7 +115,9 @@ Export and reproduction material:
 | 5 | Novel sub-AP congruence closures | 48 | original-search sub-cell closures (mod 46189·p), unconditional for all N; 37 enumerated below with full data |
 | 6 | Theorem 2 (prime-chain reduction) | 3 | first machine-checked proof: every candidate is `8s+8` or `16s+8` with four forced primes |
 | 7 | Layer A (quantitative-Mertens infra) | 5 | Abel-summation identity and explicit analytic bounds; valid infrastructure, though the final seventh-power proof uses the stronger Euler-product route |
-| | **Total** | **~109** | |
+| 8 | Level-truncated Selberg repair and assembly | 36 | hard support, polynomial error, denominator preservation, parameter certification, and concrete candidate transport |
+| 9 | Post-density existence and variant frontier | 49 | generic shift-factor/adic induction, shifts 9–16 as concrete frontiers and stress tests, exact depth witnesses, the eventual-excess limit interface, and the depth-two/Sophie-Germain equivalence |
+| | **Selected-family total** | **~194** | The repository-wide exact count is 288 theorem/lemma declarations; the table groups the campaign's principal publication families rather than every helper. |
 
 ---
 
@@ -390,8 +409,44 @@ The supporting generic kernel-verified lemmas are the square-support result
 
 ---
 
-*Counts are explicit: 216 top-level theorem declarations in 100 Lean files and
-210 related proof-search episodes in the export archive (203 kernel-verified,
+## Family 9 — post-density existence and variant frontier
+
+These ten modules contain 45 top-level theorems and four top-level helper
+lemmas. They sharpen the exact open cores exposed after the density theorem;
+they do not settle any of the three research-open Formal Conjectures
+statements.
+
+| source | declarations | verified result and status |
+|---|---:|---|
+| [`proof/Erdos647_Shift910Frontier.lean`](proof/Erdos647_Shift910Frontier.lean) | 6 theorems | shift 10 has no square branch; its prime and `5·prime` branches have exact mod-5/mod-25 restrictions; the two Hughes families force opposite parity of `N`; the assembled frontier has `2×3×2` branches. The four new generic lemmas separately returned `kernel_pass`, and the composition source-compiled against the campaign modules. |
+| [`proof/Erdos647_Shift10FrontierWitness.lean`](proof/Erdos647_Shift10FrontierWitness.lean) | 1 theorem | for `N=6,970,590`, all seven sieve forms are prime, every budget through shift 10 holds, and shift 11 fails. Episode `1dbde32d-4fb7-4377-931d-df32607e5a6a` is **kernel_verified**. |
+| [`proof/Erdos647_Shift12FrontierWitness.lean`](proof/Erdos647_Shift12FrontierWitness.lean) | 1 theorem | for `N=244,692,464,302`, all seven forms are prime, every budget through shift 12 holds, and shift 13 fails. Complete episode `3eb4731d-d0c9-4b7d-9e06-d44934b19c30` and the independently tracked seven-prime sub-conjunction `8f021bf2-9e4b-4f46-b6b5-09e59e8c0d78` are **kernel_verified**. |
+| [`proof/Erdos647_Shift13Refined.lean`](proof/Erdos647_Shift13Refined.lean) | 3 theorems | `σ₀(2520N−13)≤15` forces at most three distinct prime factors and excludes `2,3,5,7`; divisibility by 13 is equivalent to `13∣N`. On `N=13M`, either `M≡6 (mod 13)` or the cofactor has at most seven divisors and two distinct prime factors. Episodes `9499a13b-25db-45f6-a492-8b357900aade` and `1e79ece8-14f0-43d2-b24a-f5cb43152f38` are **kernel_verified**. |
+| [`proof/Erdos647_ShiftFactorFramework.lean`](proof/Erdos647_ShiftFactorFramework.lean) | 7 theorems | generic coprime-factor and prime-power budget peeling, cofactor `primeFactors.card` control, and exact next-`p`-adic lift/modular-class equivalences. The prime-power peel and modular-lift cores are **kernel_verified** in episodes `3e3ee8d9-a23b-4997-bb26-345cfe672337` and `5ec047ae-3659-449e-8546-26ea9c941be0`. |
+| [`proof/Erdos647_Shift14Refined.lean`](proof/Erdos647_Shift14Refined.lean) | 5 theorems | shift 14 yields `σ₀(1260N−7)≤8`; away from `N≡3 (mod 7)`, `180N−1` has at most four divisors and two distinct prime factors. The next 7-adic layer is either `N≡3 (mod 49)` or one of six prime-cofactor lifts. Episode `0ccca717-0a99-42b3-82cb-7011619cfb73` is **kernel_verified**. |
+| [`proof/Erdos647_Shift15Refined.lean`](proof/Erdos647_Shift15Refined.lean) | 7 theorems | peeling the universal factor 3 gives an eight-divisor cofactor budget; two 5-adic layers give prime cofactors outside the sole residual class `N≡32 (mod 125)`. Episodes `4a1060e5-3f9e-4a72-8ccf-ed7ae231d3be` and `718d1350-8ff2-4069-8527-5474a1dddd16` are **kernel_verified**. |
+| [`proof/Erdos647_Shift16Refined.lean`](proof/Erdos647_Shift16Refined.lean) | 6 theorems | the family-B/odd branch has a cofactor with at most four divisors and two prime factors; the family-A/even branch splits through explicit 2-adic layers, leaving `M≡3 (mod 8)` as the residual class. The full source chain compiles, and the strongest even-parameter core returned `kernel_pass` in job `9d45701f-7e1e-45bc-8cd2-6c5b4be6906f`; **no tracked episode is claimed**. |
+| [`proof/Erdos647_LimitShiftInterface.lean`](proof/Erdos647_LimitShiftInterface.lean) | 4 theorems | convergence to `atTop` is equivalent to eventual arbitrarily large shift excess. Prime powers prove an explicit unbounded subsequence and non-`BddAbove`, not convergence. The exact adapter episode `3baedfa9-85ed-48b0-b477-18faa0d9e47f` is **kernel_verified**. |
+| [`proof/Erdos647_InfiniteWindowFrontier.lean`](proof/Erdos647_InfiniteWindowFrontier.lean) | 5 theorems + 4 lemmas | window sizes at most two are unconditional; above `n>10`, depth-two survivors are exactly `n=2q+2` with `q` and `2q+1` prime; infinitude at depth two is therefore equivalent to infinitude of Sophie Germain primes. Episodes `e7b81c9f-8b1e-41c5-a760-d9aba712bb16` and `7cf0660b-3dac-48f3-8294-7b22d8e9f593` are **kernel_verified**; the converse and final equivalence source-compiled in the pinned environment, and the exact iff is stated directly over the Formal Conjectures window expression. |
+
+The central development here is no longer “one more shift.” The framework
+isolates a reusable transition: factorization → coprime budget division →
+prime-factor control → one exceptional next-adic congruence. Shifts 14–16 are
+deliberately included as independent stress tests showing that 7-adic,
+5-adic, and family-sensitive 2-adic arguments all fit that transition. What
+remains genuinely shift-specific is the affine factorization, the available
+family/parity hypotheses, and finite exceptional-digit enumeration. A full
+existence proof still needs a global induction or growing-depth principle
+showing that these transitions cannot continue indefinitely. The limit route
+must upgrade sparse unboundedness to an eventual uniform statement. The first
+open infinite-window depth is already the classical Sophie Germain infinitude
+problem.
+
+---
+
+*Counts are explicit: 284 top-level theorem declarations plus four top-level
+helper lemmas in 116 Lean files, and 227 related proof-search episodes in the
+export archive (220 kernel-verified,
 seven retained non-success histories). These are different metrics—one episode
 can assemble several helper declarations, while some final repository
 compositions are not standalone episodes. The global density theorem is

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  have hsigma_prime : ∀ p : ℕ, p.Prime → sigma 0 p = 2 := by\n    intro p hp\n    simpa using (sigma_zero_apply_prime_pow (i := 1) hp)\n  have hs1 : sigma 0 17565886799 = 2 :=\n    hsigma_prime 17565886799 (by native_decide)\n  have hs2 : sigma 0 17565886798 = 4 := by\n    rw [show 17565886798 = 2 * 8782943399 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 2 Nat.prime_two,\n      hsigma_prime 8782943399 (by native_decide)]\n    norm_num\n  have hs3 : sigma 0 17565886797 = 4 := by\n    rw [show 17565886797 = 3 * 5855295599 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 3 Nat.prime_three,\n      hsigma_prime 5855295599 (by native_decide)]\n    norm_num\n  have hs4 : sigma 0 17565886796 = 6 := by\n    rw [show 17565886796 = 2 ^ 2 * 4391471699 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      sigma_zero_apply_prime_pow Nat.prime_two,\n      hsigma_prime 4391471699 (by native_decide)]\n    norm_num\n  have hs5 : sigma 0 17565886795 = 4 := by\n    rw [show 17565886795 = 5 * 3513177359 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 5 (by norm_num),\n      hsigma_prime 3513177359 (by native_decide)]\n    norm_num\n  have hs6 : sigma 0 17565886794 = 8 := by\n    rw [show 17565886794 = (2 * 3) * 2927647799 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 2 Nat.prime_two,\n      hsigma_prime 3 Nat.prime_three,\n      hsigma_prime 2927647799 (by native_decide)]\n    norm_num\n  have hs7 : sigma 0 17565886793 = 8 := by\n    rw [show 17565886793 = (7 * 13) * 193031723 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 7 (by norm_num),\n      hsigma_prime 13 (by norm_num),\n      hsigma_prime 193031723 (by native_decide)]\n    norm_num\n  have hs8 : sigma 0 17565886792 = 8 := by\n    rw [show 17565886792 = 2 ^ 3 * 2195735849 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      sigma_zero_apply_prime_pow Nat.prime_two,\n      hsigma_prime 2195735849 (by native_decide)]\n    norm_num\n  have hs9 : sigma 0 17565886791 = 6 := by\n    rw [show 17565886791 = 3 ^ 2 * 1951765199 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      sigma_zero_apply_prime_pow Nat.prime_three,\n      hsigma_prime 1951765199 (by native_decide)]\n    norm_num\n  have hs10 : sigma 0 17565886790 = 8 := by\n    rw [show 17565886790 = (2 * 5) * 1756588679 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 2 Nat.prime_two,\n      hsigma_prime 5 (by norm_num),\n      hsigma_prime 1756588679 (by native_decide)]\n    norm_num\n  have hs11 : sigma 0 17565886789 = 24 := by\n    rw [show 17565886789 = ((11 * 37 ^ 2) * 677) * 1723 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 11 (by norm_num),\n      sigma_zero_apply_prime_pow (by norm_num : Nat.Prime 37),\n      hsigma_prime 677 (by norm_num),\n      hsigma_prime 1723 (by norm_num)]\n    norm_num\n  dsimp\n  constructor\n  · intro k hk\n    simp only [Finset.mem_Icc] at hk\n    have hk1 : 1 ≤ k := hk.1\n    have hk10 : k ≤ 10 := hk.2\n    interval_cases k <;> norm_num at * <;> omega\n  constructor\n  · rw [hs11]\n    norm_num\n  · native_decide\n\r\n",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  have hsigma_prime : ∀ p : ℕ, p.Prime → sigma 0 p = 2 := by\n    intro p hp\n    simpa using (sigma_zero_apply_prime_pow (i := 1) hp)\n  have hs1 : sigma 0 17565886799 = 2 :=\n    hsigma_prime 17565886799 (by native_decide)\n  have hs2 : sigma 0 17565886798 = 4 := by\n    rw [show 17565886798 = 2 * 8782943399 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 2 Nat.prime_two,\n      hsigma_prime 8782943399 (by native_decide)]\n    norm_num\n  have hs3 : sigma 0 17565886797 = 4 := by\n    rw [show 17565886797 = 3 * 5855295599 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 3 Nat.prime_three,\n      hsigma_prime 5855295599 (by native_decide)]\n    norm_num\n  have hs4 : sigma 0 17565886796 = 6 := by\n    rw [show 17565886796 = 2 ^ 2 * 4391471699 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      sigma_zero_apply_prime_pow Nat.prime_two,\n      hsigma_prime 4391471699 (by native_decide)]\n    norm_num\n  have hs5 : sigma 0 17565886795 = 4 := by\n    rw [show 17565886795 = 5 * 3513177359 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 5 (by norm_num),\n      hsigma_prime 3513177359 (by native_decide)]\n    norm_num\n  have hs6 : sigma 0 17565886794 = 8 := by\n    rw [show 17565886794 = (2 * 3) * 2927647799 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 2 Nat.prime_two,\n      hsigma_prime 3 Nat.prime_three,\n      hsigma_prime 2927647799 (by native_decide)]\n    norm_num\n  have hs7 : sigma 0 17565886793 = 8 := by\n    rw [show 17565886793 = (7 * 13) * 193031723 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 7 (by norm_num),\n      hsigma_prime 13 (by norm_num),\n      hsigma_prime 193031723 (by native_decide)]\n    norm_num\n  have hs8 : sigma 0 17565886792 = 8 := by\n    rw [show 17565886792 = 2 ^ 3 * 2195735849 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      sigma_zero_apply_prime_pow Nat.prime_two,\n      hsigma_prime 2195735849 (by native_decide)]\n    norm_num\n  have hs9 : sigma 0 17565886791 = 6 := by\n    rw [show 17565886791 = 3 ^ 2 * 1951765199 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      sigma_zero_apply_prime_pow Nat.prime_three,\n      hsigma_prime 1951765199 (by native_decide)]\n    norm_num\n  have hs10 : sigma 0 17565886790 = 8 := by\n    rw [show 17565886790 = (2 * 5) * 1756588679 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 2 Nat.prime_two,\n      hsigma_prime 5 (by norm_num),\n      hsigma_prime 1756588679 (by native_decide)]\n    norm_num\n  have hs11 : sigma 0 17565886789 = 24 := by\n    rw [show 17565886789 = ((11 * 37 ^ 2) * 677) * 1723 by norm_num,\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      isMultiplicative_sigma.map_mul_of_coprime (by native_decide),\n      hsigma_prime 11 (by norm_num),\n      sigma_zero_apply_prime_pow (by norm_num : Nat.Prime 37),\n      hsigma_prime 677 (by norm_num),\n      hsigma_prime 1723 (by norm_num)]\n    norm_num\n  dsimp\n  constructor\n  · intro k hk\n    simp only [Finset.mem_Icc] at hk\n    have hk1 : 1 ≤ k := hk.1\n    have hk10 : k ≤ 10 := hk.2\n    interval_cases k <;> norm_num at * <;> omega\n  constructor\n  · rw [hs11]\n    norm_num\n  · native_decide\n\r\n",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "let N : ℕ := 6970590\nlet n : ℕ := 2520 * N\n(∀ k ∈ Finset.Icc 1 10, ArithmeticFunction.sigma 0 (n - k) ≤ k + 2) ∧\n  13 < ArithmeticFunction.sigma 0 (n - 11) ∧\n  Nat.Prime (210 * N - 1) ∧\n  Nat.Prime (315 * N - 1) ∧\n  Nat.Prime (420 * N - 1) ∧\n  Nat.Prime (630 * N - 1) ∧\n  Nat.Prime (840 * N - 1) ∧\n  Nat.Prime (1260 * N - 1) ∧\n  Nat.Prime (2520 * N - 1)",
+        "module_source_hash": null,
+        "obligation_id": "001d522c-b125-4d9d-a058-e9b8b2c40417",
+        "outcome": "kernel_pass",
+        "problem_version_id": "b9a96621-fc15-42af-bf3d-8b330a1cc0f0",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "9d2635ffcb3e0e9378b67d3d460256ba9079169dbd0f7aaa53d4a92f68b585aa"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "7d1cf90510f7b79673d3a7affbe43a0973471d0688c2b726a9b0506aab1f3d57"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

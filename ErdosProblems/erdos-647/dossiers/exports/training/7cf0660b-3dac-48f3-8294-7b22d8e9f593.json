@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro hsafe\n  have hinj : Set.InjOn (fun q : ℕ => 2 * q + 2)\n      {q : ℕ | q.Prime ∧ (2 * q + 1).Prime} := by\n    intro a _ b _ hab\n    have hab' : 2 * a = 2 * b := Nat.add_right_cancel hab\n    exact Nat.eq_of_mul_eq_mul_left (by norm_num) hab'\n  have himage :\n      ((fun q : ℕ => 2 * q + 2) ''\n        {q : ℕ | q.Prime ∧ (2 * q + 1).Prime}).Infinite :=\n    (Set.infinite_image_iff hinj).2 hsafe\n  apply himage.mono\n  rintro n ⟨q, hq, rfl⟩\n  intro j hj0 hj2 hjn\n  interval_cases j\n  · have hsafePrime : (2 * q + 1).Prime := hq.2\n    have hsigma : ArithmeticFunction.sigma 0 (2 * q + 1) = 2 := by\n      simpa using\n        (ArithmeticFunction.sigma_zero_apply_prime_pow (i := 1) hsafePrime)\n    have hsub : 2 * q + 2 - 1 = 2 * q + 1 := by omega\n    rw [hsub, hsigma]\n    norm_num\n  · by_cases hq2 : q = 2\n    · subst q\n      native_decide\n    · have hcop : Nat.Coprime 2 q := by\n        rw [Nat.prime_two.coprime_iff_not_dvd]\n        rw [Nat.prime_dvd_prime_iff_eq Nat.prime_two hq.1]\n        exact Ne.symm hq2\n      have hmul :=\n        (ArithmeticFunction.isMultiplicative_sigma (k := 0)).map_mul_of_coprime hcop\n      have hs2 : ArithmeticFunction.sigma 0 2 = 2 := by\n        simpa using\n          (ArithmeticFunction.sigma_zero_apply_prime_pow (i := 1) Nat.prime_two)\n      have hsq : ArithmeticFunction.sigma 0 q = 2 := by\n        simpa using\n          (ArithmeticFunction.sigma_zero_apply_prime_pow (i := 1) hq.1)\n      rw [hs2, hsq] at hmul\n      norm_num at hmul ⊢\n      exact hmul.le",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro hsafe\n  have hinj : Set.InjOn (fun q : ℕ => 2 * q + 2)\n      {q : ℕ | q.Prime ∧ (2 * q + 1).Prime} := by\n    intro a _ b _ hab\n    have hab' : 2 * a = 2 * b := Nat.add_right_cancel hab\n    exact Nat.eq_of_mul_eq_mul_left (by norm_num) hab'\n  have himage :\n      ((fun q : ℕ => 2 * q + 2) ''\n        {q : ℕ | q.Prime ∧ (2 * q + 1).Prime}).Infinite :=\n    (Set.infinite_image_iff hinj).2 hsafe\n  apply himage.mono\n  rintro n ⟨q, hq, rfl⟩\n  intro j hj0 hj2 hjn\n  interval_cases j\n  · have hsafePrime : (2 * q + 1).Prime := hq.2\n    have hsigma : ArithmeticFunction.sigma 0 (2 * q + 1) = 2 := by\n      simpa using\n        (ArithmeticFunction.sigma_zero_apply_prime_pow (i := 1) hsafePrime)\n    have hsub : 2 * q + 2 - 1 = 2 * q + 1 := by omega\n    rw [hsub, hsigma]\n    norm_num\n  · by_cases hq2 : q = 2\n    · subst q\n      native_decide\n    · have hcop : Nat.Coprime 2 q := by\n        rw [Nat.prime_two.coprime_iff_not_dvd]\n        rw [Nat.prime_dvd_prime_iff_eq Nat.prime_two hq.1]\n        exact Ne.symm hq2\n      have hmul :=\n        (ArithmeticFunction.isMultiplicative_sigma (k := 0)).map_mul_of_coprime hcop\n      have hs2 : ArithmeticFunction.sigma 0 2 = 2 := by\n        simpa using\n          (ArithmeticFunction.sigma_zero_apply_prime_pow (i := 1) Nat.prime_two)\n      have hsq : ArithmeticFunction.sigma 0 q = 2 := by\n        simpa using\n          (ArithmeticFunction.sigma_zero_apply_prime_pow (i := 1) hq.1)\n      rw [hs2, hsq] at hmul\n      norm_num at hmul ⊢\n      exact hmul.le",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "{q : ℕ | q.Prime ∧ (2 * q + 1).Prime}.Infinite → {n | ∀ j : ℕ, 0 < j → j ≤ 2 → j < n → ArithmeticFunction.sigma 0 (n - j) ≤ j + 2}.Infinite",
+        "module_source_hash": null,
+        "obligation_id": "f3f80d98-e415-4b19-8da9-6d43153bb782",
+        "outcome": "kernel_pass",
+        "problem_version_id": "62b31233-1d14-44f2-84f0-f1af49d33e0a",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "a92138048323141abb80f47feeba652944e8de494f6d145fbae1a8d4e75a0d1a"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "bd9e2b95efe89de4321602b3df18760c84ee5f577061cfcd21b000346739139e"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

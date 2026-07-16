@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro p e m B hp hcop hbudget\nrw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,\n  ArithmeticFunction.sigma_zero_apply_prime_pow hp] at hbudget\nexact hbudget",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro p e m B hp hcop hbudget\nrw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop,\n  ArithmeticFunction.sigma_zero_apply_prime_pow hp] at hbudget\nexact hbudget",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ p e m B : ℕ, Nat.Prime p → Nat.Coprime (p ^ e) m → ArithmeticFunction.sigma 0 (p ^ e * m) ≤ B → (e + 1) * ArithmeticFunction.sigma 0 m ≤ B",
+        "module_source_hash": null,
+        "obligation_id": "32d2f846-3317-43c0-95f1-0ed92feb4c6a",
+        "outcome": "kernel_pass",
+        "problem_version_id": "e12fd70e-31e9-48c6-8be8-4cd02ad2d949",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "e3a883fe853c4c4b4cf86db41515bc364db2bc7479f9b9186bdf12b372a97d1d"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "f6ddff6cc963ac335b81d788ee5fa9b743907b2f7ff7d587eb6866e3c49cfd0a"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -265,10 +265,10 @@ repaired squarefree remainder was also submitted to the independent exact
 proof-search verifier and returned `kernel_pass`; identifiers and hashes are
 recorded in [evidence.md](evidence.md).
 
-For provenance beyond the source replay, all 210 related campaign
+For provenance beyond the source replay, all 227 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
-training JSON formats. Of these, 203 report `KERNEL_VERIFIED` in the pinned
+training JSON formats. Of these, 220 report `KERNEL_VERIFIED` in the pinned
 environment; seven non-success histories are retained for audit completeness.
 
 This proves a density-zero result with the claimed seventh logarithmic power.
@@ -276,15 +276,61 @@ It does **not** prove that no larger candidate exists: an infinite set can
 have density zero, and the theorem supplies neither a witness nor a complete
 exclusion.
 
+### 3.7 From individual shifts to a reusable induction framework (2026-07-15)
+
+The post-density campaign initially advanced shift by shift. Exact witnesses
+then showed why this could not be presented as a quick closure: one parameter
+survives every budget through shift 10 and fails at 11, while another survives
+through shift 12 and first fails at 13. Those are kernel-checked consistency
+certificates, not heuristic search observations.
+
+The resulting change in architecture is more important than any next shift.
+[`Erdos647_ShiftFactorFramework.lean`](proof/Erdos647_ShiftFactorFramework.lean)
+extracts the common transition used by the refinements:
+
+1. a candidate supplies `σ₀(n-k)≤k+2`;
+2. an exact factorization and coprimality peel a known factor and divide the
+   remaining divisor budget;
+3. for a prime power `p^e`, the budget is divided by exactly `e+1`;
+4. the divided budget bounds the cofactor's number of distinct prime factors;
+5. failure of coprimality at the next stage is exactly one more `p`-adic
+   layer, hence one exceptional congruence class for a linear cofactor.
+
+The prime-power peel and modular-lift cores are tracked `kernel_verified`.
+This is a genuine meta-framework: future concrete instances should provide
+only the affine factorization, family/parity information, and a finite list of
+exceptional `p`-adic digits.
+
+Shifts 14–16 were formalized specifically to stress-test that abstraction.
+Shift 14 produces a two-layer 7-adic frontier; outside `N≡3 (mod 7)`, the
+cofactor `180N−1` has at most four divisors and two distinct prime factors,
+while the next layer is one class modulo 49 or six explicit prime-cofactor
+lifts. Shift 15 gives a two-layer 5-adic frontier with prime cofactors outside
+the sole residual class `N≡32 (mod 125)`. Both capstones are tracked
+`kernel_verified`. Shift 16 couples the same mechanism to the two
+prime-chain families: the family-B odd branch has a cofactor with at most four
+divisors and two prime factors; the family-A even branch passes through
+explicit 2-adic layers and leaves `M≡3 (mod 8)` as the residual class. Its
+full source chain compiles, and its strongest even-parameter core independently
+returned `kernel_pass`; no tracked shift-16 episode is claimed.
+
+These examples are not a commitment to march through every shift. Their role
+is to demonstrate that 7-adic, 5-adic, and family-sensitive 2-adic arguments
+share one verified transition. The open mathematical task is now to find a
+global induction or growing-depth invariant proving that this transition
+cannot continue indefinitely for a candidate. No such termination theorem is
+claimed here.
+
 ## 4. Scoreboard (honest)
 
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **216 top-level theorem
-  declarations across 100 Lean files** under `proof/`. This count includes
-  helper and assembly theorems; it is not presented as 216 independent
-  mathematical discoveries or 216 standalone tracked episodes.
+- Portable proof source currently contains **284 top-level theorem
+  declarations and four top-level helper lemmas across 116 Lean files** under
+  `proof/`. This count includes helper and assembly theorems; it is not
+  presented as 288 independent mathematical discoveries or 288 standalone
+  tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base
   sieve, the bridging-closure layer, the Theorem-2 formalization, the
   extended negative result, the Mertens infrastructure, the explicit
@@ -309,7 +355,73 @@ is.
 ## 6. Open invitations
 
 This folder is a living workspace, not a museum. The density program is no
-longer an open invitation; it has landed. Useful next directions are:
+longer an open invitation; it has landed. The original existence campaign is
+active again. Its first new formal interface is
+[`Erdos647_ShiftDepthInterface.lean`](proof/Erdos647_ShiftDepthInterface.lean):
+the global maximum condition is equivalent to every budget
+`σ₀(n-k)≤k+2`, and therefore a single failed budget excludes an individual
+candidate. The interval `25≤n≤84` is now closed exactly; every remaining
+hypothetical candidate is above `84`, divisible by `2520`, and lies in one of
+the two verified four-prime families. The short-window formulation is also
+equivalent to fixed-depth survival, isolating that variant to an infinitude
+statement. This makes the next proof target precise: produce a failure at a
+depth that may grow with `n`, or force it from the prime-chain classifications.
+Useful next directions are:
+
+Two subsequent checks sharpen that boundary. First, the shift-10 square
+branch is impossible and the remaining prime/`5·prime` branches have exact
+residue restrictions, but this still does not contradict shift 9 or the seven
+prime forms. The exact parameter `N=6,970,590` gives
+`n=17,565,886,800`, satisfies every budget through shift 10, and has all seven
+forms prime; it first fails at shift 11. This fact is kernel-verified, so
+“combine shifts 9 and 10” is now a formally closed dead end rather than a
+plausible slogan.
+
+The same test was then pushed through the full existing fixed-depth package.
+For `N=244,692,464,302`, `n=616,625,010,041,040`, every budget from shift 1
+through shift 12 holds and all seven forms are prime. The first failure is
+shift 13, with `τ(n-13)=16>15`. Its explicit prime-factorization proof is also
+tracked `kernel_verified`. Consequently, even adding the current shift-11/12
+information cannot produce a uniform contradiction; the next honest target
+must be structural or use depth growing with `n`.
+
+Shift 13 now has a formal arithmetic frontier. Any hypothetical candidate has
+`τ(2520N-13)≤15`, so that number has at most three distinct prime factors;
+it is not divisible by `2`, `3`, `5`, or `7`, and it is divisible by
+`13` exactly when `13∣N`. If `N=13M`, then outside the exceptional
+residue `M≡6 (mod 13)`, removing the forced factor `13` leaves
+`2520M-1` with at most seven divisors and at most two distinct prime factors.
+This is a genuine narrowing of the first unclassified shift, but it is not yet
+a contradiction.
+
+The main continuation therefore packages the shared mechanism rather than
+declaring shifts 14, 15, and 16 to be three unrelated new directions. The
+generic factor/adic framework turns any exact factorization into a divided
+cofactor budget, a prime-factor bound, and a unique exceptional next-adic
+class. The shift-14/15 capstones are tracked `kernel_verified`; shift 16 has a
+clean source-chain replay plus an independent `kernel_pass` for its strongest
+even-parameter core. Together they validate the framework across 7-adic,
+5-adic, and family-sensitive 2-adic branches. The desired breakthrough is a
+global induction principle controlling repeated transitions, not an endless
+catalog of shifts.
+
+Second, the two open variants expose classical hard cores. The conjectured
+limit is equivalent to requiring, for every `B`, an eventual shift with
+`B+k<τ(n-k)`; prime powers make the sequence unbounded only along the sparse
+subsequence `n=2^B+1`. For the infinite-window conjecture, window sizes at
+most two are unconditional, while the first open size `k=3` is equivalent to
+infinitude of Sophie Germain primes. These are genuine reductions, not
+replacements for either variant `sorry`; the original existence `sorry` also
+remains open. The exact `k=3` iff is stated directly in the Formal Conjectures
+module, whose complete warning-as-failure build passes with those three
+research statements still explicit.
+
+Predicate compatibility with the upstream-style open formalization is also
+mechanically recorded in
+[`Erdos647_FormalConjecturesCompatibility.lean`](proof/Erdos647_FormalConjecturesCompatibility.lean).
+The density theorem counts exactly the same candidate property, but it is not
+the same proposition as the existential question and cannot replace its
+`sorry`.
 
 1. **Independent replay and proof review** — check the committed source in a
    fresh pinned environment, audit the candidate-to-sieve bridge, and seek
@@ -317,9 +429,11 @@ longer an open invitation; it has landed. Useful next directions are:
 2. **Upstream the reusable sieve lemmas** — the level-truncated optimal
    weight, coefficient/support bounds, finite Euler-product comparison, and
    generic two-parameter assembly are Mathlib-shaped contributions.
-3. **Attack the original existence question with a genuinely new method** —
-   density zero is not emptiness, and bounded congruence trees cannot close
-   the remaining classes.
+3. **Find the global induction behind shift refinement** — use the generic
+   factor/adic transition to prove that repeated exceptional lifts cannot
+   continue for every candidate, ideally yielding a growing bound `k≤D(n)`
+   at which some budget fails. Density zero is not emptiness, and bounded
+   congruence trees cannot close the remaining classes.
 4. **A better wall theorem** — the all-avoid obstruction rules out bounded
    congruence trees; what is the *strongest* class of arguments it rules
    out? Formalizing the obstruction itself in Lean would sharpen this.

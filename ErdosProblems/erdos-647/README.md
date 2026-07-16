@@ -18,6 +18,9 @@ Theorem 2, the repaired level-truncated Selberg machinery, and the complete
 candidate-to-sieve assembly.
 
 **The original problem remains open.** Density zero does not imply emptiness.
+The active continuation now targets individual candidates: a kernel-verified
+[shift-depth interface](proof/Erdos647_ShiftDepthInterface.lean) reduces
+nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 
 ## Start here
 
@@ -27,9 +30,9 @@ candidate-to-sieve assembly.
 | [THEOREM-CATALOG.md](THEOREM-CATALOG.md) | theorem inventory and final assembly map |
 | [attack-plan.md](attack-plan.md) | completed density program and remaining existence directions |
 | [evidence.md](evidence.md) | tracked episode evidence plus the clean repository replay |
-| [dossiers/](dossiers/README.md) | complete 210-episode export archive and indexes |
+| [dossiers/](dossiers/README.md) | complete 227-episode export archive and indexes |
 | [credit.md](credit.md) | attribution, AI disclosure, and honest limits |
-| [proof/](proof/) | 100 Lean files containing 216 top-level theorem declarations |
+| [proof/](proof/) | 116 Lean files containing 284 top-level theorems and four helper lemmas |
 
 ## Headline results — 2026-07-15
 
@@ -61,14 +64,83 @@ candidate-to-sieve assembly.
    the all-avoid obstruction showed that bounded congruence trees cannot close
    the frontier.
 
-6. **Complete machine export archive.** All 210 related episodes
+6. **Complete machine export archive.** All 227 related episodes
    are exported in redacted JSON, full Markdown dossier, and structured
    training JSON forms under
-   [dossiers/exports/](dossiers/exports/README.md). Of these, 203 report
+   [dossiers/exports/](dossiers/exports/README.md). Of these, 220 report
    `KERNEL_VERIFIED`; the archive deliberately retains three unfinished,
    three gave-up, and one budget-exhausted trajectory for audit completeness.
    The terminal composition is separately identified as a clean source replay
    rather than invented as an additional tracked episode.
+
+7. **Existence campaign has an exact first reduction.**
+   [`Erdos647_FiniteBandClosure.lean`](proof/Erdos647_FiniteBandClosure.lean)
+   certifies a failed shift for every `25 ≤ n ≤ 84`. Combining this with the
+   recovered divisibility theorem gives
+   [`candidate_gt84_and_dvd2520`](proof/Erdos647_CandidateStructuralReduction.lean):
+   every hypothetical candidate has `84 < n` and `2520 ∣ n`. The same assembly
+   places it in one of the two verified four-prime families. This is a strict
+   reduction of the open problem, not a solution.
+
+8. **Formal Conjectures predicate compatibility checked.**
+   [`Erdos647_FormalConjecturesCompatibility.lean`](proof/Erdos647_FormalConjecturesCompatibility.lean)
+   mirrors the exact open-file expression, proves the candidate predicates
+   definitionally equivalent, proves the bounded Finsets extensionally equal,
+   and restates the density theorem over that exact set. The Formal Conjectures
+   module independently compiles the matching API in its own pinned toolchain.
+   This compatibility result fills none of its three research-open `sorry`s.
+
+9. **The open variants now have exact interfaces.** The global maximum is
+   equivalent to all positive shift budgets, and the short-window maximum is
+   equivalent to the corresponding finite set of budgets. Thus the main
+   theorem is reduced to producing one failed shift for every `n > 84`, while
+   the infinite-window variant is reduced to infinitude of fixed-depth
+   survivor sets. Window sizes at most two are now proved unconditionally; the
+   first open size, `k=3`, is equivalent to infinitude of Sophie Germain
+   primes, including a direct statement over the exact Formal Conjectures
+   window expression. The limit variant is exactly an eventual failed-shift
+   theorem with arbitrarily large excess. Prime powers prove its sequence is
+   unbounded along `n=2^B+1`, but do not prove convergence.
+
+10. **Shift refinement now has a general induction framework.**
+    [`Erdos647_ShiftFactorFramework.lean`](proof/Erdos647_ShiftFactorFramework.lean)
+    packages the common arithmetic behind every later shift: peel any known
+    coprime factor from a divisor-count budget, specialize to a prime power,
+    bound the cofactor's number of distinct prime factors, and identify the
+    unique next `p`-adic exceptional lift as a congruence class. The
+    prime-power peel and modular-lift cores are independently tracked
+    `kernel_verified`. Concrete shifts now supply only their affine
+    factorization, parity/family information, and the finite enumeration of
+    exceptional digits. This is the intended route forward—not an indefinite
+    list of unrelated shift calculations.
+
+11. **Shifts 14–16 stress-test the framework.**
+    [`Erdos647_Shift14Refined.lean`](proof/Erdos647_Shift14Refined.lean) and
+    [`Erdos647_Shift15Refined.lean`](proof/Erdos647_Shift15Refined.lean)
+    give tracked 7-adic and 5-adic frontiers. Shift 16 then combines the same
+    API with the two prime-chain families and a 2-adic split; its source chain
+    compiles and its strongest even-parameter core independently returned
+    `kernel_pass`. These are validation cases for the abstraction, not a new
+    commitment to advance one shift at a time.
+
+12. **The shift-9/10 closure route was tested and ruled out exactly.** Shift
+    10's square branch is impossible and its two remaining branches have exact
+    residue restrictions. Nevertheless, the tracked witness
+    `N=6,970,590`, `n=17,565,886,800` satisfies every budget through shift 10
+    and all seven density forms are prime; it first fails at shift 11. See
+    [`Erdos647_Shift910Frontier.lean`](proof/Erdos647_Shift910Frontier.lean)
+    and the kernel-verified
+    [`Erdos647_Shift10FrontierWitness.lean`](proof/Erdos647_Shift10FrontierWitness.lean).
+    A deeper tracked witness
+    [`Erdos647_Shift12FrontierWitness.lean`](proof/Erdos647_Shift12FrontierWitness.lean)
+    has `N=244,692,464,302`, satisfies **every** budget through shift 12 and
+    all seven prime forms, then first fails at shift 13. Any direct closure
+    must therefore use a structural induction or a genuinely growing depth.
+    The new
+    [`Erdos647_Shift13Refined.lean`](proof/Erdos647_Shift13Refined.lean)
+    starts that next layer: a hypothetical survivor's shift-13 value has at
+    most three distinct prime factors, and its 13-adic branch reduces outside
+    one exceptional residue to a cofactor with at most seven divisors.
 
 ## Verification snapshot
 

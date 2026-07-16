@@ -1,0 +1,31 @@
+{
+  "benchmark_suite": null,
+  "benchmark_upstream_problem_id": null,
+  "certified": false,
+  "completed_at": "2026-07-16T04:36:14.997139200+00:00",
+  "created_at": "2026-07-16T04:35:51.103654100+00:00",
+  "environment_hash": "9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d",
+  "episode_id": "718d1350-8ff2-4069-8527-5474a1dddd16",
+  "fidelity_basis": null,
+  "fidelity_status": "attested",
+  "formal_target_matched": false,
+  "import_manifest_hash": "aaf21893d520a78dee0787a1bcaf939ee6b922265ff670c272e2e1d450dd29a7",
+  "interactive_sessions": {
+    "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
+    "proof_body_redacted": true,
+    "session_count": 0,
+    "sessions": []
+  },
+  "kernel_verified": true,
+  "mode": "public_summary",
+  "obligation_counts_by_status": {
+    "proved": 1
+  },
+  "outcome": "KERNEL_VERIFIED",
+  "proof_body_redacted": true,
+  "root_formal_statement": "∀ p e m B : ℕ, Nat.Prime p → Nat.Coprime (p ^ e) m → ArithmeticFunction.sigma 0 (p ^ e * m) ≤ B → (e + 1) * ArithmeticFunction.sigma 0 m ≤ B",
+  "step_count": 1,
+  "trajectory_event_count": 3,
+  "trajectory_first_hash": "f4110986a0bc85551f4afc6b5acf19c840c93850f5f5db3ca51c710216819c5c",
+  "trajectory_last_hash": "2c622b6f137d7f9e2e2137d0a90354e897e84172ec7bcb0ed6e6550f98be599b"
+}

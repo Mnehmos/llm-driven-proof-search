@@ -45,7 +45,27 @@
   finite-range closure.
 - The global theorem `|C(X)|≤K·X/(log X)^7` for every natural `X`, with
   explicit effective `K`.
-- A complete public export archive for all 210 related episodes: 203
+- Exact post-density interfaces: full maximum iff all shift budgets, certified
+  closure of `25≤n≤84`, the `n>84`/`2520∣n`/prime-family reduction, and a
+  short-window iff fixed-depth-shift adapter.
+- Exact shift-9/shift-10 residue and parity sharpening, together with
+  kernel-verified seven-prime consistency witnesses surviving through shifts
+  10 and 12. These witnesses identify the next fixed-depth obstruction; they
+  are not candidates for the original problem.
+- A first shift-13 refinement: at most three distinct prime factors, exclusion
+  of the primes dividing `2520`, and an exact first 13-adic split that reduces
+  the nonexceptional cofactor to at most seven divisors and two prime factors.
+- A reusable seven-theorem shift-factor/adic induction framework: generic
+  coprime and prime-power budget peeling, cofactor prime-factor control, and
+  exact conversion of the next `p`-adic layer to a modular exceptional class.
+  Shifts 14–16 are recorded as 7-adic, 5-adic, and family-sensitive 2-adic
+  stress tests of that framework—not as a claim that isolated shift
+  accumulation will solve the problem.
+- Exact interfaces for the variants: the limit statement is equivalent to an
+  eventual arbitrarily large shift excess, while prime powers prove only
+  sparse unboundedness; window size three is exactly the Sophie Germain prime
+  infinitude problem.
+- A complete public export archive for all 227 related episodes: 220
   kernel-verified successes and seven retained non-success histories.
 
 ## Tools and authorship
@@ -56,6 +76,10 @@
 - Formal claims are checked by the Lean 4 kernel against pinned Mathlib. Model
   prose, human confidence, numerical experiments, and literature summaries do
   not substitute for kernel evidence.
+- Computational searches were used to locate fixed-depth witnesses. The
+  published Lean witnesses recheck explicit factorizations, divisor counts,
+  and primality claims in the kernel; larger scan-range observations remain
+  search guidance and are not promoted to theorems.
 - Mid-campaign errors and corrections—including the inert-level diagnosis and
   the insufficient Mertens coefficient—are retained in the record rather than
   silently rewritten away.
@@ -64,13 +88,17 @@
 
 - **Erdős #647 remains open.** The density theorem neither constructs a larger
   candidate nor proves the candidate set empty.
+- The three research statements in the Formal Conjectures module remain
+  explicit `sorry`s. The new fixed-depth witnesses and variant equivalences
+  sharpen what those obligations require; none is presented as a replacement
+  for an open theorem.
 - Hughes's 6.16×10¹⁷ exclusion is Hughes's computation, not ours.
 - Theorem 2's mathematics and the density target are Hughes–Kitamura
   mathematics. Our contribution is the independent Lean reconstruction,
   truncation-gap diagnosis and repair, explicit constants, and final assembly.
-- The 210 proof-search episodes have `fidelity_status = attested`: Lean checks
+- The 227 proof-search episodes have `fidelity_status = attested`: Lean checks
   project-authored formal statements, but this is not neutral-corpus
-  certification. Kernel verification applies to 203 of those episodes; the
+  certification. Kernel verification applies to 220 of those episodes; the
   other seven are retained as explicit negative or unfinished trajectories.
 - The terminal density theorem is supported by a clean transitive source
   replay. It is not misrepresented as an additional standalone tracked
