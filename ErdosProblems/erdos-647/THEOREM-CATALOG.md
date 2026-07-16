@@ -4,8 +4,8 @@
 > updated 2026-07-16.
 >
 > This catalogs the kernel-checked and source-replayed theorem families produced by the Erdős
-> #647 campaign. The portable source currently has 452 top-level theorem
-> declarations and five top-level helper lemmas across 169 Lean files (457
+> #647 campaign. The portable source currently has 449 actual theorem
+> declarations and five top-level helper lemmas across 169 Lean files (454
 > theorem/lemma declarations total). Each tracked row carries the
 > `problem_version_id` — the authoritative lookup key in the
 > tracked pipeline — plus the exact root statement and, where recorded, the
@@ -116,8 +116,8 @@ no access to this project's database required.
 
 Committed Lean source:
 
-- 169 `.lean` files under [proof/](proof/), containing 452 top-level theorem
-  declarations and five top-level helper lemmas (457 declarations total).
+- 169 `.lean` files under [proof/](proof/), containing 449 actual theorem
+  declarations and five top-level helper lemmas (454 declarations total).
 - Five consolidated modular families under
   [proof/campaign/](proof/campaign/), plus individual analytic, truncation,
   candidate-transport, and final-assembly modules in the parent directory.
@@ -146,7 +146,7 @@ Export and reproduction material:
 | 9 | Post-density existence and variant frontier | 49 | generic shift-factor/adic induction, shifts 9–16 as concrete frontiers and stress tests, exact depth witnesses, the eventual-excess limit interface, and the depth-two/Sophie-Germain equivalence |
 | 10 | Power-prefix, block, and certificate architecture | 31 | arbitrary-power local-factor products, exact block reindexing, executable factorization batches, fourth-root compression, and the conditional novelty/shared-host seam |
 | 11 | Large-factor novelty, CRT re-entry, and second-layer catalogs | 59 | fifth/hybrid prefix compression, finite-catalog escape, `t`-subset product alternatives, CRT exclusion, and the conditional smooth-cofactor catalog after two exceptions |
-| | **Selected-family subtotal** | **not additive** | The exact repository-wide count is 457 theorem/lemma declarations; family rows are publication groupings and may overlap. |
+| | **Selected-family subtotal** | **not additive** | The exact repository-wide count is 454 theorem/lemma declarations; family rows are publication groupings and may overlap. |
 
 ---
 
@@ -548,7 +548,7 @@ Formal Conjectures closure remains `0/3`.**
 
 ---
 
-*Counts are explicit: 452 top-level theorem declarations plus five top-level
+*Counts are explicit: 449 actual theorem declarations plus five top-level
 helper lemmas in 169 Lean files, and 317 related proof-search episodes in the
 export archive (310 kernel-verified,
 seven retained non-success histories). These are different metrics—one episode

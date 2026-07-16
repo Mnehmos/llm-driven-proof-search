@@ -32,7 +32,7 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 | [evidence.md](evidence.md) | tracked episode evidence plus the clean repository replay |
 | [dossiers/](dossiers/README.md) | complete 317-episode export archive and indexes |
 | [credit.md](credit.md) | attribution, AI disclosure, and honest limits |
-| [proof/](proof/) | 169 Lean files containing 452 top-level theorems and five helper lemmas (457 theorem/lemma declarations total) |
+| [proof/](proof/) | 169 Lean files containing 449 actual theorem declarations and five helper lemmas (454 theorem/lemma declarations total) |
 
 ## Headline results — 2026-07-16
 
@@ -251,10 +251,10 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 - Complete density dependency replay: 42 modules plus
   `proof/campaign/family2-classifications.lean`, exit code 0
 - No `sorry`, `admit`, or added axiom in the final assembly
-- Portable source contains 452 top-level theorem declarations and five
-  top-level lemma declarations across 169 Lean files; including 45 definitions
-  gives 502 declarations. These are source declarations, not 502 independent
-  tracked discoveries.
+- Portable source contains 449 actual theorem declarations and five top-level
+  lemma declarations across 169 Lean files; including 47 definitions (45
+  public and two private helpers) gives 501 declarations. These are source
+  declarations, not 501 independent tracked discoveries.
 - The 2026-07-16 power-prefix/block/certificate batch contains 31 theorem
   declarations in nine modules. Twenty-three roots were independently
   tracked `kernel_verified`; the remaining eight are source-compiled helpers.

@@ -98,8 +98,9 @@
   prefix.
 - A complete public export archive for all 317 related episodes: 310
   kernel-verified successes and seven retained non-success histories.
-- The final checkpoint contains 169 Lean files with 452 theorem declarations
-  and five lemma declarations (457 theorem/lemma declarations total).
+- The final checkpoint contains 169 Lean files with 449 actual theorem
+  declarations and five lemma declarations (454 theorem/lemma declarations
+  total).
 
 ## Tools and authorship
 
