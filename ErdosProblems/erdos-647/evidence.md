@@ -145,12 +145,14 @@ The first concrete cross-rung non-reuse pair is independently tracked:
 | coprimality of `504N-1` and `360N-1` | `70b88b83-6ac4-480f-b906-2b31c0befe47` | `227e1560-c30a-41f3-904e-91716252a014` | **kernel_verified**, `root_proved`; replay matched 6/6 events |
 | pairwise coprimality of all four reduced rung cofactors | `6d108ae2-23ca-4766-9122-665a27ba65a3` | `4a5b8d82-e89c-4893-8599-b6279c502a96` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `0b42b302-cda4-4746-bbb9-ecadba82dd56` **kernel_pass** |
 | rung-5/rung-10 5-adic depths cannot both be positive | `c6a98f6f-e2f7-4762-9b45-936f168135ea` | `48d2efa3-0198-4efd-927d-15a870c55cdf` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `65bf0b73-dcb8-497d-8c52-56cfb8189c56` **kernel_pass** |
+| sharpened total adic depth `a₅+a₇+a₉+a₁₀≤3B+14` | `4b6aadf9-6e12-4a29-aaaa-b40519d23d3b` | `9d536e7d-f76b-4d89-9763-7b63728a8c2c` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `13852c52-b188-4ec7-bb42-1f917230b8b3` **kernel_pass** |
 
 All three sources also compile directly in the pinned `lean-checker`. The
 strongest source additionally proves that selected prime factors are pairwise
 distinct and that the four shifted values always supply four distinct primes.
 The second tracked root removes the simultaneous positive-depth 5-adic branch
-at rungs 5 and 10. No global failed-shift conclusion is being inferred from
+at rungs 5 and 10; the third lowers the corresponding total depth bound from
+`4B+20` to `3B+14`. No global failed-shift conclusion is being inferred from
 this local clique.
 
 Shift 13 now has its own exact refinement:
@@ -308,15 +310,15 @@ compatibility check rather than a forced mixed-version import.
 
 ## Complete proof-search export archive
 
-The repository now includes exports for all 321 related episodes identified by
+The repository now includes exports for all 322 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
 index, and a read-only database closure audit. Of these, 312 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.
-Portable source currently contains 456 actual theorem declarations and five
+Portable source currently contains 457 actual theorem declarations and five
 top-level lemma declarations across 172 Lean files; including 47 definitions
-(45 public and two private helpers) gives 508 declarations. Those source counts
+(45 public and two private helpers) gives 509 declarations. Those source counts
 and the 319 episode count measure different things.
 
 - [export manifest](dossiers/exports/manifest.tsv)

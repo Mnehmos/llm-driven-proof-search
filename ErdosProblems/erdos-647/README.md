@@ -32,7 +32,7 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 | [evidence.md](evidence.md) | tracked episode evidence plus the clean repository replay |
 | [dossiers/](dossiers/README.md) | complete 319-episode export archive and indexes |
 | [credit.md](credit.md) | attribution, AI disclosure, and honest limits |
-| [proof/](proof/) | 172 Lean files containing 456 actual theorem declarations and five helper lemmas (461 theorem/lemma declarations total) |
+| [proof/](proof/) | 172 Lean files containing 457 actual theorem declarations and five helper lemmas (462 theorem/lemma declarations total) |
 
 ## Headline results — 2026-07-16
 
@@ -64,7 +64,7 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
    the all-avoid obstruction showed that bounded congruence trees cannot close
    the frontier.
 
-6. **Complete machine export archive.** All 321 related episodes
+6. **Complete machine export archive.** All 322 related episodes
    are exported in redacted JSON, full Markdown dossier, and structured
    training JSON forms under
    [dossiers/exports/](dossiers/exports/README.md). Of these, 312 report
@@ -255,7 +255,8 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
     `N≥1`. Consequently the four shifts always supply four distinct prime
     factors. The same module also proves that the 5-adic escape depths attached
     to rungs 5 and 10 cannot both be positive, deleting their joint exceptional
-    branch from the base-gauntlet state space. This is a concrete cross-rung
+    branch from the base-gauntlet state space and sharpening the total adic
+    boundary from `4B+20` to `3B+14` (`28` to `20` when `B=2`). This is a concrete cross-rung
     non-reuse theorem, but it does not
     yet produce the global failed shift needed to close the existence
     declaration.
@@ -267,9 +268,9 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 - Complete density dependency replay: 42 modules plus
   `proof/campaign/family2-classifications.lean`, exit code 0
 - No `sorry`, `admit`, or added axiom in the final assembly
-- Portable source contains 456 actual theorem declarations and five top-level
+- Portable source contains 457 actual theorem declarations and five top-level
   lemma declarations across 172 Lean files; including 47 definitions (45
-  public and two private helpers) gives 508 declarations. These are source
+  public and two private helpers) gives 509 declarations. These are source
   declarations, not 503 independent tracked discoveries.
 - The 2026-07-16 power-prefix/block/certificate batch contains 31 theorem
   declarations in nine modules. Twenty-three roots were independently

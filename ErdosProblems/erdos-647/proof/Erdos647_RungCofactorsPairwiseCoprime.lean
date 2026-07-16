@@ -36,6 +36,15 @@ The rung-5/rung-10 adic-depth incompatibility was separately tracked:
 * root statement hash:
   `006c85849b78a3d5ede09612336d7907a94d5a0d0422926a93f7a22f55410050`
 * outcome: `kernel_verified`; replay `matched(1)`
+
+The sharpened total-adic-depth boundary was separately tracked:
+
+* preverification job: `13852c52-b188-4ec7-bb42-1f917230b8b3`
+* problem version: `4b6aadf9-6e12-4a29-aaaa-b40519d23d3b`
+* episode: `9d536e7d-f76b-4d89-9763-7b63728a8c2c`
+* root statement hash:
+  `ddd9db6cf221e46d7fcf25c1ec65bb5110a1cca23915e930e66a9c080eefb8cd`
+* outcome: `kernel_verified`; replay `matched(1)`
 -/
 
 /-- A positive Bézout relation in subtraction-free natural-number form forces
@@ -172,3 +181,19 @@ theorem erdos647_rung5_rung10_adic_depth_incompatible :
   have h5plus : 5 ∣ 2 * (252 * N - 1) + 1 := hrel ▸ h5A
   have h51 : 5 ∣ 1 := (Nat.dvd_add_right h5twice).mp h5plus
   norm_num at h51
+
+/-- Eliminating the joint rung-5/rung-10 branch improves the total base-block
+adic-depth bound from `4B+20` to `3B+14`. -/
+theorem erdos647_base_gauntlet_adic_sum_sharpened :
+    ∀ N B a5 a7 a9 a10 : ℕ, 1 ≤ N →
+      5 ^ a5 ∣ 504 * N - 1 →
+      5 ^ a10 ∣ 252 * N - 1 →
+      a5 ≤ B + 3 → a7 ≤ B + 5 → a9 ≤ B + 6 →
+      2 * a10 ≤ B + 6 →
+      a5 + a7 + a9 + a10 ≤ 3 * B + 14 := by
+  intro N B a5 a7 a9 a10 hN hpow5 hpow10 hb5 hb7 hb9 hb10
+  have hsplit := erdos647_rung5_rung10_adic_depth_incompatible
+    N a5 a10 hN hpow5 hpow10
+  rcases hsplit with h5zero | h10zero
+  · omega
+  · omega

@@ -90,7 +90,8 @@
   `5,7,9,10` are pairwise coprime by six explicit positive Bézout identities,
   so every positive parameter supplies four pairwise distinct shifted-value
   prime factors; the associated rung-5 and rung-10 5-adic depths cannot both
-  be positive.
+  be positive, sharpening the total base-gauntlet adic bound from `4B+20` to
+  `3B+14`.
 - General `t`-subset product selection and an exact CRT re-entry certificate:
   whenever a selected prime product lies below `n`, its residue supplies a
   new shift with the kernel-checked sandwich
@@ -104,10 +105,10 @@
   not a contradiction.
 - The explicit global bound `τ(n)^4≤19680n` and its fourth-root candidate
   prefix.
-- A complete public export archive for all 321 related episodes: 314
+- A complete public export archive for all 322 related episodes: 315
   kernel-verified successes and seven retained non-success histories.
-- The final checkpoint contains 172 Lean files with 456 actual theorem
-  declarations and five lemma declarations (461 theorem/lemma declarations
+- The final checkpoint contains 172 Lean files with 457 actual theorem
+  declarations and five lemma declarations (462 theorem/lemma declarations
   total).
 
 ## Tools and authorship
@@ -150,7 +151,7 @@
 - Theorem 2's mathematics and the density target are Hughes–Kitamura
   mathematics. Our contribution is the independent Lean reconstruction,
   truncation-gap diagnosis and repair, explicit constants, and final assembly.
-- The 321 proof-search episodes have `fidelity_status = attested`: Lean checks
+- The 322 proof-search episodes have `fidelity_status = attested`: Lean checks
   project-authored formal statements, but this is not neutral-corpus
   certification. Kernel verification applies to 312 of those episodes; the
   other seven are retained as explicit negative or unfinished trajectories.
