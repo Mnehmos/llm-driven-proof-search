@@ -93,6 +93,10 @@
   be positive, sharpening the total base-gauntlet adic bound from `4B+20` to
   `3B+14`. A candidate-facing source-checked assembly now returns that sharper
   bound directly from the four relevant shift budgets.
+- The pure-power exclusion refinement: modular power cycles show that all four
+  residual cofactors are nontrivial. At the actual candidate budget this
+  bounds their divisor counts by `3,4,3,3`, their adic depths by `1,2,2,1`,
+  and the total depth by `5` after the two 5-adic branches are coupled.
 - General `t`-subset product selection and an exact CRT re-entry certificate:
   whenever a selected prime product lies below `n`, its residue supplies a
   new shift with the kernel-checked sandwich
@@ -106,10 +110,10 @@
   not a contradiction.
 - The explicit global bound `τ(n)^4≤19680n` and its fourth-root candidate
   prefix.
-- A complete public export archive for all 322 related episodes: 315
+- A complete public export archive for all 323 related episodes: 316
   kernel-verified successes and seven retained non-success histories.
-- The final checkpoint contains 172 Lean files with 458 actual theorem
-  declarations and five lemma declarations (463 theorem/lemma declarations
+- The final checkpoint contains 173 Lean files with 459 actual theorem
+  declarations and five lemma declarations (464 theorem/lemma declarations
   total).
 
 ## Tools and authorship
@@ -154,7 +158,7 @@
   truncation-gap diagnosis and repair, explicit constants, and final assembly.
 - The 322 proof-search episodes have `fidelity_status = attested`: Lean checks
   project-authored formal statements, but this is not neutral-corpus
-  certification. Kernel verification applies to 315 of those episodes; the
+  certification. Kernel verification applies to 316 of those episodes; the
   other seven are retained as explicit negative or unfinished trajectories.
 - The terminal density theorem is supported by a clean transitive source
   replay. It is not misrepresented as an additional standalone tracked

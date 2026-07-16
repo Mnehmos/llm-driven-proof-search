@@ -146,6 +146,7 @@ The first concrete cross-rung non-reuse pair is independently tracked:
 | pairwise coprimality of all four reduced rung cofactors | `6d108ae2-23ca-4766-9122-665a27ba65a3` | `4a5b8d82-e89c-4893-8599-b6279c502a96` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `0b42b302-cda4-4746-bbb9-ecadba82dd56` **kernel_pass** |
 | rung-5/rung-10 5-adic depths cannot both be positive | `c6a98f6f-e2f7-4762-9b45-936f168135ea` | `48d2efa3-0198-4efd-927d-15a870c55cdf` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `65bf0b73-dcb8-497d-8c52-56cfb8189c56` **kernel_pass** |
 | sharpened total adic depth `a₅+a₇+a₉+a₁₀≤3B+14` | `4b6aadf9-6e12-4a29-aaaa-b40519d23d3b` | `9d536e7d-f76b-4d89-9763-7b63728a8c2c` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `13852c52-b188-4ec7-bb42-1f917230b8b3` **kernel_pass** |
+| actual-budget pure-power exclusion and total depth `≤5` | `3339c761-f0de-494b-ae80-6e680f91d72d` | `d1a3a3ae-24ba-4ece-ae85-5df82815be36` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `2a575de0-d8ec-4010-83ab-48e2fc6d08c3` **kernel_pass** |
 
 All three sources also compile directly in the pinned `lean-checker`. The
 strongest source additionally proves that selected prime factors are pairwise
@@ -157,6 +158,14 @@ at rungs 5 and 10; the third lowers the corresponding total depth bound from
 the four shift budgets and compiles in the pinned project. It is recorded as
 a source-checked assembly theorem, not as an additional tracked episode. No global failed-shift conclusion is being inferred from
 this local clique.
+
+The next tracked root removes the hidden `q=1` slack from all four
+decompositions. Small-modulus power cycles force every residual cofactor to
+be nontrivial, yielding divisor-count bounds `3,4,3,3`, depth bounds
+`1,2,2,1`, and—after the shared 5-adic incompatibility—a total depth at most
+`5`. The result is stronger than the source-checked `3B+14` assembly at the
+main problem's actual budget, while remaining a structural reduction rather
+than a failed-shift conclusion.
 
 Shift 13 now has its own exact refinement:
 
@@ -313,16 +322,16 @@ compatibility check rather than a forced mixed-version import.
 
 ## Complete proof-search export archive
 
-The repository now includes exports for all 322 related episodes identified by
+The repository now includes exports for all 323 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
 index, and a read-only database closure audit. Of these, 315 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.
-Portable source currently contains 458 actual theorem declarations and five
-top-level lemma declarations across 172 Lean files; including 47 definitions
-(45 public and two private helpers) gives 510 declarations. Those source counts
-and the 322 episode count measure different things.
+Portable source currently contains 459 actual theorem declarations and five
+top-level lemma declarations across 173 Lean files; including 47 definitions
+(45 public and two private helpers) gives 511 declarations. Those source counts
+and the 323 episode count measure different things.
 
 - [export manifest](dossiers/exports/manifest.tsv)
 - [public summaries](dossiers/exports/public_summary/)

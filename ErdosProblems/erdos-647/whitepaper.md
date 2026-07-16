@@ -265,7 +265,7 @@ repaired squarefree remainder was also submitted to the independent exact
 proof-search verifier and returned `kernel_pass`; identifiers and hashes are
 recorded in [evidence.md](evidence.md).
 
-For provenance beyond the source replay, all 322 related campaign
+For provenance beyond the source replay, all 323 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
 training JSON formats. Of these, 315 report `KERNEL_VERIFIED` in the pinned
@@ -505,6 +505,18 @@ bound it assembles are independently tracked kernel-verified roots. It is a stru
 not a global
 contradiction.
 
+The remaining slack in that `20` bound came from allowing a residual
+cofactor to equal one. The tracked theorem
+`Erdos647_BaseGauntletSharpDepth.lean` removes all four pure-power branches:
+the required powers of `5`, `7`, `3`, and `5` have incompatible residues
+modulo `4`, `3`, `8`, and `4`. Every residual cofactor is therefore
+nontrivial and has at least two divisors. At `B=2`, their divisor counts are
+at most `3,4,3,3`, their adic depths are at most `1,2,2,1`, and the two
+5-adic depths cannot both be positive. The total depth is consequently at
+most `5`, not `20`. This is a substantial finite-state compression, but the
+surviving near-prime and semiprime branches still require a global
+accumulation contradiction.
+
 The remaining barrier is now precise. One must either force a re-entry subset
 whose remainder violates `2^|I|≤h+2`, or prove that the large family of
 smooth, size-controlled second-layer cofactors cannot coexist for a candidate.
@@ -517,11 +529,11 @@ Formal Conjectures declarations.
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **458 actual theorem
-  declarations and five top-level helper lemmas across 172 Lean files** under
+- Portable proof source currently contains **459 actual theorem
+  declarations and five top-level helper lemmas across 173 Lean files** under
   `proof/`. Including 47 definitions (45 public and two private helpers) gives
-  510 declarations. These counts include helper and assembly declarations;
-  they are not presented as 510 independent mathematical discoveries or 510
+  511 declarations. These counts include helper and assembly declarations;
+  they are not presented as 511 independent mathematical discoveries or 511
   standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base
   sieve, the bridging-closure layer, the Theorem-2 formalization, the

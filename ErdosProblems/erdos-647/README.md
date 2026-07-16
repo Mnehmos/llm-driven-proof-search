@@ -30,9 +30,9 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 | [THEOREM-CATALOG.md](THEOREM-CATALOG.md) | theorem inventory and final assembly map |
 | [attack-plan.md](attack-plan.md) | completed density program and remaining existence directions |
 | [evidence.md](evidence.md) | tracked episode evidence plus the clean repository replay |
-| [dossiers/](dossiers/README.md) | complete 322-episode export archive and indexes |
+| [dossiers/](dossiers/README.md) | complete 323-episode export archive and indexes |
 | [credit.md](credit.md) | attribution, AI disclosure, and honest limits |
-| [proof/](proof/) | 172 Lean files containing 458 actual theorem declarations and five helper lemmas (463 theorem/lemma declarations total) |
+| [proof/](proof/) | 173 Lean files containing 459 actual theorem declarations and five helper lemmas (464 theorem/lemma declarations total) |
 
 ## Headline results — 2026-07-16
 
@@ -64,7 +64,7 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
    the all-avoid obstruction showed that bounded congruence trees cannot close
    the frontier.
 
-6. **Complete machine export archive.** All 322 related episodes
+6. **Complete machine export archive.** All 323 related episodes
    are exported in redacted JSON, full Markdown dossier, and structured
    training JSON forms under
    [dossiers/exports/](dossiers/exports/README.md). Of these, 315 report
@@ -266,6 +266,17 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
     yet produce the global failed shift needed to close the existence
     declaration.
 
+25. **Pure-power escape branches are eliminated.**
+    [`Erdos647_BaseGauntletSharpDepth.lean`](proof/Erdos647_BaseGauntletSharpDepth.lean)
+    proves that the four residual cofactors at shifts `5,7,9,10` are all
+    strictly larger than one: the excluded pure powers fail modulo
+    `4,3,8,4`. Their divisor counts are therefore at least two. Under the
+    actual candidate budgets, the four adic depths are bounded by
+    `1,2,2,1`, the residual divisor counts by `3,4,3,3`, and the rung-5 and
+    rung-10 incompatibility reduces the total depth to at most `5`. The root
+    is independently `kernel_verified` and replayed. This sharply reduces the
+    base state space but still does not prove a universal failed shift.
+
 ## Verification snapshot
 
 - Pinned environment:
@@ -273,9 +284,9 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 - Complete density dependency replay: 42 modules plus
   `proof/campaign/family2-classifications.lean`, exit code 0
 - No `sorry`, `admit`, or added axiom in the final assembly
-- Portable source contains 458 actual theorem declarations and five top-level
-  lemma declarations across 172 Lean files; including 47 definitions (45
-  public and two private helpers) gives 510 declarations. These are source
+- Portable source contains 459 actual theorem declarations and five top-level
+  lemma declarations across 173 Lean files; including 47 definitions (45
+  public and two private helpers) gives 511 declarations. These are source
   declarations, not 510 independent tracked discoveries.
 - The 2026-07-16 power-prefix/block/certificate batch contains 31 theorem
   declarations in nine modules. Twenty-three roots were independently
@@ -283,7 +294,7 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 - The later large-prime, CRT re-entry, and second-layer continuation contributes
   30 additional tracked roots. Direct proof-search export confirms all 30 are
   `KERNEL_VERIFIED` in the pinned environment; their full, public-summary,
-  and training artifacts are included in the 322-episode archive.
+  and training artifacts are included in the 323-episode archive.
 - None of these results closes a Formal Conjectures declaration. All three
   research-open `sorry`s remain explicit.
 - Generated `.olean` files are not committed

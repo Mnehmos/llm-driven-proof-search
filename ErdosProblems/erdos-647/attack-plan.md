@@ -869,6 +869,12 @@ nonexistence, convergence, or Sophie Germain infinitude.
   `erdos647_base_gauntlet_adic_boundary_sharpened` now returns that improved
   total directly from the candidate's four shift budgets. It is an integrated
   assembly corollary, not a newly claimed tracked root.
+  The next theorem eliminates all four residual-cofactor-equals-one branches
+  by power residues modulo `4,3,8,4`. At `B=2` it improves the individual
+  depth bounds to `1,2,2,1`, returns residual divisor-count bounds
+  `3,4,3,3`, and—using the rung-5/rung-10 incompatibility—reduces the total
+  depth from `20` to `5`. This root is tracked `kernel_verified` as episode
+  `d1a3a3ae-24ba-4ece-ae85-5df82815be36` and replayed cleanly.
   The next seam is to connect this forced novelty to one common host, a CRT
   re-entry violation, or another global accumulation mechanism.
 - ✅ **Subset-product / CRT re-entry DONE (2026-07-16):** pair and general
