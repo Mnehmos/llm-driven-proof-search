@@ -117,14 +117,13 @@ fn rho(n: u64) -> u64 {
     }
 }
 
-/// Divisor count via recursive factorization.
-fn tau(n: u64) -> u64 {
-    if n == 1 {
-        return 1;
-    }
-    // Collect prime factors with multiplicity.
-    let mut stack = vec![n];
+/// Full factorization as sorted (prime, exponent) pairs.
+fn factorize(n: u64) -> Vec<(u64, u32)> {
     let mut primes: Vec<(u64, u32)> = Vec::new();
+    if n <= 1 {
+        return primes;
+    }
+    let mut stack = vec![n];
     while let Some(m) = stack.pop() {
         if m == 1 {
             continue;
@@ -140,7 +139,29 @@ fn tau(n: u64) -> u64 {
         stack.push(d);
         stack.push(m / d);
     }
-    primes.iter().map(|(_, e)| (*e as u64) + 1).product()
+    primes.sort();
+    primes
+}
+
+fn fact_string(f: &[(u64, u32)]) -> String {
+    f.iter()
+        .map(|(p, e)| {
+            if *e == 1 {
+                p.to_string()
+            } else {
+                format!("{}^{}", p, e)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("*")
+}
+
+/// Divisor count via factorization.
+fn tau(n: u64) -> u64 {
+    if n <= 1 {
+        return 1;
+    }
+    factorize(n).iter().map(|(_, e)| (*e as u64) + 1).product()
 }
 
 fn isqrt(n: u64) -> u64 {
@@ -154,16 +175,18 @@ fn isqrt(n: u64) -> u64 {
     r
 }
 
-/// Full prefix check: returns first failing shift, or None if N is a
-/// genuine square-root-prefix survivor (i.e. a candidate!).
-fn prefix_check(n_val: u64) -> Option<u64> {
+/// Full prefix check: returns (first failing shift, tau, factorization),
+/// or None if N is a genuine square-root-prefix survivor (a candidate!).
+fn prefix_check(n_val: u64) -> Option<(u64, u64, Vec<(u64, u32)>)> {
     let limit = 2 * isqrt(n_val);
     for k in 1..limit {
         if k >= n_val {
             break;
         }
-        if tau(n_val - k) > k + 2 {
-            return Some(k);
+        let f = factorize(n_val - k);
+        let t: u64 = f.iter().map(|(_, e)| (*e as u64) + 1).product();
+        if t > k + 2 {
+            return Some((k, t, f));
         }
     }
     None
@@ -189,7 +212,12 @@ fn check_one(n_param: u64) {
         seven_form_filter(n_param)
     );
     match prefix_check(n_val) {
-        Some(k) => println!("  first failing shift: k = {} (tau = {})", k, tau(n_val - k)),
+        Some((k, t, f)) => println!(
+            "  first failing shift: k = {} (tau = {}, n-k = {})",
+            k,
+            t,
+            fact_string(&f)
+        ),
         None => println!("  *** FULL SQRT-PREFIX SURVIVOR — CANDIDATE ***"),
     }
 }
@@ -202,10 +230,11 @@ fn main() {
     }
     let t_start: u64 = args.get(1).map(|s| s.parse().unwrap()).unwrap_or(0);
     let t_end: u64 = args.get(2).map(|s| s.parse().unwrap()).unwrap_or(t_start + 1000);
-    let threshold: u64 = args.get(3).map(|s| s.parse().unwrap()).unwrap_or(13);
     let mut tested: u64 = 0;
     let mut seven_survivors: u64 = 0;
     let mut best_depth: u64 = 0;
+    // First-failure histogram over shifts 1..=64 (larger shifts binned at 0).
+    let mut fail_hist = [0u64; 65];
     for t in t_start..t_end {
         for r in RESIDUES {
             let n_param = 46189 * t + r;
@@ -219,12 +248,34 @@ fn main() {
             seven_survivors += 1;
             let n_val = 2520 * n_param;
             match prefix_check(n_val) {
-                Some(k) => {
+                Some((k, tau_val, f)) => {
+                    // Full telemetry row for every seven-form survivor:
+                    // parameter, wheel residue, first failing shift, tau,
+                    // budget, excess, and the failure factorization.
+                    println!(
+                        "SURV N={} res={} k={} tau={} budget={} excess={} fact={}",
+                        n_param,
+                        r,
+                        k,
+                        tau_val,
+                        k + 2,
+                        tau_val - (k + 2),
+                        fact_string(&f)
+                    );
+                    if (k as usize) < fail_hist.len() {
+                        fail_hist[k as usize] += 1;
+                    } else {
+                        fail_hist[0] += 1;
+                    }
                     if k > best_depth {
                         best_depth = k;
-                    }
-                    if k >= threshold {
-                        println!("DEPTH {} at N = {} (n = {})", k, n_param, n_val);
+                        println!(
+                            "RECORD depth={} N={} n={} fact(n-k)={}",
+                            k,
+                            n_param,
+                            n_val,
+                            fact_string(&f)
+                        );
                     }
                 }
                 None => {
@@ -243,4 +294,10 @@ fn main() {
         "DONE t=[{},{}) tested {} seven-form-survivors {} best-depth {}",
         t_start, t_end, tested, seven_survivors, best_depth
     );
+    println!("FAILHIST k:count (0 bin = k>64)");
+    for (k, c) in fail_hist.iter().enumerate() {
+        if *c > 0 {
+            println!("  {}:{}", k, c);
+        }
+    }
 }
