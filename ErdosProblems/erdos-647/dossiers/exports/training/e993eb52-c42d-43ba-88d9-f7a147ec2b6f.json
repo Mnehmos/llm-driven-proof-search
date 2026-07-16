@@ -1,0 +1,86 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro s R hR\n  exact ⟨{ toBoundingSieve := s, level := R, one_le_level := hR }, rfl, rfl⟩",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro s R hR\n  exact ⟨{ toBoundingSieve := s, level := R, one_le_level := hR }, rfl, rfl⟩",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : BoundingSieve) (R : ℕ), 1 ≤ R → ∃ t : SelbergSieve,\n      t.toBoundingSieve = s ∧ t.level = R",
+        "module_source_hash": null,
+        "obligation_id": "6257f0ea-3954-4b35-ad82-80be99e2583a",
+        "outcome": "kernel_fail",
+        "problem_version_id": "a1095c68-7d6f-4e6a-91ad-894d73d35863",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "fcaef0ed5c3c0fe5416bcb3fe4291a300d525c6d116727ed1825badc22c6c6f5"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "196e9095a4faa2719c5d57d81a83d8ce97772f988572d06f117b195fd4957d1f"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro s R hR\nhave hRreal : (1 : ℝ) ≤ (R : ℝ) := by\n  exact_mod_cast hR\nexact ⟨{\n  toBoundingSieve := s\n  level := R\n  one_le_level := hRreal\n}, rfl, rfl⟩",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro s R hR\nhave hRreal : (1 : ℝ) ≤ (R : ℝ) := by\n  exact_mod_cast hR\nexact ⟨{\n  toBoundingSieve := s\n  level := R\n  one_le_level := hRreal\n}, rfl, rfl⟩",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : BoundingSieve) (R : ℕ), 1 ≤ R → ∃ t : SelbergSieve,\n      t.toBoundingSieve = s ∧ t.level = R",
+        "module_source_hash": null,
+        "obligation_id": "6257f0ea-3954-4b35-ad82-80be99e2583a",
+        "outcome": "kernel_pass",
+        "problem_version_id": "a1095c68-7d6f-4e6a-91ad-894d73d35863",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "fcaef0ed5c3c0fe5416bcb3fe4291a300d525c6d116727ed1825badc22c6c6f5"
+      },
+      "next_state": {
+        "state_hash": "cf47e175675e6f78337bcffee524e4b958c64cc23e56c992d25491a74046817b"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "f1233b038c5e89cad8bd051198dc3a39bd9d285cb42873834e0d0bc074d1f913"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

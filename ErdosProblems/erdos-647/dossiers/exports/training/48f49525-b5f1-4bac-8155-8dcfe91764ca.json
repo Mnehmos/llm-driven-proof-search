@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro s X z C hCX hcop hsift\n  let G := C.filter (fun N => z < 157*N)\n  let B := C.filter (fun N => 157*N ≤ z)\n  have hGsub : G ⊆ (Finset.Icc 1 X).filter (fun N =>\n      Nat.Coprime s.prodPrimes\n        ((210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1))) := by\n    intro N hN\n    simp only [G, Finset.mem_filter] at hN ⊢\n    exact ⟨hCX hN.1, hcop N hN.1 hN.2⟩\n  have hGcard : (G.card : ℝ) ≤ s.siftedSum := by\n    rw [hsift]\n    exact_mod_cast Finset.card_le_card hGsub\n  have hBsub : B ⊆ Finset.Icc 1 z := by\n    intro N hN\n    simp only [B, Finset.mem_filter, Finset.mem_Icc] at hN ⊢\n    have hNX := hCX hN.1\n    simp only [Finset.mem_Icc] at hNX\n    omega\n  have hBcardNat : B.card ≤ z := by\n    calc\n      B.card ≤ (Finset.Icc 1 z).card := Finset.card_le_card hBsub\n      _ = z := by rw [Nat.card_Icc]; omega\n  have hBcard : (B.card : ℝ) ≤ z := by\n    exact_mod_cast hBcardNat\n  have hcover : C ⊆ G ∪ B := by\n    intro N hN\n    simp only [Finset.mem_union, G, B, Finset.mem_filter]\n    by_cases hsmall : z < 157*N\n    · exact Or.inl ⟨hN, hsmall⟩\n    · exact Or.inr ⟨hN, by omega⟩\n  have hcardNat : C.card ≤ G.card + B.card := by\n    calc\n      C.card ≤ (G ∪ B).card := Finset.card_le_card hcover\n      _ ≤ G.card + B.card := Finset.card_union_le _ _\n  have hcard : (C.card : ℝ) ≤ (G.card : ℝ) + (B.card : ℝ) := by\n    exact_mod_cast hcardNat\n  linarith",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro s X z C hCX hcop hsift\n  let G := C.filter (fun N => z < 157*N)\n  let B := C.filter (fun N => 157*N ≤ z)\n  have hGsub : G ⊆ (Finset.Icc 1 X).filter (fun N =>\n      Nat.Coprime s.prodPrimes\n        ((210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1))) := by\n    intro N hN\n    simp only [G, Finset.mem_filter] at hN ⊢\n    exact ⟨hCX hN.1, hcop N hN.1 hN.2⟩\n  have hGcard : (G.card : ℝ) ≤ s.siftedSum := by\n    rw [hsift]\n    exact_mod_cast Finset.card_le_card hGsub\n  have hBsub : B ⊆ Finset.Icc 1 z := by\n    intro N hN\n    simp only [B, Finset.mem_filter, Finset.mem_Icc] at hN ⊢\n    have hNX := hCX hN.1\n    simp only [Finset.mem_Icc] at hNX\n    omega\n  have hBcardNat : B.card ≤ z := by\n    calc\n      B.card ≤ (Finset.Icc 1 z).card := Finset.card_le_card hBsub\n      _ = z := by rw [Nat.card_Icc]; omega\n  have hBcard : (B.card : ℝ) ≤ z := by\n    exact_mod_cast hBcardNat\n  have hcover : C ⊆ G ∪ B := by\n    intro N hN\n    simp only [Finset.mem_union, G, B, Finset.mem_filter]\n    by_cases hsmall : z < 157*N\n    · exact Or.inl ⟨hN, hsmall⟩\n    · exact Or.inr ⟨hN, by omega⟩\n  have hcardNat : C.card ≤ G.card + B.card := by\n    calc\n      C.card ≤ (G ∪ B).card := Finset.card_le_card hcover\n      _ ≤ G.card + B.card := Finset.card_union_le _ _\n  have hcard : (C.card : ℝ) ≤ (G.card : ℝ) + (B.card : ℝ) := by\n    exact_mod_cast hcardNat\n  linarith",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : BoundingSieve) (X z : ℕ) (C : Finset ℕ),\n      C ⊆ Finset.Icc 1 X →\n      (∀ N ∈ C, z < 157*N →\n        Nat.Coprime s.prodPrimes\n          ((210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n            (840*N-1)*(1260*N-1)*(2520*N-1))) →\n      s.siftedSum =\n        (((Finset.Icc 1 X).filter (fun N =>\n          Nat.Coprime s.prodPrimes\n            ((210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n              (840*N-1)*(1260*N-1)*(2520*N-1)))).card : ℝ) →\n      (C.card : ℝ) ≤ s.siftedSum + z",
+        "module_source_hash": null,
+        "obligation_id": "dbe90fe9-515f-4d47-9694-bccdcb16429d",
+        "outcome": "kernel_pass",
+        "problem_version_id": "20e17129-58dd-46aa-9a9f-d35e0d97c96b",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "091284a06deb6c14f157b9dbe555e00409b518e8bf9c274edfcb2a89f8ecb8e6"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "3855d5496da55ebf28f66c3415136320a156aff58fdc312e81097c4da1add2f7"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro x hx\n  have hsubset : Set.Icc (2:ℝ) x ⊆ {t : ℝ | t ≠ 0} := by\n    intro t ht\n    have h1 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n    exact ne_of_gt (by linarith)\n  have hmain : ∀ t ∈ Set.uIcc (2:ℝ) x,\n      HasDerivAt (fun s => Real.log (Real.log s) - (Real.log s)⁻¹)\n        ((Real.log t + 1) / (t * (Real.log t)^2)) t := by\n    intro t ht\n    rw [Set.uIcc_of_le hx] at ht\n    have ht2 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n    have htpos : (0:ℝ) < t := by linarith\n    have htne : t ≠ 0 := ne_of_gt htpos\n    have hlogtpos : 0 < Real.log t := Real.log_pos (by linarith)\n    have hlogtne : Real.log t ≠ 0 := ne_of_gt hlogtpos\n    have hlog : HasDerivAt Real.log t⁻¹ t := Real.hasDerivAt_log htne\n    have hloglog : HasDerivAt (fun s => Real.log (Real.log s)) ((Real.log t)⁻¹ * t⁻¹) t :=\n      (Real.hasDerivAt_log hlogtne).comp t hlog\n    have hinv : HasDerivAt (fun s => (Real.log s)⁻¹) (-t⁻¹ / Real.log t ^ 2) t :=\n      hlog.inv hlogtne\n    have hsub := hloglog.sub hinv\n    have hval : (Real.log t)⁻¹ * t⁻¹ - -t⁻¹ / Real.log t ^ 2 = (Real.log t + 1) / (t * (Real.log t)^2) := by\n      field_simp\n      ring\n    rw [hval] at hsub\n    exact hsub\n  have hcont : ContinuousOn (fun t => (Real.log t + 1) / (t * (Real.log t)^2)) (Set.uIcc (2:ℝ) x) := by\n    rw [Set.uIcc_of_le hx]\n    apply ContinuousOn.div\n    · exact (Real.continuousOn_log.mono hsubset).add continuousOn_const\n    · exact continuousOn_id.mul ((Real.continuousOn_log.mono hsubset).pow 2)\n    · intro t ht\n      have ht2 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n      have htne : t ≠ 0 := ne_of_gt (by linarith)\n      have hlogtne : Real.log t ≠ 0 := ne_of_gt (Real.log_pos (by linarith))\n      exact mul_ne_zero htne (pow_ne_zero 2 hlogtne)\n  have hint : IntervalIntegrable (fun t => (Real.log t + 1) / (t * (Real.log t)^2)) MeasureTheory.volume 2 x :=\n    hcont.intervalIntegrable\n  rw [intervalIntegral.integral_eq_sub_of_hasDerivAt hmain hint]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro x hx\n  have hsubset : Set.Icc (2:ℝ) x ⊆ {t : ℝ | t ≠ 0} := by\n    intro t ht\n    have h1 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n    exact ne_of_gt (by linarith)\n  have hmain : ∀ t ∈ Set.uIcc (2:ℝ) x,\n      HasDerivAt (fun s => Real.log (Real.log s) - (Real.log s)⁻¹)\n        ((Real.log t + 1) / (t * (Real.log t)^2)) t := by\n    intro t ht\n    rw [Set.uIcc_of_le hx] at ht\n    have ht2 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n    have htpos : (0:ℝ) < t := by linarith\n    have htne : t ≠ 0 := ne_of_gt htpos\n    have hlogtpos : 0 < Real.log t := Real.log_pos (by linarith)\n    have hlogtne : Real.log t ≠ 0 := ne_of_gt hlogtpos\n    have hlog : HasDerivAt Real.log t⁻¹ t := Real.hasDerivAt_log htne\n    have hloglog : HasDerivAt (fun s => Real.log (Real.log s)) ((Real.log t)⁻¹ * t⁻¹) t :=\n      (Real.hasDerivAt_log hlogtne).comp t hlog\n    have hinv : HasDerivAt (fun s => (Real.log s)⁻¹) (-t⁻¹ / Real.log t ^ 2) t :=\n      hlog.inv hlogtne\n    have hsub := hloglog.sub hinv\n    have hval : (Real.log t)⁻¹ * t⁻¹ - -t⁻¹ / Real.log t ^ 2 = (Real.log t + 1) / (t * (Real.log t)^2) := by\n      field_simp\n      ring\n    rw [hval] at hsub\n    exact hsub\n  have hcont : ContinuousOn (fun t => (Real.log t + 1) / (t * (Real.log t)^2)) (Set.uIcc (2:ℝ) x) := by\n    rw [Set.uIcc_of_le hx]\n    apply ContinuousOn.div\n    · exact (Real.continuousOn_log.mono hsubset).add continuousOn_const\n    · exact continuousOn_id.mul ((Real.continuousOn_log.mono hsubset).pow 2)\n    · intro t ht\n      have ht2 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n      have htne : t ≠ 0 := ne_of_gt (by linarith)\n      have hlogtne : Real.log t ≠ 0 := ne_of_gt (Real.log_pos (by linarith))\n      exact mul_ne_zero htne (pow_ne_zero 2 hlogtne)\n  have hint : IntervalIntegrable (fun t => (Real.log t + 1) / (t * (Real.log t)^2)) MeasureTheory.volume 2 x :=\n    hcont.intervalIntegrable\n  rw [intervalIntegral.integral_eq_sub_of_hasDerivAt hmain hint]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ x : ℝ, 2 ≤ x → ∫ t in (2:ℝ)..x, (Real.log t + 1) / (t * (Real.log t)^2) = (Real.log (Real.log x) - (Real.log x)⁻¹) - (Real.log (Real.log 2) - (Real.log 2)⁻¹)",
+        "module_source_hash": null,
+        "obligation_id": "c84d5f85-5008-4153-86ae-75ec80f154de",
+        "outcome": "kernel_pass",
+        "problem_version_id": "781d4876-55c9-4c3c-9420-602b508771be",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "513062caa29c528d7f2df3f6e92de50073c08703b87b05fe15abc49064431b65"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "50963fcfc4d0f3143f6044b6a995a0c199e7bff9530c8b89a9b54b93ac8a0740"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

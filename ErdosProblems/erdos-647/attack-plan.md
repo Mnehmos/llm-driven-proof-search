@@ -1,24 +1,37 @@
 # Attack plan — Erdős #647 (living)
 
-> Last updated 2026-07-14. This is the working plan of record; it changes as
+> Last updated 2026-07-15. This is the working plan of record; it changes as
 > results land. Completed milestones move to the whitepaper's campaign log.
 
-## HEADLINE STATUS (2026-07-14)
+## HEADLINE STATUS (2026-07-15)
 
-**Main term solved. Error term structurally unresolved. The desired
-`x/(log x)^7` density theorem does NOT yet follow from the verified
-bounds.** The main-term growth chain for `L` is complete and solid
-(`erdos647_L_eq_prod` + `erdos647_seventuple_rootcount_eq_seven` + `erdos647_nu_eq_seven_div_p`
-+ `erdos647_nu_sum_ge_seven_mertens` + `erdos647_L_ge_exp_nu_sum` ⟹
-`L≳(log z)^7`). The capstone `erdos647_selberg_sieve_bound_conditional`
-is real and kernel-verified, but its `errSum` term is bounded via a
-crude pointwise estimate summed over an UNRESTRICTED divisor set —
-Mathlib's `SelbergSieve.level` is vestigial (never used to truncate
-`lambdaSquared`'s support), so this bound is plausibly exponential in
-`π(z)`, reproducing the "Legendre explosion" already ruled out for a
-cruder shortcut. **Do not attempt the final numeric assembly until this
-is resolved** — see the "⚠⚠ CRITICAL DIAGNOSTIC" bullet under Layer C
-below for full detail and the two candidate resolutions.
+**The concrete global density theorem is kernel-verified.** The bounded
+candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,
+promoted concrete sieve, truncated optimal weight, polynomial error,
+denominator lower bound, dyadic parameter choice, large-range estimate, and
+finite-range closure now compose to
+`|C(X)| ≤ K * X / (log X)^7` for every natural `X`, with an explicit effective
+constant `K`. A clean replay from source compiled all 42 transitive campaign
+modules plus `family2-classifications.lean` in the pinned environment.
+The Erdős problem itself remains open: this density theorem neither produces
+nor excludes a larger candidate.
+
+One analytic correction is now part of the proof record. The earlier
+Chebyshev/Mertens lower bound is valid, but its leading coefficient is
+`log 2`; after multiplying by seven it is too weak to yield a seventh power
+of `log z`. The final proof instead establishes the elementary finite Euler
+product bound
+`∑_{n≤z} 1/n ≤ ∏_{p≤z}(1-1/p)⁻¹` using divisibility by `z!`. Combined with the
+exact seven roots away from the deleted small primes and their exact Euler
+factor loss `77/16`, this gives
+`(16/77)^7 * (log z)^7 ≤ L`. Thus the final exponent is not resting on the
+insufficient Mertens coefficient.
+
+The repaired optimal weight has hard support `d≤R`, its `lambdaSquared` has
+support `d≤R²`, its coefficients are bounded by `16^ω(d)`, and the concrete
+seven-form remainder is bounded by `7^ω(d)`, giving
+`errSum≤(R²+1)^8`. The verified moment estimate permits `R=(2z)^20`; dyadic
+`z=2^k` absorbs this polynomial error into the required logarithmic scale.
 
 ## Guiding constraint (proven, not vibes)
 
@@ -29,7 +42,7 @@ from analytic estimates (density bounds) or from a genuinely new leaf type
 nobody has found yet. Sub-AP/congruence work is therefore frozen except
 where a specific new leaf type appears.
 
-## Track 1 — the density-bound program (ACTIVE)
+## Track 1 — the density-bound program (COMPLETE)
 
 Target: a machine-checked `|C(x)| ≪ x/(log x)⁷` (Hughes–Kitamura Theorem 3),
 via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
@@ -73,8 +86,8 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
   `proof/Erdos647_MoebiusIndicator.lean`,
   `proof/Erdos647_MoebiusSwapInversion.lean`,
   `proof/Erdos647_SelbergOptimalWeight.lean`.
-- **Layer C — the 7-tuple application. IN PROGRESS, own independent
-  construction confirmed valid (2026-07-14).** Hughes's paper attributes
+- **Layer C — the 7-tuple application. COMPLETE through the global density
+  theorem (2026-07-15).** Hughes's paper attributes
   the seven-form Theorem's proof to an unpublished companion manuscript
   (`HughesChains`, no arXiv ID) absent from his public repo — no
   ground-truth source exists for his exact construction. This campaign
@@ -180,19 +193,18 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
   - ✅ **`d=1` trivial case DONE (2026-07-14)**: `erdos647_rem_bound_one`
     proves `rem(1)=0` exactly (multSum(1,X)=X since `1∣` everything,
     `ν(1)=1`). Snapshot `proof/Erdos647_RemBoundOne.lean`.
-  - **Remaining for the final numeric theorem**: sum
+  - ✅ **Historical remaining step, now resolved (2026-07-15)**: sum
     `erdos647_rem_bound_squarefree` (plus `erdos647_rem_bound_one` for
     `d=1`) over `prodPrimes(z).divisors` weighted by the
     Selberg `λ_d²` structure (`lambdaSquared`, from
     `Mathlib.NumberTheory.SelbergSieve`) to get the actual `errSum` used
     by `BoundingSieve.siftedSum_le_mainSum_errSum_of_upperMoebius`; this
-    needs a bound on `|lambdaSquared w d|` for Layer B's specific optimal
-    weight `w` (not yet established — `erdos647_selberg_optimal_weight`
-    proves the mainSum value but not a pointwise weight bound); combine
-    with Layer B's `erdos647_selberg_optimal_weight` + Layer A's
-    `erdos647_mertens_assembly`, choosing an optimal `z=z(x)`, for the
-    final `x/(log x)^7`-shaped bound. This remaining step is genuine new
-    analytic content (a weight-boundedness argument), not just assembly.
+    required a bound on `|lambdaSquared w d|` for a level-truncated optimal
+    weight. The later truncation repair establishes `16^ω(d)`, and the
+    concrete remainder gives `7^ω(d)`, producing
+    `errSum≤(R²+1)^8`. The final main-term exponent uses the elementary
+    Euler-product lower bound described in the headline, and the dyadic
+    parameter assembly is complete.
   - ⚠ **Confirmed (2026-07-14): the pure Legendre/Möbius sieve (`muPlus :=
     μ` instead of Selberg's `lambdaSquared w`) is NOT a viable shortcut**,
     despite `|μ(d)|≤1` being trivial. `errSum(μ) ≤
@@ -342,19 +354,19 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     — split at `p>11` via `Finset.sum_filter_add_sum_filter_not`, exact
     substitution `ν(p)=7/p` on the `p>11` part, the `p≤11` part (⊆
     `{2,3,5,7,11}`) dropped as a nonneg correction bounded by an explicit
-    constant. This is the first piece feeding into a full Mertens-type
-    growth-rate estimate for `L~(log z)^7`, combined with
-    `erdos647_mertens_assembly`'s lower bound on `∑1/p` and
-    `-log(1-x)≥x`. Snapshot `proof/Erdos647_NuSumGe.lean`.
+    constant. This is valid Mertens-type infrastructure, but the available
+    Chebyshev lower bound has leading coefficient `log 2`, so this route alone
+    does not prove the required seventh power. Snapshot
+    `proof/Erdos647_NuSumGe.lean`.
   - ✅ **Generic log L ≥ ∑ν(p) bound DONE (2026-07-14)**:
     `erdos647_L_ge_exp_nu_sum` proves, for ANY `s:SelbergSieve`,
     `∑_{p∈prodPrimes.primeFactors}ν(p) ≤ log L` (via `Real.log_prod` +
-    the elementary `-log(1-x)≥x`). Fully generic, combines directly with
-    `erdos647_nu_sum_ge_seven_mertens` (once instantiated with our own
-    construction) to get `log L ≥ 7·loglog(z)−C`, i.e. `L≳(log z)^7` —
-    the target growth rate. Snapshot `proof/Erdos647_LGeExpNuSum.lean`.
-  - ⚠⚠ **CRITICAL DIAGNOSTIC (2026-07-14): the errSum bound chain may not
-    be tight enough — genuine open question, not yet resolved.** Mathlib's
+    the elementary `-log(1-x)≥x`). Fully generic and still useful, but the
+    campaign's concrete seventh-power lower bound now comes from the stronger
+    factorial/Euler-product argument. Snapshot
+    `proof/Erdos647_LGeExpNuSum.lean`.
+  - ✅ **HISTORICAL CRITICAL DIAGNOSTIC (2026-07-14), RESOLVED
+    2026-07-15.** Mathlib's
     `SelbergSieve.level` field is declared but VESTIGIAL — grepped the
     whole file: `lambdaSquared` and every downstream theorem
     (`mainSum_lambdaSquared_eq_sum_mul_sum_sq`,
@@ -368,17 +380,13 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     7^ω(d)` unrestricted is plausibly EXPONENTIAL in `π(z)` (`~29^π(z)`)
     — reproducing the "Legendre explosion" already ruled out for the pure
     Möbius shortcut, just smuggled back in via a bound too weak to see
-    Selberg's actual cancellation. **Two possible resolutions, neither
-    attempted yet**: (a) rebuild Layer B's optimal-weight construction
+    Selberg's actual cancellation. The chosen resolution was to rebuild
+    Layer B's optimal-weight construction
     with an explicit level-`y` truncation (`w(d):=0` for `d>y`) —
-    substantial rework of every Layer B theorem; (b) find a sharper
-    direct bound on `∑_d|lambdaSquared(w)(d)|·|rem(d)|` using `w`'s
-    actual signed structure, not just `|w(d)|≤...`. **Do not force the
-    final numeric assembly by plugging the unrestricted errSum bound into
-    the Mertens growth rate without resolving this first** — the L/main-
-    term growth-rate chain (`nu_sum_ge_seven_mertens`+`L_ge_exp_nu_sum`+
-    Layer A Mertens) is solid and complete; only the error-term side needs
-    this rework.
+    substantial rework of every Layer B theorem. The resulting hard support
+    and coefficient bounds give the polynomial error stated below. Separately,
+    the main-term exponent is supplied by the new elementary Euler-product
+    lower bound, not by the insufficient-coefficient Mertens chain.
   - ✅ **errSum REPAIR, Milestone A piece 1/N DONE (2026-07-14):
     `erdos647_lambdaSquared_support_sq`** proves the generic mechanism
     that fixes the critical errSum defect: `(∀d,R<d→w d=0) → ∀d,
@@ -386,12 +394,8 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     gives a level-truncated `lambdaSquared`, converting the errSum bound
     from "over all `2^π(z)` divisors" to "over integers `≤R²`". Fully
     generic, no Lean bugs. Snapshot
-    `proof/Erdos647_LambdaSquaredSupportSq.lean`. **Still needed for the
-    full repair** (Milestone A remainder): actually construct a
-    truncated optimal weight `w_R` (restricted-divisor-set Möbius
-    inversion, `w_R(1)=1`, `mainSum(lambdaSquared w_R)=1/L_R`) — see the
-    level-truncation repair plan under the CRITICAL DIAGNOSTIC headline
-    at the top of this file.
+    `proof/Erdos647_LambdaSquaredSupportSq.lean`. The required truncated
+    optimal weight `w_R` is now constructed below (2026-07-15).
   - ✅ **errSum REPAIR, Milestone A/B piece 2/N DONE (2026-07-14):
     `erdos647_selberg_L_tail_bound`** proves the growth-preservation
     step built directly on `erdos647_selberg_log_moment`:
@@ -402,9 +406,9 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     large enough. Zero Lean bugs, kernel-verified FIRST TRY on both
     pre-check and tracked pipeline — the first repair-sequence piece
     with no verification-tool round trip. Snapshot
-    `proof/Erdos647_SelbergLTailBound.lean`. **Still needed for
-    Milestone A**: the actual `w_R` construction; **for the final
-    normalization** (choosing `R=R(z)`): per the deep-research finding,
+    `proof/Erdos647_SelbergLTailBound.lean`. The `w_R` construction is
+    now complete below; **for the final normalization** (choosing
+    `R=R(z)`): per the deep-research finding,
     do not assume `R=z^A`, derive the balance directly from this bound
     once the error-side growth rate is known.
   - ✅ **errSum REPAIR, Milestone C piece DONE (2026-07-14):
@@ -451,13 +455,239 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     of a goal at once, confirmed by reading the exact post-`kernel_fail`
     unsolved-goals diagnostic (a spurious `ν(p)²` cross term appeared);
     fixed with `conv_lhs => rw [hkey]` to scope the rewrite. Snapshot
-    `proof/Erdos647_SelbergLogMoment.lean`. **Still needed for the full
-    Milestone A/B repair**: the actual level-truncated weight
-    construction `w_R` (restricted-divisor-set Möbius inversion,
-    `w_R(1)=1`, `mainSum(λ²w_R)=1/L_R`), combined with
-    `erdos647_lambdaSquared_support_sq`'s support bound and this
-    log-moment tail estimate, to get a complete truncated-Selberg-sieve
-    bound with a controlled error term.
+    `proof/Erdos647_SelbergLogMoment.lean`. The formerly missing
+    level-truncated weight construction is now complete in
+    `erdos647_selberg_optimal_weight_truncated` below.
+  - ✅ **errSum REPAIR, Milestone A construction DONE (2026-07-15):
+    `erdos647_selberg_optimal_weight_truncated`** proves that for every
+    `SelbergSieve s` and `R≥1` there is a weight `w_R` with `w_R(1)=1`,
+    hard support `w_R(d)=0` for `d>R`, and exact diagonal value
+    `mainSum(lambdaSquared w_R)=1/L_R`, where
+    `L_R=∑_{l∣prodPrimes,l≤R}selbergTerms(l)`. The decisive construction
+    keeps Möbius inversion over the full divisor lattice but sets the
+    target diagonal data to zero outside `l≤R`; nonzero terms in `w_R(d)`
+    therefore force `d∣l'≤R`. Together with
+    `erdos647_lambdaSquared_support_sq`, this gives
+    `lambdaSquared(w_R)(d)=0` for `d>R²`; together with
+    `erdos647_selberg_L_tail_bound`, it preserves the main denominator's
+    growth. Kernel-verified through proof-search MCP in 2 tracked attempts
+    (the first exposed two filtered-Finset elaboration errors; the second
+    passed). Snapshot `proof/Erdos647_SelbergOptimalWeightTruncated.lean`,
+    episode `333d528d-3032-47b6-ba2e-fa5ae42da41f`.
+  - ✅ **Truncated optimal weight coefficient bound DONE (2026-07-15):
+    `erdos647_selberg_optimal_weight_truncated_bound`** strengthens the
+    construction with `|w_R(d)|≤selbergTerms(d)/ν(d)` on every primorial
+    divisor. Reindexing leaves a filtered positive cofactor sum; the fact
+    `d·e≤R → e≤R` embeds it into `L_R`. Kernel-verified first tracked
+    attempt. Snapshot
+    `proof/Erdos647_SelbergOptimalWeightTruncatedBound.lean`, episode
+    `445e255c-cc28-443c-bcf5-a883543784da`.
+  - ✅ **Numeric lambda coefficient bound DONE (2026-07-15):
+    `erdos647_lambdaSquared_card_bound`** combines the pointwise weight
+    estimate with the uniform prime factor bound
+    `1+(1-ν(p))⁻¹≤4` to prove
+    `|lambdaSquared(w)(d)|≤16^ω(d)`. Kernel-verified in 2 tracked
+    attempts. Snapshot `proof/Erdos647_LambdaSquaredCardBound.lean`,
+    episode `cf8a89b5-0e9e-4b70-babf-ebffe3b4d954`.
+  - ✅ **Polynomial hard-truncated errSum bound DONE (2026-07-15):
+    `erdos647_errSum_truncated_polynomial`** proves
+    `errSum(lambdaSquared w)≤(R²+1)^8` from hard support `d≤R²`, the
+    `16^ω(d)` coefficient bound, and the `7^ω(d)` remainder bound. The
+    elementary core is `112^ω(d)≤128^ω(d)≤d^7` for squarefree `d`, since
+    `2^ω(d)≤d`; fewer than `R²+1` integers survive. This is the formal
+    resolution of the exponential divisor-lattice defect. Kernel-verified
+    first tracked attempt. Snapshot
+    `proof/Erdos647_ErrSumTruncatedPolynomial.lean`, episode
+    `312120f0-82e4-49d8-a0a5-022822683064`.
+  - ✅ **Prime log-moment upper bound DONE (2026-07-15):**
+    `erdos647_prime_log_div_identity` proves by Abel summation that
+    `∑_{p≤x}log(p)/p=θ(x)/x+∫θ(t)/t²`; then
+    `erdos647_prime_log_div_upper` combines Mathlib's
+    `θ(t)≤log(4)t` with `∫dt/t=log(x/2)` to obtain
+    `∑_{p≤x}log(p)/p≤log(4)(1+log(x/2))`. Thus
+    `∑ν(p)log p=O(log z)` and the `L_R` tail condition only requires
+    polynomial `R(z)`. Snapshots `proof/Erdos647_PrimeLogDivIdentity.lean`
+    and `proof/Erdos647_PrimeLogDivUpper.lean`; episodes
+    `fbf2047c-f3aa-4a54-9529-8ab7ecdd81e5` and
+    `e7e66b7f-45ad-4031-8dbc-c3c4af9d9717`.
+  - ✅ **Half-denominator invariant DONE (2026-07-15):
+    `erdos647_selberg_L_truncated_ge_half`** packages the log-moment tail
+    estimate into the exact form needed downstream:
+    `∑ν(p)log p≤log(R)/2 → L_R≥L/2`. Kernel-verified in 2 tracked
+    attempts. Snapshot `proof/Erdos647_SelbergLTruncatedGeHalf.lean`,
+    episode `d2c798f6-9476-4029-b72d-71ac9c898c14`.
+  - ✅ **The `R=(2z)^20` log-moment choice DONE (2026-07-15):
+    `erdos647_parameter_R20_moment` proves, for every real `z≥2`,
+    `7·log(4)·(1+log(z/2))≤log((2z)^20)/2`. This formally certifies
+    the numerical slack `7·log(4)<10` needed to feed the seven-form prime
+    moment estimate into the half-denominator invariant. Kernel-verified
+    in 3 tracked attempts and independently rechecked. Snapshot
+    `proof/Erdos647_ParameterR20Moment.lean`, episode
+    `c7a9a71b-13be-4c5a-ab86-953c8d7e76c1`.
+  - ✅ **Explicit polynomial error for `R=(2z)^20` DONE (2026-07-15):
+    `erdos647_parameter_error_polynomial` proves over natural numbers
+    that `z≥1` implies
+    `((((2z)^20)^2+1)^8)≤2^328·z^320`. Thus the former asymptotic
+    notation `(R²+1)^8=O(z^320)` now has a concrete effective constant.
+    Kernel-verified in 3 tracked attempts and independently rechecked.
+    Snapshot `proof/Erdos647_ParameterErrorPolynomial.lean`, episode
+    `668f3e3f-190e-4b7d-9e23-c111482e2534`.
+  - ✅ **Dyadic integer `z=z(X)` bracket DONE (2026-07-15):
+    `erdos647_dyadic_parameter_bracket` proves that every nonzero natural
+    `X` admits `k` with `(2^k)^400≤X<(2·2^k)^400`. Taking `z=2^k`
+    gives the exact integer substitute for `z≈X^(1/400)`, using
+    `k=Nat.log (2^400) X`. Kernel-verified in 2 tracked attempts and
+    independently rechecked. Snapshot
+    `proof/Erdos647_DyadicParameterBracket.lean`, episode
+    `cd7d60ab-82d3-4288-9b58-da5f3553a257`.
+  - ✅ **Exact `X^(4/5)` error absorption encoding DONE (2026-07-15):
+    `erdos647_error_absorption_power` proves that
+    `E≤2^328·z^320` and `z^400≤X` imply
+    `E^5≤2^1640·X^4`. This is the fractional estimate in a form using
+    only natural-number powers, so it composes directly with the dyadic
+    bracket. Kernel-verified on the first tracked attempt and independently
+    rechecked. Snapshot `proof/Erdos647_ErrorAbsorptionPower.lean`,
+    episode `88f161ad-0233-4381-aded-09f76a861a90`.
+  - ✅ **Dyadic error absorbed at the `X/k^7` scale DONE (2026-07-15):
+    `erdos647_dyadic_error_log_scale` proves that
+    `(2^k)^400≤X` and `E≤2^328·(2^k)^320` imply
+    `E·k^7≤2^328·X`. Since `log(2^k)=k·log 2`, this is the exact
+    algebraic form needed to absorb the polynomial error into an
+    `X/(log z)^7` main bound. Kernel-verified in 2 tracked attempts and
+    independently rechecked. Snapshot
+    `proof/Erdos647_DyadicErrorLogScale.lean`, episode
+    `52f39da0-0c91-4381-ba6b-6763044014e1`.
+  - ✅ **Real-log error bridge DONE (2026-07-15):
+    `erdos647_dyadic_error_real_log` turns `E·k^7≤2^328·X`
+    into the direct bound
+    `E≤2^328·(log 2)^7·X/(log(2^k))^7` for `k>0`, using the exact
+    identity `log(2^k)=k·log 2`. Thus the parameter/error component is
+    now closed all the way to the analytic denominator used in the
+    density theorem. Kernel-verified on the first tracked attempt and
+    independently rechecked. Snapshot
+    `proof/Erdos647_DyadicErrorRealLog.lean`, episode
+    `a4646056-f6af-462c-be5f-1fee2bd03727`.
+  - ✅ **Generic two-parameter sieve assembly DONE (2026-07-15):
+    `erdos647_two_parameter_sieve_assembly` proves that the truncated
+    main-sum identity `mainSum=1/L_R`, `L_R≥L/2`, and
+    `errSum≤(R²+1)^8` imply
+    `siftedSum≤2·totalMass/L+(R²+1)^8`. This lands assembly stage 2 and
+    confirms there is no further analytic algebra hidden between the
+    repaired components and the concrete instance. Kernel-verified on
+    the first tracked attempt and independently rechecked. Snapshot
+    `proof/Erdos647_TwoParameterSieveAssembly.lean`, episode
+    `47248be9-ad01-4c85-a333-1bade2673bfc`.
+  - ✅ **Exposed two-parameter concrete seven-form witness DONE
+    (2026-07-15):** `erdos647_boundingSieve_exposed` separates the
+    candidate range `X` from the active-prime level `z` and returns exact
+    equations for `support`, `prodPrimes`, unit `weights`, `totalMass=X`,
+    and the multiplicative `nu`. This removes the earlier opaque
+    `Nonempty BoundingSieve` interface. Kernel-verified on the first
+    tracked attempt and independently rechecked. Snapshot
+    `proof/Erdos647_BoundingSieveExposed.lean`, episode
+    `76254e7f-c4ca-45e2-a029-26697df01c16`.
+  - ✅ **Core concrete field audit DONE (2026-07-15):** four new theorems
+    verify the representation-sensitive chain: exposed support/weights
+    give the exact raw `multSum`; exposed fields rewrite `s.rem(d)` to the
+    raw remainder; squarefree `prodPrimeFactors` `nu(d)` equals the raw
+    CRT density; and the raw remainder/root-count estimates assemble to
+    `|s.rem(d)|≤7^ω(d)`. All landed on their first tracked attempts and
+    passed independent replay. Snapshots
+    `proof/Erdos647_MultSumFieldAudit.lean`,
+    `proof/Erdos647_RemFieldAudit.lean`,
+    `proof/Erdos647_NuFieldAudit.lean`, and
+    `proof/Erdos647_RemBoundFieldAssembly.lean`; episodes
+    `3c2ce9c0-6e0b-4bd8-9b52-8e6464a32d64`,
+    `e95b56da-6d95-43eb-85c5-ea2ae9c128be`,
+    `a8a19a21-345a-4e96-a656-1206b8947f16`, and
+    `161e04d9-7439-4866-b5d7-483d1cb4b0c7`.
+  - ✅ **Survivor field and candidate-count transport DONE
+    (2026-07-15):** `erdos647_siftedSum_field_audit` identifies
+    `siftedSum` exactly with the number of parameters whose seven-form
+    product is coprime to `prodPrimes`; `erdos647_candidate_finset_le_siftedSum`
+    then embeds any bounded candidate Finset satisfying that coprimality
+    condition. Both landed on their first tracked attempts and passed
+    independent replay. Snapshots
+    `proof/Erdos647_SiftedSumFieldAudit.lean` and
+    `proof/Erdos647_CandidateFinsetBridge.lean`.
+  - ✅ **Family-B parity obstruction found and repaired (2026-07-15):**
+    the original modulus includes `2`, so every odd parameter has
+    `2 ∣ 315N-1` and is rejected. This exactly conflicts with the allowed
+    Family B branch, where `315N-1` is twice a prime. The obstruction is
+    kernel-verified by `erdos647_odd_parameter_rejected_by_two`, and
+    `erdos647_boundingSieve_exclude_two` constructs an otherwise identical
+    concrete sieve with `2,3,5,7` excluded. The support, weights, mass, and
+    `nu` are unchanged, so the large-prime dimension remains seven.
+    Snapshots `proof/Erdos647_OddParameterRejectedByTwo.lean` and
+    `proof/Erdos647_BoundingSieveExcludeTwo.lean`.
+  - ✅ **Candidate-specific repaired-modulus coprimality DONE
+    (2026-07-15):** `erdos647_repaired_modulus_candidate_coprime` proves
+    that the campaign's exact shift-classification shape—six prime forms
+    and `315N-1` prime or twice a prime—implies coprimality with the
+    repaired active-prime product whenever `z<157N`. This handles Family A
+    and Family B uniformly. Snapshot
+    `proof/Erdos647_RepairedModulusCandidateCoprime.lean`.
+  - ✅ **Shift-classification bundle DONE (2026-07-15):**
+    `erdos647_shift_outputs_to_seven_forms` converts the verified outputs at
+    shifts `1,2,3,4,6,8,12` under `n=2520N` into the exact seven-form bundle,
+    including the shift-8 `prime ∨ 2·prime` disjunction. Snapshot
+    `proof/Erdos647_ShiftOutputsToSevenForms.lean`.
+  - ✅ **Explicit exceptional parameter band DONE (2026-07-15):**
+    `erdos647_small_parameter_band_card` proves that the complement of
+    `z<157N` inside `[1,X]` has at most `z` elements. Thus the candidate
+    bridge's only range loss is an explicit additive term far below the
+    existing `z^320` sieve error. Snapshot
+    `proof/Erdos647_SmallParameterBand.lean`.
+  - ✅ **Final set-theoretic candidate interface DONE (2026-07-15):**
+    `erdos647_candidate_finset_le_siftedSum_add_z` combines the exact
+    survivor audit, repaired-modulus coprimality hypothesis, and exceptional
+    band into the directly consumable inequality
+    `(C.card:ℝ)≤s.siftedSum+z`. Snapshot
+    `proof/Erdos647_CandidateBridgeAddZ.lean`.
+  - ✅ **Repaired-denominator finite correction DONE (2026-07-15):**
+    `erdos647_nu_small_prime_values` verifies `nu(2)=1/2` and
+    `nu(3)=nu(5)=nu(7)=0`; `erdos647_prime_sum_exclude_small` then proves
+    that the repaired active-prime `nu` sum is exactly the old all-prime
+    sum minus `1/2`. Thus deleting `2` changes only the effective constant,
+    not the seven-dimensional logarithmic exponent. Snapshots
+    `proof/Erdos647_NuSmallPrimeValues.lean` and
+    `proof/Erdos647_PrimeSumExcludeSmall.lean`.
+  - ✅ **Repaired logarithmic denominator assembly DONE (2026-07-15):**
+    `erdos647_repaired_prod_primeFactors` aligns the modulus factors with
+    the active Finset, and `erdos647_repaired_logL_lower` proves that any
+    old all-prime lower bound `B` yields `log L≥B-1/2` for the repaired
+    Euler product. The parity repair therefore needs no new exponent or
+    parameter certification. Snapshots
+    `proof/Erdos647_RepairedProdPrimeFactors.lean` and
+    `proof/Erdos647_RepairedLogLLower.lean`.
+  - ✅ **Concrete-to-analytic structure adapter DONE (2026-07-15):**
+    `erdos647_boundingSieve_to_selbergSieve` promotes any concrete
+    `BoundingSieve` to a `SelbergSieve` at every natural level `R≥1`, while
+    preserving the complete underlying sieve definitionally. This closes
+    the structure-level transport needed to apply the generic truncated
+    Selberg theorems to the parity-repaired instance. Snapshot
+    `proof/Erdos647_BoundingToSelberg.lean`.
+  - ✅ **Candidate/analytic handoff DONE (2026-07-15):**
+    `erdos647_candidate_two_parameter_assembly` transports
+    `(C.card:ℝ)≤s.siftedSum+z` and `s.totalMass=X` through the generic
+    two-parameter sieve inequality. The stronger
+    `erdos647_direct_candidate_density_assembly` also folds in the upper
+    Möbius argument, truncated main-sum identity, half-denominator bound,
+    and polynomial error directly, yielding
+    `C.card≤2X/L+(R²+1)^8+z`. Snapshots
+    `proof/Erdos647_CandidateTwoParameterAssembly.lean` and
+    `proof/Erdos647_DirectCandidateDensityAssembly.lean`.
+  - ✅ **Shift outputs to repaired coprimality DONE (2026-07-15):**
+    `erdos647_shift_outputs_repaired_coprime` composes the seven verified
+    shift-output shapes under `n=2520N` directly with the repaired modulus.
+    It covers the shift-8 `prime ∨ 2·prime` branch without family casework.
+    Snapshot `proof/Erdos647_ShiftOutputsRepairedCoprime.lean`.
+  - ✅ **Original variable to seven-form parameter reindexing DONE
+    (2026-07-15):** `erdos647_candidate_reindex_2520` gives an exact
+    cardinality-preserving bijection between bounded `n` satisfying
+    `2520∣n` and bounded parameters `N≤x/2520`, for an arbitrary candidate
+    predicate. No counting constant is lost in passing to the seven-form
+    support. Snapshot `proof/Erdos647_CandidateReindex2520.lean`.
   - ⚠ **Important environment-constraint finding**: `erdos647_boundingSieve_instance`'s
     statement is `∀ z, Nonempty BoundingSieve` — it proves EXISTENCE only,
     not a nameable value with accessible fields, and cross-submission
@@ -476,20 +706,13 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
     the final assembly will still need a single large, carefully-staged
     submission, but every individual piece it draws on is independently
     pre-verified.
-  - **Remaining for the final numeric theorem**: combine
-    `erdos647_lambdaSquared_bound` (instantiated with
-    `erdos647_selberg_weight_bound`'s pointwise bound) with
-    `erdos647_rem_bound_squarefree`/`erdos647_rem_bound_one` and
-    `erdos647_rootUnionCount_le` to bound `errSum(lambdaSquared w) =
-    Σ_d |lambdaSquared w d|·|rem d|`; combine with
-    `siftedSum_le_mainSum_errSum_of_upperMoebius` +
-    `erdos647_selberg_optimal_weight` (mainSum value) + Layer A's
-    `erdos647_mertens_assembly`, choosing an optimal `z=z(x)` balancing
-    main term vs error term, for the final `x/(log x)^7`-shaped bound.
-    This remaining step is now genuinely "assembly" (combining proven
-    pieces + an explicit growth-rate/summability estimate for
-    `∑_{d|prodPrimes(z)} selbergTerms(d)/ν(d)`-type sums), not open
-    research — though the growth-rate estimate itself still needs care.
+  - ✅ **Final numeric density theorem COMPLETE (2026-07-15)**: the repaired
+    concrete witness, bounded candidate `Finset`, exact reindexing, shift
+    classifications, survivor transport, truncated optimal weight, concrete
+    remainder, polynomial error, elementary denominator lower bound, dyadic
+    parameters, and finite-range closure are assembled in
+    `proof/Erdos647_ConcreteAsymptoticDensity.lean`. The global theorem has an
+    explicit effective constant and was replayed from a clean source state.
 - Fallback if a layer stalls: a weaker exponent (`x/(log x)^k`, k < 7, using
   fewer forms) is still a first-of-its-kind artifact; take the partial win
   and iterate.

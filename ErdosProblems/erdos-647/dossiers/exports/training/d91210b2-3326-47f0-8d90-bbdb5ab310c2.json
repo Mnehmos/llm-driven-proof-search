@@ -1,0 +1,199 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "module_items": [
+          {
+            "item_kind": "theorem",
+            "name": "sigma0_le_three_prime_or_square_prime",
+            "proof_term": "by\n  by_cases hprime : Nat.Prime r\n  · exact Or.inl hprime\n  · right\n    rcases (Nat.not_prime_iff_exists_dvd_ne hr).mp hprime with ⟨d, hd, hd1, hdr⟩\n    rcases hd with ⟨e, he⟩\n    have hdvd : d ∣ r := ⟨e, he⟩\n    have hd0 : d ≠ 0 := by\n      intro h\n      subst d\n      simp at he\n      omega\n    have he0 : e ≠ 0 := by\n      intro h\n      subst e\n      simp at he\n      omega\n    have hd2 : 2 ≤ d := by omega\n    have he1 : e ≠ 1 := by\n      intro h\n      subst e\n      simp at he\n      omega\n    have he2 : 2 ≤ e := by omega\n    have hder : d < r := by nlinarith\n    have her : e < r := by nlinarith\n    have hdprime : Nat.Prime d := by\n      by_contra hdn\n      rcases (Nat.not_prime_iff_exists_dvd_ne hd2).mp hdn with ⟨c, hcd, hc1, hcdne⟩\n      have hc0 : c ≠ 0 := by\n        intro h\n        subst c\n        simp at hcd\n      have hc2 : 2 ≤ c := by omega\n      have hcle : c ≤ d := Nat.le_of_dvd (by omega) hcd\n      have hclt : c < d := lt_of_le_of_ne hcle hcdne\n      have hcr : c ≠ r := by omega\n      have hcrdvd : c ∣ r := dvd_trans hcd hdvd\n      have hsub : ({1, c, d, r} : Finset ℕ) ⊆ r.divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rw [Nat.mem_divisors]\n        constructor\n        · rcases hx with rfl | rfl | rfl | rfl\n          · exact one_dvd r\n          · exact hcrdvd\n          · exact hdvd\n          · exact dvd_rfl\n        · omega\n      have h1r : 1 ≠ r := by omega\n      have hcard : ({1, c, d, r} : Finset ℕ).card = 4 := by\n        simp [Ne.symm hc1, hc1, Ne.symm hd1, hd1, hcdne, Ne.symm hcdne,\n          hcr, Ne.symm hcr, hdr, Ne.symm hdr, h1r]\n      rw [ArithmeticFunction.sigma_zero_apply] at hsig\n      have hfour : 4 ≤ r.divisors.card := by\n        calc\n          4 = ({1, c, d, r} : Finset ℕ).card := hcard.symm\n          _ ≤ r.divisors.card := Finset.card_le_card hsub\n      omega\n    have hed : e = d := by\n      by_contra hedne\n      have hediv : e ∣ r := by\n        use d\n        omega\n      have hsub : ({1, d, e, r} : Finset ℕ) ⊆ r.divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rw [Nat.mem_divisors]\n        constructor\n        · rcases hx with rfl | rfl | rfl | rfl\n          · exact one_dvd r\n          · exact hdvd\n          · exact hediv\n          · exact dvd_rfl\n        · omega\n      have h1r : 1 ≠ r := by omega\n      have herne : e ≠ r := ne_of_lt her\n      have hcard : ({1, d, e, r} : Finset ℕ).card = 4 := by\n        simp [Ne.symm hd1, hd1, Ne.symm he1, he1, hedne, Ne.symm hedne,\n          hdr, Ne.symm hdr, herne, Ne.symm herne, h1r]\n      rw [ArithmeticFunction.sigma_zero_apply] at hsig\n      have hfour : 4 ≤ r.divisors.card := by\n        calc\n          4 = ({1, d, e, r} : Finset ℕ).card := hcard.symm\n          _ ≤ r.divisors.card := Finset.card_le_card hsub\n      omega\n    refine ⟨d, hdprime, ?_⟩\n    simpa [hed, pow_two] using he",
+            "statement": "∀ r : ℕ, 2 ≤ r → ArithmeticFunction.sigma 0 r ≤ 3 → Nat.Prime r ∨ ∃ p : ℕ, Nat.Prime p ∧ r = p ^ 2"
+          }
+        ],
+        "root_theorem": {
+          "name": "erdos647_shift5_classification",
+          "proof_format": "raw_lean_block",
+          "proof_term": "by\n  intro n hn H h2520\n  have shift : ArithmeticFunction.sigma 0 (n - 5) ≤ 7 := by\n    have hsub : n - 5 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 5, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  rcases h2520 with ⟨q, hq⟩\n  have hqpos : 1 ≤ q := by omega\n  have h5div : 5 ∣ n - 5 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  let r : ℕ := (n - 5) / 5\n  have hcancel := Nat.div_mul_cancel h5div\n  have hr : n - 5 = 5 * r := by\n    dsimp [r]\n    omega\n  have hrformula : r = 504 * q - 1 := by omega\n  have hr2 : 2 ≤ r := by omega\n  have hrmod : r % 5 = 4 := by omega\n  have hcop : Nat.Coprime 5 r := by\n    refine Nat.coprime_of_dvd ?_\n    intro p hp hp5\n    intro hpr\n    have peq : p = 5 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp5\n    subst p\n    rw [Nat.dvd_iff_mod_eq_zero] at hpr\n    omega\n  have h5eq : ArithmeticFunction.sigma 0 5 = 2 := by\n    norm_num [ArithmeticFunction.sigma_zero_apply, Nat.divisors]\n  have hmul : ArithmeticFunction.sigma 0 (5 * r) =\n      ArithmeticFunction.sigma 0 5 * ArithmeticFunction.sigma 0 r :=\n    ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n  rw [hr] at shift\n  rw [hmul, h5eq] at shift\n  have hsig : ArithmeticFunction.sigma 0 r ≤ 3 := by omega\n  have hclass := sigma0_le_three_prime_or_square_prime r hr2 hsig\n  refine ⟨q, hq, ?_, ?_, ?_⟩\n  · simpa [r] using hrformula\n  · simpa [r] using hsig\n  · simpa [r] using hclass",
+          "statement": "∀ n : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → 2520 ∣ n → ∃ q : ℕ, n = 2520 * q ∧ (n - 5) / 5 = 504 * q - 1 ∧ ArithmeticFunction.sigma 0 ((n - 5) / 5) ≤ 3 ∧ (Nat.Prime ((n - 5) / 5) ∨ ∃ p : ℕ, Nat.Prime p ∧ (n - 5) / 5 = p ^ 2)"
+        },
+        "type": "submit_module"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "module_items": [
+            {
+              "item_kind": "theorem",
+              "name": "sigma0_le_three_prime_or_square_prime",
+              "proof_term": "by\n  by_cases hprime : Nat.Prime r\n  · exact Or.inl hprime\n  · right\n    rcases (Nat.not_prime_iff_exists_dvd_ne hr).mp hprime with ⟨d, hd, hd1, hdr⟩\n    rcases hd with ⟨e, he⟩\n    have hdvd : d ∣ r := ⟨e, he⟩\n    have hd0 : d ≠ 0 := by\n      intro h\n      subst d\n      simp at he\n      omega\n    have he0 : e ≠ 0 := by\n      intro h\n      subst e\n      simp at he\n      omega\n    have hd2 : 2 ≤ d := by omega\n    have he1 : e ≠ 1 := by\n      intro h\n      subst e\n      simp at he\n      omega\n    have he2 : 2 ≤ e := by omega\n    have hder : d < r := by nlinarith\n    have her : e < r := by nlinarith\n    have hdprime : Nat.Prime d := by\n      by_contra hdn\n      rcases (Nat.not_prime_iff_exists_dvd_ne hd2).mp hdn with ⟨c, hcd, hc1, hcdne⟩\n      have hc0 : c ≠ 0 := by\n        intro h\n        subst c\n        simp at hcd\n      have hc2 : 2 ≤ c := by omega\n      have hcle : c ≤ d := Nat.le_of_dvd (by omega) hcd\n      have hclt : c < d := lt_of_le_of_ne hcle hcdne\n      have hcr : c ≠ r := by omega\n      have hcrdvd : c ∣ r := dvd_trans hcd hdvd\n      have hsub : ({1, c, d, r} : Finset ℕ) ⊆ r.divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rw [Nat.mem_divisors]\n        constructor\n        · rcases hx with rfl | rfl | rfl | rfl\n          · exact one_dvd r\n          · exact hcrdvd\n          · exact hdvd\n          · exact dvd_rfl\n        · omega\n      have h1r : 1 ≠ r := by omega\n      have hcard : ({1, c, d, r} : Finset ℕ).card = 4 := by\n        simp [Ne.symm hc1, hc1, Ne.symm hd1, hd1, hcdne, Ne.symm hcdne,\n          hcr, Ne.symm hcr, hdr, Ne.symm hdr, h1r]\n      rw [ArithmeticFunction.sigma_zero_apply] at hsig\n      have hfour : 4 ≤ r.divisors.card := by\n        calc\n          4 = ({1, c, d, r} : Finset ℕ).card := hcard.symm\n          _ ≤ r.divisors.card := Finset.card_le_card hsub\n      omega\n    have hed : e = d := by\n      by_contra hedne\n      have hediv : e ∣ r := by\n        use d\n        omega\n      have hsub : ({1, d, e, r} : Finset ℕ) ⊆ r.divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rw [Nat.mem_divisors]\n        constructor\n        · rcases hx with rfl | rfl | rfl | rfl\n          · exact one_dvd r\n          · exact hdvd\n          · exact hediv\n          · exact dvd_rfl\n        · omega\n      have h1r : 1 ≠ r := by omega\n      have herne : e ≠ r := ne_of_lt her\n      have hcard : ({1, d, e, r} : Finset ℕ).card = 4 := by\n        simp [Ne.symm hd1, hd1, Ne.symm he1, he1, hedne, Ne.symm hedne,\n          hdr, Ne.symm hdr, herne, Ne.symm herne, h1r]\n      rw [ArithmeticFunction.sigma_zero_apply] at hsig\n      have hfour : 4 ≤ r.divisors.card := by\n        calc\n          4 = ({1, d, e, r} : Finset ℕ).card := hcard.symm\n          _ ≤ r.divisors.card := Finset.card_le_card hsub\n      omega\n    refine ⟨d, hdprime, ?_⟩\n    simpa [hed, pow_two] using he",
+              "statement": "∀ r : ℕ, 2 ≤ r → ArithmeticFunction.sigma 0 r ≤ 3 → Nat.Prime r ∨ ∃ p : ℕ, Nat.Prime p ∧ r = p ^ 2"
+            }
+          ],
+          "root_theorem": {
+            "name": "erdos647_shift5_classification",
+            "proof_format": "raw_lean_block",
+            "proof_term": "by\n  intro n hn H h2520\n  have shift : ArithmeticFunction.sigma 0 (n - 5) ≤ 7 := by\n    have hsub : n - 5 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 5, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  rcases h2520 with ⟨q, hq⟩\n  have hqpos : 1 ≤ q := by omega\n  have h5div : 5 ∣ n - 5 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  let r : ℕ := (n - 5) / 5\n  have hcancel := Nat.div_mul_cancel h5div\n  have hr : n - 5 = 5 * r := by\n    dsimp [r]\n    omega\n  have hrformula : r = 504 * q - 1 := by omega\n  have hr2 : 2 ≤ r := by omega\n  have hrmod : r % 5 = 4 := by omega\n  have hcop : Nat.Coprime 5 r := by\n    refine Nat.coprime_of_dvd ?_\n    intro p hp hp5\n    intro hpr\n    have peq : p = 5 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp5\n    subst p\n    rw [Nat.dvd_iff_mod_eq_zero] at hpr\n    omega\n  have h5eq : ArithmeticFunction.sigma 0 5 = 2 := by\n    norm_num [ArithmeticFunction.sigma_zero_apply, Nat.divisors]\n  have hmul : ArithmeticFunction.sigma 0 (5 * r) =\n      ArithmeticFunction.sigma 0 5 * ArithmeticFunction.sigma 0 r :=\n    ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n  rw [hr] at shift\n  rw [hmul, h5eq] at shift\n  have hsig : ArithmeticFunction.sigma 0 r ≤ 3 := by omega\n  have hclass := sigma0_le_three_prime_or_square_prime r hr2 hsig\n  refine ⟨q, hq, ?_, ?_, ?_⟩\n  · simpa [r] using hrformula\n  · simpa [r] using hsig\n  · simpa [r] using hclass",
+            "statement": "∀ n : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → 2520 ∣ n → ∃ q : ℕ, n = 2520 * q ∧ (n - 5) / 5 = 504 * q - 1 ∧ ArithmeticFunction.sigma 0 ((n - 5) / 5) ≤ 3 ∧ (Nat.Prime ((n - 5) / 5) ∨ ∃ p : ℕ, Nat.Prime p ∧ (n - 5) / 5 = p ^ 2)"
+          },
+          "type": "submit_module"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → 2520 ∣ n → ∃ q : ℕ, n = 2520 * q ∧ (n - 5) / 5 = 504 * q - 1 ∧ ArithmeticFunction.sigma 0 ((n - 5) / 5) ≤ 3 ∧ (Nat.Prime ((n - 5) / 5) ∨ ∃ p : ℕ, Nat.Prime p ∧ (n - 5) / 5 = p ^ 2)",
+        "module_source_hash": null,
+        "obligation_id": "cd8945e4-c91e-4cb0-b936-3688634487bc",
+        "outcome": "kernel_fail",
+        "problem_version_id": "dbd105e7-ce58-4ed1-93a6-0694cf131d13",
+        "solve_kind": "verified_module_solve",
+        "statement_hash": "49be45856e25d10acda1687eb0aa9ad7ac18ec7ec507c1989a741a1ac5470c93"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "df543221e7865bac0d0be4abab88ac9876b2e3460ec70ae2409e6b80af3583a7"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "module_items": [
+          {
+            "item_kind": "theorem",
+            "name": "sigma0_le_three_prime_or_square_prime",
+            "proof_term": "  by_cases hprime : Nat.Prime r\n  · exact Or.inl hprime\n  · right\n    rcases (Nat.not_prime_iff_exists_dvd_ne hr).mp hprime with ⟨d, hd, hd1, hdr⟩\n    rcases hd with ⟨e, he⟩\n    have hdvd : d ∣ r := ⟨e, he⟩\n    have hd0 : d ≠ 0 := by\n      intro h\n      subst d\n      simp at he\n      omega\n    have he0 : e ≠ 0 := by\n      intro h\n      subst e\n      simp at he\n      omega\n    have hd2 : 2 ≤ d := by omega\n    have he1 : e ≠ 1 := by\n      intro h\n      subst e\n      simp at he\n      omega\n    have he2 : 2 ≤ e := by omega\n    have hder : d < r := by nlinarith\n    have her : e < r := by nlinarith\n    have hdprime : Nat.Prime d := by\n      by_contra hdn\n      rcases (Nat.not_prime_iff_exists_dvd_ne hd2).mp hdn with ⟨c, hcd, hc1, hcdne⟩\n      have hc0 : c ≠ 0 := by\n        intro h\n        subst c\n        simp at hcd\n      have hc2 : 2 ≤ c := by omega\n      have hcle : c ≤ d := Nat.le_of_dvd (by omega) hcd\n      have hclt : c < d := lt_of_le_of_ne hcle hcdne\n      have hcr : c ≠ r := by omega\n      have hcrdvd : c ∣ r := dvd_trans hcd hdvd\n      have hsub : ({1, c, d, r} : Finset ℕ) ⊆ r.divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rw [Nat.mem_divisors]\n        constructor\n        · rcases hx with rfl | rfl | rfl | rfl\n          · exact one_dvd r\n          · exact hcrdvd\n          · exact hdvd\n          · exact dvd_rfl\n        · omega\n      have h1r : 1 ≠ r := by omega\n      have hcard : ({1, c, d, r} : Finset ℕ).card = 4 := by\n        simp [Ne.symm hc1, hc1, Ne.symm hd1, hd1, hcdne, Ne.symm hcdne,\n          hcr, Ne.symm hcr, hdr, Ne.symm hdr, h1r]\n      rw [ArithmeticFunction.sigma_zero_apply] at hsig\n      have hfour : 4 ≤ r.divisors.card := by\n        calc\n          4 = ({1, c, d, r} : Finset ℕ).card := hcard.symm\n          _ ≤ r.divisors.card := Finset.card_le_card hsub\n      omega\n    have hed : e = d := by\n      by_contra hedne\n      have hediv : e ∣ r := by\n        use d\n        omega\n      have hsub : ({1, d, e, r} : Finset ℕ) ⊆ r.divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rw [Nat.mem_divisors]\n        constructor\n        · rcases hx with rfl | rfl | rfl | rfl\n          · exact one_dvd r\n          · exact hdvd\n          · exact hediv\n          · exact dvd_rfl\n        · omega\n      have h1r : 1 ≠ r := by omega\n      have herne : e ≠ r := ne_of_lt her\n      have hcard : ({1, d, e, r} : Finset ℕ).card = 4 := by\n        simp [Ne.symm hd1, hd1, Ne.symm he1, he1, hedne, Ne.symm hedne,\n          hdr, Ne.symm hdr, herne, Ne.symm herne, h1r]\n      rw [ArithmeticFunction.sigma_zero_apply] at hsig\n      have hfour : 4 ≤ r.divisors.card := by\n        calc\n          4 = ({1, d, e, r} : Finset ℕ).card := hcard.symm\n          _ ≤ r.divisors.card := Finset.card_le_card hsub\n      omega\n    refine ⟨d, hdprime, ?_⟩\n    simpa [hed, pow_two] using he",
+            "statement": "∀ r : ℕ, 2 ≤ r → ArithmeticFunction.sigma 0 r ≤ 3 → Nat.Prime r ∨ ∃ p : ℕ, Nat.Prime p ∧ r = p ^ 2"
+          }
+        ],
+        "root_theorem": {
+          "name": "erdos647_shift5_classification",
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n hn H h2520\n  have shift : ArithmeticFunction.sigma 0 (n - 5) ≤ 7 := by\n    have hsub : n - 5 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 5, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  rcases h2520 with ⟨q, hq⟩\n  have hqpos : 1 ≤ q := by omega\n  have h5div : 5 ∣ n - 5 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  let r : ℕ := (n - 5) / 5\n  have hcancel := Nat.div_mul_cancel h5div\n  have hr : n - 5 = 5 * r := by\n    dsimp [r]\n    omega\n  have hrformula : r = 504 * q - 1 := by omega\n  have hr2 : 2 ≤ r := by omega\n  have hrmod : r % 5 = 4 := by omega\n  have hcop : Nat.Coprime 5 r := by\n    refine Nat.coprime_of_dvd ?_\n    intro p hp hp5\n    intro hpr\n    have peq : p = 5 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp5\n    subst p\n    rw [Nat.dvd_iff_mod_eq_zero] at hpr\n    omega\n  have h5eq : ArithmeticFunction.sigma 0 5 = 2 := by\n    norm_num [ArithmeticFunction.sigma_zero_apply, Nat.divisors]\n  have hmul : ArithmeticFunction.sigma 0 (5 * r) =\n      ArithmeticFunction.sigma 0 5 * ArithmeticFunction.sigma 0 r :=\n    ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n  rw [hr] at shift\n  rw [hmul, h5eq] at shift\n  have hsig : ArithmeticFunction.sigma 0 r ≤ 3 := by omega\n  have hclass := sigma0_le_three_prime_or_square_prime r hr2 hsig\n  refine ⟨q, hq, ?_, ?_, ?_⟩\n  · simpa [r] using hrformula\n  · simpa [r] using hsig\n  · simpa [r] using hclass",
+          "statement": "∀ n : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → 2520 ∣ n → ∃ q : ℕ, n = 2520 * q ∧ (n - 5) / 5 = 504 * q - 1 ∧ ArithmeticFunction.sigma 0 ((n - 5) / 5) ≤ 3 ∧ (Nat.Prime ((n - 5) / 5) ∨ ∃ p : ℕ, Nat.Prime p ∧ (n - 5) / 5 = p ^ 2)"
+        },
+        "type": "submit_module"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "module_items": [
+            {
+              "item_kind": "theorem",
+              "name": "sigma0_le_three_prime_or_square_prime",
+              "proof_term": "  by_cases hprime : Nat.Prime r\n  · exact Or.inl hprime\n  · right\n    rcases (Nat.not_prime_iff_exists_dvd_ne hr).mp hprime with ⟨d, hd, hd1, hdr⟩\n    rcases hd with ⟨e, he⟩\n    have hdvd : d ∣ r := ⟨e, he⟩\n    have hd0 : d ≠ 0 := by\n      intro h\n      subst d\n      simp at he\n      omega\n    have he0 : e ≠ 0 := by\n      intro h\n      subst e\n      simp at he\n      omega\n    have hd2 : 2 ≤ d := by omega\n    have he1 : e ≠ 1 := by\n      intro h\n      subst e\n      simp at he\n      omega\n    have he2 : 2 ≤ e := by omega\n    have hder : d < r := by nlinarith\n    have her : e < r := by nlinarith\n    have hdprime : Nat.Prime d := by\n      by_contra hdn\n      rcases (Nat.not_prime_iff_exists_dvd_ne hd2).mp hdn with ⟨c, hcd, hc1, hcdne⟩\n      have hc0 : c ≠ 0 := by\n        intro h\n        subst c\n        simp at hcd\n      have hc2 : 2 ≤ c := by omega\n      have hcle : c ≤ d := Nat.le_of_dvd (by omega) hcd\n      have hclt : c < d := lt_of_le_of_ne hcle hcdne\n      have hcr : c ≠ r := by omega\n      have hcrdvd : c ∣ r := dvd_trans hcd hdvd\n      have hsub : ({1, c, d, r} : Finset ℕ) ⊆ r.divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rw [Nat.mem_divisors]\n        constructor\n        · rcases hx with rfl | rfl | rfl | rfl\n          · exact one_dvd r\n          · exact hcrdvd\n          · exact hdvd\n          · exact dvd_rfl\n        · omega\n      have h1r : 1 ≠ r := by omega\n      have hcard : ({1, c, d, r} : Finset ℕ).card = 4 := by\n        simp [Ne.symm hc1, hc1, Ne.symm hd1, hd1, hcdne, Ne.symm hcdne,\n          hcr, Ne.symm hcr, hdr, Ne.symm hdr, h1r]\n      rw [ArithmeticFunction.sigma_zero_apply] at hsig\n      have hfour : 4 ≤ r.divisors.card := by\n        calc\n          4 = ({1, c, d, r} : Finset ℕ).card := hcard.symm\n          _ ≤ r.divisors.card := Finset.card_le_card hsub\n      omega\n    have hed : e = d := by\n      by_contra hedne\n      have hediv : e ∣ r := by\n        use d\n        omega\n      have hsub : ({1, d, e, r} : Finset ℕ) ⊆ r.divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rw [Nat.mem_divisors]\n        constructor\n        · rcases hx with rfl | rfl | rfl | rfl\n          · exact one_dvd r\n          · exact hdvd\n          · exact hediv\n          · exact dvd_rfl\n        · omega\n      have h1r : 1 ≠ r := by omega\n      have herne : e ≠ r := ne_of_lt her\n      have hcard : ({1, d, e, r} : Finset ℕ).card = 4 := by\n        simp [Ne.symm hd1, hd1, Ne.symm he1, he1, hedne, Ne.symm hedne,\n          hdr, Ne.symm hdr, herne, Ne.symm herne, h1r]\n      rw [ArithmeticFunction.sigma_zero_apply] at hsig\n      have hfour : 4 ≤ r.divisors.card := by\n        calc\n          4 = ({1, d, e, r} : Finset ℕ).card := hcard.symm\n          _ ≤ r.divisors.card := Finset.card_le_card hsub\n      omega\n    refine ⟨d, hdprime, ?_⟩\n    simpa [hed, pow_two] using he",
+              "statement": "∀ r : ℕ, 2 ≤ r → ArithmeticFunction.sigma 0 r ≤ 3 → Nat.Prime r ∨ ∃ p : ℕ, Nat.Prime p ∧ r = p ^ 2"
+            }
+          ],
+          "root_theorem": {
+            "name": "erdos647_shift5_classification",
+            "proof_format": "raw_lean_block",
+            "proof_term": "  intro n hn H h2520\n  have shift : ArithmeticFunction.sigma 0 (n - 5) ≤ 7 := by\n    have hsub : n - 5 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 5, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  rcases h2520 with ⟨q, hq⟩\n  have hqpos : 1 ≤ q := by omega\n  have h5div : 5 ∣ n - 5 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  let r : ℕ := (n - 5) / 5\n  have hcancel := Nat.div_mul_cancel h5div\n  have hr : n - 5 = 5 * r := by\n    dsimp [r]\n    omega\n  have hrformula : r = 504 * q - 1 := by omega\n  have hr2 : 2 ≤ r := by omega\n  have hrmod : r % 5 = 4 := by omega\n  have hcop : Nat.Coprime 5 r := by\n    refine Nat.coprime_of_dvd ?_\n    intro p hp hp5\n    intro hpr\n    have peq : p = 5 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp5\n    subst p\n    rw [Nat.dvd_iff_mod_eq_zero] at hpr\n    omega\n  have h5eq : ArithmeticFunction.sigma 0 5 = 2 := by\n    norm_num [ArithmeticFunction.sigma_zero_apply, Nat.divisors]\n  have hmul : ArithmeticFunction.sigma 0 (5 * r) =\n      ArithmeticFunction.sigma 0 5 * ArithmeticFunction.sigma 0 r :=\n    ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n  rw [hr] at shift\n  rw [hmul, h5eq] at shift\n  have hsig : ArithmeticFunction.sigma 0 r ≤ 3 := by omega\n  have hclass := sigma0_le_three_prime_or_square_prime r hr2 hsig\n  refine ⟨q, hq, ?_, ?_, ?_⟩\n  · simpa [r] using hrformula\n  · simpa [r] using hsig\n  · simpa [r] using hclass",
+            "statement": "∀ n : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → 2520 ∣ n → ∃ q : ℕ, n = 2520 * q ∧ (n - 5) / 5 = 504 * q - 1 ∧ ArithmeticFunction.sigma 0 ((n - 5) / 5) ≤ 3 ∧ (Nat.Prime ((n - 5) / 5) ∨ ∃ p : ℕ, Nat.Prime p ∧ (n - 5) / 5 = p ^ 2)"
+          },
+          "type": "submit_module"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → 2520 ∣ n → ∃ q : ℕ, n = 2520 * q ∧ (n - 5) / 5 = 504 * q - 1 ∧ ArithmeticFunction.sigma 0 ((n - 5) / 5) ≤ 3 ∧ (Nat.Prime ((n - 5) / 5) ∨ ∃ p : ℕ, Nat.Prime p ∧ (n - 5) / 5 = p ^ 2)",
+        "module_source_hash": null,
+        "obligation_id": "cd8945e4-c91e-4cb0-b936-3688634487bc",
+        "outcome": "kernel_fail",
+        "problem_version_id": "dbd105e7-ce58-4ed1-93a6-0694cf131d13",
+        "solve_kind": "verified_module_solve",
+        "statement_hash": "49be45856e25d10acda1687eb0aa9ad7ac18ec7ec507c1989a741a1ac5470c93"
+      },
+      "next_state": {
+        "state_hash": "0f5715f4f57f4d6b72fc45f03af811a8619ba4c42cdccba12ae3f20d7e104d53"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "2bf6262d2df952f1b49154e17c011d09c885a9a3c7bb71e7a29c8803a010ddd2"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n hn H h2520\n  have classify : ∀ s : ℕ, 2 ≤ s → ArithmeticFunction.sigma 0 s ≤ 3 →\n      Nat.Prime s ∨ ∃ p : ℕ, Nat.Prime p ∧ s = p ^ 2 := by\n    intro s hs hsig\n    by_cases hprime : Nat.Prime s\n    · exact Or.inl hprime\n    · right\n      rcases (Nat.not_prime_iff_exists_dvd_ne hs).mp hprime with ⟨d, hd, hd1, hds⟩\n      rcases hd with ⟨e, he⟩\n      have hdvd : d ∣ s := ⟨e, he⟩\n      have hd0 : d ≠ 0 := by\n        intro h\n        subst d\n        simp at he\n        omega\n      have he0 : e ≠ 0 := by\n        intro h\n        subst e\n        simp at he\n        omega\n      have hd2 : 2 ≤ d := by omega\n      have he1 : e ≠ 1 := by\n        intro h\n        subst e\n        simp at he\n        omega\n      have he2 : 2 ≤ e := by omega\n      have hdlt : d < s := by nlinarith\n      have helt : e < s := by nlinarith\n      have hdprime : Nat.Prime d := by\n        by_contra hdn\n        rcases (Nat.not_prime_iff_exists_dvd_ne hd2).mp hdn with ⟨c, hcd, hc1, hcdne⟩\n        have hc0 : c ≠ 0 := by\n          intro h\n          subst c\n          simp at hcd\n        have hc2 : 2 ≤ c := by omega\n        have hcle : c ≤ d := Nat.le_of_dvd (by omega) hcd\n        have hclt : c < d := lt_of_le_of_ne hcle hcdne\n        have hcs : c ≠ s := by omega\n        have hcrdvd : c ∣ s := dvd_trans hcd hdvd\n        have hsub : ({1, c, d, s} : Finset ℕ) ⊆ s.divisors := by\n          intro x hx\n          simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n          rw [Nat.mem_divisors]\n          constructor\n          · rcases hx with rfl | rfl | rfl | rfl\n            · exact one_dvd s\n            · exact hcrdvd\n            · exact hdvd\n            · exact dvd_rfl\n          · omega\n        have h1s : 1 ≠ s := by omega\n        have hcard : ({1, c, d, s} : Finset ℕ).card = 4 := by\n          simp [Ne.symm hc1, hc1, Ne.symm hd1, hd1, hcdne, Ne.symm hcdne,\n            hcs, Ne.symm hcs, hds, Ne.symm hds, h1s]\n        rw [ArithmeticFunction.sigma_zero_apply] at hsig\n        have hfour : 4 ≤ s.divisors.card := by\n          calc\n            4 = ({1, c, d, s} : Finset ℕ).card := hcard.symm\n            _ ≤ s.divisors.card := Finset.card_le_card hsub\n        omega\n      have hed : e = d := by\n        by_contra hedne\n        have hediv : e ∣ s := by\n          use d\n          omega\n        have hsub : ({1, d, e, s} : Finset ℕ) ⊆ s.divisors := by\n          intro x hx\n          simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n          rw [Nat.mem_divisors]\n          constructor\n          · rcases hx with rfl | rfl | rfl | rfl\n            · exact one_dvd s\n            · exact hdvd\n            · exact hediv\n            · exact dvd_rfl\n          · omega\n        have h1s : 1 ≠ s := by omega\n        have hes : e ≠ s := ne_of_lt helt\n        have hcard : ({1, d, e, s} : Finset ℕ).card = 4 := by\n          simp [Ne.symm hd1, hd1, Ne.symm he1, he1, hedne, Ne.symm hedne,\n            hds, Ne.symm hds, hes, Ne.symm hes, h1s]\n        rw [ArithmeticFunction.sigma_zero_apply] at hsig\n        have hfour : 4 ≤ s.divisors.card := by\n          calc\n            4 = ({1, d, e, s} : Finset ℕ).card := hcard.symm\n            _ ≤ s.divisors.card := Finset.card_le_card hsub\n        omega\n      refine ⟨d, hdprime, ?_⟩\n      simpa [hed, pow_two] using he\n  have shift : ArithmeticFunction.sigma 0 (n - 5) ≤ 7 := by\n    have hsub : n - 5 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 5, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  rcases h2520 with ⟨q, hq⟩\n  have hqpos : 1 ≤ q := by omega\n  have h5div : 5 ∣ n - 5 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  let r : ℕ := (n - 5) / 5\n  have hcancel := Nat.div_mul_cancel h5div\n  have hr : n - 5 = 5 * r := by\n    dsimp [r]\n    omega\n  have hrformula : r = 504 * q - 1 := by omega\n  have hr2 : 2 ≤ r := by omega\n  have hrmod : r % 5 = 4 := by omega\n  have hcop : Nat.Coprime 5 r := by\n    refine Nat.coprime_of_dvd ?_\n    intro p hp hp5\n    intro hpr\n    have peq : p = 5 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp5\n    subst p\n    rw [Nat.dvd_iff_mod_eq_zero] at hpr\n    omega\n  have h5eq : ArithmeticFunction.sigma 0 5 = 2 := by\n    rw [ArithmeticFunction.sigma_zero_apply]\n    native_decide\n  have hmul : ArithmeticFunction.sigma 0 (5 * r) =\n      ArithmeticFunction.sigma 0 5 * ArithmeticFunction.sigma 0 r :=\n    ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n  rw [hr] at shift\n  rw [hmul, h5eq] at shift\n  have hsig : ArithmeticFunction.sigma 0 r ≤ 3 := by omega\n  have hclass := classify r hr2 hsig\n  refine ⟨q, hq, ?_, ?_, ?_⟩\n  · change r = 504 * q - 1\n    exact hrformula\n  · change ArithmeticFunction.sigma 0 r ≤ 3\n    exact hsig\n  · change Nat.Prime r ∨ ∃ p : ℕ, Nat.Prime p ∧ r = p ^ 2\n    exact hclass",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n hn H h2520\n  have classify : ∀ s : ℕ, 2 ≤ s → ArithmeticFunction.sigma 0 s ≤ 3 →\n      Nat.Prime s ∨ ∃ p : ℕ, Nat.Prime p ∧ s = p ^ 2 := by\n    intro s hs hsig\n    by_cases hprime : Nat.Prime s\n    · exact Or.inl hprime\n    · right\n      rcases (Nat.not_prime_iff_exists_dvd_ne hs).mp hprime with ⟨d, hd, hd1, hds⟩\n      rcases hd with ⟨e, he⟩\n      have hdvd : d ∣ s := ⟨e, he⟩\n      have hd0 : d ≠ 0 := by\n        intro h\n        subst d\n        simp at he\n        omega\n      have he0 : e ≠ 0 := by\n        intro h\n        subst e\n        simp at he\n        omega\n      have hd2 : 2 ≤ d := by omega\n      have he1 : e ≠ 1 := by\n        intro h\n        subst e\n        simp at he\n        omega\n      have he2 : 2 ≤ e := by omega\n      have hdlt : d < s := by nlinarith\n      have helt : e < s := by nlinarith\n      have hdprime : Nat.Prime d := by\n        by_contra hdn\n        rcases (Nat.not_prime_iff_exists_dvd_ne hd2).mp hdn with ⟨c, hcd, hc1, hcdne⟩\n        have hc0 : c ≠ 0 := by\n          intro h\n          subst c\n          simp at hcd\n        have hc2 : 2 ≤ c := by omega\n        have hcle : c ≤ d := Nat.le_of_dvd (by omega) hcd\n        have hclt : c < d := lt_of_le_of_ne hcle hcdne\n        have hcs : c ≠ s := by omega\n        have hcrdvd : c ∣ s := dvd_trans hcd hdvd\n        have hsub : ({1, c, d, s} : Finset ℕ) ⊆ s.divisors := by\n          intro x hx\n          simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n          rw [Nat.mem_divisors]\n          constructor\n          · rcases hx with rfl | rfl | rfl | rfl\n            · exact one_dvd s\n            · exact hcrdvd\n            · exact hdvd\n            · exact dvd_rfl\n          · omega\n        have h1s : 1 ≠ s := by omega\n        have hcard : ({1, c, d, s} : Finset ℕ).card = 4 := by\n          simp [Ne.symm hc1, hc1, Ne.symm hd1, hd1, hcdne, Ne.symm hcdne,\n            hcs, Ne.symm hcs, hds, Ne.symm hds, h1s]\n        rw [ArithmeticFunction.sigma_zero_apply] at hsig\n        have hfour : 4 ≤ s.divisors.card := by\n          calc\n            4 = ({1, c, d, s} : Finset ℕ).card := hcard.symm\n            _ ≤ s.divisors.card := Finset.card_le_card hsub\n        omega\n      have hed : e = d := by\n        by_contra hedne\n        have hediv : e ∣ s := by\n          use d\n          omega\n        have hsub : ({1, d, e, s} : Finset ℕ) ⊆ s.divisors := by\n          intro x hx\n          simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n          rw [Nat.mem_divisors]\n          constructor\n          · rcases hx with rfl | rfl | rfl | rfl\n            · exact one_dvd s\n            · exact hdvd\n            · exact hediv\n            · exact dvd_rfl\n          · omega\n        have h1s : 1 ≠ s := by omega\n        have hes : e ≠ s := ne_of_lt helt\n        have hcard : ({1, d, e, s} : Finset ℕ).card = 4 := by\n          simp [Ne.symm hd1, hd1, Ne.symm he1, he1, hedne, Ne.symm hedne,\n            hds, Ne.symm hds, hes, Ne.symm hes, h1s]\n        rw [ArithmeticFunction.sigma_zero_apply] at hsig\n        have hfour : 4 ≤ s.divisors.card := by\n          calc\n            4 = ({1, d, e, s} : Finset ℕ).card := hcard.symm\n            _ ≤ s.divisors.card := Finset.card_le_card hsub\n        omega\n      refine ⟨d, hdprime, ?_⟩\n      simpa [hed, pow_two] using he\n  have shift : ArithmeticFunction.sigma 0 (n - 5) ≤ 7 := by\n    have hsub : n - 5 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 5, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  rcases h2520 with ⟨q, hq⟩\n  have hqpos : 1 ≤ q := by omega\n  have h5div : 5 ∣ n - 5 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  let r : ℕ := (n - 5) / 5\n  have hcancel := Nat.div_mul_cancel h5div\n  have hr : n - 5 = 5 * r := by\n    dsimp [r]\n    omega\n  have hrformula : r = 504 * q - 1 := by omega\n  have hr2 : 2 ≤ r := by omega\n  have hrmod : r % 5 = 4 := by omega\n  have hcop : Nat.Coprime 5 r := by\n    refine Nat.coprime_of_dvd ?_\n    intro p hp hp5\n    intro hpr\n    have peq : p = 5 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp5\n    subst p\n    rw [Nat.dvd_iff_mod_eq_zero] at hpr\n    omega\n  have h5eq : ArithmeticFunction.sigma 0 5 = 2 := by\n    rw [ArithmeticFunction.sigma_zero_apply]\n    native_decide\n  have hmul : ArithmeticFunction.sigma 0 (5 * r) =\n      ArithmeticFunction.sigma 0 5 * ArithmeticFunction.sigma 0 r :=\n    ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n  rw [hr] at shift\n  rw [hmul, h5eq] at shift\n  have hsig : ArithmeticFunction.sigma 0 r ≤ 3 := by omega\n  have hclass := classify r hr2 hsig\n  refine ⟨q, hq, ?_, ?_, ?_⟩\n  · change r = 504 * q - 1\n    exact hrformula\n  · change ArithmeticFunction.sigma 0 r ≤ 3\n    exact hsig\n  · change Nat.Prime r ∨ ∃ p : ℕ, Nat.Prime p ∧ r = p ^ 2\n    exact hclass",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → 2520 ∣ n → ∃ q : ℕ, n = 2520 * q ∧ (n - 5) / 5 = 504 * q - 1 ∧ ArithmeticFunction.sigma 0 ((n - 5) / 5) ≤ 3 ∧ (Nat.Prime ((n - 5) / 5) ∨ ∃ p : ℕ, Nat.Prime p ∧ (n - 5) / 5 = p ^ 2)",
+        "module_source_hash": null,
+        "obligation_id": "cd8945e4-c91e-4cb0-b936-3688634487bc",
+        "outcome": "kernel_fail",
+        "problem_version_id": "dbd105e7-ce58-4ed1-93a6-0694cf131d13",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "49be45856e25d10acda1687eb0aa9ad7ac18ec7ec507c1989a741a1ac5470c93"
+      },
+      "next_state": {
+        "state_hash": "80ae9291eda537caf1d39a0df990c9feafc84df573617d5ba26d95227b8bc3c0"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "7b01db32547bc762b426d133a3659bf00c44063baa34810868b447d03b0e1fdd"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "type": "give_up"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "type": "give_up"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → 2520 ∣ n → ∃ q : ℕ, n = 2520 * q ∧ (n - 5) / 5 = 504 * q - 1 ∧ ArithmeticFunction.sigma 0 ((n - 5) / 5) ≤ 3 ∧ (Nat.Prime ((n - 5) / 5) ∨ ∃ p : ℕ, Nat.Prime p ∧ (n - 5) / 5 = p ^ 2)",
+        "module_source_hash": null,
+        "obligation_id": "cd8945e4-c91e-4cb0-b936-3688634487bc",
+        "outcome": "kernel_pass",
+        "problem_version_id": "dbd105e7-ce58-4ed1-93a6-0694cf131d13",
+        "statement_hash": "49be45856e25d10acda1687eb0aa9ad7ac18ec7ec507c1989a741a1ac5470c93"
+      },
+      "next_state": {
+        "state_hash": "c77f3814cf20662eaa1f5750a10a38d178f60a0da8da378e0be1e64242e35379"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "2aec6f88a775053ac895edbe11e0431b775a196766dcc5d0bbe891ad983f4f82"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

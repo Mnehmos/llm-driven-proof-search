@@ -1,0 +1,154 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "sub_lemmas": [
+          "True"
+        ],
+        "type": "decompose"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "sub_lemmas": [
+            "True"
+          ],
+          "type": "decompose"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "True",
+        "module_source_hash": null,
+        "obligation_id": "16578b24-b697-4b78-949c-0319b038b132",
+        "outcome": "kernel_pass",
+        "problem_version_id": "7bf591a9-9ee3-4782-b244-913006b336eb",
+        "statement_hash": "76c777b0ce3c35ba97c6cbdeea2a08cf31ebcd274fa0190aa83db5bc8742ae1e"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "04eddde2603ea63116c949b824bb1e9ad4d5cffb7c3db6cf723c450e52c3c53e"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "sub_lemmas": [
+          "True"
+        ],
+        "type": "decompose"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "sub_lemmas": [
+            "True"
+          ],
+          "type": "decompose"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "True",
+        "module_source_hash": null,
+        "obligation_id": "8562ed7c-0caa-4569-9f26-bc74b34ebb62",
+        "outcome": "kernel_pass",
+        "problem_version_id": "7bf591a9-9ee3-4782-b244-913006b336eb",
+        "statement_hash": "76c777b0ce3c35ba97c6cbdeea2a08cf31ebcd274fa0190aa83db5bc8742ae1e"
+      },
+      "next_state": {
+        "state_hash": "0f5715f4f57f4d6b72fc45f03af811a8619ba4c42cdccba12ae3f20d7e104d53"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "00b6ca3b90800ab91443fc4c8e53020c1143692fc2ad85622156e30ae2a36ca7"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "sub_lemmas": [
+          "True"
+        ],
+        "type": "decompose"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "sub_lemmas": [
+            "True"
+          ],
+          "type": "decompose"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "True",
+        "module_source_hash": null,
+        "obligation_id": "4ff87749-e1fe-4804-839c-02c62edd5c3b",
+        "outcome": "kernel_pass",
+        "problem_version_id": "7bf591a9-9ee3-4782-b244-913006b336eb",
+        "statement_hash": "76c777b0ce3c35ba97c6cbdeea2a08cf31ebcd274fa0190aa83db5bc8742ae1e"
+      },
+      "next_state": {
+        "state_hash": "80ae9291eda537caf1d39a0df990c9feafc84df573617d5ba26d95227b8bc3c0"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "f88838a6e6d652557377997b7bf2383035fe4efc30411f96d178427e913b093d"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "type": "give_up"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "type": "give_up"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "True",
+        "module_source_hash": null,
+        "obligation_id": "61ca3368-8716-463f-96a7-8d4c2d389e75",
+        "outcome": "kernel_pass",
+        "problem_version_id": "7bf591a9-9ee3-4782-b244-913006b336eb",
+        "statement_hash": "76c777b0ce3c35ba97c6cbdeea2a08cf31ebcd274fa0190aa83db5bc8742ae1e"
+      },
+      "next_state": {
+        "state_hash": "c77f3814cf20662eaa1f5750a10a38d178f60a0da8da378e0be1e64242e35379"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "39cd4c48dba96daf64c02af28361abca09b2ca802207eb2fde43fbecd92cf90e"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro k X E hX hE\n  have hk : k ≤ 2^k := by\n    induction k with\n    | zero => norm_num\n    | succ k ih =>\n        rw [pow_succ]\n        have hp : 1 ≤ 2^k := Nat.one_le_pow k 2 (by norm_num)\n        omega\n  have hk7 : k^7 ≤ (2^k)^7 := by gcongr\n  have hexp : (2^k)^327 ≤ (2^k)^400 := by\n    exact pow_le_pow (le_refl _) (Nat.one_le_pow 327 (2^k) (by positivity)) (by norm_num)\n  calc\n    E * k^7 ≤ (2^328 * (2^k)^320) * k^7 := Nat.mul_le_mul_right _ hE\n    _ ≤ (2^328 * (2^k)^320) * (2^k)^7 := Nat.mul_le_mul_left _ hk7\n    _ = 2^328 * (2^k)^327 := by rw [mul_assoc, ← pow_add]; norm_num\n    _ ≤ 2^328 * (2^k)^400 := Nat.mul_le_mul_left _ hexp\n    _ ≤ 2^328 * X := Nat.mul_le_mul_left _ hX",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro k X E hX hE\n  have hk : k ≤ 2^k := by\n    induction k with\n    | zero => norm_num\n    | succ k ih =>\n        rw [pow_succ]\n        have hp : 1 ≤ 2^k := Nat.one_le_pow k 2 (by norm_num)\n        omega\n  have hk7 : k^7 ≤ (2^k)^7 := by gcongr\n  have hexp : (2^k)^327 ≤ (2^k)^400 := by\n    exact pow_le_pow (le_refl _) (Nat.one_le_pow 327 (2^k) (by positivity)) (by norm_num)\n  calc\n    E * k^7 ≤ (2^328 * (2^k)^320) * k^7 := Nat.mul_le_mul_right _ hE\n    _ ≤ (2^328 * (2^k)^320) * (2^k)^7 := Nat.mul_le_mul_left _ hk7\n    _ = 2^328 * (2^k)^327 := by rw [mul_assoc, ← pow_add]; norm_num\n    _ ≤ 2^328 * (2^k)^400 := Nat.mul_le_mul_left _ hexp\n    _ ≤ 2^328 * X := Nat.mul_le_mul_left _ hX",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ k X E : ℕ,\n  (2^k)^400 ≤ X →\n  E ≤ 2^328 * (2^k)^320 →\n  E * k^7 ≤ 2^328 * X",
+        "module_source_hash": null,
+        "obligation_id": "c229ce57-4c98-44a2-8073-1487dae1cfa4",
+        "outcome": "kernel_fail",
+        "problem_version_id": "e74ace30-3fd0-4192-aea1-1f0f348f6e9b",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "7a3904890bde66411c6d2808eb1d5a8b1f7f81c0d5d6f9cc3f61061586d62a1e"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "bedf2e4f4a2727ba5f9784a2c10f1a815bc246266edb5223c4567ed757b19ab8"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro k X E hX hE\n  have hk : k ≤ 2^k := by\n    clear hX hE X E\n    induction k with\n    | zero => norm_num\n    | succ k ih =>\n        have hp : 1 ≤ 2^k := Nat.one_le_pow k 2 (by norm_num)\n        calc\n          k+1 ≤ 2^k+1 := Nat.add_le_add_right ih 1\n          _ ≤ 2^k+2^k := Nat.add_le_add_left hp _\n          _ = 2^(k+1) := by rw [pow_succ, Nat.mul_two]\n  have hk7 : k^7 ≤ (2^k)^7 := by gcongr\n  have hexp : (2^k)^327 ≤ (2^k)^400 := by\n    exact pow_le_pow_right' (Nat.one_le_pow k 2 (by norm_num)) (by norm_num)\n  calc\n    E * k^7 ≤ (2^328 * (2^k)^320) * k^7 := Nat.mul_le_mul_right _ hE\n    _ ≤ (2^328 * (2^k)^320) * (2^k)^7 := Nat.mul_le_mul_left _ hk7\n    _ = 2^328 * (2^k)^327 := by rw [mul_assoc, ← pow_add]\n    _ ≤ 2^328 * (2^k)^400 := Nat.mul_le_mul_left _ hexp\n    _ ≤ 2^328 * X := Nat.mul_le_mul_left _ hX",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro k X E hX hE\n  have hk : k ≤ 2^k := by\n    clear hX hE X E\n    induction k with\n    | zero => norm_num\n    | succ k ih =>\n        have hp : 1 ≤ 2^k := Nat.one_le_pow k 2 (by norm_num)\n        calc\n          k+1 ≤ 2^k+1 := Nat.add_le_add_right ih 1\n          _ ≤ 2^k+2^k := Nat.add_le_add_left hp _\n          _ = 2^(k+1) := by rw [pow_succ, Nat.mul_two]\n  have hk7 : k^7 ≤ (2^k)^7 := by gcongr\n  have hexp : (2^k)^327 ≤ (2^k)^400 := by\n    exact pow_le_pow_right' (Nat.one_le_pow k 2 (by norm_num)) (by norm_num)\n  calc\n    E * k^7 ≤ (2^328 * (2^k)^320) * k^7 := Nat.mul_le_mul_right _ hE\n    _ ≤ (2^328 * (2^k)^320) * (2^k)^7 := Nat.mul_le_mul_left _ hk7\n    _ = 2^328 * (2^k)^327 := by rw [mul_assoc, ← pow_add]\n    _ ≤ 2^328 * (2^k)^400 := Nat.mul_le_mul_left _ hexp\n    _ ≤ 2^328 * X := Nat.mul_le_mul_left _ hX",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ k X E : ℕ,\n  (2^k)^400 ≤ X →\n  E ≤ 2^328 * (2^k)^320 →\n  E * k^7 ≤ 2^328 * X",
+        "module_source_hash": null,
+        "obligation_id": "c229ce57-4c98-44a2-8073-1487dae1cfa4",
+        "outcome": "kernel_pass",
+        "problem_version_id": "e74ace30-3fd0-4192-aea1-1f0f348f6e9b",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "7a3904890bde66411c6d2808eb1d5a8b1f7f81c0d5d6f9cc3f61061586d62a1e"
+      },
+      "next_state": {
+        "state_hash": "cf47e175675e6f78337bcffee524e4b958c64cc23e56c992d25491a74046817b"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "dd7694c3aec2f1e240f05b0a65cfe2645cf5a432df9ab5f650172155788cd982"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

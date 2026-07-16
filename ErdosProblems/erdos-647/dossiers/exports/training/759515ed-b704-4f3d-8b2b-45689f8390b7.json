@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro s w d hd hw\nhave hstep : |BoundingSieve.lambdaSquared w d| ≤ ∑ d1 ∈ d.divisors, ∑ d2 ∈ d.divisors, |w d1| * |w d2| := by\n  unfold BoundingSieve.lambdaSquared\n  calc |∑ d1 ∈ d.divisors, ∑ d2 ∈ d.divisors, if d = Nat.lcm d1 d2 then w d1 * w d2 else 0|\n      ≤ ∑ d1 ∈ d.divisors, |∑ d2 ∈ d.divisors, if d = Nat.lcm d1 d2 then w d1 * w d2 else 0| := Finset.abs_sum_le_sum_abs _ _\n    _ ≤ ∑ d1 ∈ d.divisors, ∑ d2 ∈ d.divisors, |if d = Nat.lcm d1 d2 then w d1 * w d2 else 0| := by\n        apply Finset.sum_le_sum\n        intro d1 _\n        exact Finset.abs_sum_le_sum_abs _ _\n    _ ≤ ∑ d1 ∈ d.divisors, ∑ d2 ∈ d.divisors, |w d1| * |w d2| := by\n        apply Finset.sum_le_sum\n        intro d1 _\n        apply Finset.sum_le_sum\n        intro d2 _\n        split_ifs with h\n        · rw [abs_mul]\n        · rw [abs_zero]; positivity\nhave heq : (∑ d1 ∈ d.divisors, ∑ d2 ∈ d.divisors, |w d1| * |w d2|) = (∑ d1 ∈ d.divisors, |w d1|) * (∑ d2 ∈ d.divisors, |w d2|) := by\n  rw [Finset.sum_mul_sum]\nhave hsum_le : (∑ d1 ∈ d.divisors, |w d1|) ≤ ∑ d1 ∈ d.divisors, s.selbergTerms d1 / s.nu d1 :=\n  Finset.sum_le_sum hw\nhave hsum_nonneg : 0 ≤ ∑ d1 ∈ d.divisors, |w d1| := Finset.sum_nonneg (fun _ _ => abs_nonneg _)\ncalc |BoundingSieve.lambdaSquared w d| ≤ ∑ d1 ∈ d.divisors, ∑ d2 ∈ d.divisors, |w d1| * |w d2| := hstep\n  _ = (∑ d1 ∈ d.divisors, |w d1|) * (∑ d2 ∈ d.divisors, |w d2|) := heq\n  _ = (∑ d1 ∈ d.divisors, |w d1|)^2 := by rw [sq]\n  _ ≤ (∑ d1 ∈ d.divisors, s.selbergTerms d1 / s.nu d1)^2 := pow_le_pow_left₀ hsum_nonneg hsum_le 2",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro s w d hd hw\nhave hstep : |BoundingSieve.lambdaSquared w d| ≤ ∑ d1 ∈ d.divisors, ∑ d2 ∈ d.divisors, |w d1| * |w d2| := by\n  unfold BoundingSieve.lambdaSquared\n  calc |∑ d1 ∈ d.divisors, ∑ d2 ∈ d.divisors, if d = Nat.lcm d1 d2 then w d1 * w d2 else 0|\n      ≤ ∑ d1 ∈ d.divisors, |∑ d2 ∈ d.divisors, if d = Nat.lcm d1 d2 then w d1 * w d2 else 0| := Finset.abs_sum_le_sum_abs _ _\n    _ ≤ ∑ d1 ∈ d.divisors, ∑ d2 ∈ d.divisors, |if d = Nat.lcm d1 d2 then w d1 * w d2 else 0| := by\n        apply Finset.sum_le_sum\n        intro d1 _\n        exact Finset.abs_sum_le_sum_abs _ _\n    _ ≤ ∑ d1 ∈ d.divisors, ∑ d2 ∈ d.divisors, |w d1| * |w d2| := by\n        apply Finset.sum_le_sum\n        intro d1 _\n        apply Finset.sum_le_sum\n        intro d2 _\n        split_ifs with h\n        · rw [abs_mul]\n        · rw [abs_zero]; positivity\nhave heq : (∑ d1 ∈ d.divisors, ∑ d2 ∈ d.divisors, |w d1| * |w d2|) = (∑ d1 ∈ d.divisors, |w d1|) * (∑ d2 ∈ d.divisors, |w d2|) := by\n  rw [Finset.sum_mul_sum]\nhave hsum_le : (∑ d1 ∈ d.divisors, |w d1|) ≤ ∑ d1 ∈ d.divisors, s.selbergTerms d1 / s.nu d1 :=\n  Finset.sum_le_sum hw\nhave hsum_nonneg : 0 ≤ ∑ d1 ∈ d.divisors, |w d1| := Finset.sum_nonneg (fun _ _ => abs_nonneg _)\ncalc |BoundingSieve.lambdaSquared w d| ≤ ∑ d1 ∈ d.divisors, ∑ d2 ∈ d.divisors, |w d1| * |w d2| := hstep\n  _ = (∑ d1 ∈ d.divisors, |w d1|) * (∑ d2 ∈ d.divisors, |w d2|) := heq\n  _ = (∑ d1 ∈ d.divisors, |w d1|)^2 := by rw [sq]\n  _ ≤ (∑ d1 ∈ d.divisors, s.selbergTerms d1 / s.nu d1)^2 := pow_le_pow_left₀ hsum_nonneg hsum_le 2",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : SelbergSieve) (w : ℕ → ℝ) (d : ℕ), d ∈ s.prodPrimes.divisors →\n  (∀ d1 ∈ d.divisors, |w d1| ≤ s.selbergTerms d1 / s.nu d1) →\n  |BoundingSieve.lambdaSquared w d| ≤ (∑ d1 ∈ d.divisors, s.selbergTerms d1 / s.nu d1)^2",
+        "module_source_hash": null,
+        "obligation_id": "c56df32e-75fb-4dc2-956e-1353bbf2bbe9",
+        "outcome": "kernel_pass",
+        "problem_version_id": "07a91857-7ade-4719-867a-3836a04ed3ff",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "e1a335c630a6dcae767317fd77df12fb00588f6303488a7ddb3628618ce3e402"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "64323329fbbb555fbd136a32de76c5bf057ec7a29e0570a2fe7086ed2e75a1f5"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro p M hp hM hcop Sp T hSp hT\nrw [← Finset.card_product]\napply Finset.card_bij (fun r (_ : r ∈ (Finset.range (p*M)).filter (fun r => r%p ∈ Sp ∧ r%M ∈ T)) => (r%p, r%M))\n· intro r hr\n  simp only [Finset.mem_filter] at hr\n  simp only [Finset.mem_product]\n  exact hr.2\n· intro r1 hr1 r2 hr2 heq\n  simp only [Finset.mem_filter, Finset.mem_range] at hr1 hr2\n  simp only [Prod.mk.injEq] at heq\n  have h1 : r1 ≡ r2 [MOD p] := heq.1\n  have h2 : r1 ≡ r2 [MOD M] := heq.2\n  have h3 : r1 ≡ r2 [MOD p*M] := (Nat.modEq_and_modEq_iff_modEq_mul hcop).mp ⟨h1,h2⟩\n  have h4 := h3\n  unfold Nat.ModEq at h4\n  rwa [Nat.mod_eq_of_lt hr1.1, Nat.mod_eq_of_lt hr2.1] at h4\n· intro b hb\n  simp only [Finset.mem_product] at hb\n  obtain ⟨a1, b1⟩ := b\n  have haP : a1 < p := Finset.mem_range.mp (hSp hb.1)\n  have hbM : b1 < M := Finset.mem_range.mp (hT hb.2)\n  have hka : (Nat.chineseRemainder hcop a1 b1 : ℕ) ≡ a1 [MOD p] := (Nat.chineseRemainder hcop a1 b1).prop.1\n  have hkb : (Nat.chineseRemainder hcop a1 b1 : ℕ) ≡ b1 [MOD M] := (Nat.chineseRemainder hcop a1 b1).prop.2\n  have hklt : (Nat.chineseRemainder hcop a1 b1 : ℕ) < p*M := Nat.chineseRemainder_lt_mul hcop a1 b1 hp.ne' hM.ne'\n  set k := (Nat.chineseRemainder hcop a1 b1 : ℕ) with hkeq\n  clear_value k\n  have hkp : k % p = a1 := by\n    have h5 := hka\n    unfold Nat.ModEq at h5\n    rw [Nat.mod_eq_of_lt haP] at h5\n    exact h5\n  have hkM : k % M = b1 := by\n    have h6 := hkb\n    unfold Nat.ModEq at h6\n    rw [Nat.mod_eq_of_lt hbM] at h6\n    exact h6\n  have hmemr : k ∈ (Finset.range (p*M)).filter (fun r => r%p ∈ Sp ∧ r%M ∈ T) := by\n    simp only [Finset.mem_filter, Finset.mem_range]\n    exact ⟨hklt, hkp ▸ hb.1, hkM ▸ hb.2⟩\n  refine ⟨k, hmemr, ?_⟩\n  simp only [Prod.mk.injEq]\n  exact ⟨hkp, hkM⟩",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro p M hp hM hcop Sp T hSp hT\nrw [← Finset.card_product]\napply Finset.card_bij (fun r (_ : r ∈ (Finset.range (p*M)).filter (fun r => r%p ∈ Sp ∧ r%M ∈ T)) => (r%p, r%M))\n· intro r hr\n  simp only [Finset.mem_filter] at hr\n  simp only [Finset.mem_product]\n  exact hr.2\n· intro r1 hr1 r2 hr2 heq\n  simp only [Finset.mem_filter, Finset.mem_range] at hr1 hr2\n  simp only [Prod.mk.injEq] at heq\n  have h1 : r1 ≡ r2 [MOD p] := heq.1\n  have h2 : r1 ≡ r2 [MOD M] := heq.2\n  have h3 : r1 ≡ r2 [MOD p*M] := (Nat.modEq_and_modEq_iff_modEq_mul hcop).mp ⟨h1,h2⟩\n  have h4 := h3\n  unfold Nat.ModEq at h4\n  rwa [Nat.mod_eq_of_lt hr1.1, Nat.mod_eq_of_lt hr2.1] at h4\n· intro b hb\n  simp only [Finset.mem_product] at hb\n  obtain ⟨a1, b1⟩ := b\n  have haP : a1 < p := Finset.mem_range.mp (hSp hb.1)\n  have hbM : b1 < M := Finset.mem_range.mp (hT hb.2)\n  have hka : (Nat.chineseRemainder hcop a1 b1 : ℕ) ≡ a1 [MOD p] := (Nat.chineseRemainder hcop a1 b1).prop.1\n  have hkb : (Nat.chineseRemainder hcop a1 b1 : ℕ) ≡ b1 [MOD M] := (Nat.chineseRemainder hcop a1 b1).prop.2\n  have hklt : (Nat.chineseRemainder hcop a1 b1 : ℕ) < p*M := Nat.chineseRemainder_lt_mul hcop a1 b1 hp.ne' hM.ne'\n  set k := (Nat.chineseRemainder hcop a1 b1 : ℕ) with hkeq\n  clear_value k\n  have hkp : k % p = a1 := by\n    have h5 := hka\n    unfold Nat.ModEq at h5\n    rw [Nat.mod_eq_of_lt haP] at h5\n    exact h5\n  have hkM : k % M = b1 := by\n    have h6 := hkb\n    unfold Nat.ModEq at h6\n    rw [Nat.mod_eq_of_lt hbM] at h6\n    exact h6\n  have hmemr : k ∈ (Finset.range (p*M)).filter (fun r => r%p ∈ Sp ∧ r%M ∈ T) := by\n    simp only [Finset.mem_filter, Finset.mem_range]\n    exact ⟨hklt, hkp ▸ hb.1, hkM ▸ hb.2⟩\n  refine ⟨k, hmemr, ?_⟩\n  simp only [Prod.mk.injEq]\n  exact ⟨hkp, hkM⟩",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (p M : ℕ), 0 < p → 0 < M → Nat.Coprime p M →\n  ∀ (Sp T : Finset ℕ), Sp ⊆ Finset.range p → T ⊆ Finset.range M →\n  ((Finset.range (p*M)).filter (fun r => r%p ∈ Sp ∧ r%M ∈ T)).card = Sp.card * T.card",
+        "module_source_hash": null,
+        "obligation_id": "b859888a-1581-4e8d-a059-e49fe1ca44cf",
+        "outcome": "kernel_pass",
+        "problem_version_id": "4d884823-ff12-42bb-9451-c9206f999afd",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "d4969a40fee0fdeb0005e45d52efc5aa992e243525b10e59321fb56abcaedc5e"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "0d52fccbcfbe7a27c066c131d277f7967ef89d3da64cba24abcbc358658e62e0"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

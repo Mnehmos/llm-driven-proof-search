@@ -1,0 +1,382 @@
+import Mathlib
+
+/-!
+# Erdős #647 — level-truncated optimal Selberg weight with coefficient bound
+
+Kernel-verified through the tracked proof-search pipeline on 2026-07-15.
+
+  problem_version_id  481f490b-672c-4b2a-9f08-f630a371c606
+  episode_id          445e255c-cc28-443c-bcf5-a883543784da
+  root_statement_hash 594f3cedfb630efcbde24cffbbd05b68bd9af857eddcd47430ffd7fd8fba0d78
+  outcome             kernel_verified (root_proved), first tracked attempt
+  environment_hash    9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d
+
+This strengthens the hard-truncated optimal-weight construction with
+  |w(d)| ≤ selbergTerms(d)/ν(d)
+on every divisor of prodPrimes. After reindexing l'=d·e, truncation leaves
+only a positive filtered cofactor sum. Since d·e≤R implies e≤R, that sum is
+at most L_R, so the untruncated pointwise estimate survives unchanged.
+-/
+
+theorem erdos647_selberg_optimal_weight_truncated_bound :
+    ∀ (s : SelbergSieve) (R : ℕ), 1 ≤ R → ∃ w : ℕ → ℝ, w 1 = 1 ∧
+      (∀ d, R < d → w d = 0) ∧
+      (∀ d ∈ s.prodPrimes.divisors, |w d| ≤ s.selbergTerms d / s.nu d) ∧
+      s.mainSum (BoundingSieve.lambdaSquared w) =
+        1 / (∑ l ∈ s.prodPrimes.divisors.filter (fun l => l ≤ R), s.selbergTerms l) := by
+  intro s R hR
+  set D := s.prodPrimes.divisors with hD_def
+  set E := D.filter (fun l => l ≤ R) with hE_def
+  set L := ∑ l ∈ E, s.selbergTerms l with hL_def
+  have h1mem : (1:ℕ) ∈ D := Nat.mem_divisors.mpr ⟨one_dvd _, s.prodPrimes_squarefree.ne_zero⟩
+  have h1memE : (1:ℕ) ∈ E := by simp [hE_def, h1mem, hR]
+  have hLpos : 0 < L := Finset.sum_pos
+    (fun l hl => s.selbergTerms_pos (Nat.dvd_of_mem_divisors (by
+      have hl_pair : l ∈ D ∧ l ≤ R := by simpa [hE_def] using hl
+      exact hl_pair.1))) ⟨1, h1memE⟩
+  set y : ℕ → ℝ := fun l => if l ∈ E then (ArithmeticFunction.moebius l : ℝ) * s.selbergTerms l / L else 0 with hy_def
+  have hmoebius_sq : ∀ l ∈ D, (ArithmeticFunction.moebius l : ℝ)^2 = 1 := by
+    intro l hl
+    have hsqfree : Squarefree l := BoundingSieve.squarefree_of_dvd_prodPrimes (Nat.dvd_of_mem_divisors hl)
+    rw [ArithmeticFunction.moebius_apply_of_squarefree hsqfree]
+    push_cast
+    rw [← pow_mul, mul_comm, pow_mul]
+    norm_num
+  have hswap : ∀ l ∈ D, (∑ d ∈ D, if l ∣ d then
+        (∑ l' ∈ D, if d ∣ l' then (ArithmeticFunction.moebius (l'/d) : ℝ) * y l' else 0) else 0) = y l := by
+    intro l hl
+    have hmi : ∀ m : ℕ, 0 < m → ∑ e ∈ m.divisors, (ArithmeticFunction.moebius e : ℝ) = if m = 1 then 1 else 0 := by
+      intro m hm
+      have h1 : (ArithmeticFunction.moebius * ArithmeticFunction.zeta : ArithmeticFunction ℝ) m = ∑ i ∈ m.divisors, (ArithmeticFunction.moebius i : ℝ) := ArithmeticFunction.coe_mul_zeta_apply
+      have h2 : (ArithmeticFunction.moebius * ArithmeticFunction.zeta : ArithmeticFunction ℝ) = 1 := ArithmeticFunction.coe_moebius_mul_coe_zeta
+      rw [h2, ArithmeticFunction.one_apply] at h1
+      exact h1.symm
+    have hNpos : 0 < s.prodPrimes := s.prodPrimes_squarefree.ne_zero.bot_lt
+    have hlpos : 0 < l := Nat.pos_of_mem_divisors hl
+    have hldvdN : l ∣ s.prodPrimes := Nat.dvd_of_mem_divisors hl
+    have hstep1 : (∑ d ∈ D, if l ∣ d then
+          (∑ l' ∈ D, if d ∣ l' then (ArithmeticFunction.moebius (l'/d) : ℝ) * y l' else 0) else 0)
+        = ∑ d ∈ D, ∑ l' ∈ D, (if l ∣ d ∧ d ∣ l' then (ArithmeticFunction.moebius (l'/d) : ℝ) * y l' else 0) := by
+      apply Finset.sum_congr rfl
+      intro d hd
+      by_cases hld : l ∣ d
+      · simp only [hld, if_true, true_and]
+      · rw [if_neg hld]
+        symm
+        apply Finset.sum_eq_zero
+        intro l' _
+        exact if_neg (fun h => hld h.1)
+    rw [hstep1, Finset.sum_comm]
+    have hstep2 : ∑ l' ∈ D, ∑ d ∈ D, (if l ∣ d ∧ d ∣ l' then (ArithmeticFunction.moebius (l'/d) : ℝ) * y l' else 0)
+        = ∑ l' ∈ D, (if l' = l then y l' else 0) := by
+      apply Finset.sum_congr rfl
+      intro l' hl'
+      have hl'pos : 0 < l' := Nat.pos_of_mem_divisors hl'
+      have hl'dvdN : l' ∣ s.prodPrimes := Nat.dvd_of_mem_divisors hl'
+      by_cases hll' : l ∣ l'
+      · obtain ⟨m, hm⟩ := hll'
+        have hmpos : 0 < m := by
+          rcases Nat.eq_zero_or_pos m with h0 | h0
+          · exfalso; rw [h0, mul_zero] at hm; omega
+          · exact h0
+        have hml' : m ∣ l' := ⟨l, by rw [hm]; ring⟩
+        have hfilter_eq : D.filter (fun d => l ∣ d ∧ d ∣ l') = l'.divisors.filter (fun d => l ∣ d) := by
+          ext d
+          simp only [hD_def, Finset.mem_filter, Nat.mem_divisors]
+          constructor
+          · rintro ⟨⟨_, _⟩, hld, hdl'⟩
+            exact ⟨⟨hdl', hl'pos.ne'⟩, hld⟩
+          · rintro ⟨⟨hdl', _⟩, hld⟩
+            exact ⟨⟨hdl'.trans hl'dvdN, s.prodPrimes_squarefree.ne_zero⟩, hld, hdl'⟩
+        have hbij : ∑ d ∈ D, (if l ∣ d ∧ d ∣ l' then (ArithmeticFunction.moebius (l'/d) : ℝ) * y l' else 0)
+            = ∑ e ∈ m.divisors, (ArithmeticFunction.moebius e : ℝ) * y l' := by
+          rw [← Finset.sum_filter, hfilter_eq]
+          apply Finset.sum_nbij' (fun x => l' / x) (fun x => l' / x)
+          · intro d hd
+            simp only [Finset.mem_filter, Nat.mem_divisors] at hd
+            obtain ⟨⟨hdl', _⟩, hld⟩ := hd
+            rw [Nat.mem_divisors]
+            refine ⟨?_, hmpos.ne'⟩
+            obtain ⟨e, he⟩ := hld
+            have hde : d * (l' / d) = l' := Nat.mul_div_cancel' hdl'
+            have heq1 : l * (e * (l' / d)) = l * m := by rw [← mul_assoc, ← he, hde, hm]
+            have hem : e * (l' / d) = m := Nat.eq_of_mul_eq_mul_left hlpos heq1
+            exact ⟨e, by rw [← hem]; ring⟩
+          · intro e he
+            simp only [Finset.mem_coe, Nat.mem_divisors] at he
+            simp only [Finset.mem_filter, Nat.mem_divisors]
+            obtain ⟨e', he'⟩ := he.1
+            have hepos : 0 < e := Nat.pos_of_dvd_of_pos he.1 hmpos
+            have hl'e : l' / e = l * e' := by
+              have hl'eq : l' = (l * e') * e := by rw [hm, he']; ring
+              rw [hl'eq, Nat.mul_div_cancel _ hepos]
+            refine ⟨⟨⟨e, by rw [hl'e, hm, he']; ring⟩, hl'pos.ne'⟩, ⟨e', hl'e⟩⟩
+          · intro d hd
+            simp only [Finset.mem_filter, Nat.mem_divisors] at hd
+            obtain ⟨⟨hdl', _⟩, _⟩ := hd
+            have hdpos : 0 < d := Nat.pos_of_dvd_of_pos hdl' hl'pos
+            have hde : (l' / d) * d = l' := Nat.div_mul_cancel hdl'
+            have hddpos : 0 < l' / d := Nat.div_pos (Nat.le_of_dvd hl'pos hdl') hdpos
+            nth_rewrite 1 [show l' = (l'/d) * d from hde.symm]
+            exact Nat.mul_div_cancel_left d hddpos
+          · intro e he
+            simp only [Finset.mem_coe, Nat.mem_divisors] at he
+            have hel' : e ∣ l' := he.1.trans hml'
+            have hepos : 0 < e := Nat.pos_of_dvd_of_pos he.1 hmpos
+            have hde : (l' / e) * e = l' := Nat.div_mul_cancel hel'
+            have hdepos : 0 < l' / e := Nat.div_pos (Nat.le_of_dvd hl'pos hel') hepos
+            nth_rewrite 1 [show l' = (l'/e) * e from hde.symm]
+            exact Nat.mul_div_cancel_left e hdepos
+          · intro d _
+            rfl
+        rw [hbij, ← Finset.sum_mul, hmi m hmpos]
+        have hiff : m = 1 ↔ l' = l := by
+          constructor
+          · intro h1; rw [hm, h1, mul_one]
+          · intro h2
+            have heq2 : l * m = l * 1 := by rw [← hm, h2, mul_one]
+            exact Nat.eq_of_mul_eq_mul_left hlpos heq2
+        simp only [hiff]
+        by_cases hcond : l' = l
+        · simp [hcond]
+        · simp [hcond]
+      · have hzero : ∀ d ∈ D, (if l ∣ d ∧ d ∣ l' then (ArithmeticFunction.moebius (l'/d) : ℝ) * y l' else 0) = 0 := by
+          intro d hd
+          rw [if_neg]
+          intro hc
+          exact hll' (hc.1.trans hc.2)
+        rw [Finset.sum_congr rfl hzero, Finset.sum_const_zero, if_neg]
+        intro heq
+        exact hll' (heq ▸ dvd_refl l)
+    rw [hstep2, Finset.sum_ite_eq' D l y]
+    simp [hl]
+  set w : ℕ → ℝ := fun d => if d ∈ D then
+      (∑ l' ∈ D, if d ∣ l' then (ArithmeticFunction.moebius (l'/d) : ℝ) * y l' else 0) / s.nu d
+    else 0 with hw_def
+  have hinv : ∀ l ∈ D, (∑ d ∈ D, if l ∣ d then s.nu d * w d else 0) = y l := by
+    intro l hl
+    rw [← hswap l hl]
+    apply Finset.sum_congr rfl
+    intro d hd
+    by_cases hld : l ∣ d
+    · simp only [hld, if_true]
+      rw [hw_def]
+      simp only [hd, if_true]
+      rw [mul_div_cancel₀]
+      exact s.nu_ne_zero (Nat.dvd_of_mem_divisors hd)
+    · simp [hld]
+  refine ⟨w, ?_, ?_, ?_, ?_⟩
+  · have hw1 : w 1 = (∑ l' ∈ D, if (1:ℕ) ∣ l' then (ArithmeticFunction.moebius (l'/1) : ℝ) * y l' else 0) / s.nu 1 := by
+      rw [hw_def]; simp [h1mem]
+    rw [hw1, s.nu_mult.map_one]
+    have hsum1 : (∑ l' ∈ D, if (1:ℕ) ∣ l' then (ArithmeticFunction.moebius (l'/1) : ℝ) * y l' else 0) = 1 := by
+      have heq : ∀ l' ∈ D, (if (1:ℕ) ∣ l' then (ArithmeticFunction.moebius (l'/1) : ℝ) * y l' else 0) =
+          if l' ∈ E then s.selbergTerms l' / L else 0 := by
+        intro l' hl'
+        simp only [one_dvd, if_true, Nat.div_one]
+        by_cases hl'E : l' ∈ E
+        · rw [hy_def]
+          simp only [hl'E, if_true]
+          have hsq := hmoebius_sq l' hl'
+          have hTpos := s.selbergTerms_pos (Nat.dvd_of_mem_divisors hl')
+          field_simp
+          nlinarith [hsq]
+        · simp [hy_def, hl'E]
+      rw [Finset.sum_congr rfl heq, ← Finset.sum_filter]
+      have hfilter : D.filter (fun l => l ∈ E) = E := by
+        ext l
+        simp [hE_def]
+      rw [hfilter, ← Finset.sum_div, ← hL_def, div_self hLpos.ne']
+    rw [hsum1]; norm_num
+  · intro d hdR
+    rw [hw_def]
+    by_cases hdD : d ∈ D
+    · simp only [hdD, if_true]
+      have hzero : (∑ l' ∈ D, if d ∣ l' then
+          (ArithmeticFunction.moebius (l'/d) : ℝ) * y l' else 0) = 0 := by
+        apply Finset.sum_eq_zero
+        intro l' hl'
+        by_cases hdl : d ∣ l'
+        · have hl'E : l' ∉ E := by
+            intro hl'E
+            have hl'_pair : l' ∈ D ∧ l' ≤ R := by simpa [hE_def] using hl'E
+            have hl'R : l' ≤ R := hl'_pair.2
+            have hdl_le : d ≤ l' := Nat.le_of_dvd (Nat.pos_of_mem_divisors hl') hdl
+            omega
+          simp [hdl, hy_def, hl'E]
+        · simp [hdl]
+      rw [hzero, zero_div]
+    · simp [hdD]
+  · intro d hd
+    have hdpos : 0 < d := Nat.pos_of_mem_divisors hd
+    have hdvdN : d ∣ s.prodPrimes := Nat.dvd_of_mem_divisors hd
+    have hNne0 : s.prodPrimes ≠ 0 := s.prodPrimes_squarefree.ne_zero
+    have hnudpos : 0 < s.nu d := BoundingSieve.nu_pos_of_dvd_prodPrimes hdvdN
+    have hTdpos : 0 < s.selbergTerms d := s.selbergTerms_pos hdvdN
+    have hNd : d * (s.prodPrimes/d) = s.prodPrimes := Nat.mul_div_cancel' hdvdN
+    have hcofactor_dvd : (s.prodPrimes/d) ∣ s.prodPrimes :=
+      ⟨d, (Nat.div_mul_cancel hdvdN).symm⟩
+    have hgeneral_reindex : ∀ (N dd : ℕ), 0 < dd → dd ∣ N → N ≠ 0 → ∀ (f : ℕ → ℝ),
+        (∑ l' ∈ N.divisors, if dd ∣ l' then f l' else 0) =
+          ∑ e ∈ (N/dd).divisors, f (dd*e) := by
+      intro N dd hdd hdvd hN f
+      have hNd' : dd * (N/dd) = N := Nat.mul_div_cancel' hdvd
+      rw [← Finset.sum_filter]
+      apply Finset.sum_nbij' (fun l' => l'/dd) (fun e => dd*e)
+      · intro l' hl'
+        simp only [Finset.mem_filter, Nat.mem_divisors] at hl'
+        obtain ⟨⟨hl'dvd, _⟩, hdl'⟩ := hl'
+        simp only [Nat.mem_divisors]
+        obtain ⟨e, he⟩ := hdl'
+        refine ⟨?_, ?_⟩
+        · rw [he]
+          have hstep : dd * e ∣ dd * (N/dd) := by rw [hNd', ← he]; exact hl'dvd
+          have he2 : e ∣ N/dd := (mul_dvd_mul_iff_left hdd.ne').mp hstep
+          rw [Nat.mul_div_cancel_left e hdd]
+          exact he2
+        · intro hcontra
+          apply hN
+          rw [← hNd', hcontra, mul_zero]
+      · intro e he
+        simp only [Nat.mem_divisors] at he
+        simp only [Finset.mem_filter, Nat.mem_divisors]
+        obtain ⟨he1, he2⟩ := he
+        refine ⟨⟨?_, hN⟩, ?_⟩
+        · obtain ⟨f2, hf2⟩ := he1
+          refine ⟨f2, ?_⟩
+          rw [← hNd', hf2]
+          ring
+        · exact Dvd.intro e rfl
+      · intro l' hl'
+        simp only [Finset.mem_filter, Nat.mem_divisors] at hl'
+        obtain ⟨⟨_, _⟩, hdl'⟩ := hl'
+        obtain ⟨e, he⟩ := hdl'
+        rw [he, Nat.mul_div_cancel_left e hdd]
+      · intro e he
+        simp only [Nat.mem_divisors] at he
+        rw [Nat.mul_div_cancel_left e hdd]
+      · intro l' hl'
+        simp only [Finset.mem_filter, Nat.mem_divisors] at hl'
+        obtain ⟨⟨_, _⟩, hdl'⟩ := hl'
+        obtain ⟨e, he⟩ := hdl'
+        rw [he, Nat.mul_div_cancel_left e hdd]
+    have hreindex := hgeneral_reindex s.prodPrimes d hdpos hdvdN hNne0
+      (fun l' => (ArithmeticFunction.moebius (l'/d) : ℝ) * y l')
+    have hdsqfree : Squarefree d :=
+      Squarefree.squarefree_of_dvd hdvdN s.prodPrimes_squarefree
+    have hmoebius_sq_d : (ArithmeticFunction.moebius d : ℝ)^2 = 1 := by
+      rw [ArithmeticFunction.moebius_apply_of_squarefree hdsqfree]
+      push_cast
+      rw [← pow_mul, mul_comm, pow_mul]
+      norm_num
+    have hmoebius_abs_d : |(ArithmeticFunction.moebius d : ℝ)| = 1 := by
+      nlinarith [sq_abs (ArithmeticFunction.moebius d : ℝ), hmoebius_sq_d,
+        abs_nonneg (ArithmeticFunction.moebius d : ℝ)]
+    have hstep2 : (∑ e ∈ (s.prodPrimes/d).divisors,
+        (ArithmeticFunction.moebius ((d*e)/d) : ℝ) * y (d*e)) =
+        (ArithmeticFunction.moebius d : ℝ) * (s.selbergTerms d / L) *
+          (∑ e ∈ (s.prodPrimes/d).divisors,
+            if d*e ∈ E then s.selbergTerms e else 0) := by
+      have hterm : ∀ e ∈ (s.prodPrimes/d).divisors,
+          (ArithmeticFunction.moebius ((d*e)/d) : ℝ) * y (d*e) =
+          (ArithmeticFunction.moebius d : ℝ) * (s.selbergTerms d / L) *
+            (if d*e ∈ E then s.selbergTerms e else 0) := by
+        intro e he
+        by_cases hdeE : d*e ∈ E
+        · rw [show y (d*e) = (ArithmeticFunction.moebius (d*e) : ℝ) *
+              s.selbergTerms (d*e) / L from by rw [hy_def]; simp [hdeE]]
+          rw [if_pos hdeE]
+          rw [Nat.mem_divisors] at he
+          have hedvdN : e ∣ s.prodPrimes := he.1.trans hcofactor_dvd
+          have hdesqfree : Squarefree (d*e) := by
+            apply Squarefree.squarefree_of_dvd _ s.prodPrimes_squarefree
+            obtain ⟨f2, hf2⟩ := he.1
+            exact ⟨f2, by rw [← hNd, hf2]; ring⟩
+          have hcop : Nat.Coprime d e := Nat.coprime_of_squarefree_mul hdesqfree
+          have hesqfree : Squarefree e :=
+            Squarefree.squarefree_of_dvd hedvdN s.prodPrimes_squarefree
+          have hmoebius_sq_e : (ArithmeticFunction.moebius e : ℝ)^2 = 1 := by
+            rw [ArithmeticFunction.moebius_apply_of_squarefree hesqfree]
+            push_cast
+            rw [← pow_mul, mul_comm, pow_mul]
+            norm_num
+          rw [Nat.mul_div_cancel_left e hdpos,
+            s.selbergTerms_isMultiplicative.map_mul_of_coprime hcop]
+          have hmoebius_mul : (ArithmeticFunction.moebius (d*e) : ℝ) =
+              (ArithmeticFunction.moebius d : ℝ) *
+                (ArithmeticFunction.moebius e : ℝ) := by
+            have hmm := ArithmeticFunction.isMultiplicative_moebius.map_mul_of_coprime hcop
+            exact_mod_cast hmm
+          rw [hmoebius_mul]
+          have hesq : (ArithmeticFunction.moebius e:ℝ) *
+              (ArithmeticFunction.moebius e:ℝ) = 1 := by
+            rw [← sq]
+            exact hmoebius_sq_e
+          calc
+            (ArithmeticFunction.moebius e:ℝ) *
+                ((ArithmeticFunction.moebius d:ℝ) *
+                  (ArithmeticFunction.moebius e:ℝ) *
+                  (s.selbergTerms d * s.selbergTerms e) / L) =
+                ((ArithmeticFunction.moebius e:ℝ) *
+                  (ArithmeticFunction.moebius e:ℝ)) *
+                  (ArithmeticFunction.moebius d:ℝ) *
+                  (s.selbergTerms d * s.selbergTerms e) / L := by ring
+            _ = 1 * (ArithmeticFunction.moebius d:ℝ) *
+                  (s.selbergTerms d * s.selbergTerms e) / L := by rw [hesq]
+            _ = (ArithmeticFunction.moebius d:ℝ) *
+                  (s.selbergTerms d / L) * s.selbergTerms e := by ring
+        · rw [show y (d*e) = 0 from by rw [hy_def]; simp [hdeE]]
+          simp [hdeE]
+      rw [Finset.sum_congr rfl hterm, ← Finset.mul_sum]
+    have hbound_sum : (∑ e ∈ (s.prodPrimes/d).divisors,
+        if d*e ∈ E then s.selbergTerms e else 0) ≤ L := by
+      rw [← Finset.sum_filter, hL_def]
+      apply Finset.sum_le_sum_of_subset_of_nonneg
+      · intro e he
+        simp only [Finset.mem_filter] at he
+        have hediv : e ∣ s.prodPrimes :=
+          (Nat.dvd_of_mem_divisors he.1).trans hcofactor_dvd
+        have heD : e ∈ D := Nat.mem_divisors.mpr ⟨hediv, hNne0⟩
+        have hde_pair : d*e ∈ D ∧ d*e ≤ R := by
+          simpa [hE_def] using he.2
+        have hele : e ≤ d*e := Nat.le_mul_of_pos_left e hdpos
+        simp only [hE_def, Finset.mem_filter]
+        exact ⟨heD, hele.trans hde_pair.2⟩
+      · intro e he _
+        exact le_of_lt (s.selbergTerms_pos (Nat.dvd_of_mem_divisors
+          (by have hpair : e ∈ D ∧ e ≤ R := by simpa [hE_def] using he
+              exact hpair.1)))
+    have hsum_nonneg : 0 ≤ (∑ e ∈ (s.prodPrimes/d).divisors,
+        if d*e ∈ E then s.selbergTerms e else 0) :=
+      Finset.sum_nonneg (fun e he => by
+        split_ifs
+        · exact le_of_lt (s.selbergTerms_pos
+            ((Nat.dvd_of_mem_divisors he).trans hcofactor_dvd))
+        · exact le_rfl)
+    rw [hw_def]
+    simp only [hd, if_true]
+    rw [hreindex, hstep2]
+    rw [abs_div, abs_of_pos hnudpos]
+    gcongr
+    rw [mul_assoc, abs_mul, hmoebius_abs_d, one_mul,
+      abs_of_nonneg (mul_nonneg (le_of_lt (div_pos hTdpos hLpos)) hsum_nonneg)]
+    rw [div_mul_eq_mul_div, div_le_iff₀ hLpos]
+    nlinarith [hbound_sum, hTdpos]
+  · rw [s.mainSum_lambdaSquared_eq_sum_mul_sum_sq w]
+    have hstep : ∀ l ∈ D, (s.selbergTerms l)⁻¹ * (∑ d ∈ D, if l ∣ d then s.nu d * w d else 0)^2
+        = if l ∈ E then s.selbergTerms l / L^2 else 0 := by
+      intro l hl
+      rw [hinv l hl, hy_def]
+      by_cases hlE : l ∈ E
+      · simp only [hlE, if_true]
+        have hsq := hmoebius_sq l hl
+        have hTpos := s.selbergTerms_pos (Nat.dvd_of_mem_divisors hl)
+        field_simp
+        nlinarith [hsq, hTpos]
+      · simp [hlE]
+    rw [Finset.sum_congr rfl hstep, ← Finset.sum_filter]
+    have hfilter : D.filter (fun l => l ∈ E) = E := by
+      ext l
+      simp [hE_def]
+    rw [hfilter, ← Finset.sum_div, ← hL_def]
+    rw [pow_two, ← div_div, div_self hLpos.ne', one_div]

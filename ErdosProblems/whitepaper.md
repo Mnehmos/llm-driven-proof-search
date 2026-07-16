@@ -53,14 +53,15 @@ the same thing.
 | [erdos-399/](erdos-399/whitepaper.md) | [#399](https://www.erdosproblems.com/399) — `n! = xᵏ ± yᵏ` solvable? **Resolved (Barfield, not by us).** | Not the headline. Cambie's **already-known companion**: `n! ≠ x⁴ + y⁴` for coprime `x,y` with `xy>1`, via a mod-8 fourth-power argument. Corpus ships it `sorry`; kernel-verified here. |
 | [erdos-1113/](erdos-1113/whitepaper.md) | [#1113](https://www.erdosproblems.com/1113) — Sierpiński numbers with no finite covering set? **Open.** | Not the open question. The classical **solved companion** (Sierpiński 1960): there are **infinitely many Sierpiński numbers**, via Selfridge's `{3,5,7,13,19,37,73}` covering generalized across `k ≡ 78557 (mod M)`. Corpus ships it `sorry`; kernel-verified here with **pure `decide`** (no `native_decide` — stronger than the corpus's own `selfridge_78557`). |
 | [erdos-494/](erdos-494/whitepaper.md) | [#494](https://www.erdosproblems.com/494) — is a set determined by its `k`-subset sums? | The **product** analogue is **false** (Steinerberger): distinct `A, B ⊆ ℂ`, same card, same multiset of 3-subset products — witness `A = {1,ω,ω²,2}`, `B = ω·A`, `ω³=1`. Corpus ships it `sorry`; kernel-verified here. |
-| [erdos-647/](erdos-647/README.md) | [#647](https://www.erdosproblems.com/647) — is there `n>24` with `max_{m<n}(m+τ(m)) ≤ n+2`? **Open.** | Not #647 itself — a **living campaign folder** (~110 kernel-verified theorems, growing). Independent replication of the Hughes/Idén/Kitamura 41-class modular reduction via a tighter 48-survivor sieve, every row *proven* from classification theorems; 48 novel sub-AP closures (frozen: the all-avoid obstruction proves congruence trees can't finish); the **first machine-checked proof of Hughes's Theorem 2** (every candidate lies in one of two 4-prime constellations); and an active Selberg-sieve density-bound program, first brick (an exact Mertens identity for `∑1/p` via Chebyshev θ) kernel-verified. |
+| [erdos-647/](erdos-647/README.md) | [#647](https://www.erdosproblems.com/647) — is there `n>24` with `max_{m<n}(m+τ(m)) ≤ n+2`? **Open.** | The existence question remains open, but the effective global density theorem `|C(X)|≤KX/(log X)^7` is now kernel-verified. The folder also contains an independent 41-class modular replication, 48 novel sub-AP closures, the first machine-checked proof of Hughes's Theorem 2, an explicit repair of missing Selberg level truncation, 100 Lean files with 216 theorem declarations, and complete exports for 210 related episodes (203 kernel-verified; seven retained non-success histories). |
 
-**In short: seven infra/companion-lemma wins (#1, #1052, #349, #291, #399, #1113,
-#494), zero Erdős problems closed, one genuine sub-characterization fully assembled (#349's
-integer case: `integer_isGoodPair_iff`, all four pieces plus the final iff,
-kernel-verified end to end), and one living open-problem campaign (#647:
-frontier replicated + first formalization of its Theorem 2; the problem
-itself remains open).** If an open question is ever actually closed here, it
+**In short: seven infra/companion-lemma wins (#1, #1052, #349, #291, #399,
+#1113, #494), zero Erdős problems closed, one genuine sub-characterization
+fully assembled (#349's integer case), and one open-problem campaign (#647)
+that now includes both the replicated frontier/first formalization of its
+Theorem 2 and a complete kernel-verified seventh-power density theorem. The
+#647 existence question itself remains open.** If an open question is ever
+actually closed here, it
 will say so explicitly, in a table row of its own, not folded into this one.
 
 ## Cross-problem method: calibrate, then produce, then attack

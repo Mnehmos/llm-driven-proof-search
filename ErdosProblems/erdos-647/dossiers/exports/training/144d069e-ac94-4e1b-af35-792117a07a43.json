@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro w R hw d hd\nunfold BoundingSieve.lambdaSquared\napply Finset.sum_eq_zero\nintro d1 hd1\napply Finset.sum_eq_zero\nintro d2 hd2\nsplit_ifs with hlcm\n· by_cases h1 : R < d1\n  · rw [hw d1 h1, zero_mul]\n  · by_cases h2 : R < d2\n    · rw [hw d2 h2, mul_zero]\n    · exfalso\n      push_neg at h1 h2\n      have hd1pos : 0 < d1 := Nat.pos_of_mem_divisors hd1\n      have hd2pos : 0 < d2 := Nat.pos_of_mem_divisors hd2\n      have hle : Nat.lcm d1 d2 ≤ d1 * d2 := Nat.le_of_dvd (Nat.mul_pos hd1pos hd2pos) (Nat.lcm_dvd_mul d1 d2)\n      rw [hlcm] at hd\n      have hprod_le : d1 * d2 ≤ R * R := Nat.mul_le_mul h1 h2\n      omega\n· rfl",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro w R hw d hd\nunfold BoundingSieve.lambdaSquared\napply Finset.sum_eq_zero\nintro d1 hd1\napply Finset.sum_eq_zero\nintro d2 hd2\nsplit_ifs with hlcm\n· by_cases h1 : R < d1\n  · rw [hw d1 h1, zero_mul]\n  · by_cases h2 : R < d2\n    · rw [hw d2 h2, mul_zero]\n    · exfalso\n      push_neg at h1 h2\n      have hd1pos : 0 < d1 := Nat.pos_of_mem_divisors hd1\n      have hd2pos : 0 < d2 := Nat.pos_of_mem_divisors hd2\n      have hle : Nat.lcm d1 d2 ≤ d1 * d2 := Nat.le_of_dvd (Nat.mul_pos hd1pos hd2pos) (Nat.lcm_dvd_mul d1 d2)\n      rw [hlcm] at hd\n      have hprod_le : d1 * d2 ≤ R * R := Nat.mul_le_mul h1 h2\n      omega\n· rfl",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (w : ℕ → ℝ) (R : ℕ), (∀ d, R < d → w d = 0) → ∀ d, R*R < d → BoundingSieve.lambdaSquared w d = 0",
+        "module_source_hash": null,
+        "obligation_id": "1003ac81-7a7a-4202-bb84-78d0b59135d9",
+        "outcome": "kernel_pass",
+        "problem_version_id": "271ee635-46fc-4c1f-b132-e7ee9324a69f",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "fb2fd0c5dbf934219efaec5330a7413092a8df0ee1270d8cb7b18a8083a74fe3"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "0c3c4b93deabe7717880d6a215ae64ba9fa709c89428a0822ccde74f688794f8"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

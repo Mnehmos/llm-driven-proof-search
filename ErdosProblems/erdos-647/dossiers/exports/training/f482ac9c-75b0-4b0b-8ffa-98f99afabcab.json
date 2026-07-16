@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro t\ninduction t using Finset.induction_on with\n| empty => intro f; simp\n| @insert p t' hp_notin ih =>\n  intro hp_all f\n  have hp_prime : p.Prime := hp_all p (Finset.mem_insert_self p t')\n  have ht'_prime : ∀ q ∈ t', q.Prime := fun q hq => hp_all q (Finset.mem_insert_of_mem hq)\n  have hM_pos : 0 < ∏ q ∈ t', q := Finset.prod_pos (fun q hq => (ht'_prime q hq).pos)\n  have hcop : Nat.Coprime p (∏ q ∈ t', q) := by\n    apply Nat.Coprime.prod_right\n    intro q hq\n    rw [Nat.coprime_primes hp_prime (ht'_prime q hq)]\n    intro heq; exact hp_notin (heq ▸ hq)\n  conv_lhs => rw [Finset.prod_insert hp_notin]\n  conv_rhs => rw [Finset.prod_insert hp_notin]\n  rw [← ih ht'_prime f]\n  have hMne0 : (∏ q ∈ t', q) ≠ 0 := hM_pos.ne'\n  have hpMne0 : (p * ∏ q ∈ t', q) ≠ 0 := Nat.mul_ne_zero hp_prime.pos.ne' hMne0\n  have hsplit : (p * ∏ q ∈ t', q).divisors = (∏ q ∈ t', q).divisors ∪ (∏ q ∈ t', q).divisors.image (fun b => p*b) := by\n    ext d1\n    simp only [Finset.mem_union, Finset.mem_image, Nat.mem_divisors]\n    constructor\n    · rintro ⟨hdvd, _⟩\n      by_cases hpd : p ∣ d1\n      · obtain ⟨e, he⟩ := hpd\n        right\n        refine ⟨e, ⟨?_, hMne0⟩, he.symm⟩\n        rw [he] at hdvd\n        exact (mul_dvd_mul_iff_left hp_prime.pos.ne').mp hdvd\n      · left\n        refine ⟨?_, hMne0⟩\n        have hcop2 : Nat.Coprime d1 p := ((Nat.Prime.coprime_iff_not_dvd hp_prime).mpr hpd).symm\n        exact (Nat.Coprime.dvd_of_dvd_mul_left hcop2 hdvd)\n    · rintro (⟨hdvd, _⟩ | ⟨e, ⟨he, _⟩, heq⟩)\n      · exact ⟨hdvd.trans ⟨p, by ring⟩, hpMne0⟩\n      · rw [← heq]\n        exact ⟨mul_dvd_mul_left p he, hpMne0⟩\n  rw [hsplit]\n  have hdisj : Disjoint ((∏ q ∈ t', q).divisors) ((∏ q ∈ t', q).divisors.image (fun b => p*b)) := by\n    apply Finset.disjoint_left.mpr\n    intro a ha1 ha2\n    simp only [Finset.mem_image] at ha2\n    obtain ⟨e, he, heq⟩ := ha2\n    have haM : a ∣ (∏ q ∈ t', q) := Nat.dvd_of_mem_divisors ha1\n    have hpa : p ∣ a := by rw [← heq]; exact Dvd.intro e rfl\n    have hpM : p ∣ (∏ q ∈ t', q) := hpa.trans haM\n    exact absurd (Nat.eq_one_of_dvd_coprimes hcop (dvd_refl p) hpM) hp_prime.ne_one\n  rw [Finset.sum_union hdisj]\n  have hstep2 : ∑ b ∈ (∏ q ∈ t', q).divisors.image (fun b => p*b), ∏ p_1 ∈ b.primeFactors, f p_1\n      = f p * ∑ b ∈ (∏ q ∈ t', q).divisors, ∏ p_1 ∈ b.primeFactors, f p_1 := by\n    rw [Finset.mul_sum]\n    rw [Finset.sum_image]\n    · apply Finset.sum_congr rfl\n      intro b hb\n      have hbM : b ∣ (∏ q ∈ t', q) := Nat.dvd_of_mem_divisors hb\n      have hcopb : Nat.Coprime p b := hcop.coprime_dvd_right hbM\n      have hbne0 : b ≠ 0 := by\n        intro hb0; rw [hb0] at hbM; exact hMne0 (Nat.eq_zero_of_zero_dvd hbM)\n      have hpb_pf : (p * b).primeFactors = insert p b.primeFactors := by\n        rw [Nat.primeFactors_mul hp_prime.ne_zero hbne0, Nat.Prime.primeFactors hp_prime]\n        rfl\n      rw [hpb_pf]\n      rw [Finset.prod_insert]\n      intro hpmem\n      have : p ∣ b := Nat.dvd_of_mem_primeFactors hpmem\n      exact absurd (Nat.eq_one_of_dvd_coprimes hcopb (dvd_refl p) this) hp_prime.ne_one\n    · intro a1 ha1 a2 ha2 heq\n      exact Nat.eq_of_mul_eq_mul_left hp_prime.pos heq\n  rw [hstep2]\n  ring",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro t\ninduction t using Finset.induction_on with\n| empty => intro f; simp\n| @insert p t' hp_notin ih =>\n  intro hp_all f\n  have hp_prime : p.Prime := hp_all p (Finset.mem_insert_self p t')\n  have ht'_prime : ∀ q ∈ t', q.Prime := fun q hq => hp_all q (Finset.mem_insert_of_mem hq)\n  have hM_pos : 0 < ∏ q ∈ t', q := Finset.prod_pos (fun q hq => (ht'_prime q hq).pos)\n  have hcop : Nat.Coprime p (∏ q ∈ t', q) := by\n    apply Nat.Coprime.prod_right\n    intro q hq\n    rw [Nat.coprime_primes hp_prime (ht'_prime q hq)]\n    intro heq; exact hp_notin (heq ▸ hq)\n  conv_lhs => rw [Finset.prod_insert hp_notin]\n  conv_rhs => rw [Finset.prod_insert hp_notin]\n  rw [← ih ht'_prime f]\n  have hMne0 : (∏ q ∈ t', q) ≠ 0 := hM_pos.ne'\n  have hpMne0 : (p * ∏ q ∈ t', q) ≠ 0 := Nat.mul_ne_zero hp_prime.pos.ne' hMne0\n  have hsplit : (p * ∏ q ∈ t', q).divisors = (∏ q ∈ t', q).divisors ∪ (∏ q ∈ t', q).divisors.image (fun b => p*b) := by\n    ext d1\n    simp only [Finset.mem_union, Finset.mem_image, Nat.mem_divisors]\n    constructor\n    · rintro ⟨hdvd, _⟩\n      by_cases hpd : p ∣ d1\n      · obtain ⟨e, he⟩ := hpd\n        right\n        refine ⟨e, ⟨?_, hMne0⟩, he.symm⟩\n        rw [he] at hdvd\n        exact (mul_dvd_mul_iff_left hp_prime.pos.ne').mp hdvd\n      · left\n        refine ⟨?_, hMne0⟩\n        have hcop2 : Nat.Coprime d1 p := ((Nat.Prime.coprime_iff_not_dvd hp_prime).mpr hpd).symm\n        exact (Nat.Coprime.dvd_of_dvd_mul_left hcop2 hdvd)\n    · rintro (⟨hdvd, _⟩ | ⟨e, ⟨he, _⟩, heq⟩)\n      · exact ⟨hdvd.trans ⟨p, by ring⟩, hpMne0⟩\n      · rw [← heq]\n        exact ⟨mul_dvd_mul_left p he, hpMne0⟩\n  rw [hsplit]\n  have hdisj : Disjoint ((∏ q ∈ t', q).divisors) ((∏ q ∈ t', q).divisors.image (fun b => p*b)) := by\n    apply Finset.disjoint_left.mpr\n    intro a ha1 ha2\n    simp only [Finset.mem_image] at ha2\n    obtain ⟨e, he, heq⟩ := ha2\n    have haM : a ∣ (∏ q ∈ t', q) := Nat.dvd_of_mem_divisors ha1\n    have hpa : p ∣ a := by rw [← heq]; exact Dvd.intro e rfl\n    have hpM : p ∣ (∏ q ∈ t', q) := hpa.trans haM\n    exact absurd (Nat.eq_one_of_dvd_coprimes hcop (dvd_refl p) hpM) hp_prime.ne_one\n  rw [Finset.sum_union hdisj]\n  have hstep2 : ∑ b ∈ (∏ q ∈ t', q).divisors.image (fun b => p*b), ∏ p_1 ∈ b.primeFactors, f p_1\n      = f p * ∑ b ∈ (∏ q ∈ t', q).divisors, ∏ p_1 ∈ b.primeFactors, f p_1 := by\n    rw [Finset.mul_sum]\n    rw [Finset.sum_image]\n    · apply Finset.sum_congr rfl\n      intro b hb\n      have hbM : b ∣ (∏ q ∈ t', q) := Nat.dvd_of_mem_divisors hb\n      have hcopb : Nat.Coprime p b := hcop.coprime_dvd_right hbM\n      have hbne0 : b ≠ 0 := by\n        intro hb0; rw [hb0] at hbM; exact hMne0 (Nat.eq_zero_of_zero_dvd hbM)\n      have hpb_pf : (p * b).primeFactors = insert p b.primeFactors := by\n        rw [Nat.primeFactors_mul hp_prime.ne_zero hbne0, Nat.Prime.primeFactors hp_prime]\n        rfl\n      rw [hpb_pf]\n      rw [Finset.prod_insert]\n      intro hpmem\n      have : p ∣ b := Nat.dvd_of_mem_primeFactors hpmem\n      exact absurd (Nat.eq_one_of_dvd_coprimes hcopb (dvd_refl p) this) hp_prime.ne_one\n    · intro a1 ha1 a2 ha2 heq\n      exact Nat.eq_of_mul_eq_mul_left hp_prime.pos heq\n  rw [hstep2]\n  ring",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (t : Finset ℕ), (∀ p ∈ t, p.Prime) → ∀ (f : ℕ → ℝ),\n  ∑ d1 ∈ (∏ p ∈ t, p).divisors, ∏ p ∈ d1.primeFactors, f p = ∏ p ∈ t, (1 + f p)",
+        "module_source_hash": null,
+        "obligation_id": "3ab84ed2-3e81-4292-84bd-18215d2a7061",
+        "outcome": "kernel_pass",
+        "problem_version_id": "d7690fb9-b7a6-433d-8163-5ea7d18e9ad9",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "af16bc5cdc5f108e76871b628ae7b5341393a9440c81684a8ec5b37d0993c5e9"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "98e5a1544e7179cc931c1440963b4b8ceed1170873201eb07bd2adecfc994031"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

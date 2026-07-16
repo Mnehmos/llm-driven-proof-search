@@ -1,0 +1,31 @@
+{
+  "benchmark_suite": null,
+  "benchmark_upstream_problem_id": null,
+  "certified": false,
+  "completed_at": null,
+  "created_at": "2026-07-13T12:40:31.733096500+00:00",
+  "environment_hash": "9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d",
+  "episode_id": "6421d973-b765-49ad-92ca-9e2e39d88dd9",
+  "fidelity_basis": null,
+  "fidelity_status": "attested",
+  "formal_target_matched": false,
+  "import_manifest_hash": "409c28561ce51f049ff6d835330b5f8d9a9b1c943db488280748901a8181d3b7",
+  "interactive_sessions": {
+    "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
+    "proof_body_redacted": true,
+    "session_count": 0,
+    "sessions": []
+  },
+  "kernel_verified": false,
+  "mode": "public_summary",
+  "obligation_counts_by_status": {
+    "open": 1
+  },
+  "outcome": "IN_PROGRESS",
+  "proof_body_redacted": true,
+  "root_formal_statement": "∀ n N : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → N % 1986127 = 9009 → False",
+  "step_count": 2,
+  "trajectory_event_count": 4,
+  "trajectory_first_hash": "bdcdab9aef546e0aa67b500837586fb19000c8eb893cf662cd3db6521383ce98",
+  "trajectory_last_hash": "71a4aae93e935538c333fc7b6fc6b3d5ea9cb973ac129b5d56b6d66cec151a6d"
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro d r X hd hr\nby_cases hr0 : r = 0\n· right; exact hr0\n· left\n  have hr1 : 1 ≤ r := Nat.one_le_iff_ne_zero.mpr hr0\n  have hsub : (Finset.range (X/d)).image (fun k => r + k*d) ⊆ (Finset.Icc 1 X).filter (fun N => N % d = r) := by\n    intro N hN\n    simp only [Finset.mem_image, Finset.mem_range] at hN\n    obtain ⟨k, hk, hNeq⟩ := hN\n    have hexp : (k+1)*d = k*d + d := by ring\n    have h2 : (k+1)*d ≤ X := by\n      calc (k+1)*d ≤ (X/d)*d := Nat.mul_le_mul_right d (by omega)\n        _ ≤ X := Nat.div_mul_le_self X d\n    simp only [Finset.mem_filter, Finset.mem_Icc]\n    refine ⟨⟨by omega, by omega⟩, ?_⟩\n    rw [← hNeq, Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt hr]\n  have hcardimg : ((Finset.range (X/d)).image (fun k => r + k*d)).card = X/d := by\n    rw [Finset.card_image_of_injOn]\n    · exact Finset.card_range _\n    · intro k1 hk1 k2 hk2 heq\n      simp only at heq\n      have heq' : k1*d = k2*d := by omega\n      exact Nat.eq_of_mul_eq_mul_right hd heq'\n  calc X/d = ((Finset.range (X/d)).image (fun k => r + k*d)).card := hcardimg.symm\n    _ ≤ ((Finset.Icc 1 X).filter (fun N => N % d = r)).card := Finset.card_le_card hsub",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro d r X hd hr\nby_cases hr0 : r = 0\n· right; exact hr0\n· left\n  have hr1 : 1 ≤ r := Nat.one_le_iff_ne_zero.mpr hr0\n  have hsub : (Finset.range (X/d)).image (fun k => r + k*d) ⊆ (Finset.Icc 1 X).filter (fun N => N % d = r) := by\n    intro N hN\n    simp only [Finset.mem_image, Finset.mem_range] at hN\n    obtain ⟨k, hk, hNeq⟩ := hN\n    have hexp : (k+1)*d = k*d + d := by ring\n    have h2 : (k+1)*d ≤ X := by\n      calc (k+1)*d ≤ (X/d)*d := Nat.mul_le_mul_right d (by omega)\n        _ ≤ X := Nat.div_mul_le_self X d\n    simp only [Finset.mem_filter, Finset.mem_Icc]\n    refine ⟨⟨by omega, by omega⟩, ?_⟩\n    rw [← hNeq, Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt hr]\n  have hcardimg : ((Finset.range (X/d)).image (fun k => r + k*d)).card = X/d := by\n    rw [Finset.card_image_of_injOn]\n    · exact Finset.card_range _\n    · intro k1 hk1 k2 hk2 heq\n      simp only at heq\n      have heq' : k1*d = k2*d := by omega\n      exact Nat.eq_of_mul_eq_mul_right hd heq'\n  calc X/d = ((Finset.range (X/d)).image (fun k => r + k*d)).card := hcardimg.symm\n    _ ≤ ((Finset.Icc 1 X).filter (fun N => N % d = r)).card := Finset.card_le_card hsub",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (d r X : ℕ), 0 < d → r < d → X / d ≤ ((Finset.Icc 1 X).filter (fun N => N % d = r)).card ∨ r = 0",
+        "module_source_hash": null,
+        "obligation_id": "c7a542b2-68d6-40a3-b905-26c000c803f8",
+        "outcome": "kernel_pass",
+        "problem_version_id": "64af298c-bf2a-4f70-8ba4-8b712acdc1f5",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "375e933ad4c6e04d55bd1e004a5c9387b9e75a0ad0bb978fc8d80ee29b4eb323"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "98a886cb02191c55ff5f65665af89fbaf668f04fca43804af0a9e3a738935cdd"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

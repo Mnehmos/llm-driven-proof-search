@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro s X C hCX hcop hsift\n  have hsub : C ⊆ (Finset.Icc 1 X).filter (fun N =>\n      Nat.Coprime s.prodPrimes\n        ((210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1))) := by\n    intro N hNC\n    simp only [Finset.mem_filter]\n    exact ⟨hCX hNC, hcop N hNC⟩\n  rw [hsift]\n  exact_mod_cast Finset.card_le_card hsub",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro s X C hCX hcop hsift\n  have hsub : C ⊆ (Finset.Icc 1 X).filter (fun N =>\n      Nat.Coprime s.prodPrimes\n        ((210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1))) := by\n    intro N hNC\n    simp only [Finset.mem_filter]\n    exact ⟨hCX hNC, hcop N hNC⟩\n  rw [hsift]\n  exact_mod_cast Finset.card_le_card hsub",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : BoundingSieve) (X : ℕ) (C : Finset ℕ),\n      C ⊆ Finset.Icc 1 X →\n      (∀ N ∈ C, Nat.Coprime s.prodPrimes\n        ((210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1))) →\n      s.siftedSum =\n        (((Finset.Icc 1 X).filter (fun N =>\n          Nat.Coprime s.prodPrimes\n            ((210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n              (840*N-1)*(1260*N-1)*(2520*N-1)))).card : ℝ) →\n      (C.card : ℝ) ≤ s.siftedSum",
+        "module_source_hash": null,
+        "obligation_id": "dfcedd7e-115e-49c7-aefa-e7f339124a26",
+        "outcome": "kernel_pass",
+        "problem_version_id": "3821e6ae-7ce0-40eb-913e-1a39e33e62b7",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "6ef9f3e6e341975a7d4c186f0ffb78323d4ec10d6f9aac587e930b6c5e93fa8d"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "e7484f1c611a6d7a096d736bd950762c7cd59cba54ab3d8d47ff3967b9e688f3"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "flat_tactic_sequence",
+        "proof_term": "native_decide",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "flat_tactic_sequence",
+          "proof_term": "native_decide",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "((Finset.range 1339481).filter (fun r => ∀ d ∈ ([105, 126, 140, 210, 252, 280, 315, 420, 504, 630, 840, 1260, 2520] : List ℕ), ∀ q ∈ ([11, 13, 17, 19, 29] : List ℕ), d * r % q ≠ 1)).card = 768",
+        "module_source_hash": null,
+        "obligation_id": "113eafac-89e0-481f-981c-174db837cb0e",
+        "outcome": "kernel_pass",
+        "problem_version_id": "4d2b7ec1-5a76-4328-92c2-4a8727d70ed2",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "613cef967b0c359ed029d068fb464dbe5dce8c045873e4f6bb8fff8f3436c08f"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "246ff2bc3ad124ccfe5549791bf126ec70b5f966eb89ea4e360be4883886c5e9"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

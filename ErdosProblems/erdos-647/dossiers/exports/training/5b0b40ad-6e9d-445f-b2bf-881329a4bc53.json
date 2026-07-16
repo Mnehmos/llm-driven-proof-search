@@ -1,0 +1,121 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n hn H h1\n  have shift : ArithmeticFunction.sigma 0 (n - 1) ≤ 3 := by\n    have hsub : n - 1 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 1, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  have hd : 7 ∣ n - 1 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  rcases hd with ⟨b, hb⟩\n  have hbgt : 7 < b := by omega\n  have hge : 4 ≤ ArithmeticFunction.sigma 0 (n - 1) := by\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hsub : ({1, 7, b, n - 1} : Finset ℕ) ⊆ (n - 1).divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl | rfl\n        · exact one_dvd (n - 1)\n        · use b\n        · use 7\n          omega\n        · exact dvd_rfl\n      · omega\n    have hcard : ({1, 7, b, n - 1} : Finset ℕ).card = 4 := by simp <;> omega\n    calc\n      4 = ({1, 7, b, n - 1} : Finset ℕ).card := hcard.symm\n      _ ≤ (n - 1).divisors.card := Finset.card_le_card hsub\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n hn H h1\n  have shift : ArithmeticFunction.sigma 0 (n - 1) ≤ 3 := by\n    have hsub : n - 1 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 1, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  have hd : 7 ∣ n - 1 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  rcases hd with ⟨b, hb⟩\n  have hbgt : 7 < b := by omega\n  have hge : 4 ≤ ArithmeticFunction.sigma 0 (n - 1) := by\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hsub : ({1, 7, b, n - 1} : Finset ℕ) ⊆ (n - 1).divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl | rfl\n        · exact one_dvd (n - 1)\n        · use b\n        · use 7\n          omega\n        · exact dvd_rfl\n      · omega\n    have hcard : ({1, 7, b, n - 1} : Finset ℕ).card = 4 := by simp <;> omega\n    calc\n      4 = ({1, 7, b, n - 1} : Finset ℕ).card := hcard.symm\n      _ ≤ (n - 1).divisors.card := Finset.card_le_card hsub\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 54 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n % 7 = 1 → False",
+        "module_source_hash": null,
+        "obligation_id": "8d63c56f-e0ae-43a0-9265-778c6e87a8e8",
+        "outcome": "kernel_fail",
+        "problem_version_id": "79faae68-5b9e-4839-8073-f75d438d5166",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "96bdd04845904c102b3abe80c0e5b4867b35a36b7969171a1799c623bebf82da"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "0745edf8bce338dcce6bd18fd02efd4e631601863428b7ce4277a5b2b95cd0a1"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n hn H h1\n  have shift : ArithmeticFunction.sigma 0 (n - 1) ≤ 3 := by\n    have hsub : n - 1 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 1, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  have hd : 7 ∣ n - 1 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  rcases hd with ⟨b, hb⟩\n  have hbgt : 7 < b := by omega\n  have hge : 4 ≤ ArithmeticFunction.sigma 0 (n - 1) := by\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hsub : ({1, 7, b, n - 1} : Finset ℕ) ⊆ (n - 1).divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl | rfl\n        · exact one_dvd (n - 1)\n        · use b\n        · use 7\n          omega\n        · exact dvd_rfl\n      · omega\n    have hcard : ({1, 7, b, n - 1} : Finset ℕ).card = 4 := by simp <;> omega\n    calc\n      4 = ({1, 7, b, n - 1} : Finset ℕ).card := hcard.symm\n      _ ≤ (n - 1).divisors.card := Finset.card_le_card hsub\n  exact Nat.not_succ_le_self 3 (le_trans hge shift)",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n hn H h1\n  have shift : ArithmeticFunction.sigma 0 (n - 1) ≤ 3 := by\n    have hsub : n - 1 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 1, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  have hd : 7 ∣ n - 1 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  rcases hd with ⟨b, hb⟩\n  have hbgt : 7 < b := by omega\n  have hge : 4 ≤ ArithmeticFunction.sigma 0 (n - 1) := by\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hsub : ({1, 7, b, n - 1} : Finset ℕ) ⊆ (n - 1).divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl | rfl\n        · exact one_dvd (n - 1)\n        · use b\n        · use 7\n          omega\n        · exact dvd_rfl\n      · omega\n    have hcard : ({1, 7, b, n - 1} : Finset ℕ).card = 4 := by simp <;> omega\n    calc\n      4 = ({1, 7, b, n - 1} : Finset ℕ).card := hcard.symm\n      _ ≤ (n - 1).divisors.card := Finset.card_le_card hsub\n  exact Nat.not_succ_le_self 3 (le_trans hge shift)",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 54 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n % 7 = 1 → False",
+        "module_source_hash": null,
+        "obligation_id": "8d63c56f-e0ae-43a0-9265-778c6e87a8e8",
+        "outcome": "kernel_fail",
+        "problem_version_id": "79faae68-5b9e-4839-8073-f75d438d5166",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "96bdd04845904c102b3abe80c0e5b4867b35a36b7969171a1799c623bebf82da"
+      },
+      "next_state": {
+        "state_hash": "0f5715f4f57f4d6b72fc45f03af811a8619ba4c42cdccba12ae3f20d7e104d53"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "44020ef4708b7e30af995943a30833391f86749071ea75e037ff61e35cd7eac4"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n hn H h1\n  have shift : ArithmeticFunction.sigma 0 (n - 1) ≤ 3 := by\n    have hsub : n - 1 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 1, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  have hd : 7 ∣ n - 1 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  rcases hd with ⟨b, hb⟩\n  have hbgt : 7 < b := by omega\n  have hge : 4 ≤ ArithmeticFunction.sigma 0 (n - 1) := by\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hsub : ({1, 7, b, n - 1} : Finset ℕ) ⊆ (n - 1).divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl | rfl\n        · exact one_dvd (n - 1)\n        · use b\n        · use 7\n          omega\n        · exact dvd_rfl\n      · omega\n    have hba : b ≠ n - 1 := by omega\n    have h7b : 7 ≠ b := by omega\n    have h1b : 1 ≠ b := by omega\n    have h1a : 1 ≠ n - 1 := by omega\n    have h7a : 7 ≠ n - 1 := by omega\n    have hcard : ({1, 7, b, n - 1} : Finset ℕ).card = 4 := by\n      simp [hba, h7b, h1b, h1a, h7a]\n    calc\n      4 = ({1, 7, b, n - 1} : Finset ℕ).card := hcard.symm\n      _ ≤ (n - 1).divisors.card := Finset.card_le_card hsub\n  exact Nat.not_succ_le_self 3 (le_trans hge shift)",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n hn H h1\n  have shift : ArithmeticFunction.sigma 0 (n - 1) ≤ 3 := by\n    have hsub : n - 1 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 1, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  have hd : 7 ∣ n - 1 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  rcases hd with ⟨b, hb⟩\n  have hbgt : 7 < b := by omega\n  have hge : 4 ≤ ArithmeticFunction.sigma 0 (n - 1) := by\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hsub : ({1, 7, b, n - 1} : Finset ℕ) ⊆ (n - 1).divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl | rfl\n        · exact one_dvd (n - 1)\n        · use b\n        · use 7\n          omega\n        · exact dvd_rfl\n      · omega\n    have hba : b ≠ n - 1 := by omega\n    have h7b : 7 ≠ b := by omega\n    have h1b : 1 ≠ b := by omega\n    have h1a : 1 ≠ n - 1 := by omega\n    have h7a : 7 ≠ n - 1 := by omega\n    have hcard : ({1, 7, b, n - 1} : Finset ℕ).card = 4 := by\n      simp [hba, h7b, h1b, h1a, h7a]\n    calc\n      4 = ({1, 7, b, n - 1} : Finset ℕ).card := hcard.symm\n      _ ≤ (n - 1).divisors.card := Finset.card_le_card hsub\n  exact Nat.not_succ_le_self 3 (le_trans hge shift)",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 54 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n % 7 = 1 → False",
+        "module_source_hash": null,
+        "obligation_id": "8d63c56f-e0ae-43a0-9265-778c6e87a8e8",
+        "outcome": "kernel_pass",
+        "problem_version_id": "79faae68-5b9e-4839-8073-f75d438d5166",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "96bdd04845904c102b3abe80c0e5b4867b35a36b7969171a1799c623bebf82da"
+      },
+      "next_state": {
+        "state_hash": "d763c56a392ce6f0e2f004121d55ac800ff5ba92044b4e825ed7258fb284d6f3"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "974708dedf30e63674f23c9c9ce7446cc3bb933949537ead3a487fc6b576fbe1"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,9 +1,9 @@
-# Erdős #647 — mapping the wall, formalizing the frontier
+# Erdős #647 — mapping the wall and formalizing the density frontier
 
-> **Status: LIVING DOCUMENT — problem OPEN.** Last updated 2026-07-13.
-> Erdős #647 is unresolved. Nothing in this folder claims otherwise. As long
-> as the problem stays open, this document grows: each dated section below is
-> a checkpoint, not a conclusion.
+> **Status: GLOBAL DENSITY THEOREM KERNEL-VERIFIED; problem OPEN.** Last
+> updated 2026-07-15. Erdős #647 is unresolved: no larger candidate is known
+> and none is excluded in full. What is now complete is the formal density
+> theorem `|C(X)| ≪ X/(log X)^7`, including an explicit effective constant.
 
 ## 1. The problem
 
@@ -42,8 +42,11 @@ Idén independently to 10¹² and beyond with gap-growth analysis).
 
 Everything below was produced in a verifier-gated LLM proof-search
 environment: an AI agent proposes Lean proofs, and **only the Lean 4 kernel
-(pinned Mathlib) decides what counts**. Every theorem cited here reached
-`kernel_verified` through a tracked, hash-chained episode pipeline. See
+(pinned Mathlib) decides what counts**. Individual milestones were checked
+through tracked, hash-chained proof-search episodes. The terminal composition
+was additionally replayed from clean Lean source across its full transitive
+dependency graph; it is recorded as repository-level kernel evidence rather
+than misrepresented as a single tracked episode. See
 [evidence.md](evidence.md) for machine records and [credit.md](credit.md) for
 full attribution and honest limits.
 
@@ -133,78 +136,190 @@ congruence closures built from Theorem-2 chain elements have the same
 "≤ 1 class per prime" structure, and CRT again guarantees a surviving
 branch. We record this as a result, not a disappointment — it extends
 Hughes's negative theorem to a track he had not explicitly ruled out, and it
-says precisely *why* the remaining work must be analytic, not modular.
+says precisely why the next successful step had to be analytic rather than
+another bounded modular search.
 
-### 3.5 The frontier: density bounds, and the state of Lean's sieve theory (2026-07-13 →)
+### 3.5 The density campaign: obstruction, repair, and concrete assembly (2026-07-13/15)
 
-The live mathematical frontier (Hughes–Kitamura, May–June 2026) is the
-**Brun sieve density bound**: candidates below `x` number at most
-`≪ x/(log x)⁷`, because membership demands 7 simultaneous primes in an
-admissible tuple. This exists only in manuscripts. Formalizing it would be,
-as far as we can tell, the first kernel-checked sieve density bound of its
-kind. Scoping findings (all verified against our pinned Mathlib):
-
-- **Mathlib already has the Selberg sieve core**:
-  `Mathlib.NumberTheory.SelbergSieve` — `BoundingSieve`, the Λ² sieve, and
-  `siftedSum ≤ totalMass · mainSum + errSum`. (A fuzzy search misses it; we
-  initially and wrongly declared it absent. Corrected on direct lookup —
-  the mistake and correction are both part of the record.)
-- **Missing piece #1 — quantitative Mertens**: Mathlib knows `∑ 1/p`
-  diverges but has no rate. The sieve needs one.
-- **Missing piece #2 — the Selberg optimization step**: Mathlib diagonalizes
-  the Λ² main term but stops before the classical optimal-weights bound.
-- **Missing piece #3** — the application layer: admissibility of the two
-  7-tuples, density function ν, error-sum control.
-
-**First brick, laid and kernel-verified** (problem `d584666d`,
-[proof](proof/Erdos647_MertensIdentity.lean)): an *exact* identity
+The Hughes–Kitamura density target is that candidates below `X` number at
+most `≪ X/(log X)⁷`. The exponent seven comes from the simultaneous
+seven-linear-form system obtained after writing a sufficiently large
+candidate as `n = 2520N`:
 
 ```
-∑_{p ≤ x} 1/p  =  θ(x)/(x·log x)  +  ∫_{(2,x]} (log t + 1)/(t²·log²t) · θ(t) dt   (x ≥ 2)
+210N−1, 315N−1, 420N−1, 630N−1,
+840N−1, 1260N−1, 2520N−1.
 ```
 
-via Mathlib's Abel summation applied to Chebyshev's θ. Since Mathlib carries
-*effective* two-sided bounds on θ, quantitative Mertens now reduces to
-bounding one explicit real integral — the next milestone in
-[attack-plan.md](attack-plan.md).
+Mathlib already contained the abstract `BoundingSieve` and `SelbergSieve`
+framework, but not the concrete application or the level-truncated optimal
+weight required here. The completed formalization proceeds in six layers.
+
+1. **Candidate transport.** Define
+   `boundedCandidates X` as the `n ∈ [1,X]` with `n > 24` satisfying the
+   original divisor-count bound. Every member above 84 is proved divisible
+   by 2520, so `n = 2520N` is exact and injective. The verified shift
+   classifications imply precisely the coprimality condition required by the
+   seven-form sieve, including the awkward `2·prime` branch.
+
+2. **Concrete promoted sieve.** A nameable seven-form `BoundingSieve` is
+   built with support equal to the image of the product of the seven forms,
+   unit weights, total mass `X/2520`, and the exact root-union density `ν`.
+   Removing the bad active prime 2 repairs the parity obstruction without
+   changing the underlying support. The same structure is then promoted to a
+   `SelbergSieve` at arbitrary positive level `R`.
+
+3. **Level-truncated optimal weights.** The optimal weight has hard support
+   `d ≤ R`; therefore `lambdaSquared(w)(d) = 0` for `d > R²`. Its pointwise
+   coefficients satisfy
+
+   ```
+   |lambdaSquared(w)(d)| ≤ 16^ω(d).
+   ```
+
+   The concrete seven-form counting remainder satisfies
+
+   ```
+   |rem(d)| ≤ 7^ω(d)
+   ```
+
+   on the squarefree divisor lattice. Consequently the unrestricted divisor
+   explosion is replaced by the polynomial bound
+
+   ```
+   errSum ≤ (R² + 1)^8.
+   ```
+
+   This repairs the only identified analytic obstruction: Mathlib's abstract
+   `level` field does not itself truncate `lambdaSquared`, so using an
+   untruncated optimal weight would have left an exponential-in-`π(z)` error.
+
+4. **Polynomial level certification.** The verified prime logarithmic-moment
+   estimate shows that `R = (2z)^20` preserves at least half of the full
+   Selberg denominator. It also gives the explicit error estimate
+   `(R²+1)^8 ≤ 2^328 z^320`.
+
+5. **Seventh-power denominator.** The first analytic route formalized an
+   exact Abel identity and an effective Chebyshev/Mertens lower bound for
+   `∑_{p≤z}1/p`. That theorem is correct, but its available leading
+   coefficient is `log 2`; multiplying by seven does **not** yield the full
+   seventh power required here. The final proof therefore uses a stronger
+   elementary comparison:
+
+   ```
+   ∑_{n≤z} 1/n ≤ ∏_{p≤z} (1 − 1/p)⁻¹.
+   ```
+
+   Every `n ≤ z` divides `z!`, and the reciprocal divisor sum of `z!`
+   factors into finite geometric series bounded by the corresponding Euler
+   factors. Since the concrete tuple has exactly seven roots at the relevant
+   primes, Bernoulli's inequality lifts this to the seventh power. Deleting
+   the exceptional primes `{2,3,5,7,11}` costs exactly `77/16`, giving
+
+   ```
+   (16/77)^7 · (log z)^7 ≤ L.
+   ```
+
+6. **Dyadic parameters and finite closure.** Choose `z = 2^k` from a
+   verified dyadic bracket for `X`, then `R = (2z)^20`. Above the explicit
+   threshold `16^400`, the main term, the polynomial error, the additive
+   survivor loss `z`, and the fixed initial contribution are absorbed into
+   `X/(log X)^7`. Below the threshold, the trivial card bound is absorbed by
+   enlarging the constant.
+
+The intermediate concrete inequality, before the final dyadic substitution,
+is
+
+```
+|C(X)| ≤ 60
+  + 2(77/16)^7 · (X/2520)/(log z)^7
+  + (((2z)^20)^2 + 1)^8 + z.
+```
+
+### 3.6 Terminal theorem and replay evidence (2026-07-15)
+
+The final source theorem is
+[`boundedCandidates_density_global`](proof/Erdos647_ConcreteAsymptoticDensity.lean):
+
+```lean
+theorem boundedCandidates_density_global (X : ℕ) :
+    ((boundedCandidates X).card : ℝ) ≤
+      globalDensityConstant * (X : ℝ) / (Real.log (X : ℝ)) ^ 7
+```
+
+The constant is explicit:
+
+```lean
+densityConstant =
+  (2 * (77/16)^7 + 3 * 2^328 * (log 2)^7) * 800^7
+
+globalDensityConstant =
+  max densityConstant (log (16^400))^7.
+```
+
+A genuinely clean replay removed all generated `.olean` files and rebuilt
+the theorem's complete dependency graph: 42 campaign modules plus
+`family2-classifications.lean`, exit code 0 in the pinned environment. A
+source audit found no `sorry`, `admit`, or added axiom in the assembly. The
+repaired squarefree remainder was also submitted to the independent exact
+proof-search verifier and returned `kernel_pass`; identifiers and hashes are
+recorded in [evidence.md](evidence.md).
+
+For provenance beyond the source replay, all 210 related campaign
+episodes are published under [dossiers/exports/](dossiers/exports/README.md)
+in redacted public-summary JSON, full Markdown dossier, and structured
+training JSON formats. Of these, 203 report `KERNEL_VERIFIED` in the pinned
+environment; seven non-success histories are retained for audit completeness.
+
+This proves a density-zero result with the claimed seventh logarithmic power.
+It does **not** prove that no larger candidate exists: an infinite set can
+have density zero, and the theorem supplies neither a witness nor a complete
+exclusion.
 
 ## 4. Scoreboard (honest)
 
-- Problem status: **OPEN**. No new witness; no disproof. Nothing here
-  changes the answer — it changes what is *machine-checked* about the
-  answer.
-- Kernel-verified theorems in this campaign: **~110** (sieve certificates,
-  13 classifications, 26+ bridging closures, 4 residue closures, 48 sub-AP
-  closures, Theorem 2 × 3 stages, Mertens identity).
+- Problem status: **OPEN**. No new witness and no complete exclusion.
+- Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
+  constant and exponent seven.
+- Portable proof source currently contains **216 top-level theorem
+  declarations across 100 Lean files** under `proof/`. This count includes
+  helper and assembly theorems; it is not presented as 216 independent
+  mathematical discoveries or 216 standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base
   sieve, the bridging-closure layer, the Theorem-2 formalization, the
-  extended negative result, and the Mertens identity are new artifacts; the
-  frontier structure (41 classes, closure techniques, Theorem 2's
-  *statement*, the density-bound program) is Hughes/Kitamura/Idén's
-  mathematics.
+  extended negative result, the Mertens infrastructure, the explicit
+  truncation repair, the elementary denominator proof, and the complete Lean
+  density assembly are new artifacts. The frontier structure (41 classes,
+  closure techniques, Theorem 2's statement, and the density target) comes
+  from Hughes/Kitamura/Idén's mathematical program.
 
 ## 5. What "verified" means here
 
-Every "proved" in this document means: submitted through a tracked pipeline
-(`problem_create → episode_create → attempt_claim → episode_step`), accepted
-by the **Lean 4 kernel** against pinned Mathlib, recorded with statement
-hashes and episode IDs ([evidence.md](evidence.md)). The fidelity basis is a
-dev attestation (statements were authored inside this project, not imported
-from a neutral catalog), so outcomes are reported as `kernel_verified` —
-never "certified." The AI's claims are not trusted; the human's aren't
-either. The checker's word is the only one that counts.
+Every "proved" in this document means accepted by the **Lean 4 kernel**
+against pinned Mathlib. Most milestones were submitted through the tracked
+pipeline (`problem_create → episode_create → attempt_claim → episode_step`)
+and carry statement hashes and episode IDs. The final composition is instead
+identified explicitly as a clean repository-level replay of its entire
+source dependency graph. The fidelity basis is a dev attestation (statements
+were authored inside this project, not imported from a neutral catalog), so
+tracked outcomes are reported as `kernel_verified`—never "certified." The
+AI's prose and the human's expectations are not evidence; the checked source
+is.
 
 ## 6. Open invitations
 
-This folder is a living workspace, not a museum. Standing directions anyone
-is welcome to pick up, argue with, or race us to:
+This folder is a living workspace, not a museum. The density program is no
+longer an open invitation; it has landed. Useful next directions are:
 
-1. **Quantitative Mertens in Lean** (Layer A, in progress here) — bound the
-   integral above using `Chebyshev.theta_ge` / `theta_le_log4_mul_x`.
-2. **The Selberg optimization step** (Layer B) — the classical
-   optimal-weight bound on `mainSum`, on top of Mathlib's diagonalization.
-3. **The 7-tuple application** (Layer C) — admissibility + error control
-   for families A/B, targeting a machine-checked `x/(log x)⁷`.
+1. **Independent replay and proof review** — check the committed source in a
+   fresh pinned environment, audit the candidate-to-sieve bridge, and seek
+   simpler constants or a smaller threshold without weakening the theorem.
+2. **Upstream the reusable sieve lemmas** — the level-truncated optimal
+   weight, coefficient/support bounds, finite Euler-product comparison, and
+   generic two-parameter assembly are Mathlib-shaped contributions.
+3. **Attack the original existence question with a genuinely new method** —
+   density zero is not emptiness, and bounded congruence trees cannot close
+   the remaining classes.
 4. **A better wall theorem** — the all-avoid obstruction rules out bounded
    congruence trees; what is the *strongest* class of arguments it rules
    out? Formalizing the obstruction itself in Lean would sharpen this.

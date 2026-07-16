@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n hn H hdvd\n  obtain ⟨q, hq⟩ := hdvd\n  have hq1 : 1 ≤ q := by omega\n  have shift : ArithmeticFunction.sigma 0 (n - 3) ≤ 5 := by\n    have hsub : n - 3 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let mm : Fin n := ⟨n - 3, hsub⟩\n    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H\n    dsimp [f, mm] at hm\n    omega\n  have hn3 : n - 3 = 3 * (840 * q - 1) := by omega\n  have hcop : Nat.Coprime 3 (840 * q - 1) := (Nat.prime_three.coprime_iff_not_dvd).mpr (by omega)\n  have hsig3 : ArithmeticFunction.sigma 0 3 = 2 := by native_decide\n  have hmulsig : ArithmeticFunction.sigma 0 (n - 3) = 2 * ArithmeticFunction.sigma 0 (840 * q - 1) := by\n    rw [hn3, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop, hsig3]\n  have hsigr : ArithmeticFunction.sigma 0 (840 * q - 1) ≤ 2 := by omega\n  have hr2 : 2 ≤ 840 * q - 1 := by omega\n  have hprime : Nat.Prime (840 * q - 1) := by\n    rw [ArithmeticFunction.sigma_zero_apply] at hsigr\n    have hr0 : (840 * q - 1) ≠ 0 := by omega\n    have h2 : ({1, 840 * q - 1} : Finset ℕ) ⊆ (840 * q - 1).divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      rcases hx with rfl | rfl\n      · exact ⟨one_dvd _, hr0⟩\n      · exact ⟨dvd_rfl, hr0⟩\n    have hc2 : ({1, 840 * q - 1} : Finset ℕ).card = 2 := by\n      rw [Finset.card_insert_of_notMem (by simp; omega), Finset.card_singleton]\n    have heq : (840 * q - 1).divisors = {1, 840 * q - 1} :=\n      (Finset.eq_of_subset_of_card_le h2 (by rw [hc2]; exact hsigr)).symm\n    rw [Nat.prime_def_lt]\n    refine ⟨by omega, ?_⟩\n    intro mm hmlt hmdvd\n    have hmem : mm ∈ (840 * q - 1).divisors := Nat.mem_divisors.mpr ⟨hmdvd, hr0⟩\n    rw [heq] at hmem\n    simp only [Finset.mem_insert, Finset.mem_singleton] at hmem\n    rcases hmem with h1 | h1\n    · exact h1\n    · omega\n  have hdiv : (n - 3) / 3 = 840 * q - 1 := by omega\n  rw [hdiv]\n  exact hprime",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n hn H hdvd\n  obtain ⟨q, hq⟩ := hdvd\n  have hq1 : 1 ≤ q := by omega\n  have shift : ArithmeticFunction.sigma 0 (n - 3) ≤ 5 := by\n    have hsub : n - 3 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let mm : Fin n := ⟨n - 3, hsub⟩\n    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H\n    dsimp [f, mm] at hm\n    omega\n  have hn3 : n - 3 = 3 * (840 * q - 1) := by omega\n  have hcop : Nat.Coprime 3 (840 * q - 1) := (Nat.prime_three.coprime_iff_not_dvd).mpr (by omega)\n  have hsig3 : ArithmeticFunction.sigma 0 3 = 2 := by native_decide\n  have hmulsig : ArithmeticFunction.sigma 0 (n - 3) = 2 * ArithmeticFunction.sigma 0 (840 * q - 1) := by\n    rw [hn3, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop, hsig3]\n  have hsigr : ArithmeticFunction.sigma 0 (840 * q - 1) ≤ 2 := by omega\n  have hr2 : 2 ≤ 840 * q - 1 := by omega\n  have hprime : Nat.Prime (840 * q - 1) := by\n    rw [ArithmeticFunction.sigma_zero_apply] at hsigr\n    have hr0 : (840 * q - 1) ≠ 0 := by omega\n    have h2 : ({1, 840 * q - 1} : Finset ℕ) ⊆ (840 * q - 1).divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      rcases hx with rfl | rfl\n      · exact ⟨one_dvd _, hr0⟩\n      · exact ⟨dvd_rfl, hr0⟩\n    have hc2 : ({1, 840 * q - 1} : Finset ℕ).card = 2 := by\n      rw [Finset.card_insert_of_notMem (by simp; omega), Finset.card_singleton]\n    have heq : (840 * q - 1).divisors = {1, 840 * q - 1} :=\n      (Finset.eq_of_subset_of_card_le h2 (by rw [hc2]; exact hsigr)).symm\n    rw [Nat.prime_def_lt]\n    refine ⟨by omega, ?_⟩\n    intro mm hmlt hmdvd\n    have hmem : mm ∈ (840 * q - 1).divisors := Nat.mem_divisors.mpr ⟨hmdvd, hr0⟩\n    rw [heq] at hmem\n    simp only [Finset.mem_insert, Finset.mem_singleton] at hmem\n    rcases hmem with h1 | h1\n    · exact h1\n    · omega\n  have hdiv : (n - 3) / 3 = 840 * q - 1 := by omega\n  rw [hdiv]\n  exact hprime",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → 2520 ∣ n → Nat.Prime ((n - 3) / 3)",
+        "module_source_hash": null,
+        "obligation_id": "ce523006-8a05-42a9-bd06-394b8ee8f1ac",
+        "outcome": "kernel_pass",
+        "problem_version_id": "323c4801-f022-487d-8e72-da63034eccdd",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "195e293b1eb7a66a39bf8069301829294bb1808d596ec5513b15122c271b8616"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "1a4c1fd7229e84dbb6cf7560b2cf3d66b648632ae7b79469a390bebbad122df0"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}
