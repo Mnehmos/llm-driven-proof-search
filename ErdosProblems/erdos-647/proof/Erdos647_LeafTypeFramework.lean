@@ -87,8 +87,14 @@ theorem AffineForm.dvd_one_of_det_unit {L₁ L₂ : AffineForm} {t g : ℤ}
 form so the catalog stays symbolic. `divisibleBy b e` is raw divisibility
 by `b ^ e` for an ARBITRARY base `b` (no primality is implied by the
 constructor); `primePower` requires a positive exponent, so `1` does not
-qualify. -/
+qualify. `unresolved` is the HONEST marker for residual branches: the
+classification proves the candidate enters this residue branch, but no
+terminal arithmetic shape has yet been extracted — such leaves are
+universal escape vertices, and the audit must report them separately;
+a growing-prefix contradiction cannot succeed while every shift can
+escape through one. -/
 inductive CofactorShape where
+  | unresolved : CofactorShape
   | prime : CofactorShape
   | composite : CofactorShape
   | sigmaLE (B : ℕ) : CofactorShape
@@ -100,6 +106,7 @@ inductive CofactorShape where
 
 /-- Semantics of a shape demand on a natural cofactor value. -/
 def CofactorShape.Holds : CofactorShape → ℕ → Prop
+  | .unresolved, _ => True
   | .prime, m => Nat.Prime m
   | .composite, m => 1 < m ∧ ¬ Nat.Prime m
   | .sigmaLE B, m => ArithmeticFunction.sigma 0 m ≤ B
@@ -354,5 +361,412 @@ theorem shift16LeafA_excludesResidue_11_5 : ExcludesResidue shift16LeafA 11 5 :=
 /-- Graph-facing packaging: leaf B excludes master residue 5 mod 11. -/
 theorem shift16LeafB_excludesResidue_11_5 : ExcludesResidue shift16LeafB 11 5 :=
   fun N h5 => (shift16_master_exclusions N (Or.inl h5)).2
+
+/-! ## The finite leaf catalog (milestone 6)
+
+Executable identity is kept SEPARATE from proof-carrying semantics:
+`LeafId` is a proof-free enumeration (stable names for dossier output,
+audit tables, and future hyperedges) and `leafOfId` is the lookup into
+the typed catalog. The Boolean edge certifier operates on `LeafId`; its
+soundness theorem connects back to the semantic `IncompatibleLeaves`.
+
+Shift 8 is included alongside 13–16 because its two leaves parameterize
+by the PARITY of `N` — which the shift-16 residual leaves force — giving
+the first genuine cross-shift certified edges.
+
+Leaf normalization notes (weakenings are sound for both completeness and
+edges — a weaker leaf is realizable in more cases, so the frontier
+disjunction still implies realization, and incompatibility of a weaker
+leaf implies incompatibility of the stronger one):
+- side conditions of the form `t % p ≠ r` are not representable in
+  `Parameterization` and are dropped (e.g. shift 15's `M % 5 ≠ 1`);
+- shift 14's prime leaf splits into SIX variants, one per `N % 49` class
+  `7j+3` (`j = 1..6`), since the class determines the leaf's affine form
+  `1260·t + (180j+77)` exactly;
+- residual branches carry `CofactorShape.unresolved` and a trivial
+  positive form `⟨0, 1⟩` — pure congruence leaves, honest escape
+  vertices;
+- `LeavesAtShift 16` lists only the two `M % 8 = 3` family-A residual
+  leaves currently normalized; NO completeness theorem is claimed for
+  shift 16 until the remaining branches of its classification are
+  normalized. -/
+
+/-- Proof-free stable identifiers for the finite leaf catalog. -/
+inductive LeafId where
+  | shift8Prime | shift8SemiPrime
+  | shift13Free | shift13Cofactor | shift13Residual
+  | shift14Base
+  | shift14Prime0 | shift14Prime1 | shift14Prime2
+  | shift14Prime3 | shift14Prime4 | shift14Prime5
+  | shift14Residual
+  | shift15Base | shift15PrimeA | shift15PrimeB | shift15Residual
+  | shift16A | shift16B
+  deriving Repr, DecidableEq
+
+/-- Lookup from stable identity into the typed catalog. -/
+def leafOfId : LeafId → LeafType
+  | .shift8Prime =>
+      ⟨8, 2, ⟨630, -1⟩, .prime, .residueClass ⟨2, 0, by norm_num, by norm_num⟩, none⟩
+  | .shift8SemiPrime =>
+      ⟨8, 2, ⟨315, 157⟩, .prime, .residueClass ⟨2, 1, by norm_num, by norm_num⟩, none⟩
+  | .shift13Free =>
+      ⟨13, 2, ⟨2520, -13⟩, .sigmaLE 15, .direct, none⟩
+  | .shift13Cofactor =>
+      ⟨13, 2, ⟨2520, -1⟩, .sigmaLE 7, .residueClass ⟨13, 0, by norm_num, by norm_num⟩, none⟩
+  | .shift13Residual =>
+      ⟨13, 2, ⟨0, 1⟩, .unresolved, .residueClass ⟨169, 78, by norm_num, by norm_num⟩, none⟩
+  | .shift14Base =>
+      ⟨14, 2, ⟨180, -1⟩, .sigmaLE 4, .direct, none⟩
+  | .shift14Prime0 =>
+      ⟨14, 2, ⟨1260, 257⟩, .prime, .residueClass ⟨49, 10, by norm_num, by norm_num⟩, none⟩
+  | .shift14Prime1 =>
+      ⟨14, 2, ⟨1260, 437⟩, .prime, .residueClass ⟨49, 17, by norm_num, by norm_num⟩, none⟩
+  | .shift14Prime2 =>
+      ⟨14, 2, ⟨1260, 617⟩, .prime, .residueClass ⟨49, 24, by norm_num, by norm_num⟩, none⟩
+  | .shift14Prime3 =>
+      ⟨14, 2, ⟨1260, 797⟩, .prime, .residueClass ⟨49, 31, by norm_num, by norm_num⟩, none⟩
+  | .shift14Prime4 =>
+      ⟨14, 2, ⟨1260, 977⟩, .prime, .residueClass ⟨49, 38, by norm_num, by norm_num⟩, none⟩
+  | .shift14Prime5 =>
+      ⟨14, 2, ⟨1260, 1157⟩, .prime, .residueClass ⟨49, 45, by norm_num, by norm_num⟩, none⟩
+  | .shift14Residual =>
+      ⟨14, 2, ⟨0, 1⟩, .unresolved, .residueClass ⟨49, 3, by norm_num, by norm_num⟩, none⟩
+  | .shift15Base =>
+      ⟨15, 2, ⟨168, -1⟩, .sigmaLE 4, .direct, none⟩
+  | .shift15PrimeA =>
+      ⟨15, 2, ⟨168, 67⟩, .prime, .residueClass ⟨5, 2, by norm_num, by norm_num⟩, none⟩
+  | .shift15PrimeB =>
+      ⟨15, 2, ⟨168, 47⟩, .prime, .residueClass ⟨25, 7, by norm_num, by norm_num⟩, none⟩
+  | .shift15Residual =>
+      ⟨15, 2, ⟨0, 1⟩, .unresolved, .residueClass ⟨125, 32, by norm_num, by norm_num⟩, none⟩
+  | .shift16A => shift16LeafA
+  | .shift16B => shift16LeafB
+
+/-- The catalog, grouped by shift. -/
+def LeavesAtShift : ℕ → List LeafId
+  | 8 => [.shift8Prime, .shift8SemiPrime]
+  | 13 => [.shift13Free, .shift13Cofactor, .shift13Residual]
+  | 14 => [.shift14Base, .shift14Prime0, .shift14Prime1, .shift14Prime2,
+           .shift14Prime3, .shift14Prime4, .shift14Prime5, .shift14Residual]
+  | 15 => [.shift15Base, .shift15PrimeA, .shift15PrimeB, .shift15Residual]
+  | 16 => [.shift16A, .shift16B]
+  | _ => []
+
+/-! ## The Boolean edge certifier
+
+Certificates carry their reason. An absent edge means "not yet certified
+incompatible", never "proved compatible". The first implemented reason is
+`impossibleParameterizations`: two residue-class parameterizations with
+no common master parameter (CRT solvability failure at the gcd). -/
+
+/-- Why a pair of leaves is certified incompatible. -/
+inductive EdgeReason where
+  | impossibleParameterizations : EdgeReason
+  | forcedExcludedResidue (p r : ℕ) : EdgeReason
+  | primeForcedFactor (p : ℕ) : EdgeReason
+  | contradictoryShapes : EdgeReason
+  deriving Repr, DecidableEq
+
+/-- Two residue classes admit no common value exactly when their residues
+disagree modulo the gcd of the moduli. -/
+def ResidueClass.conflicts (rc1 rc2 : ResidueClass) : Bool :=
+  rc1.residue % Nat.gcd rc1.modulus rc2.modulus !=
+    rc2.residue % Nat.gcd rc1.modulus rc2.modulus
+
+/-- Parameterization-level conflict check. -/
+def paramConflict : Parameterization → Parameterization → Bool
+  | .residueClass rc1, .residueClass rc2 => rc1.conflicts rc2
+  | _, _ => false
+
+/-- Edge lookup with reason. Currently only the parameterization channel
+is implemented; `forcedExcludedResidue`, `primeForcedFactor`, and
+`contradictoryShapes` are reserved for the next catalog passes. -/
+def edgeReason (A B : LeafId) : Option EdgeReason :=
+  if paramConflict (leafOfId A).param (leafOfId B).param then
+    some .impossibleParameterizations
+  else none
+
+/-- The executable edge certificate. -/
+def certifiedIncompatible (A B : LeafId) : Bool :=
+  (edgeReason A B).isSome
+
+/-- A conflicting pair of residue classes shares no value. -/
+theorem no_common_value_of_conflicts {rc1 rc2 : ResidueClass}
+    (h : rc1.conflicts rc2 = true) (N : ℕ)
+    (h1 : ∃ t, N = rc1.modulus * t + rc1.residue)
+    (h2 : ∃ t, N = rc2.modulus * t + rc2.residue) : False := by
+  obtain ⟨t1, ht1⟩ := h1
+  obtain ⟨t2, ht2⟩ := h2
+  obtain ⟨w1, hw1⟩ : Nat.gcd rc1.modulus rc2.modulus ∣ rc1.modulus * t1 :=
+    dvd_mul_of_dvd_left (Nat.gcd_dvd_left _ _) t1
+  obtain ⟨w2, hw2⟩ : Nat.gcd rc1.modulus rc2.modulus ∣ rc2.modulus * t2 :=
+    dvd_mul_of_dvd_left (Nat.gcd_dvd_right _ _) t2
+  have hN1 : N % Nat.gcd rc1.modulus rc2.modulus =
+      rc1.residue % Nat.gcd rc1.modulus rc2.modulus := by
+    rw [ht1, hw1]
+    exact Nat.mul_add_mod _ _ _
+  have hN2 : N % Nat.gcd rc1.modulus rc2.modulus =
+      rc2.residue % Nat.gcd rc1.modulus rc2.modulus := by
+    rw [ht2, hw2]
+    exact Nat.mul_add_mod _ _ _
+  have hne : rc1.residue % Nat.gcd rc1.modulus rc2.modulus ≠
+      rc2.residue % Nat.gcd rc1.modulus rc2.modulus := by
+    simpa [ResidueClass.conflicts] using h
+  omega
+
+/-- Project the branch equation out of a residue-class realization. -/
+theorem realizes_residueClass_param {N : ℕ} {leaf : LeafType} {rc : ResidueClass}
+    (hp : leaf.param = .residueClass rc)
+    (h : CandidateRealizesLeaf N leaf) :
+    ∃ t, N = rc.modulus * t + rc.residue := by
+  unfold CandidateRealizesLeaf at h
+  rw [hp] at h
+  obtain ⟨t, ht, _, _⟩ := h
+  exact ⟨t, ht⟩
+
+/-- Soundness of the executable certificate: a certified edge is a
+semantic incompatibility. -/
+theorem certifiedIncompatible_sound {A B : LeafId}
+    (h : certifiedIncompatible A B = true) :
+    IncompatibleLeaves (leafOfId A) (leafOfId B) := by
+  intro N hAB
+  obtain ⟨hA, hB⟩ := hAB
+  unfold certifiedIncompatible edgeReason at h
+  by_cases hc : paramConflict (leafOfId A).param (leafOfId B).param = true
+  · cases hpa : (leafOfId A).param with
+    | direct => rw [hpa] at hc; simp [paramConflict] at hc
+    | residueClass rc1 =>
+      cases hpb : (leafOfId B).param with
+      | direct => rw [hpa, hpb] at hc; simp [paramConflict] at hc
+      | residueClass rc2 =>
+        rw [hpa, hpb] at hc
+        simp only [paramConflict] at hc
+        exact no_common_value_of_conflicts hc N
+          (realizes_residueClass_param hpa hA)
+          (realizes_residueClass_param hpb hB)
+  · simp [hc] at h
+
+/-! ## Graph-level avoidance: the computationally usable necessary
+condition on candidates. -/
+
+/-- A selection avoiding every certified edge. -/
+def AvoidsCertifiedEdges (selected : List LeafId) : Prop :=
+  selected.Pairwise fun A B => certifiedIncompatible A B = false
+
+/-- Any selection realized by one master parameter avoids every certified
+edge — the graph constraint is a necessary condition on candidates. -/
+theorem realized_selection_avoids_certified_edges {N : ℕ} {selected : List LeafId}
+    (h : ∀ id ∈ selected, CandidateRealizesLeaf N (leafOfId id)) :
+    AvoidsCertifiedEdges selected := by
+  induction selected with
+  | nil => exact List.Pairwise.nil
+  | cons hd tl ih =>
+    refine List.Pairwise.cons ?_ (ih fun id hid => h id (List.mem_cons_of_mem hd hid))
+    intro B hB
+    by_contra hcert
+    have hcert' : certifiedIncompatible hd B = true := by
+      revert hcert
+      cases certifiedIncompatible hd B <;> simp
+    exact certifiedIncompatible_sound hcert' N
+      ⟨h hd List.mem_cons_self, h B (List.mem_cons_of_mem hd hB)⟩
+
+/-! ## Catalog completeness (mapping form)
+
+Each theorem maps the corresponding shift's kernel-verified frontier
+disjunction (`candidate_shift13_adic_frontier`,
+`candidate_shift14_seven_adic_frontier`,
+`candidate_shift15_five_adic_frontier`, and the shift-8 classification)
+onto the catalog: every disjunct realizes some listed leaf. Stated with
+the frontier as a hypothesis so each remains self-contained and
+composable with the already-verified frontier theorems at final
+assembly (cross-file imports are not available to tracked replays). -/
+
+/-- Shift 8: the classification's two branches land in the catalog. -/
+theorem shift8_classification_realizes_catalog_leaf (N : ℕ) (hN : 1 ≤ N)
+    (h : Nat.Prime (315 * N - 1) ∨ ∃ p, Nat.Prime p ∧ 315 * N - 1 = 2 * p) :
+    ∃ id ∈ LeavesAtShift 8, CandidateRealizesLeaf N (leafOfId id) := by
+  rcases Nat.even_or_odd N with ⟨t, ht⟩ | ⟨t, ht⟩
+  · -- N = 2t: the value 630t−1 is odd, so the semiprime branch is impossible.
+    refine ⟨.shift8Prime, by simp [LeavesAtShift], ?_⟩
+    have hprime : Nat.Prime (315 * N - 1) := by
+      rcases h with hp | ⟨p, hp, heq⟩
+      · exact hp
+      · exfalso; omega
+    show ∃ u : ℕ, N = 2 * u + 0 ∧ 0 < ((630:ℤ) * u + (-1)) ∧
+        Nat.Prime (((630:ℤ) * u + (-1)).toNat)
+    refine ⟨t, by omega, by push_cast; omega, ?_⟩
+    have heval : (((630:ℤ) * t + (-1))).toNat = 315 * N - 1 := by omega
+    rwa [heval]
+  · -- N = 2t+1: the value 630t+314 is even and exceeds 2, so it is 2·prime.
+    refine ⟨.shift8SemiPrime, by simp [LeavesAtShift], ?_⟩
+    obtain ⟨p, hp, heq⟩ : ∃ p, Nat.Prime p ∧ 315 * N - 1 = 2 * p := by
+      rcases h with hp | hsp
+      · exfalso
+        have h2 : (2:ℕ) ∣ 315 * N - 1 := ⟨315 * t + 157, by omega⟩
+        rcases hp.eq_one_or_self_of_dvd 2 h2 with h1 | h1 <;> omega
+      · exact hsp
+    show ∃ u : ℕ, N = 2 * u + 1 ∧ 0 < ((315:ℤ) * u + 157) ∧
+        Nat.Prime (((315:ℤ) * u + 157).toNat)
+    refine ⟨t, by omega, by positivity, ?_⟩
+    have heval : (((315:ℤ) * t + 157)).toNat = p := by omega
+    rwa [heval]
+
+/-- Shift 13: the adic frontier's branches land in the catalog. -/
+theorem shift13_frontier_realizes_catalog_leaf (N : ℕ) (hN : 1 ≤ N)
+    (hbudget : ArithmeticFunction.sigma 0 (2520 * N - 13) ≤ 15)
+    (h : ¬ 13 ∣ N ∨ ∃ M : ℕ, N = 13 * M ∧
+      (M % 13 = 6 ∨ ArithmeticFunction.sigma 0 (2520 * M - 1) ≤ 7)) :
+    ∃ id ∈ LeavesAtShift 13, CandidateRealizesLeaf N (leafOfId id) := by
+  rcases h with _ | ⟨M, hM, hMres | hMcof⟩
+  · refine ⟨.shift13Free, by simp [LeavesAtShift], ?_⟩
+    show 0 < ((2520:ℤ) * N + (-13)) ∧
+        ArithmeticFunction.sigma 0 (((2520:ℤ) * N + (-13)).toNat) ≤ 15
+    have heval : (((2520:ℤ) * N + (-13))).toNat = 2520 * N - 13 := by omega
+    exact ⟨by push_cast; omega, by rwa [heval]⟩
+  · refine ⟨.shift13Residual, by simp [LeavesAtShift], ?_⟩
+    obtain ⟨s, hs⟩ : ∃ s, M = 13 * s + 6 := ⟨M / 13, by omega⟩
+    show ∃ u : ℕ, N = 169 * u + 78 ∧ 0 < ((0:ℤ) * u + 1) ∧ True
+    exact ⟨s, by omega, by norm_num, trivial⟩
+  · refine ⟨.shift13Cofactor, by simp [LeavesAtShift], ?_⟩
+    have hMpos : 1 ≤ M := by omega
+    show ∃ u : ℕ, N = 13 * u + 0 ∧ 0 < ((2520:ℤ) * u + (-1)) ∧
+        ArithmeticFunction.sigma 0 (((2520:ℤ) * u + (-1)).toNat) ≤ 7
+    have heval : (((2520:ℤ) * M + (-1))).toNat = 2520 * M - 1 := by omega
+    exact ⟨M, by omega, by push_cast; omega, by rwa [heval]⟩
+
+/-- Shift 15: the five-adic frontier's branches land in the catalog. -/
+theorem shift15_frontier_realizes_catalog_leaf (N : ℕ) (hN : 1 ≤ N)
+    (h : (N % 5 ≠ 2 ∧ ArithmeticFunction.sigma 0 (168 * N - 1) ≤ 4 ∧
+          (168 * N - 1).primeFactors.card ≤ 2) ∨
+        (∃ M : ℕ, N = 5 * M + 2 ∧ M % 5 ≠ 1 ∧ Nat.Prime (168 * M + 67)) ∨
+        (∃ Q : ℕ, N = 25 * Q + 7 ∧ Q % 5 ≠ 1 ∧ Nat.Prime (168 * Q + 47)) ∨
+        N % 125 = 32) :
+    ∃ id ∈ LeavesAtShift 15, CandidateRealizesLeaf N (leafOfId id) := by
+  rcases h with ⟨_, hs, _⟩ | ⟨M, hM, _, hp⟩ | ⟨Q, hQ, _, hp⟩ | hres
+  · refine ⟨.shift15Base, by simp [LeavesAtShift], ?_⟩
+    show 0 < ((168:ℤ) * N + (-1)) ∧
+        ArithmeticFunction.sigma 0 (((168:ℤ) * N + (-1)).toNat) ≤ 4
+    have heval : (((168:ℤ) * N + (-1))).toNat = 168 * N - 1 := by omega
+    exact ⟨by push_cast; omega, by rwa [heval]⟩
+  · refine ⟨.shift15PrimeA, by simp [LeavesAtShift], ?_⟩
+    show ∃ u : ℕ, N = 5 * u + 2 ∧ 0 < ((168:ℤ) * u + 67) ∧
+        Nat.Prime (((168:ℤ) * u + 67).toNat)
+    have heval : (((168:ℤ) * M + 67)).toNat = 168 * M + 67 := by omega
+    exact ⟨M, hM, by positivity, by rwa [heval]⟩
+  · refine ⟨.shift15PrimeB, by simp [LeavesAtShift], ?_⟩
+    show ∃ u : ℕ, N = 25 * u + 7 ∧ 0 < ((168:ℤ) * u + 47) ∧
+        Nat.Prime (((168:ℤ) * u + 47).toNat)
+    have heval : (((168:ℤ) * Q + 47)).toNat = 168 * Q + 47 := by omega
+    exact ⟨Q, hQ, by positivity, by rwa [heval]⟩
+  · refine ⟨.shift15Residual, by simp [LeavesAtShift], ?_⟩
+    obtain ⟨s, hs⟩ : ∃ s, N = 125 * s + 32 := ⟨N / 125, by omega⟩
+    show ∃ u : ℕ, N = 125 * u + 32 ∧ 0 < ((0:ℤ) * u + 1) ∧ True
+    exact ⟨s, hs, by norm_num, trivial⟩
+
+/-- Shift 14: the seven-adic frontier's branches land in the catalog,
+with the prime branch split across its six `N % 49` classes. -/
+theorem shift14_frontier_realizes_catalog_leaf (N : ℕ) (hN : 1 ≤ N)
+    (h : (N % 7 ≠ 3 ∧ ArithmeticFunction.sigma 0 (180 * N - 1) ≤ 4 ∧
+          (180 * N - 1).primeFactors.card ≤ 2) ∨
+        N % 49 = 3 ∨
+        ∃ M : ℕ, N = 7 * M + 3 ∧ M % 7 ≠ 0 ∧
+          Nat.Prime (180 * M + 77) ∧
+          (N % 49 = 10 ∨ N % 49 = 17 ∨ N % 49 = 24 ∨
+            N % 49 = 31 ∨ N % 49 = 38 ∨ N % 49 = 45)) :
+    ∃ id ∈ LeavesAtShift 14, CandidateRealizesLeaf N (leafOfId id) := by
+  rcases h with ⟨_, hs, _⟩ | hres | ⟨M, hM, _, hp, hcls⟩
+  · refine ⟨.shift14Base, by simp [LeavesAtShift], ?_⟩
+    show 0 < ((180:ℤ) * N + (-1)) ∧
+        ArithmeticFunction.sigma 0 (((180:ℤ) * N + (-1)).toNat) ≤ 4
+    have heval : (((180:ℤ) * N + (-1))).toNat = 180 * N - 1 := by omega
+    exact ⟨by push_cast; omega, by rwa [heval]⟩
+  · refine ⟨.shift14Residual, by simp [LeavesAtShift], ?_⟩
+    obtain ⟨s, hs⟩ : ∃ s, N = 49 * s + 3 := ⟨N / 49, by omega⟩
+    show ∃ u : ℕ, N = 49 * u + 3 ∧ 0 < ((0:ℤ) * u + 1) ∧ True
+    exact ⟨s, hs, by norm_num, trivial⟩
+  · rcases hcls with hc | hc | hc | hc | hc | hc
+    · refine ⟨.shift14Prime0, by simp [LeavesAtShift], ?_⟩
+      obtain ⟨s, hs⟩ : ∃ s, M = 7 * s + 1 := ⟨M / 7, by omega⟩
+      show ∃ u : ℕ, N = 49 * u + 10 ∧ 0 < ((1260:ℤ) * u + 257) ∧
+          Nat.Prime (((1260:ℤ) * u + 257).toNat)
+      have heval : (((1260:ℤ) * s + 257)).toNat = 180 * M + 77 := by omega
+      exact ⟨s, by omega, by positivity, by rwa [heval]⟩
+    · refine ⟨.shift14Prime1, by simp [LeavesAtShift], ?_⟩
+      obtain ⟨s, hs⟩ : ∃ s, M = 7 * s + 2 := ⟨M / 7, by omega⟩
+      show ∃ u : ℕ, N = 49 * u + 17 ∧ 0 < ((1260:ℤ) * u + 437) ∧
+          Nat.Prime (((1260:ℤ) * u + 437).toNat)
+      have heval : (((1260:ℤ) * s + 437)).toNat = 180 * M + 77 := by omega
+      exact ⟨s, by omega, by positivity, by rwa [heval]⟩
+    · refine ⟨.shift14Prime2, by simp [LeavesAtShift], ?_⟩
+      obtain ⟨s, hs⟩ : ∃ s, M = 7 * s + 3 := ⟨M / 7, by omega⟩
+      show ∃ u : ℕ, N = 49 * u + 24 ∧ 0 < ((1260:ℤ) * u + 617) ∧
+          Nat.Prime (((1260:ℤ) * u + 617).toNat)
+      have heval : (((1260:ℤ) * s + 617)).toNat = 180 * M + 77 := by omega
+      exact ⟨s, by omega, by positivity, by rwa [heval]⟩
+    · refine ⟨.shift14Prime3, by simp [LeavesAtShift], ?_⟩
+      obtain ⟨s, hs⟩ : ∃ s, M = 7 * s + 4 := ⟨M / 7, by omega⟩
+      show ∃ u : ℕ, N = 49 * u + 31 ∧ 0 < ((1260:ℤ) * u + 797) ∧
+          Nat.Prime (((1260:ℤ) * u + 797).toNat)
+      have heval : (((1260:ℤ) * s + 797)).toNat = 180 * M + 77 := by omega
+      exact ⟨s, by omega, by positivity, by rwa [heval]⟩
+    · refine ⟨.shift14Prime4, by simp [LeavesAtShift], ?_⟩
+      obtain ⟨s, hs⟩ : ∃ s, M = 7 * s + 5 := ⟨M / 7, by omega⟩
+      show ∃ u : ℕ, N = 49 * u + 38 ∧ 0 < ((1260:ℤ) * u + 977) ∧
+          Nat.Prime (((1260:ℤ) * u + 977).toNat)
+      have heval : (((1260:ℤ) * s + 977)).toNat = 180 * M + 77 := by omega
+      exact ⟨s, by omega, by positivity, by rwa [heval]⟩
+    · refine ⟨.shift14Prime5, by simp [LeavesAtShift], ?_⟩
+      obtain ⟨s, hs⟩ : ∃ s, M = 7 * s + 6 := ⟨M / 7, by omega⟩
+      show ∃ u : ℕ, N = 49 * u + 45 ∧ 0 < ((1260:ℤ) * u + 1157) ∧
+          Nat.Prime (((1260:ℤ) * u + 1157).toNat)
+      have heval : (((1260:ℤ) * s + 1157)).toNat = 180 * M + 77 := by omega
+      exact ⟨s, by omega, by positivity, by rwa [heval]⟩
+
+/-! ## Compatibility witness audit (milestone 6, step 7)
+
+The known shift-16 compatibility witness `N = 2038` (from
+`Erdos647_Shift16ResidualCompatibilityWitness.lean`) selects one leaf
+per catalog shift; the framework must NOT falsely declare this known
+compatible finite configuration impossible. This is a compatibility
+witness, not a candidate. -/
+
+/-- The witness `N = 2038` realizes one leaf per catalog shift and the
+selection avoids every certified edge. -/
+theorem depth16_witness_selection_audit :
+    (∀ id ∈ ([.shift8Prime, .shift13Free, .shift14Base, .shift15Base,
+        .shift16A] : List LeafId),
+      CandidateRealizesLeaf 2038 (leafOfId id)) ∧
+    AvoidsCertifiedEdges
+      [.shift8Prime, .shift13Free, .shift14Base, .shift15Base, .shift16A] := by
+  constructor
+  · intro id hid
+    fin_cases hid
+    · show ∃ u : ℕ, 2038 = 2 * u + 0 ∧ 0 < ((630:ℤ) * u + (-1)) ∧
+          Nat.Prime (((630:ℤ) * u + (-1)).toNat)
+      refine ⟨1019, by norm_num, by norm_num, ?_⟩
+      norm_num
+      native_decide
+    · show 0 < ((2520:ℤ) * 2038 + (-13)) ∧
+          ArithmeticFunction.sigma 0 (((2520:ℤ) * 2038 + (-13)).toNat) ≤ 15
+      refine ⟨by norm_num, ?_⟩
+      norm_num
+      native_decide
+    · show 0 < ((180:ℤ) * 2038 + (-1)) ∧
+          ArithmeticFunction.sigma 0 (((180:ℤ) * 2038 + (-1)).toNat) ≤ 4
+      refine ⟨by norm_num, ?_⟩
+      norm_num
+      native_decide
+    · show 0 < ((168:ℤ) * 2038 + (-1)) ∧
+          ArithmeticFunction.sigma 0 (((168:ℤ) * 2038 + (-1)).toNat) ≤ 4
+      refine ⟨by norm_num, ?_⟩
+      norm_num
+      native_decide
+    · show ∃ u : ℕ, 2038 = 32 * u + 22 ∧ 0 < ((630:ℤ) * u + 433) ∧
+          Nat.Prime (((630:ℤ) * u + 433).toNat)
+      refine ⟨63, by norm_num, by norm_num, ?_⟩
+      norm_num
+      native_decide
+  · unfold AvoidsCertifiedEdges
+    decide
 
 end Erdos647
