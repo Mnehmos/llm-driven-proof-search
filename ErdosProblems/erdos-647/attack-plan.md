@@ -65,6 +65,15 @@ family-sensitive 2-adic stress tests of that abstraction. The missing theorem
 is global: prove that repeated exceptional lifts cannot persist indefinitely,
 or otherwise force a failed shift at depth growing with `n`.
 
+**The four-rung base state is now an exact finite factor-shape state.** The
+three residual cofactors with divisor budget at most three are forced prime by
+uniform square-residue obstructions. The remaining `q7` cofactor is prime, a
+prime cube, or a product of two distinct primes; if it is composite, the
+coupled shift-7 budget forces its 7-adic depth to be zero. Together with the
+total depth bound `≤5` and pairwise-coprime rung clique, the next task is to
+propagate this finite prime/semiprime state into a growing-shift contradiction,
+not to weaken it back to an undifferentiated divisor-count estimate.
+
 One analytic correction is now part of the proof record. The earlier
 Chebyshev/Mertens lower bound is valid, but its leading coefficient is
 `log 2`; after multiplying by seven it is too weak to yield a seventh power

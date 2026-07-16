@@ -30,9 +30,9 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 | [THEOREM-CATALOG.md](THEOREM-CATALOG.md) | theorem inventory and final assembly map |
 | [attack-plan.md](attack-plan.md) | completed density program and remaining existence directions |
 | [evidence.md](evidence.md) | tracked episode evidence plus the clean repository replay |
-| [dossiers/](dossiers/README.md) | complete 323-episode export archive and indexes |
+| [dossiers/](dossiers/README.md) | complete 327-episode export archive and indexes |
 | [credit.md](credit.md) | attribution, AI disclosure, and honest limits |
-| [proof/](proof/) | 173 Lean files containing 459 actual theorem declarations and five helper lemmas (464 theorem/lemma declarations total) |
+| [proof/](proof/) | 175 Lean files containing 463 actual theorem declarations and five helper lemmas (468 theorem/lemma declarations total) |
 
 ## Headline results — 2026-07-16
 
@@ -64,10 +64,10 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
    the all-avoid obstruction showed that bounded congruence trees cannot close
    the frontier.
 
-6. **Complete machine export archive.** All 323 related episodes
+6. **Complete machine export archive.** All 327 related episodes
    are exported in redacted JSON, full Markdown dossier, and structured
    training JSON forms under
-   [dossiers/exports/](dossiers/exports/README.md). Of these, 315 report
+   [dossiers/exports/](dossiers/exports/README.md). Of these, 320 report
    `KERNEL_VERIFIED`; the archive deliberately retains three unfinished,
    three gave-up, and one budget-exhausted trajectory for audit completeness.
    The terminal composition is separately identified as a clean source replay
@@ -277,6 +277,20 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
     is independently `kernel_verified` and replayed. This sharply reduces the
     base state space but still does not prove a universal failed shift.
 
+26. **The residual factor shapes are now exact.**
+    [`Erdos647_BaseGauntletResidualPrimes.lean`](proof/Erdos647_BaseGauntletResidualPrimes.lean)
+    proves that the `q5`, `q9`, and `q10` residuals are prime: an integer with
+    `σ₀≤3` is prime or a square, while the defining affine forms exclude
+    squares modulo `8`, `8`, and `4` for every adic exponent.
+    [`Erdos647_SigmaFourClassification.lean`](proof/Erdos647_SigmaFourClassification.lean)
+    classifies the remaining `q7` residual as prime, a prime cube, or a
+    product of two distinct primes; its square branch is impossible modulo
+    `3`. The original coupled shift-7 budget further proves that either `q7`
+    is prime with depth at most two, or its depth is exactly zero and it has
+    one of the two composite shapes. All four new roots are independently
+    `kernel_verified` and replayed. The base gauntlet is therefore a shallow
+    finite prime/semiprime state, not merely a divisor-count bound.
+
 ## Verification snapshot
 
 - Pinned environment:
@@ -284,17 +298,17 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 - Complete density dependency replay: 42 modules plus
   `proof/campaign/family2-classifications.lean`, exit code 0
 - No `sorry`, `admit`, or added axiom in the final assembly
-- Portable source contains 459 actual theorem declarations and five top-level
-  lemma declarations across 173 Lean files; including 47 definitions (45
-  public and two private helpers) gives 511 declarations. These are source
-  declarations, not 510 independent tracked discoveries.
+- Portable source contains 463 actual theorem declarations and five top-level
+  lemma declarations across 175 Lean files; including 47 definitions (45
+  public and two private helpers) gives 515 declarations. These are source
+  declarations, not 515 independent tracked discoveries.
 - The 2026-07-16 power-prefix/block/certificate batch contains 31 theorem
   declarations in nine modules. Twenty-three roots were independently
   tracked `kernel_verified`; the remaining eight are source-compiled helpers.
 - The later large-prime, CRT re-entry, and second-layer continuation contributes
   30 additional tracked roots. Direct proof-search export confirms all 30 are
   `KERNEL_VERIFIED` in the pinned environment; their full, public-summary,
-  and training artifacts are included in the 323-episode archive.
+  and training artifacts are included in the 327-episode archive.
 - None of these results closes a Formal Conjectures declaration. All three
   research-open `sorry`s remain explicit.
 - Generated `.olean` files are not committed

@@ -2,10 +2,10 @@
 
 This directory contains the proof-search provenance layer for the campaign.
 
-- [exports/](exports/README.md): complete 323-episode archive in public-summary,
+- [exports/](exports/README.md): complete 327-episode archive in public-summary,
   full Markdown, and structured training formats.
 - [episode-index.tsv](episode-index.tsv): compact problem/episode lookup index,
-  now extended from the original 104 modular rows to all 323 related episodes.
+  now extended from the original 104 modular rows to all 327 related episodes.
 - [public-summaries.md](public-summaries.md): preserved legacy bundle for the
   original eight headline episodes.
 - [tools/](tools/README.md): reproducible fixed-depth search sources, clearly
@@ -22,7 +22,7 @@ extra proof-search episode.
 The newest tracked episodes cover exact fixed-depth consistency witnesses,
 the shift-13/14/15 refinements, the generic shift-factor and next-adic-lift
 framework, the exact eventual-excess interface for the limit variant, and the
-first infinite-window frontier. The archive now contains 316 kernel-verified
+first infinite-window frontier. The archive now contains 320 kernel-verified
 successes and seven retained non-success histories. Source-composed converses
 and frontier assemblies—including shift 16, which has a source replay and an
 independent `kernel_pass` but no tracked episode—are documented as repository
