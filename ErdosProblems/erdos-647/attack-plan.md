@@ -859,6 +859,9 @@ nonexistence, convergence, or Sophie Germain infinitude.
   are pairwise coprime for every `N≥1`. Thus the shifts `5,7,9,10` always
   supply four pairwise distinct prime factors. The six-edge root is tracked
   `kernel_verified` as episode `4a5b8d82-e89c-4893-8599-b6279c502a96`.
+  Its first branch-level consequence is also tracked: the rung-5 and rung-10
+  5-adic depths cannot both be positive (episode
+  `48d2efa3-0198-4efd-927d-15a870c55cdf`).
   The next seam is to connect this forced novelty to one common host, a CRT
   re-entry violation, or another global accumulation mechanism.
 - ✅ **Subset-product / CRT re-entry DONE (2026-07-16):** pair and general

@@ -89,7 +89,8 @@
 - The complete four-rung extension: the reduced cofactors at shifts
   `5,7,9,10` are pairwise coprime by six explicit positive Bézout identities,
   so every positive parameter supplies four pairwise distinct shifted-value
-  prime factors.
+  prime factors; the associated rung-5 and rung-10 5-adic depths cannot both
+  be positive.
 - General `t`-subset product selection and an exact CRT re-entry certificate:
   whenever a selected prime product lies below `n`, its residue supplies a
   new shift with the kernel-checked sandwich
@@ -103,10 +104,10 @@
   not a contradiction.
 - The explicit global bound `τ(n)^4≤19680n` and its fourth-root candidate
   prefix.
-- A complete public export archive for all 320 related episodes: 313
+- A complete public export archive for all 321 related episodes: 314
   kernel-verified successes and seven retained non-success histories.
-- The final checkpoint contains 172 Lean files with 455 actual theorem
-  declarations and five lemma declarations (460 theorem/lemma declarations
+- The final checkpoint contains 172 Lean files with 456 actual theorem
+  declarations and five lemma declarations (461 theorem/lemma declarations
   total).
 
 ## Tools and authorship
@@ -149,7 +150,7 @@
 - Theorem 2's mathematics and the density target are Hughes–Kitamura
   mathematics. Our contribution is the independent Lean reconstruction,
   truncation-gap diagnosis and repair, explicit constants, and final assembly.
-- The 320 proof-search episodes have `fidelity_status = attested`: Lean checks
+- The 321 proof-search episodes have `fidelity_status = attested`: Lean checks
   project-authored formal statements, but this is not neutral-corpus
   certification. Kernel verification applies to 312 of those episodes; the
   other seven are retained as explicit negative or unfinished trajectories.

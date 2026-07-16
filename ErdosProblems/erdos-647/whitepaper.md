@@ -265,7 +265,7 @@ repaired squarefree remainder was also submitted to the independent exact
 proof-search verifier and returned `kernel_pass`; identifiers and hashes are
 recorded in [evidence.md](evidence.md).
 
-For provenance beyond the source replay, all 320 related campaign
+For provenance beyond the source replay, all 321 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
 training JSON formats. Of these, 312 report `KERNEL_VERIFIED` in the pinned
@@ -493,7 +493,10 @@ Bézout identities proving that the reduced cofactors at shifts `5,7,9,10`,
 namely `504N-1`, `360N-1`, `280N-1`, and `252N-1`, are pairwise coprime.
 Every positive parameter therefore supplies four pairwise distinct primes,
 one dividing each shifted value. This blocks factor reuse across the entire
-four-rung subsystem. It is a structural increment, not a global
+four-rung subsystem. Moreover, if `5^a₅` divides `504N-1` and `5^a₁₀`
+divides `252N-1`, then `a₅=0` or `a₁₀=0`: the 5-adic escape branches at
+rungs 5 and 10 cannot occur simultaneously. It is a structural increment,
+not a global
 contradiction.
 
 The remaining barrier is now precise. One must either force a re-entry subset
@@ -508,10 +511,10 @@ Formal Conjectures declarations.
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **455 actual theorem
+- Portable proof source currently contains **456 actual theorem
   declarations and five top-level helper lemmas across 172 Lean files** under
   `proof/`. Including 47 definitions (45 public and two private helpers) gives
-  507 declarations. These counts include helper and assembly declarations;
+  508 declarations. These counts include helper and assembly declarations;
   they are not presented as 503 independent mathematical discoveries or 503
   standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base

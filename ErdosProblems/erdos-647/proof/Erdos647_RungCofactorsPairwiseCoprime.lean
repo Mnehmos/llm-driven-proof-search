@@ -27,6 +27,15 @@ proof-search pipeline on 2026-07-16:
 * root statement hash:
   `f96395d0ec4f87c2f33741e1642943aee82a55665a13e07a22e2f6925d8c85ee`
 * outcome: `kernel_verified`; replay `matched(1)`
+
+The rung-5/rung-10 adic-depth incompatibility was separately tracked:
+
+* preverification job: `65bf0b73-dcb8-497d-8c52-56cfb8189c56`
+* problem version: `c6a98f6f-e2f7-4762-9b45-936f168135ea`
+* episode: `48d2efa3-0198-4efd-927d-15a870c55cdf`
+* root statement hash:
+  `006c85849b78a3d5ede09612336d7907a94d5a0d0422926a93f7a22f55410050`
+* outcome: `kernel_verified`; replay `matched(1)`
 -/
 
 /-- A positive Bézout relation in subtraction-free natural-number form forces
@@ -144,3 +153,22 @@ theorem erdos647_four_rungs_supply_distinct_primes :
     N p5 p7 p9 p10 hN hp5 hp5co hp7 hp7co hp9 hp9co hp10 hp10co
   exact ⟨p5, p7, p9, p10, hp5, hp5shift, hp7, hp7shift,
     hp9, hp9shift, hp10, hp10shift, hdistinct⟩
+
+/-- The 5-adic escape depths at rungs `5` and `10` cannot both be positive. -/
+theorem erdos647_rung5_rung10_adic_depth_incompatible :
+    ∀ N a5 a10 : ℕ, 1 ≤ N →
+      5 ^ a5 ∣ 504 * N - 1 →
+      5 ^ a10 ∣ 252 * N - 1 →
+      a5 = 0 ∨ a10 = 0 := by
+  intro N a5 a10 hN hpow5 hpow10
+  by_contra hboth
+  push Not at hboth
+  have h5pow5 : 5 ∣ 5 ^ a5 := dvd_pow_self 5 hboth.1
+  have h5pow10 : 5 ∣ 5 ^ a10 := dvd_pow_self 5 hboth.2
+  have h5A : 5 ∣ 504 * N - 1 := h5pow5.trans hpow5
+  have h5C : 5 ∣ 252 * N - 1 := h5pow10.trans hpow10
+  have hrel : 504 * N - 1 = 2 * (252 * N - 1) + 1 := by omega
+  have h5twice : 5 ∣ 2 * (252 * N - 1) := Dvd.dvd.mul_left h5C 2
+  have h5plus : 5 ∣ 2 * (252 * N - 1) + 1 := hrel ▸ h5A
+  have h51 : 5 ∣ 1 := (Nat.dvd_add_right h5twice).mp h5plus
+  norm_num at h51

@@ -106,9 +106,9 @@ relevant) into a new `erdos-<N>/` folder and link it from the project index.
    bound `|C(X)|≤KX/(log X)^7`. The proof repairs the missing level truncation,
    proves polynomial error control, supplies an elementary seventh-power
    denominator, certifies dyadic parameters, and closes the finite range.
-    The folder publishes 460 theorem/lemma declarations (507 declarations when
+    The folder publishes 461 theorem/lemma declarations (508 declarations when
     47 definitions, including two private helpers, are included) and full
-    exports for 320 related proof-search episodes: 313 verified successes and
+    exports for 321 related proof-search episodes: 314 verified successes and
     seven retained non-success histories.
    The later existence work proves finite-catalog escape, large-prime
    non-reuse, subset-product/CRT re-entry reductions, and a conditional
