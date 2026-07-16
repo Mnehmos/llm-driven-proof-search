@@ -489,11 +489,12 @@ Formal Conjectures declarations.
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **452 top-level theorem
+- Portable proof source currently contains **449 actual theorem
   declarations and five top-level helper lemmas across 169 Lean files** under
-  `proof/`. Including 45 definitions gives 502 declarations. These counts
-  include helper and assembly declarations; they are not presented as 502
-  independent mathematical discoveries or 502 standalone tracked episodes.
+  `proof/`. Including 47 definitions (45 public and two private helpers) gives
+  501 declarations. These counts include helper and assembly declarations;
+  they are not presented as 501 independent mathematical discoveries or 501
+  standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base
   sieve, the bridging-closure layer, the Theorem-2 formalization, the
   extended negative result, the Mertens infrastructure, the explicit

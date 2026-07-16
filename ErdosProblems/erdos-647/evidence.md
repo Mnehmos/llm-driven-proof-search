@@ -298,10 +298,10 @@ index, and a read-only database closure audit. Of these, 310 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.
-Portable source currently contains 452 top-level theorem declarations and
-five top-level lemma declarations across 169 Lean files; including 45
-definitions gives 502 declarations. Those source counts and the 317 episode
-count measure different things.
+Portable source currently contains 449 actual theorem declarations and five
+top-level lemma declarations across 169 Lean files; including 47 definitions
+(45 public and two private helpers) gives 501 declarations. Those source counts
+and the 317 episode count measure different things.
 
 - [export manifest](dossiers/exports/manifest.tsv)
 - [public summaries](dossiers/exports/public_summary/)
