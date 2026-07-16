@@ -769,4 +769,57 @@ theorem depth16_witness_selection_audit :
   · unfold AvoidsCertifiedEdges
     decide
 
+/-! ## Candidate-to-catalog bridge (assembly, hypothesis form)
+
+Taking each shift's kernel-verified frontier disjunction as a hypothesis
+(the candidate-facing versions — `candidate_shift13_adic_frontier`,
+`candidate_shift14_seven_adic_frontier`,
+`candidate_shift15_five_adic_frontier`, and the shift-8 classification —
+are all tracked kernel-verified; cross-file imports are unavailable to
+tracked replays, so the final candidate-facing assembly inlines them in
+one submission), the catalog genuinely constrains a candidate: one
+realized leaf per shift, and the whole selection avoids every certified
+edge. This establishes the reusable pipeline
+`candidate ⟹ certificate family ⟹ global restriction`; it is done once,
+not extended shift-by-shift. -/
+
+theorem catalog_bridge_8_13_14_15 (N : ℕ) (hN : 1 ≤ N)
+    (h8 : Nat.Prime (315 * N - 1) ∨ ∃ p, Nat.Prime p ∧ 315 * N - 1 = 2 * p)
+    (hb13 : ArithmeticFunction.sigma 0 (2520 * N - 13) ≤ 15)
+    (h13 : ¬ 13 ∣ N ∨ ∃ M : ℕ, N = 13 * M ∧
+      (M % 13 = 6 ∨ ArithmeticFunction.sigma 0 (2520 * M - 1) ≤ 7))
+    (h14 : (N % 7 ≠ 3 ∧ ArithmeticFunction.sigma 0 (180 * N - 1) ≤ 4 ∧
+          (180 * N - 1).primeFactors.card ≤ 2) ∨
+        N % 49 = 3 ∨
+        ∃ M : ℕ, N = 7 * M + 3 ∧ M % 7 ≠ 0 ∧
+          Nat.Prime (180 * M + 77) ∧
+          (N % 49 = 10 ∨ N % 49 = 17 ∨ N % 49 = 24 ∨
+            N % 49 = 31 ∨ N % 49 = 38 ∨ N % 49 = 45))
+    (h15 : (N % 5 ≠ 2 ∧ ArithmeticFunction.sigma 0 (168 * N - 1) ≤ 4 ∧
+          (168 * N - 1).primeFactors.card ≤ 2) ∨
+        (∃ M : ℕ, N = 5 * M + 2 ∧ M % 5 ≠ 1 ∧ Nat.Prime (168 * M + 67)) ∨
+        (∃ Q : ℕ, N = 25 * Q + 7 ∧ Q % 5 ≠ 1 ∧ Nat.Prime (168 * Q + 47)) ∨
+        N % 125 = 32) :
+    ∃ a b c d : LeafId,
+      a ∈ LeavesAtShift 8 ∧ b ∈ LeavesAtShift 13 ∧
+      c ∈ LeavesAtShift 14 ∧ d ∈ LeavesAtShift 15 ∧
+      (∀ id ∈ ([a, b, c, d] : List LeafId),
+        CandidateRealizesLeaf N (leafOfId id)) ∧
+      AvoidsCertifiedEdges [a, b, c, d] := by
+  obtain ⟨a, ha, hra⟩ := shift8_classification_realizes_catalog_leaf N hN h8
+  obtain ⟨b, hb, hrb⟩ := shift13_frontier_realizes_catalog_leaf N hN hb13 h13
+  obtain ⟨c, hc, hrc⟩ := shift14_frontier_realizes_catalog_leaf N hN h14
+  obtain ⟨d, hd, hrd⟩ := shift15_frontier_realizes_catalog_leaf N hN h15
+  have hsel : ∀ id ∈ ([a, b, c, d] : List LeafId),
+      CandidateRealizesLeaf N (leafOfId id) := by
+    intro id hid
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hid
+    rcases hid with rfl | rfl | rfl | rfl
+    · exact hra
+    · exact hrb
+    · exact hrc
+    · exact hrd
+  exact ⟨a, b, c, d, ha, hb, hc, hd, hsel,
+    realized_selection_avoids_certified_edges hsel⟩
+
 end Erdos647
