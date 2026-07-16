@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro A ι _ k g q hq\nclassical\nrefine ⟨∏ i, q i, Finset.prod_pos (fun i _ => hq i), ?_⟩\nintro i hgi hki hkiAN hdi hdiv\nhave hqi : q i ∣ ∏ j, q j :=\n  Finset.dvd_prod_of_mem q (Finset.mem_univ i)\nobtain ⟨a, ha⟩ := hgi\nobtain ⟨b, hb⟩ := hqi\nhave hdAN : g i * q i ∣ A * (∏ j, q j) := by\n  refine ⟨a * b, ?_⟩\n  rw [ha, hb]\n  ring\nhave hdk : g i * q i ∣ k i := by\n  have hsub : A * (∏ j, q j) - (A * (∏ j, q j) - k i) = k i := by\n    omega\n  rw [← hsub]\n  exact Nat.dvd_sub hdAN hdiv\nrw [ArithmeticFunction.sigma_zero_apply]\nexact le_trans (Nat.card_divisors_le_self (g i * q i))\n  (Nat.le_of_dvd hki hdk)",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro A ι _ k g q hq\nclassical\nrefine ⟨∏ i, q i, Finset.prod_pos (fun i _ => hq i), ?_⟩\nintro i hgi hki hkiAN hdi hdiv\nhave hqi : q i ∣ ∏ j, q j :=\n  Finset.dvd_prod_of_mem q (Finset.mem_univ i)\nobtain ⟨a, ha⟩ := hgi\nobtain ⟨b, hb⟩ := hqi\nhave hdAN : g i * q i ∣ A * (∏ j, q j) := by\n  refine ⟨a * b, ?_⟩\n  rw [ha, hb]\n  ring\nhave hdk : g i * q i ∣ k i := by\n  have hsub : A * (∏ j, q j) - (A * (∏ j, q j) - k i) = k i := by\n    omega\n  rw [← hsub]\n  exact Nat.dvd_sub hdAN hdiv\nrw [ArithmeticFunction.sigma_zero_apply]\nexact le_trans (Nat.card_divisors_le_self (g i * q i))\n  (Nat.le_of_dvd hki hdk)",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (A : ℕ) (ι : Type) [Fintype ι] (k g q : ι → ℕ),\n      (∀ i, 0 < q i) →\n      ∃ N : ℕ, 0 < N ∧ ∀ i,\n        g i ∣ A → 0 < k i → k i ≤ A * N → 0 < g i * q i →\n        g i * q i ∣ A * N - k i →\n        ArithmeticFunction.sigma 0 (g i * q i) ≤ k i",
+        "module_source_hash": null,
+        "obligation_id": "2f47c40c-a311-49c9-a711-e228f400bcf4",
+        "outcome": "kernel_pass",
+        "problem_version_id": "c8d6c67f-ddf5-42d0-b0ef-615461265969",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "e616f21d435d5055d162b92a2bdcf181c8cdfb77b5254ad40fc67389d50bd1f5"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "4d080316a0077c428afbf28f58faf7e941f0544094ae337601ee975e7152a117"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "benchmark_suite": null,
+  "benchmark_upstream_problem_id": null,
+  "certified": false,
+  "completed_at": "2026-07-16T06:05:55.952756200+00:00",
+  "created_at": "2026-07-16T06:04:24.889824300+00:00",
+  "environment_hash": "9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d",
+  "episode_id": "5378a703-7458-4156-a4fc-547b3f11c93f",
+  "fidelity_basis": null,
+  "fidelity_status": "attested",
+  "formal_target_matched": false,
+  "import_manifest_hash": "e676c378ac1198b61f6c606d0a5aacab84dde72de7f5c784e93281285528a44b",
+  "interactive_sessions": {
+    "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
+    "proof_body_redacted": true,
+    "session_count": 0,
+    "sessions": []
+  },
+  "kernel_verified": true,
+  "mode": "public_summary",
+  "obligation_counts_by_status": {
+    "proved": 1
+  },
+  "outcome": "KERNEL_VERIFIED",
+  "proof_body_redacted": true,
+  "root_formal_statement": "    let N : ℕ := 1609299930876\n    let n : ℕ := 2520 * N\n    (∀ k ∈ Finset.Icc 1 15, sigma 0 (n - k) ≤ k + 2) ∧\n      sigma 0 (n - 16) = 40 ∧\n      18 < sigma 0 (n - 16) ∧\n      Nat.Prime (210 * N - 1) ∧\n      Nat.Prime (315 * N - 1) ∧\n      Nat.Prime (420 * N - 1) ∧\n      Nat.Prime (630 * N - 1) ∧\n      Nat.Prime (840 * N - 1) ∧\n      Nat.Prime (1260 * N - 1) ∧\n      Nat.Prime (2520 * N - 1)",
+  "step_count": 1,
+  "trajectory_event_count": 3,
+  "trajectory_first_hash": "adbb9389a58d5a9fb6ea2a3cdf01f7c3a80f36c4b2125cd3b4912ce8a59459ee",
+  "trajectory_last_hash": "99ff436ad301b7ed26ce4aa9de5915a1929e005a46dac823736aa388d1cdb410"
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro K t hprime k hk1 hkK\n  let L : ℕ := (Finset.Icc 1 K).lcm id\n  let q : ℕ := (L / k) * t - 1\n  have hpair : Nat.Prime q ∧ k < q := by\n    simpa [L, q] using hprime k hk1 hkK\n  obtain ⟨hqprime, hqgt⟩ := hpair\n  have hdvd : k ∣ L := by\n    dsimp [L]\n    simpa using\n      (Finset.dvd_lcm (s := Finset.Icc 1 K) (f := id)\n        (by simpa using Finset.mem_Icc.mpr ⟨hk1, hkK⟩))\n  have hfactor : L * t - k = k * q := by\n    dsimp [q]\n    have hmul : (((L / k) * k) * t) = k * ((L / k) * t) := by\n      ring\n    calc\n      L * t - k = (((L / k) * k) * t) - k := by\n        rw [Nat.div_mul_cancel hdvd]\n      _ = k * ((L / k) * t) - k := by rw [hmul]\n      _ = k * (((L / k) * t) - 1) := by\n        conv_rhs => rw [Nat.mul_sub_left_distrib, Nat.mul_one]\n  have hcop : Nat.Coprime k q := by\n    have hnot : ¬ q ∣ k := by\n      intro hdiv\n      have hle : q ≤ k := Nat.le_of_dvd hk1 hdiv\n      exact Nat.not_le_of_lt hqgt hle\n    exact Nat.Coprime.symm (hqprime.coprime_iff_not_dvd.mpr hnot)\n  have hqcard : q.divisors.card = 2 := by\n    rw [Nat.Prime.divisors hqprime]\n    exact Finset.card_pair hqprime.one_lt.ne\n  have htau : (L * t - k).divisors.card = 2 * k.divisors.card := by\n    calc\n      (L * t - k).divisors.card = (k * q).divisors.card := by rw [hfactor]\n      _ = k.divisors.card * q.divisors.card := hcop.card_divisors_mul\n      _ = k.divisors.card * 2 := by rw [hqcard]\n      _ = 2 * k.divisors.card := by omega\n  have hk0 : k ≠ 0 := by omega\n  have hsub : k.properDivisors ⊆ Finset.Icc 1 (k / 2) := by\n    intro d hd\n    have hdpos : 1 ≤ d := Nat.pos_of_mem_properDivisors hd\n    obtain ⟨a, ha, hka⟩ :=\n      (Nat.mem_properDivisors_iff_exists hk0).mp hd\n    have hd2 : d * 2 ≤ k := by\n      rw [hka]\n      exact Nat.mul_le_mul_left d ha\n    have hdhalf : d ≤ k / 2 :=\n      (Nat.le_div_iff_mul_le (by norm_num : 0 < 2)).mpr hd2\n    exact Finset.mem_Icc.mpr ⟨hdpos, hdhalf⟩\n  have hproper : k.properDivisors.card ≤ k / 2 := by\n    calc\n      k.properDivisors.card ≤ (Finset.Icc 1 (k / 2)).card :=\n        Finset.card_le_card hsub\n      _ = k / 2 := by rw [Nat.card_Icc]; omega\n  have hcard : k.divisors.card = k.properDivisors.card + 1 := by\n    rw [← Nat.insert_self_properDivisors hk0,\n      Finset.card_insert_of_notMem Nat.self_notMem_properDivisors]\n  change ArithmeticFunction.sigma 0 (L * t - k) ≤ k + 2\n  rw [ArithmeticFunction.sigma_zero_apply, htau]\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro K t hprime k hk1 hkK\n  let L : ℕ := (Finset.Icc 1 K).lcm id\n  let q : ℕ := (L / k) * t - 1\n  have hpair : Nat.Prime q ∧ k < q := by\n    simpa [L, q] using hprime k hk1 hkK\n  obtain ⟨hqprime, hqgt⟩ := hpair\n  have hdvd : k ∣ L := by\n    dsimp [L]\n    simpa using\n      (Finset.dvd_lcm (s := Finset.Icc 1 K) (f := id)\n        (by simpa using Finset.mem_Icc.mpr ⟨hk1, hkK⟩))\n  have hfactor : L * t - k = k * q := by\n    dsimp [q]\n    have hmul : (((L / k) * k) * t) = k * ((L / k) * t) := by\n      ring\n    calc\n      L * t - k = (((L / k) * k) * t) - k := by\n        rw [Nat.div_mul_cancel hdvd]\n      _ = k * ((L / k) * t) - k := by rw [hmul]\n      _ = k * (((L / k) * t) - 1) := by\n        conv_rhs => rw [Nat.mul_sub_left_distrib, Nat.mul_one]\n  have hcop : Nat.Coprime k q := by\n    have hnot : ¬ q ∣ k := by\n      intro hdiv\n      have hle : q ≤ k := Nat.le_of_dvd hk1 hdiv\n      exact Nat.not_le_of_lt hqgt hle\n    exact Nat.Coprime.symm (hqprime.coprime_iff_not_dvd.mpr hnot)\n  have hqcard : q.divisors.card = 2 := by\n    rw [Nat.Prime.divisors hqprime]\n    exact Finset.card_pair hqprime.one_lt.ne\n  have htau : (L * t - k).divisors.card = 2 * k.divisors.card := by\n    calc\n      (L * t - k).divisors.card = (k * q).divisors.card := by rw [hfactor]\n      _ = k.divisors.card * q.divisors.card := hcop.card_divisors_mul\n      _ = k.divisors.card * 2 := by rw [hqcard]\n      _ = 2 * k.divisors.card := by omega\n  have hk0 : k ≠ 0 := by omega\n  have hsub : k.properDivisors ⊆ Finset.Icc 1 (k / 2) := by\n    intro d hd\n    have hdpos : 1 ≤ d := Nat.pos_of_mem_properDivisors hd\n    obtain ⟨a, ha, hka⟩ :=\n      (Nat.mem_properDivisors_iff_exists hk0).mp hd\n    have hd2 : d * 2 ≤ k := by\n      rw [hka]\n      exact Nat.mul_le_mul_left d ha\n    have hdhalf : d ≤ k / 2 :=\n      (Nat.le_div_iff_mul_le (by norm_num : 0 < 2)).mpr hd2\n    exact Finset.mem_Icc.mpr ⟨hdpos, hdhalf⟩\n  have hproper : k.properDivisors.card ≤ k / 2 := by\n    calc\n      k.properDivisors.card ≤ (Finset.Icc 1 (k / 2)).card :=\n        Finset.card_le_card hsub\n      _ = k / 2 := by rw [Nat.card_Icc]; omega\n  have hcard : k.divisors.card = k.properDivisors.card + 1 := by\n    rw [← Nat.insert_self_properDivisors hk0,\n      Finset.card_insert_of_notMem Nat.self_notMem_properDivisors]\n  change ArithmeticFunction.sigma 0 (L * t - k) ≤ k + 2\n  rw [ArithmeticFunction.sigma_zero_apply, htau]\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "    ∀ K t : ℕ,\n      (∀ k, 1 ≤ k → k ≤ K →\n        Nat.Prime ((((Finset.Icc 1 K).lcm id / k) * t) - 1) ∧\n          k < (((Finset.Icc 1 K).lcm id / k) * t - 1)) →\n      ∀ k, 1 ≤ k → k ≤ K →\n        ArithmeticFunction.sigma 0 ((Finset.Icc 1 K).lcm id * t - k) ≤\n          k + 2",
+        "module_source_hash": null,
+        "obligation_id": "723878fa-6110-4cac-bc6b-a41de5bf6a39",
+        "outcome": "kernel_pass",
+        "problem_version_id": "7d956b60-f919-400b-a005-b74106be004c",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "0a027be3df9f79e5ed949f7c63af4a5b22743ec0b2d0e8c4cf4e51c1ff6323dd"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "973e4778fda5a46a9604f3ed68514d5514b8a5d84a78f46a25748d64d5886145"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

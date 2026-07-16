@@ -2,13 +2,13 @@
 
 Generated 2026-07-15 from the tracked proof-search environment.
 
-This directory is the complete export archive for all 227 related episodes
+This directory is the complete export archive for all 247 related episodes
 identified by campaign source, explicit Lean provenance, the evidence ledger,
 and a read-only transitive closure over matching problem and statement hashes.
 
 ## Outcome inventory
 
-- 220 episodes report `KERNEL_VERIFIED` and `kernel_verified = true`.
+- 240 episodes report `KERNEL_VERIFIED` and `kernel_verified = true`.
 - Three unfinished episodes report `IN_PROGRESS`.
 - Three terminated unsuccessful episodes report `GAVE_UP`.
 - One truncated episode reports `budget_exhausted`.
@@ -28,7 +28,7 @@ trajectories.
 - `training/`: structured JSON trajectory exports, including accepted proof
   actions, negative histories, and verifier metadata.
 
-All 227 exports report `fidelity_status = attested` and environment
+All 247 exports report `fidelity_status = attested` and environment
 `9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d`.
 
 The fidelity label matters: these are project-authored formal statements checked

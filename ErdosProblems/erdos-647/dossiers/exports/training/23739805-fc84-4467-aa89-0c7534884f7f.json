@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro p e q B hp hbound\nby_cases hpq : p ∣ q\n· exact Or.inl hpq\n· right\n  have hcop : Nat.Coprime p q :=\n    (hp.coprime_iff_not_dvd).mpr hpq\n  refine ⟨hcop, ?_⟩\n  have hcopPow : Nat.Coprime (p ^ e) q := hcop.pow_left e\n  rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopPow,\n    ArithmeticFunction.sigma_zero_apply_prime_pow hp] at hbound\n  apply (Nat.le_div_iff_mul_le (by omega : 0 < e + 1)).2\n  simpa [Nat.mul_comm] using hbound",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro p e q B hp hbound\nby_cases hpq : p ∣ q\n· exact Or.inl hpq\n· right\n  have hcop : Nat.Coprime p q :=\n    (hp.coprime_iff_not_dvd).mpr hpq\n  refine ⟨hcop, ?_⟩\n  have hcopPow : Nat.Coprime (p ^ e) q := hcop.pow_left e\n  rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopPow,\n    ArithmeticFunction.sigma_zero_apply_prime_pow hp] at hbound\n  apply (Nat.le_div_iff_mul_le (by omega : 0 < e + 1)).2\n  simpa [Nat.mul_comm] using hbound",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ p e q B : ℕ, Nat.Prime p → ArithmeticFunction.sigma 0 (p ^ e * q) ≤ B → (p ∣ q) ∨ (Nat.Coprime p q ∧ ArithmeticFunction.sigma 0 q ≤ B / (e + 1))",
+        "module_source_hash": null,
+        "obligation_id": "aa41f04d-bab0-4e23-aa6b-d236e24199ae",
+        "outcome": "kernel_pass",
+        "problem_version_id": "64fe14f7-ff25-42a4-afda-17ee1322a59b",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "1eac92d7176619915a6f06df000d3b364a9705e6e24d23f178fbe5df9a5e937b"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "1c65494ec5462022cd456f49fb3c18afb3807fff8f0f6eaa8648a7bf82e75dd0"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

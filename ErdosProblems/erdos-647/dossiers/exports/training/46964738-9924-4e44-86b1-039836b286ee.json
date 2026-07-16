@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "flat_tactic_sequence",
+        "proof_term": "  native_decide",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "flat_tactic_sequence",
+          "proof_term": "  native_decide",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "let Q := 63\nlet M := 16 * Q + 11\nlet N := 2 * M\nlet n := 2520 * N\nN = 2038 ∧ M % 8 = 3 ∧\n  Nat.Prime (315 * N - 1) ∧\n  Nat.Prime (630 * N - 1) ∧\n  Nat.Prime (1260 * N - 1) ∧\n  Nat.Prime (2520 * N - 1) ∧\n  Nat.Prime (630 * Q + 433) ∧\n  ArithmeticFunction.sigma 0 (n - 11) = 4 ∧\n  ArithmeticFunction.sigma 0 (n - 13) = 2 ∧\n  ArithmeticFunction.sigma 0 (n - 14) = 16 ∧\n  ArithmeticFunction.sigma 0 (n - 15) = 16 ∧\n  ArithmeticFunction.sigma 0 (n - 16) = 16",
+        "module_source_hash": null,
+        "obligation_id": "22193617-006d-42ff-92d5-899298fdde40",
+        "outcome": "kernel_pass",
+        "problem_version_id": "3cd08301-bd6a-496d-9d80-2d61fc98e32f",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "673038a699048e85dc374a1ec5257080cddb73594fb750ef4ae1d29e9a484571"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "7bbde1f31992740c60e5e559f94abc260cb6766adc75c24fdb9358d1df875c7e"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

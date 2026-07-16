@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro K hK p hp\nhaveI : Fact p.Prime := ⟨hp⟩\nrefine ⟨0, ?_⟩\nintro k hk\nsimp",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro K hK p hp\nhaveI : Fact p.Prime := ⟨hp⟩\nrefine ⟨0, ?_⟩\nintro k hk\nsimp",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ K : ℕ, 1 ≤ K → ∀ p : ℕ, p.Prime →\n  ∃ a : ZMod p, ∀ k ∈ Finset.Icc 1 K,\n    (((((Finset.Icc 1 K).lcm id / k : ℕ) : ZMod p) * a) - 1) ≠ 0",
+        "module_source_hash": null,
+        "obligation_id": "422e3d10-50f3-48fe-aee5-17c075d183a7",
+        "outcome": "kernel_pass",
+        "problem_version_id": "02ac0847-6aaf-4445-85da-42af440bdf41",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "1b25e98d1c9ab717c42c6b5f0905230e8050890c5a9dd1222961066ff53a66e5"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "8891cafffaec6856f5ab3fea4ae288ac12daf0fee6de62d5d2e3e84f408c4ac9"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

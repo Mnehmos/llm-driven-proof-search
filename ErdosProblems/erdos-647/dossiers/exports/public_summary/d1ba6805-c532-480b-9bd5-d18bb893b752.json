@@ -1,0 +1,31 @@
+{
+  "benchmark_suite": null,
+  "benchmark_upstream_problem_id": null,
+  "certified": false,
+  "completed_at": "2026-07-16T06:14:44.324955500+00:00",
+  "created_at": "2026-07-16T06:14:05.382443900+00:00",
+  "environment_hash": "9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d",
+  "episode_id": "d1ba6805-c532-480b-9bd5-d18bb893b752",
+  "fidelity_basis": null,
+  "fidelity_status": "attested",
+  "formal_target_matched": false,
+  "import_manifest_hash": "aaf21893d520a78dee0787a1bcaf939ee6b922265ff670c272e2e1d450dd29a7",
+  "interactive_sessions": {
+    "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
+    "proof_body_redacted": true,
+    "session_count": 0,
+    "sessions": []
+  },
+  "kernel_verified": true,
+  "mode": "public_summary",
+  "obligation_counts_by_status": {
+    "proved": 1
+  },
+  "outcome": "KERNEL_VERIFIED",
+  "proof_body_redacted": true,
+  "root_formal_statement": "∀ M : ℕ, 1 ≤ M →\n  ArithmeticFunction.sigma 0 (16 * (315 * M - 1)) ≤ 18 →\n  ¬ 32 ∣ 315 * M - 1",
+  "step_count": 1,
+  "trajectory_event_count": 3,
+  "trajectory_first_hash": "3554612573ea110ec0457e1e2003de5d3fe92dfc72b828a76c6163ca2068de0f",
+  "trajectory_last_hash": "d86548f16d1d6402120c63e7cfb218d9df972574dc1bc6e3ec4571c13e79e415"
+}
