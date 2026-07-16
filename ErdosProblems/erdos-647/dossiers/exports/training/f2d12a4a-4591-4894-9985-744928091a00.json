@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro N k p hkn hp\n  have hbase : p ∣ 2520 * N := Dvd.dvd.mul_right hp N\n  constructor\n  · intro hshift\n    have h := Nat.dvd_sub hbase hshift\n    rwa [show 2520 * N - (2520 * N - k) = k by omega] at h\n  · intro hk\n    exact Nat.dvd_sub hbase hk",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro N k p hkn hp\n  have hbase : p ∣ 2520 * N := Dvd.dvd.mul_right hp N\n  constructor\n  · intro hshift\n    have h := Nat.dvd_sub hbase hshift\n    rwa [show 2520 * N - (2520 * N - k) = k by omega] at h\n  · intro hk\n    exact Nat.dvd_sub hbase hk",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ N k p : ℕ, k ≤ 2520 * N → p ∣ 2520 →\n      (p ∣ 2520 * N - k ↔ p ∣ k)",
+        "module_source_hash": null,
+        "obligation_id": "ed7502a3-3a78-4e22-afe1-16063cb65ce7",
+        "outcome": "kernel_pass",
+        "problem_version_id": "0a9d617d-7ccf-4d61-b24c-fd8e9cb98ebc",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "7a25e346cef0e9d77264dc3d87a2e20de89138508a920351d2b7c6e70c03e0ed"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "2ead553d75d25924dbdb7835b71bf94fd8472e4e3054fbf98760676b17ee5876"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

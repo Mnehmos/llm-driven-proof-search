@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro r m S c hr hm hc hsmall hrough\n  have hm0 : m ≠ 0 := by omega\n  have hbinary : ∀ b : ℕ, b + 1 ≤ 2 ^ b := by\n    intro b\n    induction b with\n    | zero => simp\n    | succ k ih =>\n      calc\n        k + 1 + 1 ≤ 2 * (k + 1) := by omega\n        _ ≤ 2 * 2 ^ k := Nat.mul_le_mul_left 2 ih\n        _ = 2 ^ (k + 1) := by rw [pow_succ]; ring\n  have hlocal : ∀ p ∈ m.primeFactors,\n      (m.factorization p + 1) ^ r ≤\n        (if p ∈ S then c p else 1) * p ^ (m.factorization p) := by\n    intro p hp\n    have hpp : p.Prime := Nat.prime_of_mem_primeFactors hp\n    have hpd : p ∣ m := Nat.dvd_of_mem_primeFactors hp\n    have hpa : 1 ≤ m.factorization p :=\n      hpp.factorization_pos_of_dvd hm0 hpd\n    by_cases hpS : p ∈ S\n    · simp only [hpS, if_true]\n      exact hsmall p hpS hpp hpd _ hpa\n    · simp only [hpS, if_false, one_mul]\n      calc\n        (m.factorization p + 1) ^ r ≤ (2 ^ (m.factorization p)) ^ r :=\n          Nat.pow_le_pow_left (hbinary _) r\n        _ = (2 ^ r) ^ (m.factorization p) := by\n          rw [← pow_mul, ← pow_mul, Nat.mul_comm]\n        _ ≤ p ^ (m.factorization p) :=\n          Nat.pow_le_pow_left (hrough p hpp hpd hpS) _\n  have hsigma : ArithmeticFunction.sigma 0 m =\n      ∏ p ∈ m.primeFactors, (m.factorization p + 1) := by\n    rw [ArithmeticFunction.sigma_eq_prod_primeFactors_sum_range_factorization_pow_mul hm0]\n    simp\n  have hmprod : (∏ p ∈ m.primeFactors, p ^ (m.factorization p)) = m := by\n    rw [← Nat.prod_factorization_eq_prod_primeFactors]\n    exact Nat.prod_factorization_pow_eq_self hm0\n  have hbase : (ArithmeticFunction.sigma 0 m) ^ r ≤\n      (∏ p ∈ m.primeFactors, if p ∈ S then c p else 1) * m := by\n    rw [hsigma, ← Finset.prod_pow]\n    calc\n      ∏ p ∈ m.primeFactors, (m.factorization p + 1) ^ r\n          ≤ ∏ p ∈ m.primeFactors,\n              (if p ∈ S then c p else 1) * p ^ (m.factorization p) := by\n                exact Finset.prod_le_prod' hlocal\n      _ = (∏ p ∈ m.primeFactors, if p ∈ S then c p else 1) *\n            (∏ p ∈ m.primeFactors, p ^ (m.factorization p)) := by\n              rw [Finset.prod_mul_distrib]\n      _ = (∏ p ∈ m.primeFactors, if p ∈ S then c p else 1) * m := by\n            rw [hmprod]\n  have hprod_eq :\n      (∏ p ∈ m.primeFactors, if p ∈ S then c p else 1) =\n        ∏ p ∈ m.primeFactors.filter (fun p => p ∈ S), c p := by\n    rw [Finset.prod_filter]\n  have hsub : m.primeFactors.filter (fun p => p ∈ S) ⊆ S := by\n    intro p hp\n    exact (Finset.mem_filter.mp hp).2\n  have hprod_le :\n      (∏ p ∈ m.primeFactors, if p ∈ S then c p else 1) ≤\n        ∏ p ∈ S, c p := by\n    rw [hprod_eq]\n    exact Finset.prod_le_prod_of_subset_of_one_le hsub\n      (fun _ _ => Nat.zero_le _)\n      (fun p hpS _ => hc p hpS)\n  exact hbase.trans (Nat.mul_le_mul_right m hprod_le)",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro r m S c hr hm hc hsmall hrough\n  have hm0 : m ≠ 0 := by omega\n  have hbinary : ∀ b : ℕ, b + 1 ≤ 2 ^ b := by\n    intro b\n    induction b with\n    | zero => simp\n    | succ k ih =>\n      calc\n        k + 1 + 1 ≤ 2 * (k + 1) := by omega\n        _ ≤ 2 * 2 ^ k := Nat.mul_le_mul_left 2 ih\n        _ = 2 ^ (k + 1) := by rw [pow_succ]; ring\n  have hlocal : ∀ p ∈ m.primeFactors,\n      (m.factorization p + 1) ^ r ≤\n        (if p ∈ S then c p else 1) * p ^ (m.factorization p) := by\n    intro p hp\n    have hpp : p.Prime := Nat.prime_of_mem_primeFactors hp\n    have hpd : p ∣ m := Nat.dvd_of_mem_primeFactors hp\n    have hpa : 1 ≤ m.factorization p :=\n      hpp.factorization_pos_of_dvd hm0 hpd\n    by_cases hpS : p ∈ S\n    · simp only [hpS, if_true]\n      exact hsmall p hpS hpp hpd _ hpa\n    · simp only [hpS, if_false, one_mul]\n      calc\n        (m.factorization p + 1) ^ r ≤ (2 ^ (m.factorization p)) ^ r :=\n          Nat.pow_le_pow_left (hbinary _) r\n        _ = (2 ^ r) ^ (m.factorization p) := by\n          rw [← pow_mul, ← pow_mul, Nat.mul_comm]\n        _ ≤ p ^ (m.factorization p) :=\n          Nat.pow_le_pow_left (hrough p hpp hpd hpS) _\n  have hsigma : ArithmeticFunction.sigma 0 m =\n      ∏ p ∈ m.primeFactors, (m.factorization p + 1) := by\n    rw [ArithmeticFunction.sigma_eq_prod_primeFactors_sum_range_factorization_pow_mul hm0]\n    simp\n  have hmprod : (∏ p ∈ m.primeFactors, p ^ (m.factorization p)) = m := by\n    rw [← Nat.prod_factorization_eq_prod_primeFactors]\n    exact Nat.prod_factorization_pow_eq_self hm0\n  have hbase : (ArithmeticFunction.sigma 0 m) ^ r ≤\n      (∏ p ∈ m.primeFactors, if p ∈ S then c p else 1) * m := by\n    rw [hsigma, ← Finset.prod_pow]\n    calc\n      ∏ p ∈ m.primeFactors, (m.factorization p + 1) ^ r\n          ≤ ∏ p ∈ m.primeFactors,\n              (if p ∈ S then c p else 1) * p ^ (m.factorization p) := by\n                exact Finset.prod_le_prod' hlocal\n      _ = (∏ p ∈ m.primeFactors, if p ∈ S then c p else 1) *\n            (∏ p ∈ m.primeFactors, p ^ (m.factorization p)) := by\n              rw [Finset.prod_mul_distrib]\n      _ = (∏ p ∈ m.primeFactors, if p ∈ S then c p else 1) * m := by\n            rw [hmprod]\n  have hprod_eq :\n      (∏ p ∈ m.primeFactors, if p ∈ S then c p else 1) =\n        ∏ p ∈ m.primeFactors.filter (fun p => p ∈ S), c p := by\n    rw [Finset.prod_filter]\n  have hsub : m.primeFactors.filter (fun p => p ∈ S) ⊆ S := by\n    intro p hp\n    exact (Finset.mem_filter.mp hp).2\n  have hprod_le :\n      (∏ p ∈ m.primeFactors, if p ∈ S then c p else 1) ≤\n        ∏ p ∈ S, c p := by\n    rw [hprod_eq]\n    exact Finset.prod_le_prod_of_subset_of_one_le hsub\n      (fun _ _ => Nat.zero_le _)\n      (fun p hpS _ => hc p hpS)\n  exact hbase.trans (Nat.mul_le_mul_right m hprod_le)",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (r m : ℕ) (S : Finset ℕ) (c : ℕ → ℕ),\n      0 < r →\n      1 ≤ m →\n      (∀ p ∈ S, 1 ≤ c p) →\n      (∀ p ∈ S, p.Prime → p ∣ m → ∀ a : ℕ, 1 ≤ a →\n        (a + 1) ^ r ≤ c p * p ^ a) →\n      (∀ p : ℕ, p.Prime → p ∣ m → p ∉ S → 2 ^ r ≤ p) →\n      (ArithmeticFunction.sigma 0 m) ^ r ≤ (∏ p ∈ S, c p) * m",
+        "module_source_hash": null,
+        "obligation_id": "f76c7fe8-587e-4e7d-bc0b-57d601eab28e",
+        "outcome": "kernel_pass",
+        "problem_version_id": "826f66c3-0bed-4bfa-9f67-75292db3309d",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "54bb460e0ec9440c686c8675cd3aa0c777dd4bb08c756412e02d9e94ebe62eb5"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "4f8fe214699b26b61b3106ae7c303a126af46cfcc4b64b65ad8a9b721acfaf8e"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro a b N p ha hp hdvd hprime\nhave heq : a * N + b = p := by\n  rcases (Nat.Prime.eq_one_or_self_of_dvd hprime p hdvd) with h1 | h2\n  · omega\n  · omega\nrefine ⟨heq, ?_⟩\nhave : a * N ≤ p := by omega\nhave : 1 * N ≤ a * N := Nat.mul_le_mul_right N ha\nomega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro a b N p ha hp hdvd hprime\nhave heq : a * N + b = p := by\n  rcases (Nat.Prime.eq_one_or_self_of_dvd hprime p hdvd) with h1 | h2\n  · omega\n  · omega\nrefine ⟨heq, ?_⟩\nhave : a * N ≤ p := by omega\nhave : 1 * N ≤ a * N := Nat.mul_le_mul_right N ha\nomega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (a b N p : ℕ), 1 ≤ a → 1 < p → p ∣ a * N + b → Nat.Prime (a * N + b) → a * N + b = p ∧ N ≤ p",
+        "module_source_hash": null,
+        "obligation_id": "507481e1-8da8-48d5-a2f2-5654f75c5332",
+        "outcome": "kernel_pass",
+        "problem_version_id": "d6abd6d9-6408-40ab-8f61-7a43d8ded5c7",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "6f05c1d58ae39a6762606ba29443231d4e91605f67b4cfe18c1704babfa7a23c"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "97d4c9ead1c9b6636cd8b6ef9294b545676a09721aaaf7e62aa40ee516eebd83"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

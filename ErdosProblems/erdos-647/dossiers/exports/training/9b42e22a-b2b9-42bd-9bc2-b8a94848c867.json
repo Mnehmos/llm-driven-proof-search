@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro N B hN hbud\nhave hne : 360 * N - 1 ≠ 0 := by omega\nobtain ⟨a, q, hq7, heq⟩ := Nat.exists_eq_pow_mul_and_not_dvd hne 7 (by norm_num)\nrefine ⟨a, q, heq, hq7, ?_⟩\nhave hval : 2520 * N - 7 = 7 ^ (a + 1) * q := by\n  have h7 : 2520 * N - 7 = 7 * (360 * N - 1) := by omega\n  rw [h7, heq, pow_succ]\n  ring\nhave hcop : Nat.Coprime (7 ^ (a + 1)) q :=\n  Nat.Coprime.pow_left _ (((by norm_num : Nat.Prime 7).coprime_iff_not_dvd).mpr hq7)\nhave hs7 : ArithmeticFunction.sigma 0 (7 ^ (a + 1)) = a + 2 := by\n  rw [ArithmeticFunction.sigma_zero_apply, Nat.divisors_prime_pow (by norm_num : Nat.Prime 7), Finset.card_map, Finset.card_range]\nhave hsigma : ArithmeticFunction.sigma 0 (2520 * N - 7) = (a + 2) * ArithmeticFunction.sigma 0 q := by\n  rw [hval, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop, hs7]\nrw [hsigma] at hbud\nexact hbud",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro N B hN hbud\nhave hne : 360 * N - 1 ≠ 0 := by omega\nobtain ⟨a, q, hq7, heq⟩ := Nat.exists_eq_pow_mul_and_not_dvd hne 7 (by norm_num)\nrefine ⟨a, q, heq, hq7, ?_⟩\nhave hval : 2520 * N - 7 = 7 ^ (a + 1) * q := by\n  have h7 : 2520 * N - 7 = 7 * (360 * N - 1) := by omega\n  rw [h7, heq, pow_succ]\n  ring\nhave hcop : Nat.Coprime (7 ^ (a + 1)) q :=\n  Nat.Coprime.pow_left _ (((by norm_num : Nat.Prime 7).coprime_iff_not_dvd).mpr hq7)\nhave hs7 : ArithmeticFunction.sigma 0 (7 ^ (a + 1)) = a + 2 := by\n  rw [ArithmeticFunction.sigma_zero_apply, Nat.divisors_prime_pow (by norm_num : Nat.Prime 7), Finset.card_map, Finset.card_range]\nhave hsigma : ArithmeticFunction.sigma 0 (2520 * N - 7) = (a + 2) * ArithmeticFunction.sigma 0 q := by\n  rw [hval, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop, hs7]\nrw [hsigma] at hbud\nexact hbud",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (N B : ℕ), 1 ≤ N → ArithmeticFunction.sigma 0 (2520 * N - 7) ≤ B + 7 → ∃ a q : ℕ, 360 * N - 1 = 7 ^ a * q ∧ ¬ 7 ∣ q ∧ (a + 2) * ArithmeticFunction.sigma 0 q ≤ B + 7",
+        "module_source_hash": null,
+        "obligation_id": "00824358-0dd2-4c17-89ec-a926d61a1c57",
+        "outcome": "kernel_pass",
+        "problem_version_id": "0850b9a6-717d-469d-8d88-11ad4aa00e09",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "525f602193bb55df29b58d47ea5d1e05d6698115f18570e1075c3d603278b607"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "2afadd0f4f6ed7e0a97dee4bd24ca5b9bf140635b3144c90139f8cb35fe91a9c"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

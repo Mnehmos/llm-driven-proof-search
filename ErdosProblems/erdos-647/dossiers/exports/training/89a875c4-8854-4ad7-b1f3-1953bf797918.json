@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro block old hlarge hcop hold\n  have hinj : Set.InjOn Nat.minFac (block : Set ℕ) := by\n    intro m hm n hn hfac\n    simp only [Finset.mem_coe] at hm hn\n    by_contra hmn\n    have hmnCop : Nat.Coprime m n := hcop m hm n hn hmn\n    have hmPrime : m.minFac.Prime := Nat.minFac_prime (ne_of_gt (hlarge m hm))\n    have hmDvd : m.minFac ∣ m := Nat.minFac_dvd m\n    have hnDvd : m.minFac ∣ n := by\n      rw [hfac]\n      exact Nat.minFac_dvd n\n    exact hmPrime.ne_one (Nat.eq_one_of_dvd_coprimes hmnCop hmDvd hnDvd)\n  have hcard : (block.image Nat.minFac).card = block.card :=\n    Finset.card_image_iff.mpr hinj\n  have hdisj : Disjoint old (block.image Nat.minFac) := by\n    rw [Finset.disjoint_left]\n    intro p hpold hpnew\n    simp only [Finset.mem_image] at hpnew\n    obtain ⟨m, hm, rfl⟩ := hpnew\n    exact hold m.minFac hpold m hm (Nat.minFac_dvd m)\n  refine ⟨hcard, hdisj, ?_⟩\n  intro p hp\n  simp only [Finset.mem_image] at hp\n  obtain ⟨m, hm, rfl⟩ := hp\n  exact ⟨Nat.minFac_prime (ne_of_gt (hlarge m hm)),\n    ⟨m, hm, Nat.minFac_dvd m⟩⟩",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro block old hlarge hcop hold\n  have hinj : Set.InjOn Nat.minFac (block : Set ℕ) := by\n    intro m hm n hn hfac\n    simp only [Finset.mem_coe] at hm hn\n    by_contra hmn\n    have hmnCop : Nat.Coprime m n := hcop m hm n hn hmn\n    have hmPrime : m.minFac.Prime := Nat.minFac_prime (ne_of_gt (hlarge m hm))\n    have hmDvd : m.minFac ∣ m := Nat.minFac_dvd m\n    have hnDvd : m.minFac ∣ n := by\n      rw [hfac]\n      exact Nat.minFac_dvd n\n    exact hmPrime.ne_one (Nat.eq_one_of_dvd_coprimes hmnCop hmDvd hnDvd)\n  have hcard : (block.image Nat.minFac).card = block.card :=\n    Finset.card_image_iff.mpr hinj\n  have hdisj : Disjoint old (block.image Nat.minFac) := by\n    rw [Finset.disjoint_left]\n    intro p hpold hpnew\n    simp only [Finset.mem_image] at hpnew\n    obtain ⟨m, hm, rfl⟩ := hpnew\n    exact hold m.minFac hpold m hm (Nat.minFac_dvd m)\n  refine ⟨hcard, hdisj, ?_⟩\n  intro p hp\n  simp only [Finset.mem_image] at hp\n  obtain ⟨m, hm, rfl⟩ := hp\n  exact ⟨Nat.minFac_prime (ne_of_gt (hlarge m hm)),\n    ⟨m, hm, Nat.minFac_dvd m⟩⟩",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (block old : Finset ℕ),\n      (∀ m ∈ block, 1 < m) →\n      (∀ m ∈ block, ∀ n ∈ block, m ≠ n → Nat.Coprime m n) →\n      (∀ p ∈ old, ∀ m ∈ block, ¬ p ∣ m) →\n      (block.image Nat.minFac).card = block.card ∧\n        Disjoint old (block.image Nat.minFac) ∧\n        ∀ p ∈ block.image Nat.minFac,\n          p.Prime ∧ ∃ m ∈ block, p ∣ m",
+        "module_source_hash": null,
+        "obligation_id": "9da94f6b-4763-4223-838b-ba822b2e3ff3",
+        "outcome": "kernel_pass",
+        "problem_version_id": "cc66c3da-fe7c-42fd-b493-5b1b5e71a0ca",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "2c9868b1ee2401420669d455ee7fd245705cafbeac64f8a302ea169822385808"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "eff531eb52160e84f1768c41589c452dd917204d2aee410b4504cb5f0e078ad3"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "benchmark_suite": null,
+  "benchmark_upstream_problem_id": null,
+  "certified": false,
+  "completed_at": "2026-07-16T19:29:57.348592500+00:00",
+  "created_at": "2026-07-16T19:29:23.688805800+00:00",
+  "environment_hash": "9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d",
+  "episode_id": "11ce561a-d5ad-4225-ae5f-cb8b1f32afa6",
+  "fidelity_basis": null,
+  "fidelity_status": "attested",
+  "formal_target_matched": false,
+  "import_manifest_hash": "aaf21893d520a78dee0787a1bcaf939ee6b922265ff670c272e2e1d450dd29a7",
+  "interactive_sessions": {
+    "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
+    "proof_body_redacted": true,
+    "session_count": 0,
+    "sessions": []
+  },
+  "kernel_verified": true,
+  "mode": "public_summary",
+  "obligation_counts_by_status": {
+    "proved": 1
+  },
+  "outcome": "KERNEL_VERIFIED",
+  "proof_body_redacted": true,
+  "root_formal_statement": "∀ (r m : ℕ) (S : Finset ℕ) (den num : ℕ → ℕ),\n      0 < r →\n      1 ≤ m →\n      (∀ p ∈ S, p.Prime → p ∣ m → ∀ a : ℕ, 1 ≤ a →\n        den p * (a + 1) ^ r ≤ num p * p ^ a) →\n      (∀ p : ℕ, p.Prime → p ∣ m → p ∉ S → 2 ^ r ≤ p) →\n      (∏ p ∈ S, den p) * (ArithmeticFunction.sigma 0 m) ^ r ≤\n        (∏ p ∈ S, if p ∈ m.primeFactors then num p else den p) * m",
+  "step_count": 1,
+  "trajectory_event_count": 3,
+  "trajectory_first_hash": "c3a2932efbb5ee7a6c04a334642f5c60dbec2878cdbbd60e7394d22fa5d8d463",
+  "trajectory_last_hash": "100e31275d885dba367c56ba78b2433e64be78d2987d8ddf7b41c3055846024e"
+}

@@ -265,10 +265,10 @@ repaired squarefree remainder was also submitted to the independent exact
 proof-search verifier and returned `kernel_pass`; identifiers and hashes are
 recorded in [evidence.md](evidence.md).
 
-For provenance beyond the source replay, all 227 related campaign
+For provenance beyond the source replay, all 287 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
-training JSON formats. Of these, 220 report `KERNEL_VERIFIED` in the pinned
+training JSON formats. Of these, 280 report `KERNEL_VERIFIED` in the pinned
 environment; seven non-success histories are retained for audit completeness.
 
 This proves a density-zero result with the claimed seventh logarithmic power.
@@ -321,15 +321,102 @@ global induction or growing-depth invariant proving that this transition
 cannot continue indefinitely for a candidate. No such termination theorem is
 claimed here.
 
+### 3.8 Power-prefix compression and block production (2026-07-16)
+
+The next abstraction compresses the number of shifts requiring explicit
+arithmetic. For every positive `r`, if each prime divisor of `m` is at least
+`2^r`, then
+
+```text
+τ(m)^r ≤ m.
+```
+
+More generally, [`Erdos647_GenericLocalPowerBound.lean`](proof/Erdos647_GenericLocalPowerBound.lean)
+turns a finite table of verified local prime-power inequalities into a global
+bound. It supports natural constants and an exact integral
+denominator/numerator form. The latter recovers coefficients such as `8/5`
+and `8/7` without formal rational arithmetic. A bound
+`A·τ(m)^r≤C·m` implies that a failed budget `B+k<τ(n-k)` can occur only inside
+
+```text
+A(B+k)^r < C(n-k).
+```
+
+Thus a finite prefix certifies all shifts for any fixed `n`, and the `B=2`
+corollary directly certifies the exact supremum predicate appearing in Formal
+Conjectures.
+
+For `n=2520N`, small-prime divisibility is known exactly:
+`gcd(2520N-k,2520)=gcd(k,2520)`. Peeling `2,3,5,7` gives
+
+```text
+35·τ(2520N-k)^3 ≤ C(k)(2520N-k),
+```
+
+where
+
+```text
+C(k) =
+  (if 2∣k then 8 else 1)
+  (if 3∣k then 3 else 1)
+  (if 5∣k then 8 else 5)
+  (if 7∣k then 8 else 7).
+```
+
+The normalized local constants are `(8,3,8/5,8/7)`. This is stronger than
+using the worst class uniformly.
+
+Every positive shift also has unique block coordinates
+`k=block·q+s`, `0<s≤block`. The formal block theorem proves an exact iff
+between all global budgets and the local class-sensitive prefix cells
+`block·(N-q)-s`. Different coordinates produce different shifted values,
+although distinctness of values does not imply distinctness of prime factors.
+
+An executable factorization checker closes the finite-certification seam.
+For each required shift it checks a supplied list of distinct prime powers,
+their exact product, and the resulting divisor count. A batch theorem proves
+coverage of the entire prefix, and an end-to-end theorem converts a successful
+batch into the exact candidate supremum condition. The kernel verifies the
+factorization data; it need not run an unbounded factoring algorithm.
+
+Two further theorems isolate the hoped-for accumulation mechanism. A
+pairwise-coprime block of values greater than one produces one distinct prime
+per cell, disjoint from any avoided older catalog. If all those primes divide
+one positive host `H`, then
+
+```text
+2^block.card ≤ H.
+```
+
+The unresolved step is deriving sufficiently large pairwise-coprime blocks
+and a shared host uniformly from candidacy.
+
+Finally, the explicit global estimate
+
+```text
+τ(n)^4 ≤ 19680n
+```
+
+reduces the universal prefix to the fourth-root region
+
+```text
+(k+2)^4 < 19680(n-k).
+```
+
+This is a substantial compression for fixed-candidate certification, but the
+prefix still grows with `n`. No theorem here supplies a universal
+contradiction or a larger candidate. All three Formal Conjectures research
+declarations remain open.
+
 ## 4. Scoreboard (honest)
 
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **284 top-level theorem
-  declarations and four top-level helper lemmas across 116 Lean files** under
+- Portable proof source currently contains **388 top-level theorem
+  declarations and four top-level helper lemmas across 152 Lean files** under
   `proof/`. This count includes helper and assembly theorems; it is not
-  presented as 288 independent mathematical discoveries or 288 standalone
+  presented as 392 independent mathematical discoveries or 392 standalone
   tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base
   sieve, the bridging-closure layer, the Theorem-2 formalization, the

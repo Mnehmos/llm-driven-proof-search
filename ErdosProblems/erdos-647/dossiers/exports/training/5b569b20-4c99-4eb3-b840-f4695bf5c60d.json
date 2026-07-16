@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro N k hN hk0 hkn hcop\nhave hcore : ∀ m : ℕ, 1 ≤ m → (∀ p : ℕ, p.Prime → p ∣ m → 11 ≤ p) → (ArithmeticFunction.sigma 0 m) ^ 3 ≤ m := by\n  intro m\n  induction m using Nat.strong_induction_on with\n  | _ m ih =>\n    intro hm hrough\n    by_cases h1 : m = 1\n    · subst h1\n      native_decide\n    · have hm2 : 2 ≤ m := by omega\n      have hp : m.minFac.Prime := Nat.minFac_prime h1\n      have hpd : m.minFac ∣ m := Nat.minFac_dvd m\n      have hp11 : 11 ≤ m.minFac := hrough _ hp hpd\n      set P := m.minFac with hPdef\n      clear_value P\n      obtain ⟨a, q, hqnd, heq⟩ := Nat.exists_eq_pow_mul_and_not_dvd (show m ≠ 0 by omega) P hp.ne_one\n      have ha1 : 1 ≤ a := by\n        by_contra h0\n        push_neg at h0\n        have ha0 : a = 0 := by omega\n        rw [ha0, pow_zero, one_mul] at heq\n        rw [heq] at hpd\n        exact hqnd hpd\n      have hqpos : 1 ≤ q := by\n        rcases Nat.eq_zero_or_pos q with h0 | h0\n        · rw [h0, mul_zero] at heq\n          omega\n        · exact h0\n      have hpalt : 2 ≤ P ^ a := by\n        have := Nat.le_self_pow (by omega : a ≠ 0) P\n        omega\n      have hqlt : q < m := by\n        have h2 : 1 * q < P ^ a * q := by\n          apply Nat.mul_lt_mul_of_lt_of_le (by omega) (le_refl q)\n          omega\n        calc q = 1 * q := (one_mul q).symm\n          _ < P ^ a * q := h2\n          _ = m := heq.symm\n      have hqrough : ∀ p : ℕ, p.Prime → p ∣ q → 11 ≤ p := by\n        intro p hpp hpq\n        refine hrough p hpp ?_\n        rw [heq]\n        exact Dvd.dvd.mul_left hpq _\n      have hIH := ih q hqlt hqpos hqrough\n      have hT1 : ∀ b : ℕ, (b + 1) ^ 3 ≤ P ^ b := by\n        intro b\n        induction b with\n        | zero => simp\n        | succ j ihj =>\n          have hstep : (j + 2) ^ 3 ≤ 8 * (j + 1) ^ 3 := by\n            have h2 : j + 2 ≤ 2 * (j + 1) := by omega\n            calc (j + 2) ^ 3 ≤ (2 * (j + 1)) ^ 3 := Nat.pow_le_pow_left h2 3\n              _ = 8 * (j + 1) ^ 3 := by ring\n          calc (j + 1 + 1) ^ 3 = (j + 2) ^ 3 := by ring_nf\n            _ ≤ 8 * (j + 1) ^ 3 := hstep\n            _ ≤ 8 * P ^ j := Nat.mul_le_mul_left 8 ihj\n            _ ≤ P * P ^ j := Nat.mul_le_mul_right _ (by omega)\n            _ = P ^ (j + 1) := by rw [pow_succ]; ring\n      have hcop2 : Nat.Coprime (P ^ a) q := Nat.Coprime.pow_left _ ((hp.coprime_iff_not_dvd).mpr hqnd)\n      have hs : ArithmeticFunction.sigma 0 (P ^ a) = a + 1 := by\n        rw [ArithmeticFunction.sigma_zero_apply, Nat.divisors_prime_pow hp, Finset.card_map, Finset.card_range]\n      have hsig : ArithmeticFunction.sigma 0 m = (a + 1) * ArithmeticFunction.sigma 0 q := by\n        rw [heq, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop2, hs]\n      calc (ArithmeticFunction.sigma 0 m) ^ 3\n          = (a + 1) ^ 3 * (ArithmeticFunction.sigma 0 q) ^ 3 := by rw [hsig]; ring\n        _ ≤ P ^ a * q := Nat.mul_le_mul (hT1 a) hIH\n        _ = m := heq.symm\nhave hrough : ∀ p : ℕ, p.Prime → p ∣ 2520 * N - k → 11 ≤ p := by\n  intro p hpp hpm\n  have hple : p ∣ 2520 → False := by\n    intro hp2520\n    have hpk : p ∣ k := by\n      have h1 : p ∣ 2520 * N := Dvd.dvd.mul_right hp2520 N\n      have h2 : p ∣ 2520 * N - (2520 * N - k) := Nat.dvd_sub h1 hpm\n      rwa [show 2520 * N - (2520 * N - k) = k from by omega] at h2\n    have hg : Nat.gcd k 2520 = 1 := hcop\n    have hd : p ∣ Nat.gcd k 2520 := Nat.dvd_gcd hpk hp2520\n    rw [hg] at hd\n    have := Nat.dvd_one.mp hd\n    have := hpp.two_le\n    omega\n  have h2 := hpp.two_le\n  by_contra hlt\n  push_neg at hlt\n  interval_cases p\n  · exact hple (by norm_num)\n  · exact hple (by norm_num)\n  · exact absurd hpp (by norm_num)\n  · exact hple (by norm_num)\n  · exact absurd hpp (by norm_num)\n  · exact hple (by norm_num)\n  · exact absurd hpp (by norm_num)\n  · exact absurd hpp (by norm_num)\n  · exact absurd hpp (by norm_num)\nhave hpos : 1 ≤ 2520 * N - k := by omega\nexact hcore (2520 * N - k) hpos hrough",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro N k hN hk0 hkn hcop\nhave hcore : ∀ m : ℕ, 1 ≤ m → (∀ p : ℕ, p.Prime → p ∣ m → 11 ≤ p) → (ArithmeticFunction.sigma 0 m) ^ 3 ≤ m := by\n  intro m\n  induction m using Nat.strong_induction_on with\n  | _ m ih =>\n    intro hm hrough\n    by_cases h1 : m = 1\n    · subst h1\n      native_decide\n    · have hm2 : 2 ≤ m := by omega\n      have hp : m.minFac.Prime := Nat.minFac_prime h1\n      have hpd : m.minFac ∣ m := Nat.minFac_dvd m\n      have hp11 : 11 ≤ m.minFac := hrough _ hp hpd\n      set P := m.minFac with hPdef\n      clear_value P\n      obtain ⟨a, q, hqnd, heq⟩ := Nat.exists_eq_pow_mul_and_not_dvd (show m ≠ 0 by omega) P hp.ne_one\n      have ha1 : 1 ≤ a := by\n        by_contra h0\n        push_neg at h0\n        have ha0 : a = 0 := by omega\n        rw [ha0, pow_zero, one_mul] at heq\n        rw [heq] at hpd\n        exact hqnd hpd\n      have hqpos : 1 ≤ q := by\n        rcases Nat.eq_zero_or_pos q with h0 | h0\n        · rw [h0, mul_zero] at heq\n          omega\n        · exact h0\n      have hpalt : 2 ≤ P ^ a := by\n        have := Nat.le_self_pow (by omega : a ≠ 0) P\n        omega\n      have hqlt : q < m := by\n        have h2 : 1 * q < P ^ a * q := by\n          apply Nat.mul_lt_mul_of_lt_of_le (by omega) (le_refl q)\n          omega\n        calc q = 1 * q := (one_mul q).symm\n          _ < P ^ a * q := h2\n          _ = m := heq.symm\n      have hqrough : ∀ p : ℕ, p.Prime → p ∣ q → 11 ≤ p := by\n        intro p hpp hpq\n        refine hrough p hpp ?_\n        rw [heq]\n        exact Dvd.dvd.mul_left hpq _\n      have hIH := ih q hqlt hqpos hqrough\n      have hT1 : ∀ b : ℕ, (b + 1) ^ 3 ≤ P ^ b := by\n        intro b\n        induction b with\n        | zero => simp\n        | succ j ihj =>\n          have hstep : (j + 2) ^ 3 ≤ 8 * (j + 1) ^ 3 := by\n            have h2 : j + 2 ≤ 2 * (j + 1) := by omega\n            calc (j + 2) ^ 3 ≤ (2 * (j + 1)) ^ 3 := Nat.pow_le_pow_left h2 3\n              _ = 8 * (j + 1) ^ 3 := by ring\n          calc (j + 1 + 1) ^ 3 = (j + 2) ^ 3 := by ring_nf\n            _ ≤ 8 * (j + 1) ^ 3 := hstep\n            _ ≤ 8 * P ^ j := Nat.mul_le_mul_left 8 ihj\n            _ ≤ P * P ^ j := Nat.mul_le_mul_right _ (by omega)\n            _ = P ^ (j + 1) := by rw [pow_succ]; ring\n      have hcop2 : Nat.Coprime (P ^ a) q := Nat.Coprime.pow_left _ ((hp.coprime_iff_not_dvd).mpr hqnd)\n      have hs : ArithmeticFunction.sigma 0 (P ^ a) = a + 1 := by\n        rw [ArithmeticFunction.sigma_zero_apply, Nat.divisors_prime_pow hp, Finset.card_map, Finset.card_range]\n      have hsig : ArithmeticFunction.sigma 0 m = (a + 1) * ArithmeticFunction.sigma 0 q := by\n        rw [heq, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop2, hs]\n      calc (ArithmeticFunction.sigma 0 m) ^ 3\n          = (a + 1) ^ 3 * (ArithmeticFunction.sigma 0 q) ^ 3 := by rw [hsig]; ring\n        _ ≤ P ^ a * q := Nat.mul_le_mul (hT1 a) hIH\n        _ = m := heq.symm\nhave hrough : ∀ p : ℕ, p.Prime → p ∣ 2520 * N - k → 11 ≤ p := by\n  intro p hpp hpm\n  have hple : p ∣ 2520 → False := by\n    intro hp2520\n    have hpk : p ∣ k := by\n      have h1 : p ∣ 2520 * N := Dvd.dvd.mul_right hp2520 N\n      have h2 : p ∣ 2520 * N - (2520 * N - k) := Nat.dvd_sub h1 hpm\n      rwa [show 2520 * N - (2520 * N - k) = k from by omega] at h2\n    have hg : Nat.gcd k 2520 = 1 := hcop\n    have hd : p ∣ Nat.gcd k 2520 := Nat.dvd_gcd hpk hp2520\n    rw [hg] at hd\n    have := Nat.dvd_one.mp hd\n    have := hpp.two_le\n    omega\n  have h2 := hpp.two_le\n  by_contra hlt\n  push_neg at hlt\n  interval_cases p\n  · exact hple (by norm_num)\n  · exact hple (by norm_num)\n  · exact absurd hpp (by norm_num)\n  · exact hple (by norm_num)\n  · exact absurd hpp (by norm_num)\n  · exact hple (by norm_num)\n  · exact absurd hpp (by norm_num)\n  · exact absurd hpp (by norm_num)\n  · exact absurd hpp (by norm_num)\nhave hpos : 1 ≤ 2520 * N - k := by omega\nexact hcore (2520 * N - k) hpos hrough",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (N k : ℕ), 1 ≤ N → 0 < k → k < 2520 * N → Nat.Coprime k 2520 → (ArithmeticFunction.sigma 0 (2520 * N - k)) ^ 3 ≤ 2520 * N - k",
+        "module_source_hash": null,
+        "obligation_id": "2b03092d-23f1-4c03-acb7-ccb483a70a6b",
+        "outcome": "kernel_pass",
+        "problem_version_id": "60ecdd76-548b-4e11-a886-9536f619b320",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "61ee7953d42b5d45652fbc550faab747ac17877893e9853f5e3582028f075405"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "dc069bff846e98ade538db2274f644364f60f07a85f04ed900b0b95303e54179"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

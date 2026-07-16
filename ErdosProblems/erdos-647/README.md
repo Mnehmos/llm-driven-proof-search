@@ -30,11 +30,11 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 | [THEOREM-CATALOG.md](THEOREM-CATALOG.md) | theorem inventory and final assembly map |
 | [attack-plan.md](attack-plan.md) | completed density program and remaining existence directions |
 | [evidence.md](evidence.md) | tracked episode evidence plus the clean repository replay |
-| [dossiers/](dossiers/README.md) | complete 227-episode export archive and indexes |
+| [dossiers/](dossiers/README.md) | complete 287-episode export archive and indexes |
 | [credit.md](credit.md) | attribution, AI disclosure, and honest limits |
-| [proof/](proof/) | 116 Lean files containing 284 top-level theorems and four helper lemmas |
+| [proof/](proof/) | 152 Lean files containing 388 top-level theorems and four helper lemmas (392 declarations total) |
 
-## Headline results — 2026-07-15
+## Headline results — 2026-07-16
 
 1. **Global seventh-power density theorem.**
    [`boundedCandidates_density_global`](proof/Erdos647_ConcreteAsymptoticDensity.lean)
@@ -64,10 +64,10 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
    the all-avoid obstruction showed that bounded congruence trees cannot close
    the frontier.
 
-6. **Complete machine export archive.** All 227 related episodes
+6. **Complete machine export archive.** All 287 related episodes
    are exported in redacted JSON, full Markdown dossier, and structured
    training JSON forms under
-   [dossiers/exports/](dossiers/exports/README.md). Of these, 220 report
+   [dossiers/exports/](dossiers/exports/README.md). Of these, 280 report
    `KERNEL_VERIFIED`; the archive deliberately retains three unfinished,
    three gave-up, and one budget-exhausted trajectory for audit completeness.
    The terminal composition is separately identified as a clean source replay
@@ -142,6 +142,54 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
     most three distinct prime factors, and its 13-adic branch reduces outside
     one exceptional residue to a cofactor with at most seven divisors.
 
+13. **Every candidate now has an exact finite power-prefix certificate.**
+    [`Erdos647_RoughPowerBound.lean`](proof/Erdos647_RoughPowerBound.lean)
+    proves `τ(m)^r ≤ m` whenever every prime divisor of `m` is at least
+    `2^r`. [`Erdos647_GenericLocalPowerBound.lean`](proof/Erdos647_GenericLocalPowerBound.lean)
+    promotes arbitrary verified local prime-power inequalities—using either
+    natural constants or exact integral numerator/denominator pairs—to global
+    divisor-power bounds. [`Erdos647_GenericPowerPrefix.lean`](proof/Erdos647_GenericPowerPrefix.lean)
+    converts any `A·τ(m)^r ≤ C·m` bound into a finite shift-prefix theorem,
+    its excess-shift converse, and a certificate for the exact Formal
+    Conjectures supremum predicate.
+
+14. **The cube prefix is sharpened by the exact `gcd(k,2520)` class.**
+    [`Erdos647_ShiftGcdClass.lean`](proof/Erdos647_ShiftGcdClass.lean)
+    proves `gcd(2520N-k,2520)=gcd(k,2520)`.
+    [`Erdos647_GcdClassCubeBound.lean`](proof/Erdos647_GcdClassCubeBound.lean)
+    then proves `35·τ(2520N-k)^3 ≤ C(k)(2520N-k)`, with the exact normalized
+    local constants `(c₂,c₃,c₅,c₇)=(8,3,8/5,8/7)`.
+
+15. **The global shift family is exactly equivalent to an arbitrary-block
+    prefix family.**
+    [`Erdos647_ArbitraryBlockPowerPrefix.lean`](proof/Erdos647_ArbitraryBlockPowerPrefix.lean)
+    gives each positive shift unique coordinates `k=block·q+s`,
+    `0<s≤block`, and proves an iff—not merely an implication—between all
+    shift budgets and the corresponding local power-prefix cells. Its
+    candidate corollary uses the exact Formal Conjectures expression.
+
+16. **Finite prefix checks have an executable, kernel-sound certificate
+    format.**
+    [`Erdos647_FactorizationCertificate.lean`](proof/Erdos647_FactorizationCertificate.lean)
+    checks supplied distinct prime powers, exact products, divisor counts,
+    and complete required-shift coverage. A successful batch plus a global
+    divisor-power bound certifies the full candidate predicate; Lean checks
+    the data instead of trusting an external factorization oracle.
+
+17. **The growing-gauntlet novelty seam is isolated exactly.**
+    [`Erdos647_PairwiseCoprimeBlockNovelty.lean`](proof/Erdos647_PairwiseCoprimeBlockNovelty.lean)
+    proves that a pairwise-coprime block of values greater than one produces
+    one distinct prime per cell, new relative to any avoided finite catalog.
+    If those primes all divide a positive host `H`, then
+    `2^block.card ≤ H`. Deriving the block and host hypotheses uniformly from
+    candidacy remains open.
+
+18. **A fourth-root prefix is now available.**
+    [`Erdos647_FourthPowerDivisorBound.lean`](proof/Erdos647_FourthPowerDivisorBound.lean)
+    proves `τ(n)^4 ≤ 19680n` for every positive `n`. Consequently, for a
+    fixed candidate only shifts satisfying `(k+2)^4 < 19680(n-k)` require
+    explicit checking.
+
 ## Verification snapshot
 
 - Pinned environment:
@@ -149,6 +197,11 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 - Complete density dependency replay: 42 modules plus
   `proof/campaign/family2-classifications.lean`, exit code 0
 - No `sorry`, `admit`, or added axiom in the final assembly
+- The 2026-07-16 power-prefix/block/certificate batch contains 31 theorem
+  declarations in nine modules. Twenty-three roots were independently
+  tracked `kernel_verified`; the remaining eight are source-compiled helpers.
+- None of these results closes a Formal Conjectures declaration. All three
+  research-open `sorry`s remain explicit.
 - Generated `.olean` files are not committed
 
 No new witness and no disproof are claimed. What changed is substantial but

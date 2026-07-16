@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro r m S den num hr hm hsmall hrough\n  have hm0 : m ≠ 0 := by omega\n  have hbinary : ∀ b : ℕ, b + 1 ≤ 2 ^ b := by\n    intro b\n    induction b with\n    | zero => simp\n    | succ k ih =>\n      calc\n        k + 1 + 1 ≤ 2 * (k + 1) := by omega\n        _ ≤ 2 * 2 ^ k := Nat.mul_le_mul_left 2 ih\n        _ = 2 ^ (k + 1) := by rw [pow_succ]; ring\n  have hlocal : ∀ p ∈ m.primeFactors,\n      (if p ∈ S then den p else 1) * (m.factorization p + 1) ^ r ≤\n        (if p ∈ S then num p else 1) * p ^ (m.factorization p) := by\n    intro p hp\n    have hpp : p.Prime := Nat.prime_of_mem_primeFactors hp\n    have hpd : p ∣ m := Nat.dvd_of_mem_primeFactors hp\n    have hpa : 1 ≤ m.factorization p :=\n      hpp.factorization_pos_of_dvd hm0 hpd\n    by_cases hpS : p ∈ S\n    · simp only [hpS, if_true]\n      exact hsmall p hpS hpp hpd _ hpa\n    · simp only [hpS, if_false, one_mul]\n      calc\n        (m.factorization p + 1) ^ r ≤ (2 ^ (m.factorization p)) ^ r :=\n          Nat.pow_le_pow_left (hbinary _) r\n        _ = (2 ^ r) ^ (m.factorization p) := by\n          rw [← pow_mul, ← pow_mul, Nat.mul_comm]\n        _ ≤ p ^ (m.factorization p) :=\n          Nat.pow_le_pow_left (hrough p hpp hpd hpS) _\n  have hsigma : ArithmeticFunction.sigma 0 m =\n      ∏ p ∈ m.primeFactors, (m.factorization p + 1) := by\n    rw [ArithmeticFunction.sigma_eq_prod_primeFactors_sum_range_factorization_pow_mul hm0]\n    simp\n  have hmprod : (∏ p ∈ m.primeFactors, p ^ (m.factorization p)) = m := by\n    rw [← Nat.prod_factorization_eq_prod_primeFactors]\n    exact Nat.prod_factorization_pow_eq_self hm0\n  have hraw :\n      (∏ p ∈ m.primeFactors, if p ∈ S then den p else 1) *\n          (ArithmeticFunction.sigma 0 m) ^ r ≤\n        (∏ p ∈ m.primeFactors, if p ∈ S then num p else 1) * m := by\n    rw [hsigma, ← Finset.prod_pow]\n    calc\n      (∏ p ∈ m.primeFactors, if p ∈ S then den p else 1) *\n            (∏ p ∈ m.primeFactors, (m.factorization p + 1) ^ r) =\n          ∏ p ∈ m.primeFactors,\n            (if p ∈ S then den p else 1) * (m.factorization p + 1) ^ r := by\n              rw [Finset.prod_mul_distrib]\n      _ ≤ ∏ p ∈ m.primeFactors,\n            (if p ∈ S then num p else 1) * p ^ (m.factorization p) :=\n              Finset.prod_le_prod' hlocal\n      _ = (∏ p ∈ m.primeFactors, if p ∈ S then num p else 1) *\n            (∏ p ∈ m.primeFactors, p ^ (m.factorization p)) := by\n              rw [Finset.prod_mul_distrib]\n      _ = (∏ p ∈ m.primeFactors, if p ∈ S then num p else 1) * m := by\n            rw [hmprod]\n  set T := S.filter (fun p => p ∈ m.primeFactors) with hT\n  set U := S.filter (fun p => p ∉ m.primeFactors) with hU\n  have hfilter : m.primeFactors.filter (fun p => p ∈ S) = T := by\n    ext p\n    simp [T, and_comm]\n  have hinter : m.primeFactors ∩ S = T := by\n    ext p\n    simp [T, and_comm]\n  have hraw' : (∏ p ∈ T, den p) * (ArithmeticFunction.sigma 0 m) ^ r ≤\n      (∏ p ∈ T, num p) * m := by\n    simpa [Finset.prod_ite, hfilter, hinter] using hraw\n  have hden_split : (∏ p ∈ S, den p) =\n      (∏ p ∈ T, den p) * (∏ p ∈ U, den p) := by\n    simpa [T, U] using\n      (Finset.prod_ite (s := S) (p := fun p => p ∈ m.primeFactors) den den)\n  have hnum_split :\n      (∏ p ∈ S, if p ∈ m.primeFactors then num p else den p) =\n        (∏ p ∈ T, num p) * (∏ p ∈ U, den p) := by\n    simpa [T, U] using\n      (Finset.prod_ite (s := S) (p := fun p => p ∈ m.primeFactors) num den)\n  calc\n    (∏ p ∈ S, den p) * (ArithmeticFunction.sigma 0 m) ^ r =\n        (∏ p ∈ U, den p) *\n          ((∏ p ∈ T, den p) * (ArithmeticFunction.sigma 0 m) ^ r) := by\n            rw [hden_split]\n            ring\n    _ ≤ (∏ p ∈ U, den p) * ((∏ p ∈ T, num p) * m) :=\n      Nat.mul_le_mul_left _ hraw'\n    _ = (∏ p ∈ S, if p ∈ m.primeFactors then num p else den p) * m := by\n      rw [hnum_split]\n      ring",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro r m S den num hr hm hsmall hrough\n  have hm0 : m ≠ 0 := by omega\n  have hbinary : ∀ b : ℕ, b + 1 ≤ 2 ^ b := by\n    intro b\n    induction b with\n    | zero => simp\n    | succ k ih =>\n      calc\n        k + 1 + 1 ≤ 2 * (k + 1) := by omega\n        _ ≤ 2 * 2 ^ k := Nat.mul_le_mul_left 2 ih\n        _ = 2 ^ (k + 1) := by rw [pow_succ]; ring\n  have hlocal : ∀ p ∈ m.primeFactors,\n      (if p ∈ S then den p else 1) * (m.factorization p + 1) ^ r ≤\n        (if p ∈ S then num p else 1) * p ^ (m.factorization p) := by\n    intro p hp\n    have hpp : p.Prime := Nat.prime_of_mem_primeFactors hp\n    have hpd : p ∣ m := Nat.dvd_of_mem_primeFactors hp\n    have hpa : 1 ≤ m.factorization p :=\n      hpp.factorization_pos_of_dvd hm0 hpd\n    by_cases hpS : p ∈ S\n    · simp only [hpS, if_true]\n      exact hsmall p hpS hpp hpd _ hpa\n    · simp only [hpS, if_false, one_mul]\n      calc\n        (m.factorization p + 1) ^ r ≤ (2 ^ (m.factorization p)) ^ r :=\n          Nat.pow_le_pow_left (hbinary _) r\n        _ = (2 ^ r) ^ (m.factorization p) := by\n          rw [← pow_mul, ← pow_mul, Nat.mul_comm]\n        _ ≤ p ^ (m.factorization p) :=\n          Nat.pow_le_pow_left (hrough p hpp hpd hpS) _\n  have hsigma : ArithmeticFunction.sigma 0 m =\n      ∏ p ∈ m.primeFactors, (m.factorization p + 1) := by\n    rw [ArithmeticFunction.sigma_eq_prod_primeFactors_sum_range_factorization_pow_mul hm0]\n    simp\n  have hmprod : (∏ p ∈ m.primeFactors, p ^ (m.factorization p)) = m := by\n    rw [← Nat.prod_factorization_eq_prod_primeFactors]\n    exact Nat.prod_factorization_pow_eq_self hm0\n  have hraw :\n      (∏ p ∈ m.primeFactors, if p ∈ S then den p else 1) *\n          (ArithmeticFunction.sigma 0 m) ^ r ≤\n        (∏ p ∈ m.primeFactors, if p ∈ S then num p else 1) * m := by\n    rw [hsigma, ← Finset.prod_pow]\n    calc\n      (∏ p ∈ m.primeFactors, if p ∈ S then den p else 1) *\n            (∏ p ∈ m.primeFactors, (m.factorization p + 1) ^ r) =\n          ∏ p ∈ m.primeFactors,\n            (if p ∈ S then den p else 1) * (m.factorization p + 1) ^ r := by\n              rw [Finset.prod_mul_distrib]\n      _ ≤ ∏ p ∈ m.primeFactors,\n            (if p ∈ S then num p else 1) * p ^ (m.factorization p) :=\n              Finset.prod_le_prod' hlocal\n      _ = (∏ p ∈ m.primeFactors, if p ∈ S then num p else 1) *\n            (∏ p ∈ m.primeFactors, p ^ (m.factorization p)) := by\n              rw [Finset.prod_mul_distrib]\n      _ = (∏ p ∈ m.primeFactors, if p ∈ S then num p else 1) * m := by\n            rw [hmprod]\n  set T := S.filter (fun p => p ∈ m.primeFactors) with hT\n  set U := S.filter (fun p => p ∉ m.primeFactors) with hU\n  have hfilter : m.primeFactors.filter (fun p => p ∈ S) = T := by\n    ext p\n    simp [T, and_comm]\n  have hinter : m.primeFactors ∩ S = T := by\n    ext p\n    simp [T, and_comm]\n  have hraw' : (∏ p ∈ T, den p) * (ArithmeticFunction.sigma 0 m) ^ r ≤\n      (∏ p ∈ T, num p) * m := by\n    simpa [Finset.prod_ite, hfilter, hinter] using hraw\n  have hden_split : (∏ p ∈ S, den p) =\n      (∏ p ∈ T, den p) * (∏ p ∈ U, den p) := by\n    simpa [T, U] using\n      (Finset.prod_ite (s := S) (p := fun p => p ∈ m.primeFactors) den den)\n  have hnum_split :\n      (∏ p ∈ S, if p ∈ m.primeFactors then num p else den p) =\n        (∏ p ∈ T, num p) * (∏ p ∈ U, den p) := by\n    simpa [T, U] using\n      (Finset.prod_ite (s := S) (p := fun p => p ∈ m.primeFactors) num den)\n  calc\n    (∏ p ∈ S, den p) * (ArithmeticFunction.sigma 0 m) ^ r =\n        (∏ p ∈ U, den p) *\n          ((∏ p ∈ T, den p) * (ArithmeticFunction.sigma 0 m) ^ r) := by\n            rw [hden_split]\n            ring\n    _ ≤ (∏ p ∈ U, den p) * ((∏ p ∈ T, num p) * m) :=\n      Nat.mul_le_mul_left _ hraw'\n    _ = (∏ p ∈ S, if p ∈ m.primeFactors then num p else den p) * m := by\n      rw [hnum_split]\n      ring",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (r m : ℕ) (S : Finset ℕ) (den num : ℕ → ℕ),\n      0 < r →\n      1 ≤ m →\n      (∀ p ∈ S, p.Prime → p ∣ m → ∀ a : ℕ, 1 ≤ a →\n        den p * (a + 1) ^ r ≤ num p * p ^ a) →\n      (∀ p : ℕ, p.Prime → p ∣ m → p ∉ S → 2 ^ r ≤ p) →\n      (∏ p ∈ S, den p) * (ArithmeticFunction.sigma 0 m) ^ r ≤\n        (∏ p ∈ S, if p ∈ m.primeFactors then num p else den p) * m",
+        "module_source_hash": null,
+        "obligation_id": "cd41b457-8211-49cf-9c70-499bd7a5dabc",
+        "outcome": "kernel_pass",
+        "problem_version_id": "0e1dd653-15d2-415b-9f74-6892c18911ab",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "16cfd8f60386be597e3ff9db7367f6e3cfa75ccc6b378a8edaa062e2f17a520c"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "4010fac652ebb9e9ea30485f43d5e344d7f1ab77b5002184910b520de006d42a"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

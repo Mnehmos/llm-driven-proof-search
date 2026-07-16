@@ -1,9 +1,48 @@
 # Attack plan — Erdős #647 (living)
 
-> Last updated 2026-07-15. This is the working plan of record; it changes as
+> Last updated 2026-07-16. This is the working plan of record; it changes as
 > results land. Completed milestones move to the whitepaper's campaign log.
 
-## HEADLINE STATUS (2026-07-15)
+## HEADLINE STATUS (2026-07-16)
+
+**No Formal Conjectures `sorry` is closed yet.** The main existence
+declaration is nevertheless reduced to a sharply smaller, executable
+obligation. Candidatehood is exactly equivalent to all shift budgets; the
+finite range `25 ≤ n ≤ 84` is excluded; every remaining candidate is above
+`84`, divisible by `2520`, and lies in the verified Hughes prime-chain
+families. The third, infinite-window declaration remains separate and already
+contains Sophie Germain infinitude at its first open depth.
+
+**The positive/exclusion window is now fourth-root scale.** The generic
+rough-power theorem proves `τ(m)^r ≤ m` when every prime divisor of `m` is at
+least `2^r`. A generic excess-`B` power-prefix interface transports any bound
+`A·τ(m)^r ≤ C·m` into both failed-shift localization and the exact supremum
+candidate predicate. The first non-cubic all-integer instance is now
+kernel-verified:
+
+`τ(n)^4 ≤ 19680·n` for every `n ≥ 1`.
+
+Consequently it is enough to check the shifts satisfying
+`(k+2)^4 < 19680·(n-k)`, an explicit `O(n^(1/4))` window. For the cubic
+specialization, the exact gcd class of `k` against `2520` gives the sharper
+coefficient table `(8,3,8/5,8/7)` prime by prime.
+
+**The certificate path is end-to-end.** A verified finite batch checker now
+accepts shift-indexed lists of distinct prime powers, checks primality, exact
+products, coverage of the required power-prefix set, and each divisor budget,
+then certifies the exact Formal Conjectures supremum expression. Search remains
+steering only; a future witness must arrive with a batch that Lean rechecks.
+
+**The negative lane has an exact arbitrary-block interface and a precise
+remaining seam.** Global excess-`B` survival is equivalent to the canonical
+class-sensitive prefix checks in every block `k = block·q+s`; those coordinates
+and shifted values are injective. Pairwise-coprime blocks canonically produce
+one distinct prime per value, and a verified shared-host theorem shows that if
+all produced primes divide one positive host `H`, then `2^(block.card) ≤ H`.
+What is still missing is the genuinely arithmetic production theorem forcing
+the surviving block primes/adic digits into such a bounded shared host (or an
+equivalent reusable structure). Coordinate novelty or fixed finite gauntlets
+alone do not supply that premise.
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,
@@ -740,6 +779,10 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
 Target: prove `∀ n, 24 < n → ¬Candidate n`, equivalently show that every such
 `n` has a failed shift budget.
 
+Formal Conjectures closure count: **0 of 3 research `sorry`s closed**. The new
+results sharpen and mechanize their interfaces but do not prove existence,
+nonexistence, convergence, or Sophie Germain infinitude.
+
 - ✅ **Shift-depth interface DONE (2026-07-15):**
   `full_max_implies_shift_budgets` converts the global `ciSup` condition into
   `σ₀(n-k)≤k+2` for every `0<k<n`. `SurvivesThrough n D` packages the first
@@ -770,6 +813,40 @@ Target: prove `∀ n, 24 < n → ¬Candidate n`, equivalently show that every su
   restated over the exact Formal Conjectures set. Both sides compile in their
   independently pinned toolchains. This fills none of the research-open
   `sorry`s. Snapshot `proof/Erdos647_FormalConjecturesCompatibility.lean`.
+- ✅ **Generic local-factor and power-prefix compression DONE (2026-07-16):**
+  `erdos647_rough_power_bound` proves `τ(m)^r≤m` for `2^r`-rough `m`.
+  Four generic local-factor theorems turn arbitrary prime-power inequalities
+  into global natural-constant or exact integral-ratio bounds. The prefix
+  theorems then reduce every budget to the finite region
+  `A(B+k)^r<C(n-k)`, localize every excess shift there, and directly certify
+  the exact Formal Conjectures candidate predicate.
+- ✅ **Exact `2520` class-sensitive cube prefix DONE (2026-07-16):**
+  `gcd(2520N-k,2520)=gcd(k,2520)`, and
+  `35·τ(2520N-k)^3≤C(k)(2520N-k)` with exact local factors at
+  `2,3,5,7`. The generic ratio theorem now subsumes the coefficient table
+  `(8,3,8/5,8/7)` without rational arithmetic.
+- ✅ **Arbitrary-block production equivalence DONE (2026-07-16):** every
+  positive shift has unique coordinates `k=block·q+s`, `0<s≤block`, and all
+  global shift budgets are iff the corresponding local power-prefix checks.
+  At `block=2520` this is the exact blockwise interface sought by the
+  growing-gauntlet lane. Distinct cells give distinct shifted values, but this
+  alone does not give distinct prime factors.
+- ✅ **Verified factorization-batch checker DONE (2026-07-16):** finite
+  prefix checks can be discharged by supplied prime-power lists. The checker
+  proves prime-base distinctness, exact products, exact divisor counts,
+  required-shift coverage, and an end-to-end candidate theorem. It is a
+  proof-producing witness verifier, not a search oracle.
+- ✅ **Conditional block novelty/shared-host theorem DONE (2026-07-16):**
+  pairwise-coprime block values avoiding an old prime catalog produce one
+  distinct new prime per cell. If those primes divide one positive host `H`,
+  then `2^block.card≤H`.
+- ✅ **Fourth-root prefix DONE (2026-07-16):** `τ(n)^4≤19680n`, hence only
+  `(k+2)^4<19680(n-k)` requires explicit checking for a fixed candidate.
+- **Current hard seam:** derive, uniformly from candidate hypotheses, either
+  arbitrarily long pairwise-coprime block families plus a shared host, or an
+  equivalent accumulation mechanism forcing one budget failure. The block
+  iff, injectivity, batch checker, and fourth-root window do not themselves
+  supply that theorem.
 - **Growing-depth objective:** iterate the generic factor/adic transition,
   rather than hand-proving an unrelated theorem at every shift, to seek a
   function `D(n)→∞` for which every sufficiently large `n` fails one budget

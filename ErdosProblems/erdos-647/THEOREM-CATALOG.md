@@ -1,11 +1,11 @@
 # Erdős #647 — complete kernel-verified theorem catalog
 
 > **Living inventory. Problem OPEN; global density theorem verified.** Last
-> updated 2026-07-15.
+> updated 2026-07-16.
 >
 > This catalogs the kernel-checked and source-replayed theorem families produced by the Erdős
-> #647 campaign. The portable source currently has 284 top-level theorem
-> declarations and four top-level helper lemmas across 116 Lean files (288
+> #647 campaign. The portable source currently has 388 top-level theorem
+> declarations and four top-level helper lemmas across 152 Lean files (392
 > theorem/lemma declarations total). Each tracked row carries the
 > `problem_version_id` — the authoritative lookup key in the
 > tracked pipeline — plus the exact root statement and, where recorded, the
@@ -15,7 +15,7 @@
 > **What is portable vs. internal.** The committed `.lean` files are the
 > simplest portable formal artifact: they check against Mathlib without this
 > project's database. The repository now also publishes the complete exports
-> for all 227 related episodes—redacted public summaries, full
+> for all 287 related episodes—redacted public summaries, full
 > Markdown proof dossiers, and structured training JSON—under
 > [dossiers/exports/](dossiers/exports/README.md). The IDs alone still are not
 > an external database API; the committed exports are what makes the audit
@@ -66,6 +66,15 @@ kernel replay rather than a single tracked proof-search episode.
 | [`proof/Erdos647_Shift16Refined.lean`](proof/Erdos647_Shift16Refined.lean) | family-sensitive 2-adic stress test and explicit residual branch |
 | [`proof/Erdos647_LimitShiftInterface.lean`](proof/Erdos647_LimitShiftInterface.lean) | exact eventual-shift-excess form of the limit variant, plus an unbounded prime-power subsequence |
 | [`proof/Erdos647_InfiniteWindowFrontier.lean`](proof/Erdos647_InfiniteWindowFrontier.lean) | unconditional window depths below two and exact depth-two/Sophie-Germain infinitude equivalence |
+| [`proof/Erdos647_RoughPowerBound.lean`](proof/Erdos647_RoughPowerBound.lean) | generic rough `r`-power divisor bound |
+| [`proof/Erdos647_GenericLocalPowerBound.lean`](proof/Erdos647_GenericLocalPowerBound.lean) | generic local constants and exact finite numerator/denominator products |
+| [`proof/Erdos647_GenericPowerPrefix.lean`](proof/Erdos647_GenericPowerPrefix.lean) | generic prefix, excess-shift converse, and exact candidate bridge |
+| [`proof/Erdos647_ShiftGcdClass.lean`](proof/Erdos647_ShiftGcdClass.lean) | exact transport of the `2520` gcd class from `k` to `2520N-k` |
+| [`proof/Erdos647_GcdClassCubeBound.lean`](proof/Erdos647_GcdClassCubeBound.lean) | exact class-sensitive cube bound and candidate prefix |
+| [`proof/Erdos647_ArbitraryBlockPowerPrefix.lean`](proof/Erdos647_ArbitraryBlockPowerPrefix.lean) | exact arbitrary-block prefix equivalence and coordinate injectivity |
+| [`proof/Erdos647_FactorizationCertificate.lean`](proof/Erdos647_FactorizationCertificate.lean) | executable factorization/batch checker and end-to-end candidate soundness |
+| [`proof/Erdos647_PairwiseCoprimeBlockNovelty.lean`](proof/Erdos647_PairwiseCoprimeBlockNovelty.lean) | conditional prime novelty and shared-host exponential bound |
+| [`proof/Erdos647_FourthPowerDivisorBound.lean`](proof/Erdos647_FourthPowerDivisorBound.lean) | `τ(n)^4≤19680n` and fourth-root candidate prefix |
 
 Terminal statement:
 
@@ -89,15 +98,15 @@ no access to this project's database required.
 
 Committed Lean source:
 
-- 116 `.lean` files under [proof/](proof/), containing 284 top-level theorem
-  declarations and four top-level helper lemmas (288 declarations total).
+- 152 `.lean` files under [proof/](proof/), containing 388 top-level theorem
+  declarations and four top-level helper lemmas (392 declarations total).
 - Five consolidated modular families under
   [proof/campaign/](proof/campaign/), plus individual analytic, truncation,
   candidate-transport, and final-assembly modules in the parent directory.
 
 Export and reproduction material:
 
-- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 227 related
+- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 287 related
   problem/episode pairs.
 - [dossiers/exports/manifest.tsv](dossiers/exports/manifest.tsv) records the
   outcome, fidelity, environment, statement hash, timestamps, and step count.
@@ -117,7 +126,8 @@ Export and reproduction material:
 | 7 | Layer A (quantitative-Mertens infra) | 5 | Abel-summation identity and explicit analytic bounds; valid infrastructure, though the final seventh-power proof uses the stronger Euler-product route |
 | 8 | Level-truncated Selberg repair and assembly | 36 | hard support, polynomial error, denominator preservation, parameter certification, and concrete candidate transport |
 | 9 | Post-density existence and variant frontier | 49 | generic shift-factor/adic induction, shifts 9–16 as concrete frontiers and stress tests, exact depth witnesses, the eventual-excess limit interface, and the depth-two/Sophie-Germain equivalence |
-| | **Selected-family total** | **~194** | The repository-wide exact count is 288 theorem/lemma declarations; the table groups the campaign's principal publication families rather than every helper. |
+| 10 | Power-prefix, block, and certificate architecture | 31 | arbitrary-power local-factor products, exact block reindexing, executable factorization batches, fourth-root compression, and the conditional novelty/shared-host seam |
+| | **Selected-family subtotal** | **not additive** | The exact repository-wide count is 392 theorem/lemma declarations; family rows are publication groupings and may overlap. |
 
 ---
 
@@ -429,6 +439,42 @@ statements.
 | [`proof/Erdos647_LimitShiftInterface.lean`](proof/Erdos647_LimitShiftInterface.lean) | 4 theorems | convergence to `atTop` is equivalent to eventual arbitrarily large shift excess. Prime powers prove an explicit unbounded subsequence and non-`BddAbove`, not convergence. The exact adapter episode `3baedfa9-85ed-48b0-b477-18faa0d9e47f` is **kernel_verified**. |
 | [`proof/Erdos647_InfiniteWindowFrontier.lean`](proof/Erdos647_InfiniteWindowFrontier.lean) | 5 theorems + 4 lemmas | window sizes at most two are unconditional; above `n>10`, depth-two survivors are exactly `n=2q+2` with `q` and `2q+1` prime; infinitude at depth two is therefore equivalent to infinitude of Sophie Germain primes. Episodes `e7b81c9f-8b1e-41c5-a760-d9aba712bb16` and `7cf0660b-3dac-48f3-8294-7b22d8e9f593` are **kernel_verified**; the converse and final equivalence source-compiled in the pinned environment, and the exact iff is stated directly over the Formal Conjectures window expression. |
 
+## Family 10 — power-prefix, block-production, and certificate architecture
+
+| source | declarations | independently tracked roots |
+|---|---:|---:|
+| `Erdos647_RoughPowerBound.lean` | 1 | 1 |
+| `Erdos647_GenericLocalPowerBound.lean` | 4 | 4 |
+| `Erdos647_GenericPowerPrefix.lean` | 3 | 3 |
+| `Erdos647_ShiftGcdClass.lean` | 2 | 2 |
+| `Erdos647_GcdClassCubeBound.lean` | 4 | 4 |
+| `Erdos647_ArbitraryBlockPowerPrefix.lean` | 4 | 2 |
+| `Erdos647_FactorizationCertificate.lean` | 9 | 3 |
+| `Erdos647_PairwiseCoprimeBlockNovelty.lean` | 2 | 2 |
+| `Erdos647_FourthPowerDivisorBound.lean` | 2 | 2 |
+| **Total** | **31** | **23** |
+
+This family compresses the all-shift candidate condition in three ways.
+First, generic and class-sensitive divisor-power inequalities show that only
+a finite prefix can violate a shift budget. The exact local-ratio theorem
+turns finitely many verified prime-power inequalities into a global bound and
+subsumes the `35·τ(m)^3` class coefficient without rational arithmetic.
+Second, unique block coordinates turn the full shift family into an exactly
+equivalent family of local block/rung checks. Third, the executable
+factorization checker supplies a small kernel-sound certificate format for
+those checks.
+
+The pairwise-coprime theorem isolates a possible negative mechanism:
+sufficiently many suitable cells produce distinct new primes, and a common
+host for them must be exponentially large. Neither pairwise-coprime block
+production nor the common-host premise has yet been derived uniformly from
+candidacy.
+
+The fourth-power theorem reduces the universal explicit prefix to fourth-root
+scale, but the prefix still grows with `n`. Thus this family closes formal
+assembly and compression problems, not the original existence problem. The
+three Formal Conjectures research declarations remain open.
+
 The central development here is no longer “one more shift.” The framework
 isolates a reusable transition: factorization → coprime budget division →
 prime-factor control → one exceptional next-adic congruence. Shifts 14–16 are
@@ -444,9 +490,9 @@ problem.
 
 ---
 
-*Counts are explicit: 284 top-level theorem declarations plus four top-level
-helper lemmas in 116 Lean files, and 227 related proof-search episodes in the
-export archive (220 kernel-verified,
+*Counts are explicit: 388 top-level theorem declarations plus four top-level
+helper lemmas in 152 Lean files, and 287 related proof-search episodes in the
+export archive (280 kernel-verified,
 seven retained non-success histories). These are different metrics—one episode
 can assemble several helper declarations, while some final repository
 compositions are not standalone episodes. The global density theorem is

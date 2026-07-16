@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro c d p hp hpc\nhaveI : Fact p.Prime := ⟨hp⟩\nhaveI : NeZero p := ⟨hp.ne_zero⟩\nhave hcne : (c : ZMod p) ≠ 0 := by\n  intro h\n  exact hpc ((ZMod.natCast_eq_zero_iff c p).mp h)\nset x : ZMod p := - (d : ZMod p) * (c : ZMod p)⁻¹ with hx_def\nhave hcast : ((x.val : ℕ) : ZMod p) = x := ZMod.natCast_rightInverse x\nrefine ⟨x.val, ZMod.val_lt x, ?_⟩\nintro t\nconstructor\n· intro hdvd\n  have h0 : ((c * t + d : ℕ) : ZMod p) = 0 := (ZMod.natCast_eq_zero_iff _ p).mpr hdvd\n  push_cast at h0\n  have h1 : (c : ZMod p) * t = -(d : ZMod p) := eq_neg_of_add_eq_zero_left h0\n  have ht : (t : ZMod p) = x := by\n    calc (t : ZMod p) = (c : ZMod p)⁻¹ * ((c : ZMod p) * t) := by\n          rw [← mul_assoc, inv_mul_cancel₀ hcne, one_mul]\n      _ = (c : ZMod p)⁻¹ * (-(d : ZMod p)) := by rw [h1]\n      _ = x := by rw [hx_def]; ring\n  have hmm := (ZMod.natCast_eq_natCast_iff' t x.val p).mp (by rw [hcast]; exact ht)\n  rwa [Nat.mod_eq_of_lt (ZMod.val_lt x)] at hmm\n· intro hmod\n  have ht : (t : ZMod p) = x := by\n    rw [← hcast, ZMod.natCast_eq_natCast_iff']\n    rw [Nat.mod_eq_of_lt (ZMod.val_lt x)]\n    exact hmod\n  have h0 : ((c * t + d : ℕ) : ZMod p) = 0 := by\n    push_cast\n    rw [ht, hx_def]\n    field_simp\n    ring\n  exact (ZMod.natCast_eq_zero_iff _ p).mp h0",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro c d p hp hpc\nhaveI : Fact p.Prime := ⟨hp⟩\nhaveI : NeZero p := ⟨hp.ne_zero⟩\nhave hcne : (c : ZMod p) ≠ 0 := by\n  intro h\n  exact hpc ((ZMod.natCast_eq_zero_iff c p).mp h)\nset x : ZMod p := - (d : ZMod p) * (c : ZMod p)⁻¹ with hx_def\nhave hcast : ((x.val : ℕ) : ZMod p) = x := ZMod.natCast_rightInverse x\nrefine ⟨x.val, ZMod.val_lt x, ?_⟩\nintro t\nconstructor\n· intro hdvd\n  have h0 : ((c * t + d : ℕ) : ZMod p) = 0 := (ZMod.natCast_eq_zero_iff _ p).mpr hdvd\n  push_cast at h0\n  have h1 : (c : ZMod p) * t = -(d : ZMod p) := eq_neg_of_add_eq_zero_left h0\n  have ht : (t : ZMod p) = x := by\n    calc (t : ZMod p) = (c : ZMod p)⁻¹ * ((c : ZMod p) * t) := by\n          rw [← mul_assoc, inv_mul_cancel₀ hcne, one_mul]\n      _ = (c : ZMod p)⁻¹ * (-(d : ZMod p)) := by rw [h1]\n      _ = x := by rw [hx_def]; ring\n  have hmm := (ZMod.natCast_eq_natCast_iff' t x.val p).mp (by rw [hcast]; exact ht)\n  rwa [Nat.mod_eq_of_lt (ZMod.val_lt x)] at hmm\n· intro hmod\n  have ht : (t : ZMod p) = x := by\n    rw [← hcast, ZMod.natCast_eq_natCast_iff']\n    rw [Nat.mod_eq_of_lt (ZMod.val_lt x)]\n    exact hmod\n  have h0 : ((c * t + d : ℕ) : ZMod p) = 0 := by\n    push_cast\n    rw [ht, hx_def]\n    field_simp\n    ring\n  exact (ZMod.natCast_eq_zero_iff _ p).mp h0",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (c d p : ℕ), Nat.Prime p → ¬ p ∣ c → ∃ r, r < p ∧ ∀ t : ℕ, (p ∣ c * t + d ↔ t % p = r)",
+        "module_source_hash": null,
+        "obligation_id": "b453ea34-9e9f-4e72-8ac1-f0be5f2c06bd",
+        "outcome": "kernel_pass",
+        "problem_version_id": "a2586d9f-e349-425a-8142-536ad3c730ab",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "208ff4b4f727624b930c89174fbc09537063a514b4d9f45791c5720851dcea41"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "493f84da30188d88144b9772c3ab3ab76860c71de8bdbe952a54fbdd8a0fa88e"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

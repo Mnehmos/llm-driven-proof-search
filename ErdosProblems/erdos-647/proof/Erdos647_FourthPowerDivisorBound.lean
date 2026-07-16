@@ -1,0 +1,450 @@
+import Mathlib
+
+/-!
+# Erdős #647 — explicit fourth-power divisor bound
+
+For every positive natural number,
+
+`(ArithmeticFunction.sigma 0 n)^4 ≤ 19680 * n`.
+
+The proof peels the primes below 17 with exact integer constants
+`41, 10, 4, 3, 2, 2` for `2, 3, 5, 7, 11, 13`, whose product is
+`19680`, and applies the generic rough-power mechanism to the remaining
+17-rough core.  This supplies an explicit fourth-root power-prefix window.
+
+Tracked proof-search provenance (2026-07-16):
+
+* preverification job: `4f1fb374-1bbb-4e4f-bc22-d2bc98a1ab09`
+* problem version: `c3c5cc7b-572b-41d5-bbca-679db593cb34`
+* episode: `a611bfbf-b9eb-4550-a5a6-789104debf2e`
+* root statement hash:
+  `744b19698488897450c31f2a21a290c6b24a0ee43229f338abb779033f41c49e`
+* outcome: `kernel_verified`
+
+The exact fourth-root candidate certificate
+`erdos647_candidate_of_fourth_power_prefix` was independently tracked too:
+
+* preverification job: `9c74a706-4d9e-4995-afd6-a6e3a99a83e9`
+* problem version: `1f1a1468-b300-4bae-833b-2246b01a364e`
+* episode: `4d5a491a-e67e-4ec2-a2cc-f3f1739272ed`
+* root statement hash:
+  `e4a21249d3ff5247badf28765426c749be8d1558ce865b6ddc1d0ce4336f3bf2`
+* outcome: `kernel_verified`
+-/
+
+theorem erdos647_divisor_fourth_power_bound :
+    ∀ n : ℕ, 1 ≤ n →
+      (ArithmeticFunction.sigma 0 n) ^ 4 ≤ 19680 * n := by
+  intro n hn
+  have hroughCore : ∀ m : ℕ, 1 ≤ m →
+      (∀ p : ℕ, p.Prime → p ∣ m → 17 ≤ p) →
+      (ArithmeticFunction.sigma 0 m) ^ 4 ≤ m := by
+    intro m
+    induction m using Nat.strong_induction_on with
+    | _ m ih =>
+      intro hm hrough
+      by_cases h1 : m = 1
+      · subst h1
+        simp
+      · have hp : m.minFac.Prime := Nat.minFac_prime h1
+        have hpd : m.minFac ∣ m := Nat.minFac_dvd m
+        have hp17 : 17 ≤ m.minFac := hrough _ hp hpd
+        set P := m.minFac with hPdef
+        clear_value P
+        obtain ⟨a, q, hqnd, heq⟩ :=
+          Nat.exists_eq_pow_mul_and_not_dvd (show m ≠ 0 by omega) P hp.ne_one
+        have ha1 : 1 ≤ a := by
+          by_contra h0
+          push Not at h0
+          have ha0 : a = 0 := by omega
+          rw [ha0, pow_zero, one_mul] at heq
+          rw [heq] at hpd
+          exact hqnd hpd
+        have hqpos : 1 ≤ q := by
+          rcases Nat.eq_zero_or_pos q with h0 | h0
+          · rw [h0, mul_zero] at heq
+            omega
+          · exact h0
+        have hpalt : 2 ≤ P ^ a := by
+          exact hp.two_le.trans (Nat.le_self_pow (by omega : a ≠ 0) P)
+        have hqlt : q < m := by
+          have h2 : 1 * q < P ^ a * q := by
+            apply Nat.mul_lt_mul_of_lt_of_le (by omega) (le_refl q)
+            omega
+          calc
+            q = 1 * q := (one_mul q).symm
+            _ < P ^ a * q := h2
+            _ = m := heq.symm
+        have hqrough : ∀ p : ℕ, p.Prime → p ∣ q → 17 ≤ p := by
+          intro p hpp hpq
+          refine hrough p hpp ?_
+          rw [heq]
+          exact Dvd.dvd.mul_left hpq _
+        have hIH := ih q hqlt hqpos hqrough
+        have hbinary : ∀ b : ℕ, b + 1 ≤ 2 ^ b := by
+          intro b
+          induction b with
+          | zero => simp
+          | succ k ihk =>
+            calc
+              k + 1 + 1 ≤ 2 * (k + 1) := by omega
+              _ ≤ 2 * 2 ^ k := Nat.mul_le_mul_left 2 ihk
+              _ = 2 ^ (k + 1) := by rw [pow_succ]; ring
+        have hT1 : ∀ b : ℕ, (b + 1) ^ 4 ≤ P ^ b := by
+          intro b
+          calc
+            (b + 1) ^ 4 ≤ (2 ^ b) ^ 4 := Nat.pow_le_pow_left (hbinary b) 4
+            _ = (2 ^ 4) ^ b := by
+              rw [← pow_mul, ← pow_mul, Nat.mul_comm]
+            _ ≤ P ^ b := Nat.pow_le_pow_left (by omega) b
+        have hcop : Nat.Coprime (P ^ a) q :=
+          Nat.Coprime.pow_left _ ((hp.coprime_iff_not_dvd).mpr hqnd)
+        have hs : ArithmeticFunction.sigma 0 (P ^ a) = a + 1 := by
+          rw [ArithmeticFunction.sigma_zero_apply, Nat.divisors_prime_pow hp,
+            Finset.card_map, Finset.card_range]
+        have hsig : ArithmeticFunction.sigma 0 m =
+            (a + 1) * ArithmeticFunction.sigma 0 q := by
+          rw [heq, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop, hs]
+        calc
+          (ArithmeticFunction.sigma 0 m) ^ 4 =
+              (a + 1) ^ 4 * (ArithmeticFunction.sigma 0 q) ^ 4 := by
+                rw [hsig, mul_pow]
+          _ ≤ P ^ a * q := Nat.mul_le_mul (hT1 a) hIH
+          _ = m := heq.symm
+  have L2 : ∀ a : ℕ, (a + 1) ^ 4 ≤ 41 * 2 ^ a := by
+    intro a
+    induction a with
+    | zero => norm_num
+    | succ k ihk =>
+      by_cases hk : k ≤ 4
+      · interval_cases k <;> norm_num
+      · push Not at hk
+        have hratio : (k + 2) ^ 4 ≤ 2 * (k + 1) ^ 4 := by
+          have hlin : 6 * (k + 2) ≤ 7 * (k + 1) := by omega
+          have hpow : 1296 * (k + 2) ^ 4 ≤ 2401 * (k + 1) ^ 4 := by
+            calc
+              1296 * (k + 2) ^ 4 = (6 * (k + 2)) ^ 4 := by ring
+              _ ≤ (7 * (k + 1)) ^ 4 := Nat.pow_le_pow_left hlin 4
+              _ = 2401 * (k + 1) ^ 4 := by ring
+          omega
+        calc
+          (k + 1 + 1) ^ 4 = (k + 2) ^ 4 := by ring_nf
+          _ ≤ 2 * (k + 1) ^ 4 := hratio
+          _ ≤ 2 * (41 * 2 ^ k) := Nat.mul_le_mul_left 2 ihk
+          _ = 41 * 2 ^ (k + 1) := by rw [pow_succ]; ring
+  have L3 : ∀ a : ℕ, (a + 1) ^ 4 ≤ 10 * 3 ^ a := by
+    intro a
+    induction a with
+    | zero => norm_num
+    | succ k ihk =>
+      by_cases hk : k ≤ 2
+      · interval_cases k <;> norm_num
+      · push Not at hk
+        have hratio : (k + 2) ^ 4 ≤ 3 * (k + 1) ^ 4 := by
+          have hlin : 4 * (k + 2) ≤ 5 * (k + 1) := by omega
+          have hpow : 256 * (k + 2) ^ 4 ≤ 625 * (k + 1) ^ 4 := by
+            calc
+              256 * (k + 2) ^ 4 = (4 * (k + 2)) ^ 4 := by ring
+              _ ≤ (5 * (k + 1)) ^ 4 := Nat.pow_le_pow_left hlin 4
+              _ = 625 * (k + 1) ^ 4 := by ring
+          omega
+        calc
+          (k + 1 + 1) ^ 4 = (k + 2) ^ 4 := by ring_nf
+          _ ≤ 3 * (k + 1) ^ 4 := hratio
+          _ ≤ 3 * (10 * 3 ^ k) := Nat.mul_le_mul_left 3 ihk
+          _ = 10 * 3 ^ (k + 1) := by rw [pow_succ]; ring
+  have L5 : ∀ a : ℕ, (a + 1) ^ 4 ≤ 4 * 5 ^ a := by
+    intro a
+    induction a with
+    | zero => norm_num
+    | succ k ihk =>
+      by_cases hk : k ≤ 1
+      · interval_cases k <;> norm_num
+      · push Not at hk
+        have hratio : (k + 2) ^ 4 ≤ 5 * (k + 1) ^ 4 := by
+          have hlin : 3 * (k + 2) ≤ 4 * (k + 1) := by omega
+          have hpow : 81 * (k + 2) ^ 4 ≤ 256 * (k + 1) ^ 4 := by
+            calc
+              81 * (k + 2) ^ 4 = (3 * (k + 2)) ^ 4 := by ring
+              _ ≤ (4 * (k + 1)) ^ 4 := Nat.pow_le_pow_left hlin 4
+              _ = 256 * (k + 1) ^ 4 := by ring
+          omega
+        calc
+          (k + 1 + 1) ^ 4 = (k + 2) ^ 4 := by ring_nf
+          _ ≤ 5 * (k + 1) ^ 4 := hratio
+          _ ≤ 5 * (4 * 5 ^ k) := Nat.mul_le_mul_left 5 ihk
+          _ = 4 * 5 ^ (k + 1) := by rw [pow_succ]; ring
+  have L7 : ∀ a : ℕ, (a + 1) ^ 4 ≤ 3 * 7 ^ a := by
+    intro a
+    induction a with
+    | zero => norm_num
+    | succ k ihk =>
+      by_cases hk : k ≤ 0
+      · interval_cases k; norm_num
+      · push Not at hk
+        have hratio : (k + 2) ^ 4 ≤ 7 * (k + 1) ^ 4 := by
+          have hlin : 2 * (k + 2) ≤ 3 * (k + 1) := by omega
+          have hpow : 16 * (k + 2) ^ 4 ≤ 81 * (k + 1) ^ 4 := by
+            calc
+              16 * (k + 2) ^ 4 = (2 * (k + 2)) ^ 4 := by ring
+              _ ≤ (3 * (k + 1)) ^ 4 := Nat.pow_le_pow_left hlin 4
+              _ = 81 * (k + 1) ^ 4 := by ring
+          omega
+        calc
+          (k + 1 + 1) ^ 4 = (k + 2) ^ 4 := by ring_nf
+          _ ≤ 7 * (k + 1) ^ 4 := hratio
+          _ ≤ 7 * (3 * 7 ^ k) := Nat.mul_le_mul_left 7 ihk
+          _ = 3 * 7 ^ (k + 1) := by rw [pow_succ]; ring
+  have L11 : ∀ a : ℕ, (a + 1) ^ 4 ≤ 2 * 11 ^ a := by
+    intro a
+    induction a with
+    | zero => norm_num
+    | succ k ihk =>
+      by_cases hk : k ≤ 0
+      · interval_cases k; norm_num
+      · push Not at hk
+        have hratio : (k + 2) ^ 4 ≤ 11 * (k + 1) ^ 4 := by
+          have hlin : 2 * (k + 2) ≤ 3 * (k + 1) := by omega
+          have hpow : 16 * (k + 2) ^ 4 ≤ 81 * (k + 1) ^ 4 := by
+            calc
+              16 * (k + 2) ^ 4 = (2 * (k + 2)) ^ 4 := by ring
+              _ ≤ (3 * (k + 1)) ^ 4 := Nat.pow_le_pow_left hlin 4
+              _ = 81 * (k + 1) ^ 4 := by ring
+          omega
+        calc
+          (k + 1 + 1) ^ 4 = (k + 2) ^ 4 := by ring_nf
+          _ ≤ 11 * (k + 1) ^ 4 := hratio
+          _ ≤ 11 * (2 * 11 ^ k) := Nat.mul_le_mul_left 11 ihk
+          _ = 2 * 11 ^ (k + 1) := by rw [pow_succ]; ring
+  have L13 : ∀ a : ℕ, (a + 1) ^ 4 ≤ 2 * 13 ^ a := by
+    intro a
+    induction a with
+    | zero => norm_num
+    | succ k ihk =>
+      by_cases hk : k ≤ 0
+      · interval_cases k; norm_num
+      · push Not at hk
+        have hratio : (k + 2) ^ 4 ≤ 13 * (k + 1) ^ 4 := by
+          have hlin : 2 * (k + 2) ≤ 3 * (k + 1) := by omega
+          have hpow : 16 * (k + 2) ^ 4 ≤ 81 * (k + 1) ^ 4 := by
+            calc
+              16 * (k + 2) ^ 4 = (2 * (k + 2)) ^ 4 := by ring
+              _ ≤ (3 * (k + 1)) ^ 4 := Nat.pow_le_pow_left hlin 4
+              _ = 81 * (k + 1) ^ 4 := by ring
+          omega
+        calc
+          (k + 1 + 1) ^ 4 = (k + 2) ^ 4 := by ring_nf
+          _ ≤ 13 * (k + 1) ^ 4 := hratio
+          _ ≤ 13 * (2 * 13 ^ k) := Nat.mul_le_mul_left 13 ihk
+          _ = 2 * 13 ^ (k + 1) := by rw [pow_succ]; ring
+  obtain ⟨a, m1, h2m1, hd2⟩ :=
+    Nat.exists_eq_pow_mul_and_not_dvd (show n ≠ 0 by omega) 2 (by norm_num)
+  have hm1pos : 1 ≤ m1 := by
+    rcases Nat.eq_zero_or_pos m1 with h0 | h0
+    · rw [h0, mul_zero] at hd2
+      omega
+    · exact h0
+  obtain ⟨b, m2, h3m2, hd3⟩ :=
+    Nat.exists_eq_pow_mul_and_not_dvd (show m1 ≠ 0 by omega) 3 (by norm_num)
+  have hm2pos : 1 ≤ m2 := by
+    rcases Nat.eq_zero_or_pos m2 with h0 | h0
+    · rw [h0, mul_zero] at hd3
+      omega
+    · exact h0
+  obtain ⟨c, m3, h5m3, hd5⟩ :=
+    Nat.exists_eq_pow_mul_and_not_dvd (show m2 ≠ 0 by omega) 5 (by norm_num)
+  have hm3pos : 1 ≤ m3 := by
+    rcases Nat.eq_zero_or_pos m3 with h0 | h0
+    · rw [h0, mul_zero] at hd5
+      omega
+    · exact h0
+  obtain ⟨d, m4, h7m4, hd7⟩ :=
+    Nat.exists_eq_pow_mul_and_not_dvd (show m3 ≠ 0 by omega) 7 (by norm_num)
+  have hm4pos : 1 ≤ m4 := by
+    rcases Nat.eq_zero_or_pos m4 with h0 | h0
+    · rw [h0, mul_zero] at hd7
+      omega
+    · exact h0
+  obtain ⟨e, m5, h11m5, hd11⟩ :=
+    Nat.exists_eq_pow_mul_and_not_dvd (show m4 ≠ 0 by omega) 11 (by norm_num)
+  have hm5pos : 1 ≤ m5 := by
+    rcases Nat.eq_zero_or_pos m5 with h0 | h0
+    · rw [h0, mul_zero] at hd11
+      omega
+    · exact h0
+  obtain ⟨f, m6, h13m6, hd13⟩ :=
+    Nat.exists_eq_pow_mul_and_not_dvd (show m5 ≠ 0 by omega) 13 (by norm_num)
+  have hm6pos : 1 ≤ m6 := by
+    rcases Nat.eq_zero_or_pos m6 with h0 | h0
+    · rw [h0, mul_zero] at hd13
+      omega
+    · exact h0
+  have hm2dm1 : m2 ∣ m1 := ⟨3 ^ b, by rw [hd3]; ring⟩
+  have hm3dm2 : m3 ∣ m2 := ⟨5 ^ c, by rw [hd5]; ring⟩
+  have hm4dm3 : m4 ∣ m3 := ⟨7 ^ d, by rw [hd7]; ring⟩
+  have hm5dm4 : m5 ∣ m4 := ⟨11 ^ e, by rw [hd11]; ring⟩
+  have hm6dm5 : m6 ∣ m5 := ⟨13 ^ f, by rw [hd13]; ring⟩
+  have hrough6 : ∀ p : ℕ, p.Prime → p ∣ m6 → 17 ≤ p := by
+    intro p hpp hp6
+    have hp2 : p ≠ 2 := by
+      intro h
+      exact h2m1 (h ▸ hp6.trans (hm6dm5.trans (hm5dm4.trans
+        (hm4dm3.trans (hm3dm2.trans hm2dm1)))))
+    have hp3 : p ≠ 3 := by
+      intro h
+      exact h3m2 (h ▸ hp6.trans (hm6dm5.trans (hm5dm4.trans
+        (hm4dm3.trans hm3dm2))))
+    have hp5 : p ≠ 5 := by
+      intro h
+      exact h5m3 (h ▸ hp6.trans (hm6dm5.trans
+        (hm5dm4.trans hm4dm3)))
+    have hp7 : p ≠ 7 := by
+      intro h
+      exact h7m4 (h ▸ hp6.trans (hm6dm5.trans hm5dm4))
+    have hp11 : p ≠ 11 := by
+      intro h
+      exact h11m5 (h ▸ hp6.trans hm6dm5)
+    have hp13 : p ≠ 13 := by
+      intro h
+      exact h13m6 (h ▸ hp6)
+    have hpge2 := hpp.two_le
+    by_contra hlt
+    push Not at hlt
+    interval_cases p
+    · exact hp2 rfl
+    · exact hp3 rfl
+    · exact absurd hpp (by norm_num)
+    · exact hp5 rfl
+    · exact absurd hpp (by norm_num)
+    · exact hp7 rfl
+    · exact absurd hpp (by norm_num)
+    · exact absurd hpp (by norm_num)
+    · exact absurd hpp (by norm_num)
+    · exact hp11 rfl
+    · exact absurd hpp (by norm_num)
+    · exact hp13 rfl
+    · exact absurd hpp (by norm_num)
+    · exact absurd hpp (by norm_num)
+    · exact absurd hpp (by norm_num)
+  have hcore := hroughCore m6 hm6pos hrough6
+  have hs2 : ArithmeticFunction.sigma 0 (2 ^ a) = a + 1 := by
+    rw [ArithmeticFunction.sigma_zero_apply,
+      Nat.divisors_prime_pow (by norm_num : Nat.Prime 2),
+      Finset.card_map, Finset.card_range]
+  have hs3 : ArithmeticFunction.sigma 0 (3 ^ b) = b + 1 := by
+    rw [ArithmeticFunction.sigma_zero_apply,
+      Nat.divisors_prime_pow (by norm_num : Nat.Prime 3),
+      Finset.card_map, Finset.card_range]
+  have hs5 : ArithmeticFunction.sigma 0 (5 ^ c) = c + 1 := by
+    rw [ArithmeticFunction.sigma_zero_apply,
+      Nat.divisors_prime_pow (by norm_num : Nat.Prime 5),
+      Finset.card_map, Finset.card_range]
+  have hs7 : ArithmeticFunction.sigma 0 (7 ^ d) = d + 1 := by
+    rw [ArithmeticFunction.sigma_zero_apply,
+      Nat.divisors_prime_pow (by norm_num : Nat.Prime 7),
+      Finset.card_map, Finset.card_range]
+  have hs11 : ArithmeticFunction.sigma 0 (11 ^ e) = e + 1 := by
+    rw [ArithmeticFunction.sigma_zero_apply,
+      Nat.divisors_prime_pow (by norm_num : Nat.Prime 11),
+      Finset.card_map, Finset.card_range]
+  have hs13 : ArithmeticFunction.sigma 0 (13 ^ f) = f + 1 := by
+    rw [ArithmeticFunction.sigma_zero_apply,
+      Nat.divisors_prime_pow (by norm_num : Nat.Prime 13),
+      Finset.card_map, Finset.card_range]
+  have hc13 : Nat.Coprime (13 ^ f) m6 :=
+    Nat.Coprime.pow_left _
+      (((by norm_num : Nat.Prime 13).coprime_iff_not_dvd).mpr h13m6)
+  have hsig5 : ArithmeticFunction.sigma 0 m5 =
+      (f + 1) * ArithmeticFunction.sigma 0 m6 := by
+    rw [hd13, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hc13, hs13]
+  have hc11 : Nat.Coprime (11 ^ e) m5 :=
+    Nat.Coprime.pow_left _
+      (((by norm_num : Nat.Prime 11).coprime_iff_not_dvd).mpr h11m5)
+  have hsig4 : ArithmeticFunction.sigma 0 m4 =
+      (e + 1) * ArithmeticFunction.sigma 0 m5 := by
+    rw [hd11, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hc11, hs11]
+  have hc7 : Nat.Coprime (7 ^ d) m4 :=
+    Nat.Coprime.pow_left _
+      (((by norm_num : Nat.Prime 7).coprime_iff_not_dvd).mpr h7m4)
+  have hsig3 : ArithmeticFunction.sigma 0 m3 =
+      (d + 1) * ArithmeticFunction.sigma 0 m4 := by
+    rw [hd7, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hc7, hs7]
+  have hc5 : Nat.Coprime (5 ^ c) m3 :=
+    Nat.Coprime.pow_left _
+      (((by norm_num : Nat.Prime 5).coprime_iff_not_dvd).mpr h5m3)
+  have hsig2 : ArithmeticFunction.sigma 0 m2 =
+      (c + 1) * ArithmeticFunction.sigma 0 m3 := by
+    rw [hd5, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hc5, hs5]
+  have hc3 : Nat.Coprime (3 ^ b) m2 :=
+    Nat.Coprime.pow_left _
+      (((by norm_num : Nat.Prime 3).coprime_iff_not_dvd).mpr h3m2)
+  have hsig1 : ArithmeticFunction.sigma 0 m1 =
+      (b + 1) * ArithmeticFunction.sigma 0 m2 := by
+    rw [hd3, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hc3, hs3]
+  have hc2 : Nat.Coprime (2 ^ a) m1 :=
+    Nat.Coprime.pow_left _
+      (((by norm_num : Nat.Prime 2).coprime_iff_not_dvd).mpr h2m1)
+  have hsig0 : ArithmeticFunction.sigma 0 n =
+      (a + 1) * ArithmeticFunction.sigma 0 m1 := by
+    rw [hd2, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hc2, hs2]
+  have hfull : ArithmeticFunction.sigma 0 n =
+      (a + 1) * ((b + 1) * ((c + 1) * ((d + 1) *
+        ((e + 1) * ((f + 1) * ArithmeticFunction.sigma 0 m6))))) := by
+    rw [hsig0, hsig1, hsig2, hsig3, hsig4, hsig5]
+  calc
+    (ArithmeticFunction.sigma 0 n) ^ 4 =
+        (a + 1) ^ 4 * ((b + 1) ^ 4 * ((c + 1) ^ 4 *
+          ((d + 1) ^ 4 * ((e + 1) ^ 4 * ((f + 1) ^ 4 *
+            (ArithmeticFunction.sigma 0 m6) ^ 4))))) := by
+              rw [hfull]
+              simp only [mul_pow]
+    _ ≤ (41 * 2 ^ a) * ((10 * 3 ^ b) * ((4 * 5 ^ c) *
+          ((3 * 7 ^ d) * ((2 * 11 ^ e) * ((2 * 13 ^ f) * m6))))) :=
+      Nat.mul_le_mul
+        (L2 a) (Nat.mul_le_mul (L3 b) (Nat.mul_le_mul (L5 c)
+          (Nat.mul_le_mul (L7 d) (Nat.mul_le_mul (L11 e)
+            (Nat.mul_le_mul (L13 f) hcore)))))
+    _ = (41 * 10 * 4 * 3 * 2 * 2) * (2 ^ a * (3 ^ b * (5 ^ c *
+          (7 ^ d * (11 ^ e * (13 ^ f * m6)))))) := by ac_rfl
+    _ = 19680 * (2 ^ a * (3 ^ b * (5 ^ c *
+          (7 ^ d * (11 ^ e * (13 ^ f * m6)))))) := by norm_num
+    _ = 19680 * n := by
+      rw [← hd13, ← hd11, ← hd7, ← hd5, ← hd3, ← hd2]
+
+/-- A fourth-root-scale finite prefix certifies the exact Formal Conjectures
+candidate predicate.  Only shifts satisfying
+`(k + 2)^4 < 19680 * (n - k)` need to be checked explicitly. -/
+theorem erdos647_candidate_of_fourth_power_prefix :
+    ∀ n : ℕ,
+      0 < n →
+      (∀ k : ℕ, 0 < k → k < n →
+        (k + 2) ^ 4 < 19680 * (n - k) →
+        ArithmeticFunction.sigma 0 (n - k) ≤ k + 2) →
+      (⨆ m : Fin n,
+        (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 := by
+  intro n hn hprefix
+  haveI : Nonempty (Fin n) := ⟨⟨0, hn⟩⟩
+  have hbudget : ∀ k : ℕ, 0 < k → k < n →
+      ArithmeticFunction.sigma 0 (n - k) ≤ k + 2 := by
+    intro k hk0 hkn
+    by_cases hk : (k + 2) ^ 4 < 19680 * (n - k)
+    · exact hprefix k hk0 hkn hk
+    · push Not at hk
+      have hmpos : 1 ≤ n - k := by omega
+      have hbound := erdos647_divisor_fourth_power_bound (n - k) hmpos
+      have hpows :
+          (ArithmeticFunction.sigma 0 (n - k)) ^ 4 ≤ (k + 2) ^ 4 :=
+        hbound.trans hk
+      exact (Nat.pow_le_pow_iff_left (by norm_num : 4 ≠ 0)).mp hpows
+  apply ciSup_le
+  intro m
+  rcases Nat.eq_zero_or_pos (m : ℕ) with hm0 | hmpos
+  · rw [hm0]
+    simp
+  · have hmn : (m : ℕ) < n := m.isLt
+    have hk0 : 0 < n - (m : ℕ) := by omega
+    have hkn : n - (m : ℕ) < n := by omega
+    have hb := hbudget (n - (m : ℕ)) hk0 hkn
+    have hmk : n - (n - (m : ℕ)) = (m : ℕ) := by omega
+    rw [hmk] at hb
+    omega

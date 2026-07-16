@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro block exp A N C hblock hexp hA hN hlocal\nhave hcore : ∀ (block exp A B N : ℕ) (C : ℕ → ℕ),\n  0 < block →\n  0 < exp →\n  0 < A →\n  1 ≤ N →\n  (∀ M s : ℕ, 1 ≤ M → 0 < s → s < block * M →\n    A * (ArithmeticFunction.sigma 0 (block * M - s)) ^ exp ≤\n      C s * (block * M - s)) →\n  ((∀ k : ℕ, 0 < k → k < block * N →\n      ArithmeticFunction.sigma 0 (block * N - k) ≤ B + k) ↔\n    ∀ q s : ℕ,\n      q < N →\n      0 < s →\n      s ≤ block →\n      s < block * (N - q) →\n      A * (B + block * q + s) ^ exp <\n          C s * (block * (N - q) - s) →\n      ArithmeticFunction.sigma 0 (block * (N - q) - s) ≤\n        B + block * q + s) := by\n  intro block exp A B N C hblock hexp hA hdiv hlocal\n  constructor\n  · intro hbudget q s hqN hs0 hsle hslocal _\n    have hNsplit : block * N = block * q + block * (N - q) := by\n      rw [← Nat.mul_add]\n      congr 1\n      omega\n    have hk0 : 0 < block * q + s := by omega\n    have hkn : block * q + s < block * N := by omega\n    have hvalue : block * N - (block * q + s) =\n        block * (N - q) - s := by omega\n    simpa [hvalue, add_assoc] using hbudget (block * q + s) hk0 hkn\n  · intro hprefix k hk0 hkn\n    let q := (k - 1) / block\n    let s := (k - 1) % block + 1\n    have hslt : (k - 1) % block < block := Nat.mod_lt _ hblock\n    have hdivmod := Nat.div_add_mod (k - 1) block\n    have hkqs : k = block * q + s := by\n      dsimp [q, s]\n      omega\n    have hs0 : 0 < s := by dsimp [s]; omega\n    have hsle : s ≤ block := by dsimp [s]; omega\n    have hbq_lt : block * q < block * N := by omega\n    have hqN : q < N := (Nat.mul_lt_mul_left hblock).mp hbq_lt\n    have hMpos : 1 ≤ N - q := by omega\n    have hNsplit : block * N = block * q + block * (N - q) := by\n      rw [← Nat.mul_add]\n      congr 1\n      omega\n    have hslocal : s < block * (N - q) := by omega\n    have hvalue : block * N - k = block * (N - q) - s := by omega\n    by_cases hpref :\n        A * (B + block * q + s) ^ exp <\n          C s * (block * (N - q) - s)\n    · have hb := hprefix q s hqN hs0 hsle hslocal hpref\n      rw [hvalue]\n      simpa [hkqs, add_assoc] using hb\n    · push Not at hpref\n      have hb := hlocal (N - q) s hMpos hs0 hslocal\n      have hmul :\n          A * (ArithmeticFunction.sigma 0 (block * (N - q) - s)) ^ exp ≤\n            A * (B + block * q + s) ^ exp := hb.trans hpref\n      have hpows :\n          (ArithmeticFunction.sigma 0 (block * (N - q) - s)) ^ exp ≤\n            (B + block * q + s) ^ exp :=\n        le_of_mul_le_mul_left hmul hA\n      have hbudget : ArithmeticFunction.sigma 0 (block * (N - q) - s) ≤\n          B + block * q + s :=\n        (Nat.pow_le_pow_iff_left (Nat.ne_of_gt hexp)).mp hpows\n      rw [hvalue]\n      simpa [hkqs, add_assoc] using hbudget\nrw [← hcore block exp A 2 N C hblock hexp hA hN hlocal]\nconstructor\n· intro H k hk0 hkn\n  let f : Fin (block * N) → ℕ := fun x =>\n    (x : ℕ) + ArithmeticFunction.sigma 0 x\n  have hbdd : BddAbove (Set.range f) := by\n    refine ⟨2 * (block * N), ?_⟩\n    rintro y ⟨x, rfl⟩\n    dsimp [f]\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hc := Nat.card_divisors_le_self (x : ℕ)\n    have hx : (x : ℕ) < block * N := x.isLt\n    omega\n  let m : Fin (block * N) := ⟨block * N - k, by omega⟩\n  have hm : f m ≤ block * N + 2 := le_trans (le_ciSup hbdd m) H\n  dsimp [f, m] at hm\n  omega\n· intro H\n  have hnpos : 0 < block * N := Nat.mul_pos hblock (by omega)\n  letI : Nonempty (Fin (block * N)) := Fin.pos_iff_nonempty.mp hnpos\n  apply ciSup_le\n  intro m\n  by_cases hm0 : (m : ℕ) = 0\n  · have hs0 : ArithmeticFunction.sigma 0 (m : ℕ) = 0 := by\n      rw [hm0]\n      native_decide\n    omega\n  · let k := block * N - (m : ℕ)\n    have hk0 : 0 < k := by\n      dsimp [k]\n      omega\n    have hkn : k < block * N := by\n      dsimp [k]\n      omega\n    have hk := H k hk0 hkn\n    have hnkm : block * N - k = (m : ℕ) := by\n      dsimp [k]\n      omega\n    rw [hnkm] at hk\n    omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro block exp A N C hblock hexp hA hN hlocal\nhave hcore : ∀ (block exp A B N : ℕ) (C : ℕ → ℕ),\n  0 < block →\n  0 < exp →\n  0 < A →\n  1 ≤ N →\n  (∀ M s : ℕ, 1 ≤ M → 0 < s → s < block * M →\n    A * (ArithmeticFunction.sigma 0 (block * M - s)) ^ exp ≤\n      C s * (block * M - s)) →\n  ((∀ k : ℕ, 0 < k → k < block * N →\n      ArithmeticFunction.sigma 0 (block * N - k) ≤ B + k) ↔\n    ∀ q s : ℕ,\n      q < N →\n      0 < s →\n      s ≤ block →\n      s < block * (N - q) →\n      A * (B + block * q + s) ^ exp <\n          C s * (block * (N - q) - s) →\n      ArithmeticFunction.sigma 0 (block * (N - q) - s) ≤\n        B + block * q + s) := by\n  intro block exp A B N C hblock hexp hA hdiv hlocal\n  constructor\n  · intro hbudget q s hqN hs0 hsle hslocal _\n    have hNsplit : block * N = block * q + block * (N - q) := by\n      rw [← Nat.mul_add]\n      congr 1\n      omega\n    have hk0 : 0 < block * q + s := by omega\n    have hkn : block * q + s < block * N := by omega\n    have hvalue : block * N - (block * q + s) =\n        block * (N - q) - s := by omega\n    simpa [hvalue, add_assoc] using hbudget (block * q + s) hk0 hkn\n  · intro hprefix k hk0 hkn\n    let q := (k - 1) / block\n    let s := (k - 1) % block + 1\n    have hslt : (k - 1) % block < block := Nat.mod_lt _ hblock\n    have hdivmod := Nat.div_add_mod (k - 1) block\n    have hkqs : k = block * q + s := by\n      dsimp [q, s]\n      omega\n    have hs0 : 0 < s := by dsimp [s]; omega\n    have hsle : s ≤ block := by dsimp [s]; omega\n    have hbq_lt : block * q < block * N := by omega\n    have hqN : q < N := (Nat.mul_lt_mul_left hblock).mp hbq_lt\n    have hMpos : 1 ≤ N - q := by omega\n    have hNsplit : block * N = block * q + block * (N - q) := by\n      rw [← Nat.mul_add]\n      congr 1\n      omega\n    have hslocal : s < block * (N - q) := by omega\n    have hvalue : block * N - k = block * (N - q) - s := by omega\n    by_cases hpref :\n        A * (B + block * q + s) ^ exp <\n          C s * (block * (N - q) - s)\n    · have hb := hprefix q s hqN hs0 hsle hslocal hpref\n      rw [hvalue]\n      simpa [hkqs, add_assoc] using hb\n    · push Not at hpref\n      have hb := hlocal (N - q) s hMpos hs0 hslocal\n      have hmul :\n          A * (ArithmeticFunction.sigma 0 (block * (N - q) - s)) ^ exp ≤\n            A * (B + block * q + s) ^ exp := hb.trans hpref\n      have hpows :\n          (ArithmeticFunction.sigma 0 (block * (N - q) - s)) ^ exp ≤\n            (B + block * q + s) ^ exp :=\n        le_of_mul_le_mul_left hmul hA\n      have hbudget : ArithmeticFunction.sigma 0 (block * (N - q) - s) ≤\n          B + block * q + s :=\n        (Nat.pow_le_pow_iff_left (Nat.ne_of_gt hexp)).mp hpows\n      rw [hvalue]\n      simpa [hkqs, add_assoc] using hbudget\nrw [← hcore block exp A 2 N C hblock hexp hA hN hlocal]\nconstructor\n· intro H k hk0 hkn\n  let f : Fin (block * N) → ℕ := fun x =>\n    (x : ℕ) + ArithmeticFunction.sigma 0 x\n  have hbdd : BddAbove (Set.range f) := by\n    refine ⟨2 * (block * N), ?_⟩\n    rintro y ⟨x, rfl⟩\n    dsimp [f]\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hc := Nat.card_divisors_le_self (x : ℕ)\n    have hx : (x : ℕ) < block * N := x.isLt\n    omega\n  let m : Fin (block * N) := ⟨block * N - k, by omega⟩\n  have hm : f m ≤ block * N + 2 := le_trans (le_ciSup hbdd m) H\n  dsimp [f, m] at hm\n  omega\n· intro H\n  have hnpos : 0 < block * N := Nat.mul_pos hblock (by omega)\n  letI : Nonempty (Fin (block * N)) := Fin.pos_iff_nonempty.mp hnpos\n  apply ciSup_le\n  intro m\n  by_cases hm0 : (m : ℕ) = 0\n  · have hs0 : ArithmeticFunction.sigma 0 (m : ℕ) = 0 := by\n      rw [hm0]\n      native_decide\n    omega\n  · let k := block * N - (m : ℕ)\n    have hk0 : 0 < k := by\n      dsimp [k]\n      omega\n    have hkn : k < block * N := by\n      dsimp [k]\n      omega\n    have hk := H k hk0 hkn\n    have hnkm : block * N - k = (m : ℕ) := by\n      dsimp [k]\n      omega\n    rw [hnkm] at hk\n    omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (block exp A N : ℕ) (C : ℕ → ℕ),\n      0 < block →\n      0 < exp →\n      0 < A →\n      1 ≤ N →\n      (∀ M s : ℕ, 1 ≤ M → 0 < s → s < block * M →\n        A * (ArithmeticFunction.sigma 0 (block * M - s)) ^ exp ≤\n          C s * (block * M - s)) →\n      (((⨆ m : Fin (block * N),\n          (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ block * N + 2) ↔\n        ∀ q s : ℕ,\n          q < N →\n          0 < s →\n          s ≤ block →\n          s < block * (N - q) →\n          A * (2 + block * q + s) ^ exp <\n              C s * (block * (N - q) - s) →\n          ArithmeticFunction.sigma 0 (block * (N - q) - s) ≤\n            2 + block * q + s)",
+        "module_source_hash": null,
+        "obligation_id": "7c45080f-d4a1-4c3f-833e-dfa4b976e7a1",
+        "outcome": "kernel_pass",
+        "problem_version_id": "39ea138e-842a-4758-90fe-eb11135aa239",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "74ccf2d0251e73cacff3308e74292d7958f0849bb78835abb771402d8fe4374d"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "0b5aa460d67ee288daacac33625fe01184f9349e8c586c33afc151ff47e63285"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

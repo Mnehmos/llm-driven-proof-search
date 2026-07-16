@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro r m c hr hm hlocal\n  have hm0 : m ≠ 0 := by omega\n  have hsigma : ArithmeticFunction.sigma 0 m =\n      ∏ p ∈ m.primeFactors, (m.factorization p + 1) := by\n    rw [ArithmeticFunction.sigma_eq_prod_primeFactors_sum_range_factorization_pow_mul hm0]\n    simp\n  have hmprod : (∏ p ∈ m.primeFactors, p ^ (m.factorization p)) = m := by\n    rw [← Nat.prod_factorization_eq_prod_primeFactors]\n    exact Nat.prod_factorization_pow_eq_self hm0\n  rw [hsigma, ← Finset.prod_pow]\n  calc\n    ∏ p ∈ m.primeFactors, (m.factorization p + 1) ^ r\n        ≤ ∏ p ∈ m.primeFactors, c p * p ^ (m.factorization p) := by\n            exact Finset.prod_le_prod' hlocal\n    _ = (∏ p ∈ m.primeFactors, c p) *\n          (∏ p ∈ m.primeFactors, p ^ (m.factorization p)) := by\n            rw [Finset.prod_mul_distrib]\n    _ = (∏ p ∈ m.primeFactors, c p) * m := by rw [hmprod]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro r m c hr hm hlocal\n  have hm0 : m ≠ 0 := by omega\n  have hsigma : ArithmeticFunction.sigma 0 m =\n      ∏ p ∈ m.primeFactors, (m.factorization p + 1) := by\n    rw [ArithmeticFunction.sigma_eq_prod_primeFactors_sum_range_factorization_pow_mul hm0]\n    simp\n  have hmprod : (∏ p ∈ m.primeFactors, p ^ (m.factorization p)) = m := by\n    rw [← Nat.prod_factorization_eq_prod_primeFactors]\n    exact Nat.prod_factorization_pow_eq_self hm0\n  rw [hsigma, ← Finset.prod_pow]\n  calc\n    ∏ p ∈ m.primeFactors, (m.factorization p + 1) ^ r\n        ≤ ∏ p ∈ m.primeFactors, c p * p ^ (m.factorization p) := by\n            exact Finset.prod_le_prod' hlocal\n    _ = (∏ p ∈ m.primeFactors, c p) *\n          (∏ p ∈ m.primeFactors, p ^ (m.factorization p)) := by\n            rw [Finset.prod_mul_distrib]\n    _ = (∏ p ∈ m.primeFactors, c p) * m := by rw [hmprod]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (r m : ℕ) (c : ℕ → ℕ),\n      0 < r →\n      1 ≤ m →\n      (∀ p ∈ m.primeFactors,\n        (m.factorization p + 1) ^ r ≤ c p * p ^ (m.factorization p)) →\n      (ArithmeticFunction.sigma 0 m) ^ r ≤\n        (∏ p ∈ m.primeFactors, c p) * m",
+        "module_source_hash": null,
+        "obligation_id": "1808933b-fe1a-4af6-a77e-c60d33fb85fa",
+        "outcome": "kernel_pass",
+        "problem_version_id": "ae91b365-010a-43a3-80e8-7f473e124f1c",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "4533c10c66ae747241bc71a639a18f6596e50f2ac6cebea99a193c96c34a988f"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "c301bb96f5b99dd69d76d65ff24f31f32520d1ba646bf06d295a152df86f2517"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}
