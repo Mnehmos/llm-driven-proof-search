@@ -25,7 +25,8 @@ in the Formal Conjectures supremum form:
 Every shift beyond the cube prefix is automatically safe by the sharp
 divisor bound `35·τ(n−k)³ ≤ 1536·(n−k) ≤ 35·(k+2)³`
 (`erdos647_sharp_cube_divisor_bound`, inlined verbatim in the tracked
-proof; equality at 2520), whence `τ(n−k) ≤ k+2` by cube-root
+proof; equality at 2520 checked numerically, uniqueness not yet a
+formal claim), whence `τ(n−k) ≤ k+2` by cube-root
 monotonicity.
 
 **Supersedes `erdos647_candidate_of_sqrt_prefix`**: at frontier heights

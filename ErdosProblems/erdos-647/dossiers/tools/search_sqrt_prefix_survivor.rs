@@ -176,18 +176,31 @@ fn isqrt(n: u64) -> u64 {
 }
 
 /// Full prefix check: returns (first failing shift, tau, factorization),
-/// or None if N is a genuine square-root-prefix survivor (a candidate!).
+/// or None if N is a genuine cube-prefix survivor (a candidate!).
+///
+/// Stop rule = EXACTLY the kernel-verified theorem's condition
+/// (erdos647_candidate_of_cube_prefix): a shift k needs checking only
+/// while 35*(k+2)^3 < 1536*(n-k); once 35*(k+2)^3 >= 1536*(n-k), every
+/// later shift is automatically safe by the sharp divisor bound
+/// 35*tau(m)^3 <= 1536*m (equality at m = 2520). Evaluated in u128 --
+/// no floating-point cube roots, so the search target matches the
+/// formal certificate exactly.
 fn prefix_check(n_val: u64) -> Option<(u64, u64, Vec<(u64, u32)>)> {
-    let limit = 2 * isqrt(n_val);
-    for k in 1..limit {
-        if k >= n_val {
-            break;
+    let nu = n_val as u128;
+    let mut k: u64 = 1;
+    while k < n_val {
+        let ku = k as u128;
+        let lhs = 35u128 * (ku + 2) * (ku + 2) * (ku + 2);
+        let rhs = 1536u128 * (nu - ku);
+        if lhs >= rhs {
+            return None; // cube prefix complete: all later shifts safe
         }
         let f = factorize(n_val - k);
         let t: u64 = f.iter().map(|(_, e)| (*e as u64) + 1).product();
         if t > k + 2 {
             return Some((k, t, f));
         }
+        k += 1;
     }
     None
 }

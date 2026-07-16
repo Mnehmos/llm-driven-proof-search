@@ -30,8 +30,13 @@ Content: for every `n ≥ 1`,
 
   `35 · τ(n)³ ≤ 1536 · n`,   i.e.   `τ(n) ≤ (1536/35)^{1/3} · n^{1/3} ≈ 3.53 · n^{1/3}`,
 
-with **equality exactly at `n = 2520`** — the problem's own modulus is
-the unique extremal point (`35 · 48³ = 3 870 720 = 1536 · 2520`).
+with equality at `n = 2520` (`35 · 48³ = 3 870 720 = 1536 · 2520`,
+checked numerically). The proof design supports UNIQUENESS of the
+extremal point (each local bound is strict off its extremal exponent,
+and the rough core is strict for `m > 1`), but the characterization
+`35·τ(n)³ = 1536·n ↔ n = 2520` is NOT yet exported as its own
+kernel-verified theorem — until it is, only the inequality is a formal
+claim.
 
 Proof: peel the 2-, 3-, 5-, 7-parts and apply the sharp local bounds
 `(a+1)³ ≤ 8·2^a` (extremal at a=3), `(b+1)³ ≤ 3·3^b` (b=2),

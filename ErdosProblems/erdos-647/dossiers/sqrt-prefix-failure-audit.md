@@ -91,3 +91,29 @@ not the wheel.
    structure (passing rung 5 at 5-adic depth a forces an explicit
    near-prime certificate that feeds rung 7's demand) and the
    B-parametric bookkeeping of how many τ≤3 demands fit below 2√n.
+
+## Addendum: frontier-height run (completed 2026-07-16)
+
+**Run**: `t ∈ [5,292,300,000, 5,392,300,000)`, i.e.
+`N ∈ ~[2.4445×10¹⁴, 2.4907×10¹⁴]` (`n` beyond the published 6.16×10¹⁷
+exclusion frontier), 4,500,000,000 parameters, 2696 seven-form
+survivors, **zero candidates**. Raw log:
+`sqrt-prefix-frontier-run-6e17.survlog.txt`.
+
+| rung k | failures | reached | kill rate |
+|---|---|---|---|
+| 5  | 2343 | 2696 | 87% |
+| 7  | 220  | 353  | 62% |
+| 9  | 109  | 133  | 82% |
+| 10 | 19   | 24   | 79% |
+| 11 | 1    | 5    | 20% |
+| 13 | 4    | 4    | 100% |
+
+Height comparison: the kill rates match the N~10¹² run within noise
+(87/62/82/79 vs 86/59/81/88) — **the gauntlet mechanism is
+height-stable**. At this height the gauntlet extended one rung: four
+survivors passed the full base block (and rung 12) and all died at
+rung 13 (record certificate: `n−13 = 13·97·439·1118374637033`, τ=16>15,
+at `N = 245,678,060,791,306`). Consistent with the growing-gauntlet
+criterion: the base block is finite, the ladder extends with height,
+and no fixed rung set suffices.
