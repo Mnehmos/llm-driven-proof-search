@@ -73,6 +73,10 @@ coupled shift-7 budget forces its 7-adic depth to be zero. Together with the
 total depth bound `≤5` and pairwise-coprime rung clique, the next task is to
 propagate this finite prime/semiprime state into a growing-shift contradiction,
 not to weaken it back to an undifferentiated divisor-count estimate.
+The two 5-adic depths are now eliminated as independent variables:
+`a5=1 ↔ N≡4 (mod 5)` and `a10=1 ↔ N≡3 (mod 5)`, tracked and replayed as
+episode `dce030c5-2b7c-4e69-99fc-f4596b52f736`. The next assembly can branch
+directly on `N mod 5` rather than carrying existential 5-adic depths.
 
 One analytic correction is now part of the proof record. The earlier
 Chebyshev/Mertens lower bound is valid, but its leading coefficient is

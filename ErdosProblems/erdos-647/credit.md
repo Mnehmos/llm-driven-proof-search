@@ -110,10 +110,10 @@
   not a contradiction.
 - The explicit global bound `τ(n)^4≤19680n` and its fourth-root candidate
   prefix.
-- A complete public export archive for all 327 related episodes: 320
+- A complete public export archive for all 328 related episodes: 321
   kernel-verified successes and seven retained non-success histories.
-- The final checkpoint contains 175 Lean files with 463 actual theorem
-  declarations and five lemma declarations (468 theorem/lemma declarations
+- The final checkpoint contains 176 Lean files with 464 actual theorem
+  declarations and five lemma declarations (469 theorem/lemma declarations
   total).
 
 ## Tools and authorship
@@ -158,7 +158,7 @@
   truncation-gap diagnosis and repair, explicit constants, and final assembly.
 - The 322 proof-search episodes have `fidelity_status = attested`: Lean checks
   project-authored formal statements, but this is not neutral-corpus
-  certification. Kernel verification applies to 320 of those episodes; the
+  certification. Kernel verification applies to 321 of those episodes; the
   other seven are retained as explicit negative or unfinished trajectories.
 - The terminal density theorem is supported by a clean transitive source
   replay. It is not misrepresented as an additional standalone tracked

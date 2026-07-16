@@ -265,10 +265,10 @@ repaired squarefree remainder was also submitted to the independent exact
 proof-search verifier and returned `kernel_pass`; identifiers and hashes are
 recorded in [evidence.md](evidence.md).
 
-For provenance beyond the source replay, all 327 related campaign
+For provenance beyond the source replay, all 328 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
-training JSON formats. Of these, 320 report `KERNEL_VERIFIED` in the pinned
+training JSON formats. Of these, 321 report `KERNEL_VERIFIED` in the pinned
 environment; seven non-success histories are retained for audit completeness.
 
 This proves a density-zero result with the claimed seventh logarithmic power.
@@ -529,6 +529,11 @@ gauntlet has become an explicit shallow prime/semiprime state space rather
 than an opaque low-divisor condition. Four new tracked episodes verify and
 replay these statements independently.
 
+The two 5-adic depth variables are now determined exactly by the parameter:
+`a5=1` if and only if `N≡4 (mod 5)`, while `a10=1` if and only if
+`N≡3 (mod 5)`. This fifth tracked result removes two existential choices from
+the state space and makes the mutually exclusive 5-adic branches explicit.
+
 The remaining barrier is now precise. One must either force a re-entry subset
 whose remainder violates `2^|I|≤h+2`, or prove that the large family of
 smooth, size-controlled second-layer cofactors cannot coexist for a candidate.
@@ -541,11 +546,11 @@ Formal Conjectures declarations.
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **463 actual theorem
-  declarations and five top-level helper lemmas across 175 Lean files** under
+- Portable proof source currently contains **464 actual theorem
+  declarations and five top-level helper lemmas across 176 Lean files** under
   `proof/`. Including 47 definitions (45 public and two private helpers) gives
-  515 declarations. These counts include helper and assembly declarations;
-  they are not presented as 515 independent mathematical discoveries or 515
+  516 declarations. These counts include helper and assembly declarations;
+  they are not presented as 516 independent mathematical discoveries or 516
   standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base
   sieve, the bridging-closure layer, the Theorem-2 formalization, the

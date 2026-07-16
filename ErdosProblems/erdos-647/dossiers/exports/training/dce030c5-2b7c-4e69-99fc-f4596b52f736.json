@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro N a5 q5 a10 q10 hN h5eq hq5 h5depth h10eq hq10 h10depth\nhave hmodlt : N % 5 < 5 := Nat.mod_lt N (by norm_num)\nhave hdecomp := Nat.mod_add_div N 5\nconstructor\n· constructor\n  · intro ha5\n    subst a5\n    interval_cases hres : N % 5 <;> omega\n  · intro hres\n    interval_cases ha5 : a5\n    · have hNform : N = 5 * (N / 5) + 4 := by omega\n      have hq5eq : q5 = 5 * (504 * (N / 5) + 403) := by\n        norm_num at h5eq\n        rw [hNform] at h5eq\n        omega\n      have hdiv : 5 ∣ q5 := by\n        refine ⟨504 * (N / 5) + 403, ?_⟩\n        exact hq5eq\n      exact absurd hdiv hq5\n    · rfl\n· constructor\n  · intro ha10\n    subst a10\n    interval_cases hres : N % 5 <;> omega\n  · intro hres\n    interval_cases ha10 : a10\n    · have hNform : N = 5 * (N / 5) + 3 := by omega\n      have hq10eq : q10 = 5 * (252 * (N / 5) + 151) := by\n        norm_num at h10eq\n        rw [hNform] at h10eq\n        omega\n      have hdiv : 5 ∣ q10 := by\n        refine ⟨252 * (N / 5) + 151, ?_⟩\n        exact hq10eq\n      exact absurd hdiv hq10\n    · rfl",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro N a5 q5 a10 q10 hN h5eq hq5 h5depth h10eq hq10 h10depth\nhave hmodlt : N % 5 < 5 := Nat.mod_lt N (by norm_num)\nhave hdecomp := Nat.mod_add_div N 5\nconstructor\n· constructor\n  · intro ha5\n    subst a5\n    interval_cases hres : N % 5 <;> omega\n  · intro hres\n    interval_cases ha5 : a5\n    · have hNform : N = 5 * (N / 5) + 4 := by omega\n      have hq5eq : q5 = 5 * (504 * (N / 5) + 403) := by\n        norm_num at h5eq\n        rw [hNform] at h5eq\n        omega\n      have hdiv : 5 ∣ q5 := by\n        refine ⟨504 * (N / 5) + 403, ?_⟩\n        exact hq5eq\n      exact absurd hdiv hq5\n    · rfl\n· constructor\n  · intro ha10\n    subst a10\n    interval_cases hres : N % 5 <;> omega\n  · intro hres\n    interval_cases ha10 : a10\n    · have hNform : N = 5 * (N / 5) + 3 := by omega\n      have hq10eq : q10 = 5 * (252 * (N / 5) + 151) := by\n        norm_num at h10eq\n        rw [hNform] at h10eq\n        omega\n      have hdiv : 5 ∣ q10 := by\n        refine ⟨252 * (N / 5) + 151, ?_⟩\n        exact hq10eq\n      exact absurd hdiv hq10\n    · rfl",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ N a5 q5 a10 q10 : ℕ,\n      1 ≤ N →\n      504 * N - 1 = 5 ^ a5 * q5 →\n      ¬ 5 ∣ q5 →\n      a5 ≤ 1 →\n      252 * N - 1 = 5 ^ a10 * q10 →\n      ¬ 5 ∣ q10 →\n      a10 ≤ 1 →\n      (a5 = 1 ↔ N % 5 = 4) ∧ (a10 = 1 ↔ N % 5 = 3)",
+        "module_source_hash": null,
+        "obligation_id": "78d9193a-f11e-4492-ac86-a2727aabce32",
+        "outcome": "kernel_pass",
+        "problem_version_id": "eebc0500-b83d-48ee-b488-ab270994c41b",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "d30e78189281a84b83205ca5a2b336783a66c90ed10f273523034b2220d140e5"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "500bf1b879ac7e01392519f52fc2ca88cd582525a6e4a2806011715d6bf08155"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

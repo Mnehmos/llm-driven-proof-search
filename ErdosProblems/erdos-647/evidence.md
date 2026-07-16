@@ -151,6 +151,7 @@ The first concrete cross-rung non-reuse pair is independently tracked:
 | exact `σ₀≤4` classification | `4fabc6e0-d523-45f2-a242-9294366aab5c` | `f5375b3b-e1b3-4440-80ae-9b1fba14dc80` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `034e3e62-7755-4fc4-aae9-6901386a2835` **kernel_pass** |
 | `q7` is prime, prime-cube, or distinct-semiprime | `3269049f-3285-419e-9d3c-9f011eec124d` | `426f582b-bd4c-44b1-a964-9ac85b1e7987` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `a1f75504-8760-44a1-88e0-1f479d3f9504` **kernel_pass** |
 | composite `q7` forces 7-adic depth zero | `4152887d-8d9d-4ee7-8a93-a5c13de5ced0` | `003bb946-196b-40ba-9175-06d63d00f36f` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `a1d70b3f-3e08-4fed-83c9-bcc79c4089dc` **kernel_pass** |
+| exact 5-adic depth residues `a5=1↔N%5=4`, `a10=1↔N%5=3` | `eebc0500-b83d-48ee-b488-ab270994c41b` | `dce030c5-2b7c-4e69-99fc-f4596b52f736` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `a3ea80e7-012f-4ae6-ad2c-22f850b923bc` **kernel_pass** |
 
 All three sources also compile directly in the pinned `lean-checker`. The
 strongest source additionally proves that selected prime factors are pairwise
@@ -178,7 +179,9 @@ cube, or a product of two distinct primes; its square branch is impossible
 modulo `3`. Restoring the coupled shift-7 budget shows that either `q7` is
 prime with depth at most two, or its adic depth is zero. Thus every remaining
 base-gauntlet survivor lies in a finite shallow prime/semiprime state. This
-does not yet prove that no such state extends through all shifts.
+state is sharper still because the two 5-adic depths are exactly encoded by
+`N mod 5`, removing them as independent branch variables. This does not yet
+prove that no such state extends through all shifts.
 
 Shift 13 now has its own exact refinement:
 
@@ -335,16 +338,16 @@ compatibility check rather than a forced mixed-version import.
 
 ## Complete proof-search export archive
 
-The repository now includes exports for all 327 related episodes identified by
+The repository now includes exports for all 328 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
-index, and a read-only database closure audit. Of these, 320 report
+index, and a read-only database closure audit. Of these, 321 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.
-Portable source currently contains 463 actual theorem declarations and five
-top-level lemma declarations across 175 Lean files; including 47 definitions
-(45 public and two private helpers) gives 515 declarations. Those source counts
-and the 327 episode count measure different things.
+Portable source currently contains 464 actual theorem declarations and five
+top-level lemma declarations across 176 Lean files; including 47 definitions
+(45 public and two private helpers) gives 516 declarations. Those source counts
+and the 328 episode count measure different things.
 
 - [export manifest](dossiers/exports/manifest.tsv)
 - [public summaries](dossiers/exports/public_summary/)
