@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro s X d hs hw hmass hnu hraw hcount\n  have hmult : s.multSum d =\n      (((Finset.Icc 1 X).filter (fun N =>\n        d ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1))).card : ℝ) := by\n    unfold BoundingSieve.multSum\n    rw [hs, hw]\n    have hmono : ∀ N1 N2 : ℕ, 1 ≤ N1 → N1 < N2 →\n        (210*N1-1)*(315*N1-1)*(420*N1-1)*(630*N1-1)*\n          (840*N1-1)*(1260*N1-1)*(2520*N1-1) <\n        (210*N2-1)*(315*N2-1)*(420*N2-1)*(630*N2-1)*\n          (840*N2-1)*(1260*N2-1)*(2520*N2-1) := by\n      intro N1 N2 h1 h2\n      gcongr <;> omega\n    have hinj : Set.InjOn\n        (fun N => (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1)) (Finset.Icc 1 X) := by\n      intro N1 hN1 N2 hN2 heq\n      simp only [Finset.mem_coe, Finset.mem_Icc] at hN1 hN2\n      by_contra hne\n      rcases lt_or_gt_of_ne hne with hlt | hgt\n      · exact absurd heq (Nat.ne_of_lt (hmono N1 N2 hN1.1 hlt))\n      · exact absurd heq.symm (Nat.ne_of_lt (hmono N2 N1 hN2.1 hgt))\n    rw [Finset.sum_image\n      (fun N1 hN1 N2 hN2 heq => hinj hN1 hN2 heq)]\n    rw [Finset.sum_boole]\n  have hrem : s.rem d =\n      (((Finset.Icc 1 X).filter (fun N =>\n        d ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1))).card : ℝ) -\n      (((Finset.range d).filter (fun r =>\n        ∀ p ∈ Nat.primeFactors d,\n          r%p ∈ (Finset.range p).filter (fun t =>\n            (210*t)%p=1 ∨ (315*t)%p=1 ∨ (420*t)%p=1 ∨\n            (630*t)%p=1 ∨ (840*t)%p=1 ∨ (1260*t)%p=1 ∨\n            (2520*t)%p=1))).card : ℝ) / d * X := by\n    unfold BoundingSieve.rem\n    rw [hmult, hnu, hmass]\n  rw [hrem]\n  exact hraw.trans hcount",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro s X d hs hw hmass hnu hraw hcount\n  have hmult : s.multSum d =\n      (((Finset.Icc 1 X).filter (fun N =>\n        d ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1))).card : ℝ) := by\n    unfold BoundingSieve.multSum\n    rw [hs, hw]\n    have hmono : ∀ N1 N2 : ℕ, 1 ≤ N1 → N1 < N2 →\n        (210*N1-1)*(315*N1-1)*(420*N1-1)*(630*N1-1)*\n          (840*N1-1)*(1260*N1-1)*(2520*N1-1) <\n        (210*N2-1)*(315*N2-1)*(420*N2-1)*(630*N2-1)*\n          (840*N2-1)*(1260*N2-1)*(2520*N2-1) := by\n      intro N1 N2 h1 h2\n      gcongr <;> omega\n    have hinj : Set.InjOn\n        (fun N => (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1)) (Finset.Icc 1 X) := by\n      intro N1 hN1 N2 hN2 heq\n      simp only [Finset.mem_coe, Finset.mem_Icc] at hN1 hN2\n      by_contra hne\n      rcases lt_or_gt_of_ne hne with hlt | hgt\n      · exact absurd heq (Nat.ne_of_lt (hmono N1 N2 hN1.1 hlt))\n      · exact absurd heq.symm (Nat.ne_of_lt (hmono N2 N1 hN2.1 hgt))\n    rw [Finset.sum_image\n      (fun N1 hN1 N2 hN2 heq => hinj hN1 hN2 heq)]\n    rw [Finset.sum_boole]\n  have hrem : s.rem d =\n      (((Finset.Icc 1 X).filter (fun N =>\n        d ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1))).card : ℝ) -\n      (((Finset.range d).filter (fun r =>\n        ∀ p ∈ Nat.primeFactors d,\n          r%p ∈ (Finset.range p).filter (fun t =>\n            (210*t)%p=1 ∨ (315*t)%p=1 ∨ (420*t)%p=1 ∨\n            (630*t)%p=1 ∨ (840*t)%p=1 ∨ (1260*t)%p=1 ∨\n            (2520*t)%p=1))).card : ℝ) / d * X := by\n    unfold BoundingSieve.rem\n    rw [hmult, hnu, hmass]\n  rw [hrem]\n  exact hraw.trans hcount",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : BoundingSieve) (X d : ℕ),\n      s.support = (Finset.Icc 1 X).image\n        (fun N => (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1)) →\n      s.weights = (fun _ : ℕ => (1:ℝ)) →\n      s.totalMass = X →\n      s.nu d =\n        (((Finset.range d).filter (fun r =>\n          ∀ p ∈ Nat.primeFactors d,\n            r%p ∈ (Finset.range p).filter (fun t =>\n              (210*t)%p=1 ∨ (315*t)%p=1 ∨ (420*t)%p=1 ∨\n              (630*t)%p=1 ∨ (840*t)%p=1 ∨ (1260*t)%p=1 ∨\n              (2520*t)%p=1))).card : ℝ) / d →\n      |(((Finset.Icc 1 X).filter (fun N =>\n          d ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n            (840*N-1)*(1260*N-1)*(2520*N-1))).card : ℝ) -\n        (((Finset.range d).filter (fun r =>\n          ∀ p ∈ Nat.primeFactors d,\n            r%p ∈ (Finset.range p).filter (fun t =>\n              (210*t)%p=1 ∨ (315*t)%p=1 ∨ (420*t)%p=1 ∨\n              (630*t)%p=1 ∨ (840*t)%p=1 ∨ (1260*t)%p=1 ∨\n              (2520*t)%p=1))).card : ℝ) / d * X| ≤\n        (((Finset.range d).filter (fun r =>\n          ∀ p ∈ Nat.primeFactors d,\n            r%p ∈ (Finset.range p).filter (fun t =>\n              (210*t)%p=1 ∨ (315*t)%p=1 ∨ (420*t)%p=1 ∨\n              (630*t)%p=1 ∨ (840*t)%p=1 ∨ (1260*t)%p=1 ∨\n              (2520*t)%p=1))).card : ℝ) →\n      (((Finset.range d).filter (fun r =>\n          ∀ p ∈ Nat.primeFactors d,\n            r%p ∈ (Finset.range p).filter (fun t =>\n              (210*t)%p=1 ∨ (315*t)%p=1 ∨ (420*t)%p=1 ∨\n              (630*t)%p=1 ∨ (840*t)%p=1 ∨ (1260*t)%p=1 ∨\n              (2520*t)%p=1))).card : ℝ) ≤\n        (7:ℝ)^d.primeFactors.card →\n      |s.rem d| ≤ (7:ℝ)^d.primeFactors.card",
+        "module_source_hash": null,
+        "obligation_id": "4e0d86cb-e8bc-498f-9d1e-f780551c7c36",
+        "outcome": "kernel_pass",
+        "problem_version_id": "776de7d6-9710-427e-a3fe-29ad9be73f50",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "dad741f946608c63be3cd8a7d4ea6137ab771ecba09c866f38b5819df469b62b"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "ec8e0175984081677246e92708529171f19abc840d9e460ff64522026c3928ae"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

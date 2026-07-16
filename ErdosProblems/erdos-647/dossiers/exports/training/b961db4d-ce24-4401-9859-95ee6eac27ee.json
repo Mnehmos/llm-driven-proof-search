@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro d m hd\nconstructor\n· intro hdvd p hp\n  exact (Nat.dvd_of_mem_primeFactors hp).trans hdvd\n· intro h\n  have h2 : ∀ p ∈ d.primeFactors, Prime p := fun p hp => (Nat.prime_of_mem_primeFactors hp).prime\n  have hprod : ∏ p ∈ d.primeFactors, p ∣ m := Finset.prod_primes_dvd m h2 h\n  rwa [Nat.prod_primeFactors_of_squarefree hd] at hprod",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro d m hd\nconstructor\n· intro hdvd p hp\n  exact (Nat.dvd_of_mem_primeFactors hp).trans hdvd\n· intro h\n  have h2 : ∀ p ∈ d.primeFactors, Prime p := fun p hp => (Nat.prime_of_mem_primeFactors hp).prime\n  have hprod : ∏ p ∈ d.primeFactors, p ∣ m := Finset.prod_primes_dvd m h2 h\n  rwa [Nat.prod_primeFactors_of_squarefree hd] at hprod",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (d m : ℕ), Squarefree d → (d ∣ m ↔ ∀ p ∈ d.primeFactors, p ∣ m)",
+        "module_source_hash": null,
+        "obligation_id": "0442fb03-fffb-4dee-9ae9-6af3a49a50d1",
+        "outcome": "kernel_pass",
+        "problem_version_id": "a148f8a8-6c5a-4063-81a4-ffec7e0b0041",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "d5e7784a47d522086f412ab1e43c761fa22b5743a9ef940087b0dcd89329582f"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "9dc339c6ec09ec8b08c15b3d571371809abcfd10e507853abbf6992cd022b4db"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

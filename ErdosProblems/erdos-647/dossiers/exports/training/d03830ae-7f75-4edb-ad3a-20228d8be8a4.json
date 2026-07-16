@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro r hr hcard\n  rw [ArithmeticFunction.sigma_zero_apply] at hcard\n  have hr0 : r ≠ 0 := by omega\n  have hr1 : r ≠ 1 := by omega\n  have hp : (r.minFac).Prime := Nat.minFac_prime hr1\n  by_cases hpr : r.minFac = r\n  · exact Or.inl (hpr ▸ hp)\n  · right\n    refine ⟨r.minFac, hp, ?_⟩\n    have hpd : r.minFac ∣ r := Nat.minFac_dvd r\n    have hp2 : 2 ≤ r.minFac := hp.two_le\n    have hplt : r.minFac < r := lt_of_le_of_ne (Nat.le_of_dvd (by omega) hpd) hpr\n    have hsub : ({1, r.minFac, r} : Finset ℕ) ⊆ r.divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      rcases hx with rfl | rfl | rfl\n      · exact ⟨one_dvd r, hr0⟩\n      · exact ⟨hpd, hr0⟩\n      · exact ⟨dvd_rfl, hr0⟩\n    have hcard3 : ({1, r.minFac, r} : Finset ℕ).card = 3 := by\n      rw [Finset.card_insert_of_notMem (by simp; omega), Finset.card_insert_of_notMem (by simp; omega), Finset.card_singleton]\n    have heq : r.divisors = {1, r.minFac, r} :=\n      (Finset.eq_of_subset_of_card_le hsub (by rw [hcard3]; exact hcard)).symm\n    have hmul : r.minFac * (r / r.minFac) = r := Nat.mul_div_cancel' hpd\n    have hqd : r / r.minFac ∣ r := ⟨r.minFac, by rw [Nat.mul_comm]; exact hmul.symm⟩\n    have hqmem : r / r.minFac ∈ r.divisors := Nat.mem_divisors.mpr ⟨hqd, hr0⟩\n    rw [heq] at hqmem\n    simp only [Finset.mem_insert, Finset.mem_singleton] at hqmem\n    rcases hqmem with h1 | h2 | h3\n    · rw [h1, mul_one] at hmul\n      exact absurd hmul (Nat.ne_of_lt hplt)\n    · rw [h2] at hmul\n      rw [pow_two]\n      exact hmul.symm\n    · rw [h3] at hmul\n      exfalso\n      nlinarith [hp2, hr, hmul]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro r hr hcard\n  rw [ArithmeticFunction.sigma_zero_apply] at hcard\n  have hr0 : r ≠ 0 := by omega\n  have hr1 : r ≠ 1 := by omega\n  have hp : (r.minFac).Prime := Nat.minFac_prime hr1\n  by_cases hpr : r.minFac = r\n  · exact Or.inl (hpr ▸ hp)\n  · right\n    refine ⟨r.minFac, hp, ?_⟩\n    have hpd : r.minFac ∣ r := Nat.minFac_dvd r\n    have hp2 : 2 ≤ r.minFac := hp.two_le\n    have hplt : r.minFac < r := lt_of_le_of_ne (Nat.le_of_dvd (by omega) hpd) hpr\n    have hsub : ({1, r.minFac, r} : Finset ℕ) ⊆ r.divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      rcases hx with rfl | rfl | rfl\n      · exact ⟨one_dvd r, hr0⟩\n      · exact ⟨hpd, hr0⟩\n      · exact ⟨dvd_rfl, hr0⟩\n    have hcard3 : ({1, r.minFac, r} : Finset ℕ).card = 3 := by\n      rw [Finset.card_insert_of_notMem (by simp; omega), Finset.card_insert_of_notMem (by simp; omega), Finset.card_singleton]\n    have heq : r.divisors = {1, r.minFac, r} :=\n      (Finset.eq_of_subset_of_card_le hsub (by rw [hcard3]; exact hcard)).symm\n    have hmul : r.minFac * (r / r.minFac) = r := Nat.mul_div_cancel' hpd\n    have hqd : r / r.minFac ∣ r := ⟨r.minFac, by rw [Nat.mul_comm]; exact hmul.symm⟩\n    have hqmem : r / r.minFac ∈ r.divisors := Nat.mem_divisors.mpr ⟨hqd, hr0⟩\n    rw [heq] at hqmem\n    simp only [Finset.mem_insert, Finset.mem_singleton] at hqmem\n    rcases hqmem with h1 | h2 | h3\n    · rw [h1, mul_one] at hmul\n      exact absurd hmul (Nat.ne_of_lt hplt)\n    · rw [h2] at hmul\n      rw [pow_two]\n      exact hmul.symm\n    · rw [h3] at hmul\n      exfalso\n      nlinarith [hp2, hr, hmul]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ r : ℕ, 2 ≤ r → ArithmeticFunction.sigma 0 r ≤ 3 → Nat.Prime r ∨ ∃ p : ℕ, Nat.Prime p ∧ r = p ^ 2",
+        "module_source_hash": null,
+        "obligation_id": "fe516701-5c53-49b0-8706-70de72222cff",
+        "outcome": "kernel_pass",
+        "problem_version_id": "fb7d4bf8-bcfb-458c-876f-e5ea3687e1b5",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "cfbf6c382a90babecfb743c5deddb7ed840ea8d8e87f079cfe25145ca4a44c81"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "a74069364ba3d9b52235ad7245e6d9317841736fcae658f69c31ce795dee59bc"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

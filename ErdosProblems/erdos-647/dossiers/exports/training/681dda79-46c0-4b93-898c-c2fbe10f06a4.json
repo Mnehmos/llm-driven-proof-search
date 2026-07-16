@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro ι s g μ y hg hμ hsum\nhave hcs := Finset.sq_sum_div_le_sum_sq_div s (fun i => μ i * y i) hg\nrw [hsum] at hcs\nsimp only [one_pow] at hcs\nhave heq : ∀ i ∈ s, (μ i * y i)^2 / g i = y i ^2 / g i := by\n  intro i hi\n  have h1 : (μ i)^2 = 1 := hμ i hi\n  have h2 : (μ i * y i)^2 = (μ i)^2 * y i ^2 := by ring\n  rw [h2, h1, one_mul]\nrw [Finset.sum_congr rfl heq] at hcs\nlinarith [hcs]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro ι s g μ y hg hμ hsum\nhave hcs := Finset.sq_sum_div_le_sum_sq_div s (fun i => μ i * y i) hg\nrw [hsum] at hcs\nsimp only [one_pow] at hcs\nhave heq : ∀ i ∈ s, (μ i * y i)^2 / g i = y i ^2 / g i := by\n  intro i hi\n  have h1 : (μ i)^2 = 1 := hμ i hi\n  have h2 : (μ i * y i)^2 = (μ i)^2 * y i ^2 := by ring\n  rw [h2, h1, one_mul]\nrw [Finset.sum_congr rfl heq] at hcs\nlinarith [hcs]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ {ι : Type} (s : Finset ι) (g μ y : ι → ℝ), (∀ i ∈ s, 0 < g i) → (∀ i ∈ s, μ i ^ 2 = 1) → (∑ i ∈ s, μ i * y i) = 1 → 1 / (∑ i ∈ s, g i) ≤ ∑ i ∈ s, y i ^ 2 / g i",
+        "module_source_hash": null,
+        "obligation_id": "33ab6cee-797f-4de6-bada-3896c3a0f148",
+        "outcome": "kernel_pass",
+        "problem_version_id": "955843bb-83a6-4247-9770-1ac2d24fd4b5",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "fce6db96bc65d32be0656c3f0436dfbf7602ed899b5a39c2aa2d0035fa067b1e"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "0eaa3972ef4d961abab6827738d5cefb16aac73f1fa7b95770af63c1c6781800"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

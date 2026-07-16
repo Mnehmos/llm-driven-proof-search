@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro X z\n  have hsub : (Finset.Icc 1 X).filter (fun N => 157*N ≤ z) ⊆\n      Finset.Icc 1 z := by\n    intro N hN\n    simp only [Finset.mem_filter, Finset.mem_Icc] at hN ⊢\n    omega\n  calc\n    ((Finset.Icc 1 X).filter (fun N => 157*N ≤ z)).card\n        ≤ (Finset.Icc 1 z).card := Finset.card_le_card hsub\n    _ = z := by rw [Nat.card_Icc]; omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro X z\n  have hsub : (Finset.Icc 1 X).filter (fun N => 157*N ≤ z) ⊆\n      Finset.Icc 1 z := by\n    intro N hN\n    simp only [Finset.mem_filter, Finset.mem_Icc] at hN ⊢\n    omega\n  calc\n    ((Finset.Icc 1 X).filter (fun N => 157*N ≤ z)).card\n        ≤ (Finset.Icc 1 z).card := Finset.card_le_card hsub\n    _ = z := by rw [Nat.card_Icc]; omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (X z : ℕ),\n      ((Finset.Icc 1 X).filter (fun N => 157*N ≤ z)).card ≤ z",
+        "module_source_hash": null,
+        "obligation_id": "fcaa3dba-0b8a-4854-aa47-2151889c0df1",
+        "outcome": "kernel_pass",
+        "problem_version_id": "cc5eabec-9ba7-4b38-9f8a-482998d707af",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "fd551191af356f6d475dc719c877be08696d4ecfc78b1d135a8166288456fd5f"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "4988f7a4ca2fec0f4db6cc232de77bfdb3dae074e93a41357c754707bac262da"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

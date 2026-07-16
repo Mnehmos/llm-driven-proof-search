@@ -1,0 +1,86 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "flat_tactic_sequence",
+        "proof_term": "  intro n N ℓ hn H hnN hℓprime hℓ11 hℓ29 hcontra\n  have hprime2 : ∀ x : ℕ, 2 ≤ x → ArithmeticFunction.sigma 0 x ≤ 2 → Nat.Prime x := by\n    intro x hx hs\n    rw [ArithmeticFunction.sigma_zero_apply] at hs\n    have hx0 : x ≠ 0 := by omega\n    have hsub : ({1, x} : Finset ℕ) ⊆ x.divisors := by\n      intro y hy\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hy\n      rw [Nat.mem_divisors]\n      rcases hy with rfl | rfl\n      · exact ⟨one_dvd _, hx0⟩\n      · exact ⟨dvd_rfl, hx0⟩\n    have hc2 : ({1, x} : Finset ℕ).card = 2 := by\n      rw [Finset.card_insert_of_notMem (by simp; omega), Finset.card_singleton]\n    have heq : x.divisors = {1, x} := (Finset.eq_of_subset_of_card_le hsub (by rw [hc2]; exact hs)).symm\n    rw [Nat.prime_def_lt]\n    refine ⟨by omega, ?_⟩\n    intro mm hmlt hmdvd\n    have hmem : mm ∈ x.divisors := Nat.mem_divisors.mpr ⟨hmdvd, hx0⟩\n    rw [heq] at hmem\n    simp only [Finset.mem_insert, Finset.mem_singleton] at hmem\n    rcases hmem with h1 | h1\n    · exact h1\n    · omega\n  have shift : ArithmeticFunction.sigma 0 (n - 12) ≤ 14 := by\n    have hsub : n - 12 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let mm : Fin n := ⟨n - 12, hsub⟩\n    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H\n    dsimp [f, mm] at hm\n    omega\n  have hN1 : 1 ≤ N := by omega\n  have hn12 : n - 12 = 12 * (210 * N - 1) := by omega\n  have h2ndvd : ¬ (2 ∣ (210 * N - 1)) := by\n    rw [Nat.dvd_iff_mod_eq_zero]; omega\n  have h3ndvd : ¬ (3 ∣ (210 * N - 1)) := by\n    rw [Nat.dvd_iff_mod_eq_zero]; omega\n  have hcop2 : Nat.Coprime 4 (210 * N - 1) := by\n    have h2 : Nat.Coprime 2 (210 * N - 1) := (Nat.prime_two.coprime_iff_not_dvd).mpr h2ndvd\n    have e4 : (4:ℕ) = 2 ^ 2 := by norm_num\n    rw [e4]\n    exact h2.pow_left 2\n  have hcop3 : Nat.Coprime 3 (210 * N - 1) := (Nat.prime_three.coprime_iff_not_dvd).mpr h3ndvd\n  have hcopfull : Nat.Coprime 12 (210 * N - 1) := by\n    have e12 : (12:ℕ) = 4 * 3 := by norm_num\n    rw [e12]\n    exact hcop2.mul hcop3\n  have hsig12 : ArithmeticFunction.sigma 0 12 = 6 := by native_decide\n  have hsigeq : ArithmeticFunction.sigma 0 (n - 12) = 6 * ArithmeticFunction.sigma 0 (210 * N - 1) := by\n    rw [hn12, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopfull, hsig12]\n  have hbudget : 6 * ArithmeticFunction.sigma 0 (210 * N - 1) ≤ 14 := by rw [← hsigeq]; exact shift\n  have hsigle2 : ArithmeticFunction.sigma 0 (210 * N - 1) ≤ 2 := by omega\n  have hval2 : 2 ≤ 210 * N - 1 := by omega\n  have hclass : Nat.Prime (210 * N - 1) := hprime2 (210 * N - 1) hval2 hsigle2\n  have hdm := Nat.div_add_mod (210 * N) ℓ\n  have hdvd : ℓ ∣ (210 * N - 1) := ⟨210 * N / ℓ, by omega⟩\n  have hcase := hclass.eq_one_or_self_of_dvd ℓ hdvd\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "flat_tactic_sequence",
+          "proof_term": "  intro n N ℓ hn H hnN hℓprime hℓ11 hℓ29 hcontra\n  have hprime2 : ∀ x : ℕ, 2 ≤ x → ArithmeticFunction.sigma 0 x ≤ 2 → Nat.Prime x := by\n    intro x hx hs\n    rw [ArithmeticFunction.sigma_zero_apply] at hs\n    have hx0 : x ≠ 0 := by omega\n    have hsub : ({1, x} : Finset ℕ) ⊆ x.divisors := by\n      intro y hy\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hy\n      rw [Nat.mem_divisors]\n      rcases hy with rfl | rfl\n      · exact ⟨one_dvd _, hx0⟩\n      · exact ⟨dvd_rfl, hx0⟩\n    have hc2 : ({1, x} : Finset ℕ).card = 2 := by\n      rw [Finset.card_insert_of_notMem (by simp; omega), Finset.card_singleton]\n    have heq : x.divisors = {1, x} := (Finset.eq_of_subset_of_card_le hsub (by rw [hc2]; exact hs)).symm\n    rw [Nat.prime_def_lt]\n    refine ⟨by omega, ?_⟩\n    intro mm hmlt hmdvd\n    have hmem : mm ∈ x.divisors := Nat.mem_divisors.mpr ⟨hmdvd, hx0⟩\n    rw [heq] at hmem\n    simp only [Finset.mem_insert, Finset.mem_singleton] at hmem\n    rcases hmem with h1 | h1\n    · exact h1\n    · omega\n  have shift : ArithmeticFunction.sigma 0 (n - 12) ≤ 14 := by\n    have hsub : n - 12 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let mm : Fin n := ⟨n - 12, hsub⟩\n    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H\n    dsimp [f, mm] at hm\n    omega\n  have hN1 : 1 ≤ N := by omega\n  have hn12 : n - 12 = 12 * (210 * N - 1) := by omega\n  have h2ndvd : ¬ (2 ∣ (210 * N - 1)) := by\n    rw [Nat.dvd_iff_mod_eq_zero]; omega\n  have h3ndvd : ¬ (3 ∣ (210 * N - 1)) := by\n    rw [Nat.dvd_iff_mod_eq_zero]; omega\n  have hcop2 : Nat.Coprime 4 (210 * N - 1) := by\n    have h2 : Nat.Coprime 2 (210 * N - 1) := (Nat.prime_two.coprime_iff_not_dvd).mpr h2ndvd\n    have e4 : (4:ℕ) = 2 ^ 2 := by norm_num\n    rw [e4]\n    exact h2.pow_left 2\n  have hcop3 : Nat.Coprime 3 (210 * N - 1) := (Nat.prime_three.coprime_iff_not_dvd).mpr h3ndvd\n  have hcopfull : Nat.Coprime 12 (210 * N - 1) := by\n    have e12 : (12:ℕ) = 4 * 3 := by norm_num\n    rw [e12]\n    exact hcop2.mul hcop3\n  have hsig12 : ArithmeticFunction.sigma 0 12 = 6 := by native_decide\n  have hsigeq : ArithmeticFunction.sigma 0 (n - 12) = 6 * ArithmeticFunction.sigma 0 (210 * N - 1) := by\n    rw [hn12, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopfull, hsig12]\n  have hbudget : 6 * ArithmeticFunction.sigma 0 (210 * N - 1) ≤ 14 := by rw [← hsigeq]; exact shift\n  have hsigle2 : ArithmeticFunction.sigma 0 (210 * N - 1) ≤ 2 := by omega\n  have hval2 : 2 ≤ 210 * N - 1 := by omega\n  have hclass : Nat.Prime (210 * N - 1) := hprime2 (210 * N - 1) hval2 hsigle2\n  have hdm := Nat.div_add_mod (210 * N) ℓ\n  have hdvd : ℓ ∣ (210 * N - 1) := ⟨210 * N / ℓ, by omega⟩\n  have hcase := hclass.eq_one_or_self_of_dvd ℓ hdvd\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n N ℓ : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → Nat.Prime ℓ → 11 ≤ ℓ → ℓ ≤ 29 → 210 * N % ℓ ≠ 1",
+        "module_source_hash": null,
+        "obligation_id": "111c4530-8254-4e02-90f7-f86a8ce17402",
+        "outcome": "kernel_fail",
+        "problem_version_id": "84df59dc-30c6-4107-bb5b-9e6c68f85375",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "8bc86ddcd7c1cb34718110e244c1b11ce196635396668e4f031be7998c37a5d6"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "0ec0632213805962441656bc43bf95e9371a8e26da2d41490a2164a10119db12"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n N ℓ hn H hnN hℓprime hℓ11 hℓ29 hcontra\n  have hprime2 : ∀ x : ℕ, 2 ≤ x → ArithmeticFunction.sigma 0 x ≤ 2 → Nat.Prime x := by\n    intro x hx hs\n    rw [ArithmeticFunction.sigma_zero_apply] at hs\n    have hx0 : x ≠ 0 := by omega\n    have hsub : ({1, x} : Finset ℕ) ⊆ x.divisors := by\n      intro y hy\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hy\n      rw [Nat.mem_divisors]\n      rcases hy with rfl | rfl\n      · exact ⟨one_dvd _, hx0⟩\n      · exact ⟨dvd_rfl, hx0⟩\n    have hc2 : ({1, x} : Finset ℕ).card = 2 := by\n      rw [Finset.card_insert_of_notMem (by simp; omega), Finset.card_singleton]\n    have heq : x.divisors = {1, x} := (Finset.eq_of_subset_of_card_le hsub (by rw [hc2]; exact hs)).symm\n    rw [Nat.prime_def_lt]\n    refine ⟨by omega, ?_⟩\n    intro mm hmlt hmdvd\n    have hmem : mm ∈ x.divisors := Nat.mem_divisors.mpr ⟨hmdvd, hx0⟩\n    rw [heq] at hmem\n    simp only [Finset.mem_insert, Finset.mem_singleton] at hmem\n    rcases hmem with h1 | h1\n    · exact h1\n    · omega\n  have shift : ArithmeticFunction.sigma 0 (n - 12) ≤ 14 := by\n    have hsub : n - 12 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let mm : Fin n := ⟨n - 12, hsub⟩\n    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H\n    dsimp [f, mm] at hm\n    omega\n  have hN1 : 1 ≤ N := by omega\n  have hn12 : n - 12 = 12 * (210 * N - 1) := by omega\n  have h2ndvd : ¬ (2 ∣ (210 * N - 1)) := by\n    rw [Nat.dvd_iff_mod_eq_zero]; omega\n  have h3ndvd : ¬ (3 ∣ (210 * N - 1)) := by\n    rw [Nat.dvd_iff_mod_eq_zero]; omega\n  have hcop2 : Nat.Coprime 4 (210 * N - 1) := by\n    have h2 : Nat.Coprime 2 (210 * N - 1) := (Nat.prime_two.coprime_iff_not_dvd).mpr h2ndvd\n    have e4 : (4:ℕ) = 2 ^ 2 := by norm_num\n    rw [e4]\n    exact h2.pow_left 2\n  have hcop3 : Nat.Coprime 3 (210 * N - 1) := (Nat.prime_three.coprime_iff_not_dvd).mpr h3ndvd\n  have hcopfull : Nat.Coprime 12 (210 * N - 1) := by\n    have e12 : (12:ℕ) = 4 * 3 := by norm_num\n    rw [e12]\n    exact hcop2.mul hcop3\n  have hsig12 : ArithmeticFunction.sigma 0 12 = 6 := by native_decide\n  have hsigeq : ArithmeticFunction.sigma 0 (n - 12) = 6 * ArithmeticFunction.sigma 0 (210 * N - 1) := by\n    rw [hn12, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopfull, hsig12]\n  have hbudget : 6 * ArithmeticFunction.sigma 0 (210 * N - 1) ≤ 14 := by rw [← hsigeq]; exact shift\n  have hsigle2 : ArithmeticFunction.sigma 0 (210 * N - 1) ≤ 2 := by omega\n  have hval2 : 2 ≤ 210 * N - 1 := by omega\n  have hclass : Nat.Prime (210 * N - 1) := hprime2 (210 * N - 1) hval2 hsigle2\n  have hdm := Nat.div_add_mod (210 * N) ℓ\n  have hdvd : ℓ ∣ (210 * N - 1) := ⟨210 * N / ℓ, by omega⟩\n  have hcase := hclass.eq_one_or_self_of_dvd ℓ hdvd\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n N ℓ hn H hnN hℓprime hℓ11 hℓ29 hcontra\n  have hprime2 : ∀ x : ℕ, 2 ≤ x → ArithmeticFunction.sigma 0 x ≤ 2 → Nat.Prime x := by\n    intro x hx hs\n    rw [ArithmeticFunction.sigma_zero_apply] at hs\n    have hx0 : x ≠ 0 := by omega\n    have hsub : ({1, x} : Finset ℕ) ⊆ x.divisors := by\n      intro y hy\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hy\n      rw [Nat.mem_divisors]\n      rcases hy with rfl | rfl\n      · exact ⟨one_dvd _, hx0⟩\n      · exact ⟨dvd_rfl, hx0⟩\n    have hc2 : ({1, x} : Finset ℕ).card = 2 := by\n      rw [Finset.card_insert_of_notMem (by simp; omega), Finset.card_singleton]\n    have heq : x.divisors = {1, x} := (Finset.eq_of_subset_of_card_le hsub (by rw [hc2]; exact hs)).symm\n    rw [Nat.prime_def_lt]\n    refine ⟨by omega, ?_⟩\n    intro mm hmlt hmdvd\n    have hmem : mm ∈ x.divisors := Nat.mem_divisors.mpr ⟨hmdvd, hx0⟩\n    rw [heq] at hmem\n    simp only [Finset.mem_insert, Finset.mem_singleton] at hmem\n    rcases hmem with h1 | h1\n    · exact h1\n    · omega\n  have shift : ArithmeticFunction.sigma 0 (n - 12) ≤ 14 := by\n    have hsub : n - 12 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let mm : Fin n := ⟨n - 12, hsub⟩\n    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H\n    dsimp [f, mm] at hm\n    omega\n  have hN1 : 1 ≤ N := by omega\n  have hn12 : n - 12 = 12 * (210 * N - 1) := by omega\n  have h2ndvd : ¬ (2 ∣ (210 * N - 1)) := by\n    rw [Nat.dvd_iff_mod_eq_zero]; omega\n  have h3ndvd : ¬ (3 ∣ (210 * N - 1)) := by\n    rw [Nat.dvd_iff_mod_eq_zero]; omega\n  have hcop2 : Nat.Coprime 4 (210 * N - 1) := by\n    have h2 : Nat.Coprime 2 (210 * N - 1) := (Nat.prime_two.coprime_iff_not_dvd).mpr h2ndvd\n    have e4 : (4:ℕ) = 2 ^ 2 := by norm_num\n    rw [e4]\n    exact h2.pow_left 2\n  have hcop3 : Nat.Coprime 3 (210 * N - 1) := (Nat.prime_three.coprime_iff_not_dvd).mpr h3ndvd\n  have hcopfull : Nat.Coprime 12 (210 * N - 1) := by\n    have e12 : (12:ℕ) = 4 * 3 := by norm_num\n    rw [e12]\n    exact hcop2.mul hcop3\n  have hsig12 : ArithmeticFunction.sigma 0 12 = 6 := by native_decide\n  have hsigeq : ArithmeticFunction.sigma 0 (n - 12) = 6 * ArithmeticFunction.sigma 0 (210 * N - 1) := by\n    rw [hn12, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopfull, hsig12]\n  have hbudget : 6 * ArithmeticFunction.sigma 0 (210 * N - 1) ≤ 14 := by rw [← hsigeq]; exact shift\n  have hsigle2 : ArithmeticFunction.sigma 0 (210 * N - 1) ≤ 2 := by omega\n  have hval2 : 2 ≤ 210 * N - 1 := by omega\n  have hclass : Nat.Prime (210 * N - 1) := hprime2 (210 * N - 1) hval2 hsigle2\n  have hdm := Nat.div_add_mod (210 * N) ℓ\n  have hdvd : ℓ ∣ (210 * N - 1) := ⟨210 * N / ℓ, by omega⟩\n  have hcase := hclass.eq_one_or_self_of_dvd ℓ hdvd\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n N ℓ : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → Nat.Prime ℓ → 11 ≤ ℓ → ℓ ≤ 29 → 210 * N % ℓ ≠ 1",
+        "module_source_hash": null,
+        "obligation_id": "111c4530-8254-4e02-90f7-f86a8ce17402",
+        "outcome": "kernel_pass",
+        "problem_version_id": "84df59dc-30c6-4107-bb5b-9e6c68f85375",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "8bc86ddcd7c1cb34718110e244c1b11ce196635396668e4f031be7998c37a5d6"
+      },
+      "next_state": {
+        "state_hash": "cf47e175675e6f78337bcffee524e4b958c64cc23e56c992d25491a74046817b"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "d485b83096c7ee659c890724dbaa134424ce9f4f27576a46462896b8da1a698d"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

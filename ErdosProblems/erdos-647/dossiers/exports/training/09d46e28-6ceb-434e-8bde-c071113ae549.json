@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro s\nrw [Real.log_prod]\n· apply Finset.sum_le_sum\n  intro p hp\n  have hp_prime : p.Prime := Nat.prime_of_mem_primeFactors hp\n  have hp_dvd : p ∣ s.prodPrimes := Nat.dvd_of_mem_primeFactors hp\n  have hnu_pos : 0 < s.nu p := s.nu_pos_of_prime p hp_prime hp_dvd\n  have hnu_lt1 : s.nu p < 1 := s.nu_lt_one_of_prime p hp_prime hp_dvd\n  rw [Real.log_inv]\n  have h1mx_pos : 0 < 1 - s.nu p := by linarith\n  have hlog := Real.log_le_sub_one_of_pos h1mx_pos\n  linarith\n· intro p hp\n  have hp_prime : p.Prime := Nat.prime_of_mem_primeFactors hp\n  have hp_dvd : p ∣ s.prodPrimes := Nat.dvd_of_mem_primeFactors hp\n  have hnu_lt1 : s.nu p < 1 := s.nu_lt_one_of_prime p hp_prime hp_dvd\n  have h1mx_pos : 0 < 1 - s.nu p := by linarith\n  exact inv_ne_zero h1mx_pos.ne'",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro s\nrw [Real.log_prod]\n· apply Finset.sum_le_sum\n  intro p hp\n  have hp_prime : p.Prime := Nat.prime_of_mem_primeFactors hp\n  have hp_dvd : p ∣ s.prodPrimes := Nat.dvd_of_mem_primeFactors hp\n  have hnu_pos : 0 < s.nu p := s.nu_pos_of_prime p hp_prime hp_dvd\n  have hnu_lt1 : s.nu p < 1 := s.nu_lt_one_of_prime p hp_prime hp_dvd\n  rw [Real.log_inv]\n  have h1mx_pos : 0 < 1 - s.nu p := by linarith\n  have hlog := Real.log_le_sub_one_of_pos h1mx_pos\n  linarith\n· intro p hp\n  have hp_prime : p.Prime := Nat.prime_of_mem_primeFactors hp\n  have hp_dvd : p ∣ s.prodPrimes := Nat.dvd_of_mem_primeFactors hp\n  have hnu_lt1 : s.nu p < 1 := s.nu_lt_one_of_prime p hp_prime hp_dvd\n  have h1mx_pos : 0 < 1 - s.nu p := by linarith\n  exact inv_ne_zero h1mx_pos.ne'",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : SelbergSieve), ∑ p ∈ s.prodPrimes.primeFactors, s.nu p ≤ Real.log (∏ p ∈ s.prodPrimes.primeFactors, (1 - s.nu p)⁻¹)",
+        "module_source_hash": null,
+        "obligation_id": "26f81337-e7fd-41da-8765-8d47de92df88",
+        "outcome": "kernel_pass",
+        "problem_version_id": "d82ea6b1-2e43-49c2-8fac-834c1ffab7fe",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "c74599d45a83385df1621f8264d5e0fe99a6d056baa4bb0e01a1c4ee455d21bb"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "320a6ab3ff09438ed6d2de4d42bd35d7aee6630e8bf8d71d00ce6293e61deda3"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

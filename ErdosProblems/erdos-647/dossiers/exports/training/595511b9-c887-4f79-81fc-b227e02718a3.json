@@ -1,0 +1,156 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "flat_tactic_sequence",
+        "proof_term": "intro p N hp hN\n  have key : ∀ c : ℕ, 0 < c*N → (p ∣ c*N-1 ↔ (c*N)%p=1) := by\n    intro c hcN\n    constructor\n    · intro hdvd\n      obtain ⟨k, hk⟩ := hdvd\n      have h1 : c*N = p*k+1 := by omega\n      have h2 : p*k+1 = 1+k*p := by ring\n      rw [h1, h2, Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt hp.one_lt]\n    · intro hmod\n      have h1 : c*N = p*(c*N/p) + (c*N)%p := (Nat.div_add_mod (c*N) p).symm\n      rw [hmod] at h1\n      exact ⟨c*N/p, by omega⟩\n  constructor\n  · intro hdvd\n    rw [hp.prime.dvd_mul] at hdvd\n    rcases hdvd with hd | hd\n    · rw [hp.prime.dvd_mul] at hd\n      rcases hd with hd | hd\n      · rw [hp.prime.dvd_mul] at hd\n        rcases hd with hd | hd\n        · rw [hp.prime.dvd_mul] at hd\n          rcases hd with hd | hd\n          · rw [hp.prime.dvd_mul] at hd\n            rcases hd with hd | hd\n            · rw [hp.prime.dvd_mul] at hd\n              rcases hd with hd | hd\n              · left; exact (key 210 (by omega)).mp hd\n              · right;left; exact (key 315 (by omega)).mp hd\n            · right;right;left; exact (key 420 (by omega)).mp hd\n          · right;right;right;left; exact (key 630 (by omega)).mp hd\n        · right;right;right;right;left; exact (key 840 (by omega)).mp hd\n      · right;right;right;right;right;left; exact (key 1260 (by omega)).mp hd\n    · right;right;right;right;right;right; exact (key 2520 (by omega)).mp hd\n  · intro h\n    rcases h with h|h|h|h|h|h|h\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right ((key 210 (by omega)).mpr h) _) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 315 (by omega)).mpr h) _) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 420 (by omega)).mpr h) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 630 (by omega)).mpr h) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 840 (by omega)).mpr h) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 1260 (by omega)).mpr h) _) _\n    · exact Dvd.dvd.mul_left ((key 2520 (by omega)).mpr h) _",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "flat_tactic_sequence",
+          "proof_term": "intro p N hp hN\n  have key : ∀ c : ℕ, 0 < c*N → (p ∣ c*N-1 ↔ (c*N)%p=1) := by\n    intro c hcN\n    constructor\n    · intro hdvd\n      obtain ⟨k, hk⟩ := hdvd\n      have h1 : c*N = p*k+1 := by omega\n      have h2 : p*k+1 = 1+k*p := by ring\n      rw [h1, h2, Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt hp.one_lt]\n    · intro hmod\n      have h1 : c*N = p*(c*N/p) + (c*N)%p := (Nat.div_add_mod (c*N) p).symm\n      rw [hmod] at h1\n      exact ⟨c*N/p, by omega⟩\n  constructor\n  · intro hdvd\n    rw [hp.prime.dvd_mul] at hdvd\n    rcases hdvd with hd | hd\n    · rw [hp.prime.dvd_mul] at hd\n      rcases hd with hd | hd\n      · rw [hp.prime.dvd_mul] at hd\n        rcases hd with hd | hd\n        · rw [hp.prime.dvd_mul] at hd\n          rcases hd with hd | hd\n          · rw [hp.prime.dvd_mul] at hd\n            rcases hd with hd | hd\n            · rw [hp.prime.dvd_mul] at hd\n              rcases hd with hd | hd\n              · left; exact (key 210 (by omega)).mp hd\n              · right;left; exact (key 315 (by omega)).mp hd\n            · right;right;left; exact (key 420 (by omega)).mp hd\n          · right;right;right;left; exact (key 630 (by omega)).mp hd\n        · right;right;right;right;left; exact (key 840 (by omega)).mp hd\n      · right;right;right;right;right;left; exact (key 1260 (by omega)).mp hd\n    · right;right;right;right;right;right; exact (key 2520 (by omega)).mp hd\n  · intro h\n    rcases h with h|h|h|h|h|h|h\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right ((key 210 (by omega)).mpr h) _) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 315 (by omega)).mpr h) _) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 420 (by omega)).mpr h) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 630 (by omega)).mpr h) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 840 (by omega)).mpr h) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 1260 (by omega)).mpr h) _) _\n    · exact Dvd.dvd.mul_left ((key 2520 (by omega)).mpr h) _",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (p N : ℕ), p.Prime → 1 ≤ N → (p ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*(840*N-1)*(1260*N-1)*(2520*N-1) ↔ ((210*N)%p=1 ∨ (315*N)%p=1 ∨ (420*N)%p=1 ∨ (630*N)%p=1 ∨ (840*N)%p=1 ∨ (1260*N)%p=1 ∨ (2520*N)%p=1))",
+        "module_source_hash": null,
+        "obligation_id": "bf029d00-97dc-4d4e-9d71-13bc10b39d6c",
+        "outcome": "kernel_fail",
+        "problem_version_id": "957fbfea-f283-4f2f-b8c7-06f2f4016679",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "6c72df181a00ffe6028daff93e0e68b7c340d13f07295a0f3810336ac7fdd21e"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "a12f300b21734e1c68cf9ceeed8445e93858e274af6ad89789fe936bd76ad509"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro p N hp hN\n  have key : ∀ c : ℕ, 0 < c*N → (p ∣ c*N-1 ↔ (c*N)%p=1) := by\n    intro c hcN\n    constructor\n    · intro hdvd\n      obtain ⟨k, hk⟩ := hdvd\n      have h1 : c*N = p*k+1 := by omega\n      have h2 : p*k+1 = 1+k*p := by ring\n      rw [h1, h2, Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt hp.one_lt]\n    · intro hmod\n      have h1 : c*N = p*(c*N/p) + (c*N)%p := (Nat.div_add_mod (c*N) p).symm\n      rw [hmod] at h1\n      exact ⟨c*N/p, by omega⟩\n  constructor\n  · intro hdvd\n    rw [hp.prime.dvd_mul] at hdvd\n    rcases hdvd with hd | hd\n    · rw [hp.prime.dvd_mul] at hd\n      rcases hd with hd | hd\n      · rw [hp.prime.dvd_mul] at hd\n        rcases hd with hd | hd\n        · rw [hp.prime.dvd_mul] at hd\n          rcases hd with hd | hd\n          · rw [hp.prime.dvd_mul] at hd\n            rcases hd with hd | hd\n            · rw [hp.prime.dvd_mul] at hd\n              rcases hd with hd | hd\n              · left; exact (key 210 (by omega)).mp hd\n              · right;left; exact (key 315 (by omega)).mp hd\n            · right;right;left; exact (key 420 (by omega)).mp hd\n          · right;right;right;left; exact (key 630 (by omega)).mp hd\n        · right;right;right;right;left; exact (key 840 (by omega)).mp hd\n      · right;right;right;right;right;left; exact (key 1260 (by omega)).mp hd\n    · right;right;right;right;right;right; exact (key 2520 (by omega)).mp hd\n  · intro h\n    rcases h with h|h|h|h|h|h|h\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right ((key 210 (by omega)).mpr h) _) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 315 (by omega)).mpr h) _) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 420 (by omega)).mpr h) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 630 (by omega)).mpr h) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 840 (by omega)).mpr h) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 1260 (by omega)).mpr h) _) _\n    · exact Dvd.dvd.mul_left ((key 2520 (by omega)).mpr h) _",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro p N hp hN\n  have key : ∀ c : ℕ, 0 < c*N → (p ∣ c*N-1 ↔ (c*N)%p=1) := by\n    intro c hcN\n    constructor\n    · intro hdvd\n      obtain ⟨k, hk⟩ := hdvd\n      have h1 : c*N = p*k+1 := by omega\n      have h2 : p*k+1 = 1+k*p := by ring\n      rw [h1, h2, Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt hp.one_lt]\n    · intro hmod\n      have h1 : c*N = p*(c*N/p) + (c*N)%p := (Nat.div_add_mod (c*N) p).symm\n      rw [hmod] at h1\n      exact ⟨c*N/p, by omega⟩\n  constructor\n  · intro hdvd\n    rw [hp.prime.dvd_mul] at hdvd\n    rcases hdvd with hd | hd\n    · rw [hp.prime.dvd_mul] at hd\n      rcases hd with hd | hd\n      · rw [hp.prime.dvd_mul] at hd\n        rcases hd with hd | hd\n        · rw [hp.prime.dvd_mul] at hd\n          rcases hd with hd | hd\n          · rw [hp.prime.dvd_mul] at hd\n            rcases hd with hd | hd\n            · rw [hp.prime.dvd_mul] at hd\n              rcases hd with hd | hd\n              · left; exact (key 210 (by omega)).mp hd\n              · right;left; exact (key 315 (by omega)).mp hd\n            · right;right;left; exact (key 420 (by omega)).mp hd\n          · right;right;right;left; exact (key 630 (by omega)).mp hd\n        · right;right;right;right;left; exact (key 840 (by omega)).mp hd\n      · right;right;right;right;right;left; exact (key 1260 (by omega)).mp hd\n    · right;right;right;right;right;right; exact (key 2520 (by omega)).mp hd\n  · intro h\n    rcases h with h|h|h|h|h|h|h\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right ((key 210 (by omega)).mpr h) _) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 315 (by omega)).mpr h) _) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 420 (by omega)).mpr h) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 630 (by omega)).mpr h) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 840 (by omega)).mpr h) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 1260 (by omega)).mpr h) _) _\n    · exact Dvd.dvd.mul_left ((key 2520 (by omega)).mpr h) _",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": "Invalid attempt claim or status",
+        "disposition": "invalid_response",
+        "lean_statement": "∀ (p N : ℕ), p.Prime → 1 ≤ N → (p ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*(840*N-1)*(1260*N-1)*(2520*N-1) ↔ ((210*N)%p=1 ∨ (315*N)%p=1 ∨ (420*N)%p=1 ∨ (630*N)%p=1 ∨ (840*N)%p=1 ∨ (1260*N)%p=1 ∨ (2520*N)%p=1))",
+        "module_source_hash": null,
+        "obligation_id": "bf029d00-97dc-4d4e-9d71-13bc10b39d6c",
+        "outcome": null,
+        "problem_version_id": "957fbfea-f283-4f2f-b8c7-06f2f4016679",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "6c72df181a00ffe6028daff93e0e68b7c340d13f07295a0f3810336ac7fdd21e"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "a12f300b21734e1c68cf9ceeed8445e93858e274af6ad89789fe936bd76ad509"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro p N hp hN\n  have key : ∀ c : ℕ, 0 < c*N → (p ∣ c*N-1 ↔ (c*N)%p=1) := by\n    intro c hcN\n    constructor\n    · intro hdvd\n      obtain ⟨k, hk⟩ := hdvd\n      have h1 : c*N = p*k+1 := by omega\n      have h2 : p*k+1 = 1+k*p := by ring\n      rw [h1, h2, Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt hp.one_lt]\n    · intro hmod\n      have h1 : c*N = p*(c*N/p) + (c*N)%p := (Nat.div_add_mod (c*N) p).symm\n      rw [hmod] at h1\n      exact ⟨c*N/p, by omega⟩\n  constructor\n  · intro hdvd\n    rw [hp.prime.dvd_mul] at hdvd\n    rcases hdvd with hd | hd\n    · rw [hp.prime.dvd_mul] at hd\n      rcases hd with hd | hd\n      · rw [hp.prime.dvd_mul] at hd\n        rcases hd with hd | hd\n        · rw [hp.prime.dvd_mul] at hd\n          rcases hd with hd | hd\n          · rw [hp.prime.dvd_mul] at hd\n            rcases hd with hd | hd\n            · rw [hp.prime.dvd_mul] at hd\n              rcases hd with hd | hd\n              · left; exact (key 210 (by omega)).mp hd\n              · right;left; exact (key 315 (by omega)).mp hd\n            · right;right;left; exact (key 420 (by omega)).mp hd\n          · right;right;right;left; exact (key 630 (by omega)).mp hd\n        · right;right;right;right;left; exact (key 840 (by omega)).mp hd\n      · right;right;right;right;right;left; exact (key 1260 (by omega)).mp hd\n    · right;right;right;right;right;right; exact (key 2520 (by omega)).mp hd\n  · intro h\n    rcases h with h|h|h|h|h|h|h\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right ((key 210 (by omega)).mpr h) _) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 315 (by omega)).mpr h) _) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 420 (by omega)).mpr h) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 630 (by omega)).mpr h) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 840 (by omega)).mpr h) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 1260 (by omega)).mpr h) _) _\n    · exact Dvd.dvd.mul_left ((key 2520 (by omega)).mpr h) _",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro p N hp hN\n  have key : ∀ c : ℕ, 0 < c*N → (p ∣ c*N-1 ↔ (c*N)%p=1) := by\n    intro c hcN\n    constructor\n    · intro hdvd\n      obtain ⟨k, hk⟩ := hdvd\n      have h1 : c*N = p*k+1 := by omega\n      have h2 : p*k+1 = 1+k*p := by ring\n      rw [h1, h2, Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt hp.one_lt]\n    · intro hmod\n      have h1 : c*N = p*(c*N/p) + (c*N)%p := (Nat.div_add_mod (c*N) p).symm\n      rw [hmod] at h1\n      exact ⟨c*N/p, by omega⟩\n  constructor\n  · intro hdvd\n    rw [hp.prime.dvd_mul] at hdvd\n    rcases hdvd with hd | hd\n    · rw [hp.prime.dvd_mul] at hd\n      rcases hd with hd | hd\n      · rw [hp.prime.dvd_mul] at hd\n        rcases hd with hd | hd\n        · rw [hp.prime.dvd_mul] at hd\n          rcases hd with hd | hd\n          · rw [hp.prime.dvd_mul] at hd\n            rcases hd with hd | hd\n            · rw [hp.prime.dvd_mul] at hd\n              rcases hd with hd | hd\n              · left; exact (key 210 (by omega)).mp hd\n              · right;left; exact (key 315 (by omega)).mp hd\n            · right;right;left; exact (key 420 (by omega)).mp hd\n          · right;right;right;left; exact (key 630 (by omega)).mp hd\n        · right;right;right;right;left; exact (key 840 (by omega)).mp hd\n      · right;right;right;right;right;left; exact (key 1260 (by omega)).mp hd\n    · right;right;right;right;right;right; exact (key 2520 (by omega)).mp hd\n  · intro h\n    rcases h with h|h|h|h|h|h|h\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right ((key 210 (by omega)).mpr h) _) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 315 (by omega)).mpr h) _) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 420 (by omega)).mpr h) _) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 630 (by omega)).mpr h) _) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 840 (by omega)).mpr h) _) _) _\n    · exact Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 1260 (by omega)).mpr h) _) _\n    · exact Dvd.dvd.mul_left ((key 2520 (by omega)).mpr h) _",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (p N : ℕ), p.Prime → 1 ≤ N → (p ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*(840*N-1)*(1260*N-1)*(2520*N-1) ↔ ((210*N)%p=1 ∨ (315*N)%p=1 ∨ (420*N)%p=1 ∨ (630*N)%p=1 ∨ (840*N)%p=1 ∨ (1260*N)%p=1 ∨ (2520*N)%p=1))",
+        "module_source_hash": null,
+        "obligation_id": "bf029d00-97dc-4d4e-9d71-13bc10b39d6c",
+        "outcome": "kernel_fail",
+        "problem_version_id": "957fbfea-f283-4f2f-b8c7-06f2f4016679",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "6c72df181a00ffe6028daff93e0e68b7c340d13f07295a0f3810336ac7fdd21e"
+      },
+      "next_state": {
+        "state_hash": "0f5715f4f57f4d6b72fc45f03af811a8619ba4c42cdccba12ae3f20d7e104d53"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "0da9b4815fc7ad22df3d0e291ed46183f26fbfa95c15b5d35e92d8efcb30f25a"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro p N hp hN\nhave key : ∀ c : ℕ, 0 < c*N → (p ∣ c*N-1 ↔ (c*N)%p=1) := by\n  intro c hcN\n  constructor\n  · intro hdvd\n    obtain ⟨k, hk⟩ := hdvd\n    have h1 : c*N = p*k+1 := by omega\n    have h2 : p*k+1 = 1+k*p := by ring\n    rw [h1, h2, Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt hp.one_lt]\n  · intro hmod\n    have h1 : c*N = p*(c*N/p) + (c*N)%p := (Nat.div_add_mod (c*N) p).symm\n    rw [hmod] at h1\n    exact ⟨c*N/p, by omega⟩\nconstructor\n· intro hdvd\n  rw [hp.prime.dvd_mul] at hdvd\n  rcases hdvd with hd | hd\n  · rw [hp.prime.dvd_mul] at hd\n    rcases hd with hd | hd\n    · rw [hp.prime.dvd_mul] at hd\n      rcases hd with hd | hd\n      · rw [hp.prime.dvd_mul] at hd\n        rcases hd with hd | hd\n        · rw [hp.prime.dvd_mul] at hd\n          rcases hd with hd | hd\n          · rw [hp.prime.dvd_mul] at hd\n            rcases hd with hd | hd\n            · left; exact (key 210 (by omega)).mp hd\n            · right;left; exact (key 315 (by omega)).mp hd\n          · right;right;left; exact (key 420 (by omega)).mp hd\n        · right;right;right;left; exact (key 630 (by omega)).mp hd\n      · right;right;right;right;left; exact (key 840 (by omega)).mp hd\n    · right;right;right;right;right;left; exact (key 1260 (by omega)).mp hd\n  · right;right;right;right;right;right; exact (key 2520 (by omega)).mp hd\n· intro h\n  rcases h with h|h|h|h|h|h|h\n  · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right ((key 210 (by omega)).mpr h) _) _) _) _) _) _\n  · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 315 (by omega)).mpr h) _) _) _) _) _) _\n  · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 420 (by omega)).mpr h) _) _) _) _) _\n  · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 630 (by omega)).mpr h) _) _) _) _\n  · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 840 (by omega)).mpr h) _) _) _\n  · exact Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 1260 (by omega)).mpr h) _) _\n  · exact Dvd.dvd.mul_left ((key 2520 (by omega)).mpr h) _",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro p N hp hN\nhave key : ∀ c : ℕ, 0 < c*N → (p ∣ c*N-1 ↔ (c*N)%p=1) := by\n  intro c hcN\n  constructor\n  · intro hdvd\n    obtain ⟨k, hk⟩ := hdvd\n    have h1 : c*N = p*k+1 := by omega\n    have h2 : p*k+1 = 1+k*p := by ring\n    rw [h1, h2, Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt hp.one_lt]\n  · intro hmod\n    have h1 : c*N = p*(c*N/p) + (c*N)%p := (Nat.div_add_mod (c*N) p).symm\n    rw [hmod] at h1\n    exact ⟨c*N/p, by omega⟩\nconstructor\n· intro hdvd\n  rw [hp.prime.dvd_mul] at hdvd\n  rcases hdvd with hd | hd\n  · rw [hp.prime.dvd_mul] at hd\n    rcases hd with hd | hd\n    · rw [hp.prime.dvd_mul] at hd\n      rcases hd with hd | hd\n      · rw [hp.prime.dvd_mul] at hd\n        rcases hd with hd | hd\n        · rw [hp.prime.dvd_mul] at hd\n          rcases hd with hd | hd\n          · rw [hp.prime.dvd_mul] at hd\n            rcases hd with hd | hd\n            · left; exact (key 210 (by omega)).mp hd\n            · right;left; exact (key 315 (by omega)).mp hd\n          · right;right;left; exact (key 420 (by omega)).mp hd\n        · right;right;right;left; exact (key 630 (by omega)).mp hd\n      · right;right;right;right;left; exact (key 840 (by omega)).mp hd\n    · right;right;right;right;right;left; exact (key 1260 (by omega)).mp hd\n  · right;right;right;right;right;right; exact (key 2520 (by omega)).mp hd\n· intro h\n  rcases h with h|h|h|h|h|h|h\n  · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right ((key 210 (by omega)).mpr h) _) _) _) _) _) _\n  · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 315 (by omega)).mpr h) _) _) _) _) _) _\n  · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 420 (by omega)).mpr h) _) _) _) _) _\n  · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 630 (by omega)).mpr h) _) _) _) _\n  · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 840 (by omega)).mpr h) _) _) _\n  · exact Dvd.dvd.mul_right (Dvd.dvd.mul_left ((key 1260 (by omega)).mpr h) _) _\n  · exact Dvd.dvd.mul_left ((key 2520 (by omega)).mpr h) _",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (p N : ℕ), p.Prime → 1 ≤ N → (p ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*(840*N-1)*(1260*N-1)*(2520*N-1) ↔ ((210*N)%p=1 ∨ (315*N)%p=1 ∨ (420*N)%p=1 ∨ (630*N)%p=1 ∨ (840*N)%p=1 ∨ (1260*N)%p=1 ∨ (2520*N)%p=1))",
+        "module_source_hash": null,
+        "obligation_id": "bf029d00-97dc-4d4e-9d71-13bc10b39d6c",
+        "outcome": "kernel_pass",
+        "problem_version_id": "957fbfea-f283-4f2f-b8c7-06f2f4016679",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "6c72df181a00ffe6028daff93e0e68b7c340d13f07295a0f3810336ac7fdd21e"
+      },
+      "next_state": {
+        "state_hash": "d763c56a392ce6f0e2f004121d55ac800ff5ba92044b4e825ed7258fb284d6f3"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "0fc3a15d31b1b7ae4bd4ab117db412a984316c2045072a10ed1ff4d3b1f475a4"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

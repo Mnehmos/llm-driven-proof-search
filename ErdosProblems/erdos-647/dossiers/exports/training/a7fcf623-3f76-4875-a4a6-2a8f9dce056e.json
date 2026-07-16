@@ -1,0 +1,86 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "by\n  intro r hr hsig\n  by_cases hprime : Nat.Prime r\n  · exact Or.inl hprime\n  · right\n    let p := Nat.minFac r\n    let s := r / p\n    have hr0 : r ≠ 0 := by omega\n    have hr1 : r ≠ 1 := by omega\n    have hpprime : Nat.Prime p := by\n      dsimp [p]\n      exact Nat.minFac_prime hr1\n    have hp2 : 2 ≤ p := hpprime.two_le\n    have hpdiv : p ∣ r := by\n      dsimp [p]\n      exact Nat.minFac_dvd r\n    have hmul : p * s = r := by\n      dsimp [s]\n      exact Nat.mul_div_cancel' hpdiv\n    have hle : p ≤ s := by\n      dsimp [p, s]\n      exact Nat.minFac_le_div (by omega) hprime\n    by_cases heq : p = s\n    · refine ⟨p, hpprime, ?_⟩\n      simpa [heq, pow_two] using hmul.symm\n    · have hps : p < s := lt_of_le_of_ne hle heq\n      have hs2 : 2 ≤ s := le_trans hp2 hle\n      have hsltprod : s < p * s :=\n        lt_mul_of_one_lt_left (by omega) (by omega)\n      have hslt : s < r := by simpa [hmul] using hsltprod\n      have hpr : p < r := lt_trans hps hslt\n      have h1p : 1 ≠ p := by omega\n      have h1s : 1 ≠ s := by omega\n      have h1r : 1 ≠ r := by omega\n      have hpsne : p ≠ s := by omega\n      have hprne : p ≠ r := by omega\n      have hsrne : s ≠ r := by omega\n      have hcard : ({1, p, s, r} : Finset ℕ).card = 4 := by\n        simp [h1p, h1s, h1r, hpsne, hprne, hsrne]\n      have hsub : ({1, p, s, r} : Finset ℕ) ⊆ r.divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rcases hx with hx | hx | hx | hx\n        · subst x\n          exact Nat.one_mem_divisors.mpr hr0\n        · subst x\n          exact Nat.mem_divisors.mpr ⟨hpdiv, hr0⟩\n        · subst x\n          apply Nat.mem_divisors.mpr\n          constructor\n          · refine ⟨p, ?_⟩\n            simpa [Nat.mul_comm] using hmul.symm\n          · exact hr0\n        · subst x\n          exact Nat.mem_divisors_self r hr0\n      have hcard_lower : 4 ≤ r.divisors.card := by\n        have hc := Finset.card_le_card hsub\n        rw [hcard] at hc\n        exact hc\n      have hsigma_card :\n          ArithmeticFunction.sigma 0 r = r.divisors.card := by\n        rw [ArithmeticFunction.sigma_apply]\n        simp\n      omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "by\n  intro r hr hsig\n  by_cases hprime : Nat.Prime r\n  · exact Or.inl hprime\n  · right\n    let p := Nat.minFac r\n    let s := r / p\n    have hr0 : r ≠ 0 := by omega\n    have hr1 : r ≠ 1 := by omega\n    have hpprime : Nat.Prime p := by\n      dsimp [p]\n      exact Nat.minFac_prime hr1\n    have hp2 : 2 ≤ p := hpprime.two_le\n    have hpdiv : p ∣ r := by\n      dsimp [p]\n      exact Nat.minFac_dvd r\n    have hmul : p * s = r := by\n      dsimp [s]\n      exact Nat.mul_div_cancel' hpdiv\n    have hle : p ≤ s := by\n      dsimp [p, s]\n      exact Nat.minFac_le_div (by omega) hprime\n    by_cases heq : p = s\n    · refine ⟨p, hpprime, ?_⟩\n      simpa [heq, pow_two] using hmul.symm\n    · have hps : p < s := lt_of_le_of_ne hle heq\n      have hs2 : 2 ≤ s := le_trans hp2 hle\n      have hsltprod : s < p * s :=\n        lt_mul_of_one_lt_left (by omega) (by omega)\n      have hslt : s < r := by simpa [hmul] using hsltprod\n      have hpr : p < r := lt_trans hps hslt\n      have h1p : 1 ≠ p := by omega\n      have h1s : 1 ≠ s := by omega\n      have h1r : 1 ≠ r := by omega\n      have hpsne : p ≠ s := by omega\n      have hprne : p ≠ r := by omega\n      have hsrne : s ≠ r := by omega\n      have hcard : ({1, p, s, r} : Finset ℕ).card = 4 := by\n        simp [h1p, h1s, h1r, hpsne, hprne, hsrne]\n      have hsub : ({1, p, s, r} : Finset ℕ) ⊆ r.divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rcases hx with hx | hx | hx | hx\n        · subst x\n          exact Nat.one_mem_divisors.mpr hr0\n        · subst x\n          exact Nat.mem_divisors.mpr ⟨hpdiv, hr0⟩\n        · subst x\n          apply Nat.mem_divisors.mpr\n          constructor\n          · refine ⟨p, ?_⟩\n            simpa [Nat.mul_comm] using hmul.symm\n          · exact hr0\n        · subst x\n          exact Nat.mem_divisors_self r hr0\n      have hcard_lower : 4 ≤ r.divisors.card := by\n        have hc := Finset.card_le_card hsub\n        rw [hcard] at hc\n        exact hc\n      have hsigma_card :\n          ArithmeticFunction.sigma 0 r = r.divisors.card := by\n        rw [ArithmeticFunction.sigma_apply]\n        simp\n      omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ r : ℕ, 2 ≤ r → ArithmeticFunction.sigma 0 r ≤ 3 → Nat.Prime r ∨ ∃ p : ℕ, Nat.Prime p ∧ r = p ^ 2",
+        "module_source_hash": null,
+        "obligation_id": "466ffff7-4dcb-4db7-bd03-8a222e24c77d",
+        "outcome": "kernel_fail",
+        "problem_version_id": "40a8784d-9dd7-4681-891a-b95705037e46",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "cfbf6c382a90babecfb743c5deddb7ed840ea8d8e87f079cfe25145ca4a44c81"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "a74069364ba3d9b52235ad7245e6d9317841736fcae658f69c31ce795dee59bc"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro r hr hsig\n  by_cases hprime : Nat.Prime r\n  · exact Or.inl hprime\n  · right\n    let p := Nat.minFac r\n    let s := r / p\n    have hr0 : r ≠ 0 := by omega\n    have hr1 : r ≠ 1 := by omega\n    have hpprime : Nat.Prime p := by\n      dsimp [p]\n      exact Nat.minFac_prime hr1\n    have hp2 : 2 ≤ p := hpprime.two_le\n    have hpdiv : p ∣ r := by\n      dsimp [p]\n      exact Nat.minFac_dvd r\n    have hmul : p * s = r := by\n      dsimp [s]\n      exact Nat.mul_div_cancel' hpdiv\n    have hle : p ≤ s := by\n      dsimp [p, s]\n      exact Nat.minFac_le_div (by omega) hprime\n    by_cases heq : p = s\n    · refine ⟨p, hpprime, ?_⟩\n      simpa [heq, pow_two] using hmul.symm\n    · have hps : p < s := lt_of_le_of_ne hle heq\n      have hs2 : 2 ≤ s := le_trans hp2 hle\n      have hsltprod : s < p * s :=\n        lt_mul_of_one_lt_left (by omega) (by omega)\n      have hslt : s < r := by simpa [hmul] using hsltprod\n      have hpr : p < r := lt_trans hps hslt\n      have h1p : 1 ≠ p := by omega\n      have h1s : 1 ≠ s := by omega\n      have h1r : 1 ≠ r := by omega\n      have hpsne : p ≠ s := by omega\n      have hprne : p ≠ r := by omega\n      have hsrne : s ≠ r := by omega\n      have hcard : ({1, p, s, r} : Finset ℕ).card = 4 := by\n        simp [h1p, h1s, h1r, hpsne, hprne, hsrne]\n      have hsub : ({1, p, s, r} : Finset ℕ) ⊆ r.divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rcases hx with hx | hx | hx | hx\n        · subst x\n          exact Nat.one_mem_divisors.mpr hr0\n        · subst x\n          exact Nat.mem_divisors.mpr ⟨hpdiv, hr0⟩\n        · subst x\n          apply Nat.mem_divisors.mpr\n          constructor\n          · refine ⟨p, ?_⟩\n            simpa [Nat.mul_comm] using hmul.symm\n          · exact hr0\n        · subst x\n          exact Nat.mem_divisors_self r hr0\n      have hcard_lower : 4 ≤ r.divisors.card := by\n        have hc := Finset.card_le_card hsub\n        rw [hcard] at hc\n        exact hc\n      have hsigma_card :\n          ArithmeticFunction.sigma 0 r = r.divisors.card := by\n        rw [ArithmeticFunction.sigma_apply]\n        simp\n      omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro r hr hsig\n  by_cases hprime : Nat.Prime r\n  · exact Or.inl hprime\n  · right\n    let p := Nat.minFac r\n    let s := r / p\n    have hr0 : r ≠ 0 := by omega\n    have hr1 : r ≠ 1 := by omega\n    have hpprime : Nat.Prime p := by\n      dsimp [p]\n      exact Nat.minFac_prime hr1\n    have hp2 : 2 ≤ p := hpprime.two_le\n    have hpdiv : p ∣ r := by\n      dsimp [p]\n      exact Nat.minFac_dvd r\n    have hmul : p * s = r := by\n      dsimp [s]\n      exact Nat.mul_div_cancel' hpdiv\n    have hle : p ≤ s := by\n      dsimp [p, s]\n      exact Nat.minFac_le_div (by omega) hprime\n    by_cases heq : p = s\n    · refine ⟨p, hpprime, ?_⟩\n      simpa [heq, pow_two] using hmul.symm\n    · have hps : p < s := lt_of_le_of_ne hle heq\n      have hs2 : 2 ≤ s := le_trans hp2 hle\n      have hsltprod : s < p * s :=\n        lt_mul_of_one_lt_left (by omega) (by omega)\n      have hslt : s < r := by simpa [hmul] using hsltprod\n      have hpr : p < r := lt_trans hps hslt\n      have h1p : 1 ≠ p := by omega\n      have h1s : 1 ≠ s := by omega\n      have h1r : 1 ≠ r := by omega\n      have hpsne : p ≠ s := by omega\n      have hprne : p ≠ r := by omega\n      have hsrne : s ≠ r := by omega\n      have hcard : ({1, p, s, r} : Finset ℕ).card = 4 := by\n        simp [h1p, h1s, h1r, hpsne, hprne, hsrne]\n      have hsub : ({1, p, s, r} : Finset ℕ) ⊆ r.divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rcases hx with hx | hx | hx | hx\n        · subst x\n          exact Nat.one_mem_divisors.mpr hr0\n        · subst x\n          exact Nat.mem_divisors.mpr ⟨hpdiv, hr0⟩\n        · subst x\n          apply Nat.mem_divisors.mpr\n          constructor\n          · refine ⟨p, ?_⟩\n            simpa [Nat.mul_comm] using hmul.symm\n          · exact hr0\n        · subst x\n          exact Nat.mem_divisors_self r hr0\n      have hcard_lower : 4 ≤ r.divisors.card := by\n        have hc := Finset.card_le_card hsub\n        rw [hcard] at hc\n        exact hc\n      have hsigma_card :\n          ArithmeticFunction.sigma 0 r = r.divisors.card := by\n        rw [ArithmeticFunction.sigma_apply]\n        simp\n      omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ r : ℕ, 2 ≤ r → ArithmeticFunction.sigma 0 r ≤ 3 → Nat.Prime r ∨ ∃ p : ℕ, Nat.Prime p ∧ r = p ^ 2",
+        "module_source_hash": null,
+        "obligation_id": "466ffff7-4dcb-4db7-bd03-8a222e24c77d",
+        "outcome": "kernel_pass",
+        "problem_version_id": "40a8784d-9dd7-4681-891a-b95705037e46",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "cfbf6c382a90babecfb743c5deddb7ed840ea8d8e87f079cfe25145ca4a44c81"
+      },
+      "next_state": {
+        "state_hash": "cf47e175675e6f78337bcffee524e4b958c64cc23e56c992d25491a74046817b"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "47b05615770968266b420d81990b695e2e5d64d5b0dc986880aa0202553add14"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

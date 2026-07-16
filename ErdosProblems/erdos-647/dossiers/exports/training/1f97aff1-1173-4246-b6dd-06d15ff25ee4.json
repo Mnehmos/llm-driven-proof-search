@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro x hx\n  have hmain : ∀ t ∈ Set.uIcc (2:ℝ) x, HasDerivAt (fun s => -s⁻¹) ((t^2)⁻¹) t := by\n    intro t ht\n    rw [Set.uIcc_of_le hx] at ht\n    have ht2 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n    have htne : t ≠ 0 := ne_of_gt (by linarith)\n    have hi : HasDerivAt (fun s : ℝ => s⁻¹) (-(t^2)⁻¹) t := hasDerivAt_inv htne\n    have hneg := hi.neg\n    have hval : - -(t^2)⁻¹ = (t^2)⁻¹ := by ring\n    rw [hval] at hneg\n    exact hneg\n  have hcont : ContinuousOn (fun t => (t^2)⁻¹) (Set.uIcc (2:ℝ) x) := by\n    rw [Set.uIcc_of_le hx]\n    apply ContinuousOn.inv₀\n    · exact continuousOn_id.pow 2\n    · intro t ht\n      have ht2 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n      exact pow_ne_zero 2 (ne_of_gt (by linarith))\n  have hint : IntervalIntegrable (fun t => (t^2)⁻¹) MeasureTheory.volume 2 x := hcont.intervalIntegrable\n  rw [intervalIntegral.integral_eq_sub_of_hasDerivAt hmain hint]\n  ring",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro x hx\n  have hmain : ∀ t ∈ Set.uIcc (2:ℝ) x, HasDerivAt (fun s => -s⁻¹) ((t^2)⁻¹) t := by\n    intro t ht\n    rw [Set.uIcc_of_le hx] at ht\n    have ht2 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n    have htne : t ≠ 0 := ne_of_gt (by linarith)\n    have hi : HasDerivAt (fun s : ℝ => s⁻¹) (-(t^2)⁻¹) t := hasDerivAt_inv htne\n    have hneg := hi.neg\n    have hval : - -(t^2)⁻¹ = (t^2)⁻¹ := by ring\n    rw [hval] at hneg\n    exact hneg\n  have hcont : ContinuousOn (fun t => (t^2)⁻¹) (Set.uIcc (2:ℝ) x) := by\n    rw [Set.uIcc_of_le hx]\n    apply ContinuousOn.inv₀\n    · exact continuousOn_id.pow 2\n    · intro t ht\n      have ht2 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n      exact pow_ne_zero 2 (ne_of_gt (by linarith))\n  have hint : IntervalIntegrable (fun t => (t^2)⁻¹) MeasureTheory.volume 2 x := hcont.intervalIntegrable\n  rw [intervalIntegral.integral_eq_sub_of_hasDerivAt hmain hint]\n  ring",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ x : ℝ, 2 ≤ x → ∫ t in (2:ℝ)..x, ((t^2)⁻¹) = (2:ℝ)⁻¹ - x⁻¹",
+        "module_source_hash": null,
+        "obligation_id": "56b497df-4565-418e-bc24-8a8ef39baccb",
+        "outcome": "kernel_pass",
+        "problem_version_id": "89b0e678-f69b-427d-9e71-9523856a7cab",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "cd03a308ddacbad0f6723dfd5c88377d555d9737d0ce99b92a5b4d325db0fe9b"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "2ff5610d43b47da6d64c004295158826bed0b347f40546c4d2ddb1c6af213f31"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

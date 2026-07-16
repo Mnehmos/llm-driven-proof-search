@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro N z hN hz h210 h315 h420 h630 h840 h1260 h2520\n  apply Nat.coprime_of_dvd\n  intro p hp hpmod\n  simp only [hp.prime.dvd_finsetProd_iff, Finset.mem_filter,\n    Finset.mem_range] at hpmod\n  obtain ⟨q, hqmem, hpq⟩ := hpmod\n  have hpqeq : p = q :=\n    (Nat.prime_dvd_prime_iff_eq hp hqmem.2.1).mp hpq\n  subst q\n  have hpz : p ≤ z := by omega\n  have hpne2 : p ≠ 2 := hqmem.2.2.1\n  have noPrime : ∀ r : ℕ, r.Prime → z < r → ¬ p ∣ r := by\n    intro r hr hzr hdvd\n    have heq : p = r :=\n      (Nat.prime_dvd_prime_iff_eq hp hr).mp hdvd\n    omega\n  have hn210 : ¬ p ∣ 210*N-1 :=\n    noPrime _ h210 (by omega)\n  have hn420 : ¬ p ∣ 420*N-1 :=\n    noPrime _ h420 (by omega)\n  have hn630 : ¬ p ∣ 630*N-1 :=\n    noPrime _ h630 (by omega)\n  have hn840 : ¬ p ∣ 840*N-1 :=\n    noPrime _ h840 (by omega)\n  have hn1260 : ¬ p ∣ 1260*N-1 :=\n    noPrime _ h1260 (by omega)\n  have hn2520 : ¬ p ∣ 2520*N-1 :=\n    noPrime _ h2520 (by omega)\n  have hn315 : ¬ p ∣ 315*N-1 := by\n    rcases h315 with h315prime | ⟨r, hr, heq⟩\n    · exact noPrime _ h315prime (by omega)\n    · intro hdvd\n      rw [heq] at hdvd\n      rcases (hp.dvd_mul).mp hdvd with hp2 | hpr\n      · have heq2 : p = 2 :=\n          (Nat.prime_dvd_prime_iff_eq hp Nat.prime_two).mp hp2\n        exact hpne2 heq2\n      · have heqpr : p = r :=\n          (Nat.prime_dvd_prime_iff_eq hp hr).mp hpr\n        have hzr : z < r := by omega\n        omega\n  intro hforms\n  simp only [hp.dvd_mul] at hforms\n  tauto",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro N z hN hz h210 h315 h420 h630 h840 h1260 h2520\n  apply Nat.coprime_of_dvd\n  intro p hp hpmod\n  simp only [hp.prime.dvd_finsetProd_iff, Finset.mem_filter,\n    Finset.mem_range] at hpmod\n  obtain ⟨q, hqmem, hpq⟩ := hpmod\n  have hpqeq : p = q :=\n    (Nat.prime_dvd_prime_iff_eq hp hqmem.2.1).mp hpq\n  subst q\n  have hpz : p ≤ z := by omega\n  have hpne2 : p ≠ 2 := hqmem.2.2.1\n  have noPrime : ∀ r : ℕ, r.Prime → z < r → ¬ p ∣ r := by\n    intro r hr hzr hdvd\n    have heq : p = r :=\n      (Nat.prime_dvd_prime_iff_eq hp hr).mp hdvd\n    omega\n  have hn210 : ¬ p ∣ 210*N-1 :=\n    noPrime _ h210 (by omega)\n  have hn420 : ¬ p ∣ 420*N-1 :=\n    noPrime _ h420 (by omega)\n  have hn630 : ¬ p ∣ 630*N-1 :=\n    noPrime _ h630 (by omega)\n  have hn840 : ¬ p ∣ 840*N-1 :=\n    noPrime _ h840 (by omega)\n  have hn1260 : ¬ p ∣ 1260*N-1 :=\n    noPrime _ h1260 (by omega)\n  have hn2520 : ¬ p ∣ 2520*N-1 :=\n    noPrime _ h2520 (by omega)\n  have hn315 : ¬ p ∣ 315*N-1 := by\n    rcases h315 with h315prime | ⟨r, hr, heq⟩\n    · exact noPrime _ h315prime (by omega)\n    · intro hdvd\n      rw [heq] at hdvd\n      rcases (hp.dvd_mul).mp hdvd with hp2 | hpr\n      · have heq2 : p = 2 :=\n          (Nat.prime_dvd_prime_iff_eq hp Nat.prime_two).mp hp2\n        exact hpne2 heq2\n      · have heqpr : p = r :=\n          (Nat.prime_dvd_prime_iff_eq hp hr).mp hpr\n        have hzr : z < r := by omega\n        omega\n  intro hforms\n  simp only [hp.dvd_mul] at hforms\n  tauto",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (N z : ℕ), 1 ≤ N → z < 157*N →\n      (210*N-1).Prime →\n      ((315*N-1).Prime ∨ ∃ q : ℕ, q.Prime ∧ 315*N-1 = 2*q) →\n      (420*N-1).Prime →\n      (630*N-1).Prime →\n      (840*N-1).Prime →\n      (1260*N-1).Prime →\n      (2520*N-1).Prime →\n      Nat.Coprime\n        (∏ p ∈ (Finset.range (z+1)).filter\n          (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7), p)\n        ((210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1))",
+        "module_source_hash": null,
+        "obligation_id": "a77dd07e-a05e-4d65-8216-eef3925d3326",
+        "outcome": "kernel_pass",
+        "problem_version_id": "d1d08312-eea8-443a-9ff2-78f6c63d0014",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "3d8f14ca5dc6466efd34a526dba274fac3350e2647b16166b40599632f232726"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "9c02417764ead50bf36656b487290fe63af259727e9c5402dbda953de1e7ca28"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

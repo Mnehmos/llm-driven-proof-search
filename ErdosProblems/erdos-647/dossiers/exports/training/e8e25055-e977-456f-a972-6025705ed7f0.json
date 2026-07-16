@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro x hx\n  have hsubset : Set.Icc (2:ℝ) x ⊆ {t : ℝ | t ≠ 0} := by\n    intro t ht\n    have h1 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n    exact ne_of_gt (by linarith)\n  have hmain : ∀ t ∈ Set.uIcc (2:ℝ) x,\n      HasDerivAt (fun s => -(Real.log s)⁻¹) (1 / (t * (Real.log t) ^ 2)) t := by\n    intro t ht\n    rw [Set.uIcc_of_le hx] at ht\n    have ht2 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n    have htpos : (0:ℝ) < t := by linarith\n    have htne : t ≠ 0 := ne_of_gt htpos\n    have hlogtpos : 0 < Real.log t := Real.log_pos (by linarith)\n    have hlogtne : Real.log t ≠ 0 := ne_of_gt hlogtpos\n    have hbase : HasDerivAt (fun s => -(Real.log s)⁻¹) (-(-t⁻¹ / Real.log t ^ 2)) t :=\n      ((Real.hasDerivAt_log htne).inv hlogtne).neg\n    have hval : -(-t⁻¹ / Real.log t ^ 2) = 1 / (t * (Real.log t) ^ 2) := by\n      first\n      | (field_simp; ring)\n      | field_simp\n    rw [hval] at hbase\n    exact hbase\n  have hcont : ContinuousOn (fun t => 1 / (t * (Real.log t) ^ 2)) (Set.uIcc (2:ℝ) x) := by\n    rw [Set.uIcc_of_le hx]\n    apply ContinuousOn.div\n    · exact continuousOn_const\n    · exact continuousOn_id.mul ((Real.continuousOn_log.mono hsubset).pow 2)\n    · intro t ht\n      have ht2 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n      have htne : t ≠ 0 := ne_of_gt (by linarith)\n      have hlogtne : Real.log t ≠ 0 := ne_of_gt (Real.log_pos (by linarith))\n      exact mul_ne_zero htne (pow_ne_zero 2 hlogtne)\n  have hint : IntervalIntegrable (fun t => 1 / (t * (Real.log t) ^ 2)) MeasureTheory.volume 2 x :=\n    hcont.intervalIntegrable\n  have hval_eq : (∫ t in (2:ℝ)..x, 1 / (t * (Real.log t) ^ 2)) = (Real.log 2)⁻¹ - (Real.log x)⁻¹ := by\n    rw [intervalIntegral.integral_eq_sub_of_hasDerivAt hmain hint]\n    ring\n  refine ⟨hval_eq, ?_⟩\n  rw [hval_eq]\n  have hlogx : 0 < Real.log x := Real.log_pos (by linarith)\n  have hinvpos : 0 ≤ (Real.log x)⁻¹ := le_of_lt (inv_pos.mpr hlogx)\n  linarith",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro x hx\n  have hsubset : Set.Icc (2:ℝ) x ⊆ {t : ℝ | t ≠ 0} := by\n    intro t ht\n    have h1 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n    exact ne_of_gt (by linarith)\n  have hmain : ∀ t ∈ Set.uIcc (2:ℝ) x,\n      HasDerivAt (fun s => -(Real.log s)⁻¹) (1 / (t * (Real.log t) ^ 2)) t := by\n    intro t ht\n    rw [Set.uIcc_of_le hx] at ht\n    have ht2 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n    have htpos : (0:ℝ) < t := by linarith\n    have htne : t ≠ 0 := ne_of_gt htpos\n    have hlogtpos : 0 < Real.log t := Real.log_pos (by linarith)\n    have hlogtne : Real.log t ≠ 0 := ne_of_gt hlogtpos\n    have hbase : HasDerivAt (fun s => -(Real.log s)⁻¹) (-(-t⁻¹ / Real.log t ^ 2)) t :=\n      ((Real.hasDerivAt_log htne).inv hlogtne).neg\n    have hval : -(-t⁻¹ / Real.log t ^ 2) = 1 / (t * (Real.log t) ^ 2) := by\n      first\n      | (field_simp; ring)\n      | field_simp\n    rw [hval] at hbase\n    exact hbase\n  have hcont : ContinuousOn (fun t => 1 / (t * (Real.log t) ^ 2)) (Set.uIcc (2:ℝ) x) := by\n    rw [Set.uIcc_of_le hx]\n    apply ContinuousOn.div\n    · exact continuousOn_const\n    · exact continuousOn_id.mul ((Real.continuousOn_log.mono hsubset).pow 2)\n    · intro t ht\n      have ht2 : (2:ℝ) ≤ t := (Set.mem_Icc.mp ht).1\n      have htne : t ≠ 0 := ne_of_gt (by linarith)\n      have hlogtne : Real.log t ≠ 0 := ne_of_gt (Real.log_pos (by linarith))\n      exact mul_ne_zero htne (pow_ne_zero 2 hlogtne)\n  have hint : IntervalIntegrable (fun t => 1 / (t * (Real.log t) ^ 2)) MeasureTheory.volume 2 x :=\n    hcont.intervalIntegrable\n  have hval_eq : (∫ t in (2:ℝ)..x, 1 / (t * (Real.log t) ^ 2)) = (Real.log 2)⁻¹ - (Real.log x)⁻¹ := by\n    rw [intervalIntegral.integral_eq_sub_of_hasDerivAt hmain hint]\n    ring\n  refine ⟨hval_eq, ?_⟩\n  rw [hval_eq]\n  have hlogx : 0 < Real.log x := Real.log_pos (by linarith)\n  have hinvpos : 0 ≤ (Real.log x)⁻¹ := le_of_lt (inv_pos.mpr hlogx)\n  linarith",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ x : ℝ, 2 ≤ x →\n  (∫ t in (2:ℝ)..x, 1 / (t * (Real.log t) ^ 2)) = (Real.log 2)⁻¹ - (Real.log x)⁻¹ ∧\n  (∫ t in (2:ℝ)..x, 1 / (t * (Real.log t) ^ 2)) ≤ (Real.log 2)⁻¹",
+        "module_source_hash": null,
+        "obligation_id": "230cb0a3-28d7-4492-b835-2f24970a8d75",
+        "outcome": "kernel_pass",
+        "problem_version_id": "0113e4df-32ac-4c2a-a58f-9928f05ea213",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "509ebfe4281026c30c35638fee0194c069a0e3940274cfd3df4b787391a3c78c"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "7533c877206c73db8295c8d99fef499b7191a2842e6c9d2a9b91c0b920ad7e99"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

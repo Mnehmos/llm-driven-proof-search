@@ -1,17 +1,23 @@
-# Erdős #647 — machine-generated export dossiers (public summaries)
+# Erdős #647 — legacy headline public summaries
 
 > These records were produced by the proof-search environment's `proof_export`
 > tool in `public_summary` mode — a redacted, public-safe export that carries
 > the kernel-verification status, root statement, environment/import-manifest
 > hashes, and trajectory integrity hashes, but **never** the proof body.
-> Generated 2026-07-13. Each is independently reproducible: given the
+> This file preserves the original eight-headline bundle generated
+> 2026-07-13. The complete 210-episode archive generated 2026-07-15 is in
+> [exports/](exports/README.md), with one public summary, full Markdown
+> dossier, and structured training export per episode. It contains 203
+> kernel-verified successes and seven retained non-success histories. Each is
+> independently reproducible: given the
 > `episode_id`, re-run `proof_export{episode_id, format: "public_summary"}`
 > against the pinned environment (`environment_hash` below) and compare.
 >
-> These eight are the headline theorems (Theorem 2's three stages + the five
+> The eight records below are the original headline theorems (Theorem 2's
+> three stages + the five
 > Layer-A quantitative-Mertens infrastructure lemmas). Full proof snapshots
-> for these live in [../proof/](../proof/). The complete ~110-theorem campaign
-> inventory is in [../THEOREM-CATALOG.md](../THEOREM-CATALOG.md).
+> for these live in [../proof/](../proof/). The current theorem inventory is
+> in [../THEOREM-CATALOG.md](../THEOREM-CATALOG.md).
 
 Common to all records below:
 - `environment_hash`: `9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d`

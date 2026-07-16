@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro s\nhave h := s.sum_divisors_selbergTerms_eq_selbergTerms_mul_nu_inv (dvd_refl s.prodPrimes)\nhave hall : ∀ l ∈ s.prodPrimes.divisors, l ∣ s.prodPrimes := fun l hl => Nat.dvd_of_mem_divisors hl\nhave hsimp : (∑ l ∈ s.prodPrimes.divisors, if l ∣ s.prodPrimes then s.selbergTerms l else 0) = ∑ l ∈ s.prodPrimes.divisors, s.selbergTerms l := by\n  apply Finset.sum_congr rfl\n  intro l hl\n  rw [if_pos (hall l hl)]\nrw [hsimp] at h\nhave hnupos : 0 < s.nu s.prodPrimes := BoundingSieve.nu_pos_of_dvd_prodPrimes (dvd_refl _)\nrw [h, s.selbergTerms_apply, mul_right_comm, mul_inv_cancel₀ hnupos.ne', one_mul]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro s\nhave h := s.sum_divisors_selbergTerms_eq_selbergTerms_mul_nu_inv (dvd_refl s.prodPrimes)\nhave hall : ∀ l ∈ s.prodPrimes.divisors, l ∣ s.prodPrimes := fun l hl => Nat.dvd_of_mem_divisors hl\nhave hsimp : (∑ l ∈ s.prodPrimes.divisors, if l ∣ s.prodPrimes then s.selbergTerms l else 0) = ∑ l ∈ s.prodPrimes.divisors, s.selbergTerms l := by\n  apply Finset.sum_congr rfl\n  intro l hl\n  rw [if_pos (hall l hl)]\nrw [hsimp] at h\nhave hnupos : 0 < s.nu s.prodPrimes := BoundingSieve.nu_pos_of_dvd_prodPrimes (dvd_refl _)\nrw [h, s.selbergTerms_apply, mul_right_comm, mul_inv_cancel₀ hnupos.ne', one_mul]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : SelbergSieve), (∑ l ∈ s.prodPrimes.divisors, s.selbergTerms l) = ∏ p ∈ s.prodPrimes.primeFactors, (1 - s.nu p)⁻¹",
+        "module_source_hash": null,
+        "obligation_id": "f3bbd70b-570b-481d-8ac0-619189c7c731",
+        "outcome": "kernel_pass",
+        "problem_version_id": "7a467ca6-2f6d-43c0-b125-12c5638620e0",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "21847448bdf2801ed62abf7d3d1aa2741496622a03811552b0b2da2dd81e0943"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "d91192692e0195832caed5ca8d0de0cbc1e275c24429119b63b54bd76297824a"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

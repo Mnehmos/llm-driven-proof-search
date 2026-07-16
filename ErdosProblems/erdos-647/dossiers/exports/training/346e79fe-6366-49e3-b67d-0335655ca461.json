@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro N z hz hN\n  have h2mem : 2 ∈ (Finset.range (z+1)).filter\n      (fun p => p.Prime ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7) := by\n    simp only [Finset.mem_filter, Finset.mem_range]\n    exact ⟨by omega, Nat.prime_two, by norm_num, by norm_num, by norm_num⟩\n  have hprod : 2 ∣ ∏ p ∈ (Finset.range (z+1)).filter\n      (fun p => p.Prime ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7), p := by\n    exact Finset.dvd_prod_of_mem (fun p : ℕ => p) h2mem\n  rcases hN with ⟨k, hk⟩\n  have h315 : 2 ∣ 315*N-1 := by\n    refine ⟨315*k+157, ?_⟩\n    omega\n  have h12 : 2 ∣ (210*N-1)*(315*N-1) :=\n    dvd_mul_of_dvd_right h315 _\n  have h123 : 2 ∣ (210*N-1)*(315*N-1)*(420*N-1) :=\n    dvd_mul_of_dvd_left h12 _\n  have h1234 : 2 ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1) :=\n    dvd_mul_of_dvd_left h123 _\n  have h12345 : 2 ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n      (840*N-1) := dvd_mul_of_dvd_left h1234 _\n  have h123456 : 2 ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n      (840*N-1)*(1260*N-1) := dvd_mul_of_dvd_left h12345 _\n  have hforms : 2 ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n      (840*N-1)*(1260*N-1)*(2520*N-1) :=\n    dvd_mul_of_dvd_left h123456 _\n  intro hcop\n  have hgcd : 2 ∣ Nat.gcd\n      (∏ p ∈ (Finset.range (z+1)).filter\n        (fun p => p.Prime ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7), p)\n      ((210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n        (840*N-1)*(1260*N-1)*(2520*N-1)) :=\n    Nat.dvd_gcd hprod hforms\n  rw [hcop.gcd_eq_one] at hgcd\n  norm_num at hgcd",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro N z hz hN\n  have h2mem : 2 ∈ (Finset.range (z+1)).filter\n      (fun p => p.Prime ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7) := by\n    simp only [Finset.mem_filter, Finset.mem_range]\n    exact ⟨by omega, Nat.prime_two, by norm_num, by norm_num, by norm_num⟩\n  have hprod : 2 ∣ ∏ p ∈ (Finset.range (z+1)).filter\n      (fun p => p.Prime ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7), p := by\n    exact Finset.dvd_prod_of_mem (fun p : ℕ => p) h2mem\n  rcases hN with ⟨k, hk⟩\n  have h315 : 2 ∣ 315*N-1 := by\n    refine ⟨315*k+157, ?_⟩\n    omega\n  have h12 : 2 ∣ (210*N-1)*(315*N-1) :=\n    dvd_mul_of_dvd_right h315 _\n  have h123 : 2 ∣ (210*N-1)*(315*N-1)*(420*N-1) :=\n    dvd_mul_of_dvd_left h12 _\n  have h1234 : 2 ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1) :=\n    dvd_mul_of_dvd_left h123 _\n  have h12345 : 2 ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n      (840*N-1) := dvd_mul_of_dvd_left h1234 _\n  have h123456 : 2 ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n      (840*N-1)*(1260*N-1) := dvd_mul_of_dvd_left h12345 _\n  have hforms : 2 ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n      (840*N-1)*(1260*N-1)*(2520*N-1) :=\n    dvd_mul_of_dvd_left h123456 _\n  intro hcop\n  have hgcd : 2 ∣ Nat.gcd\n      (∏ p ∈ (Finset.range (z+1)).filter\n        (fun p => p.Prime ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7), p)\n      ((210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n        (840*N-1)*(1260*N-1)*(2520*N-1)) :=\n    Nat.dvd_gcd hprod hforms\n  rw [hcop.gcd_eq_one] at hgcd\n  norm_num at hgcd",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (N z : ℕ), 2 ≤ z → Odd N →\n      ¬ Nat.Coprime\n        (∏ p ∈ (Finset.range (z+1)).filter\n          (fun p => p.Prime ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7), p)\n        ((210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*\n          (840*N-1)*(1260*N-1)*(2520*N-1))",
+        "module_source_hash": null,
+        "obligation_id": "46518a1f-876e-4fbc-af1f-8908982f6166",
+        "outcome": "kernel_pass",
+        "problem_version_id": "8057d050-084d-49ef-8be3-91be624a6e36",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "318baf888e5c5753c02203ffe166b64f7da332a27e075d11bafe055527c7cca4"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "361df2c01775c7665353a1839327d204abd5616f89e7934857ac6c49834e871a"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "flat_tactic_sequence",
+        "proof_term": "native_decide",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "flat_tactic_sequence",
+          "proof_term": "native_decide",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "((Finset.range 46189).filter (fun r => (∀ d ∈ ([105, 126, 140, 210, 252, 280, 315, 420, 504, 630, 840, 1260, 2520] : List ℕ), ∀ q ∈ ([11, 13, 17, 19] : List ℕ), d * r % q ≠ 1) ∧ (180 * r % 11 ≠ 1 ∧ 180 * r % 13 ≠ 1 ∧ (180 * r % 17 ≠ 1 ∨ 180 * r % 19 ≠ 1)) ∧ ¬(r % 17 = 8 ∧ r % 19 = 6) ∧ ¬(r % 17 = 16 ∧ r % 19 = 12) ∧ ¬(r % 17 = 12 ∧ r % 19 = 17))).card = 45",
+        "module_source_hash": null,
+        "obligation_id": "9e03fe90-3ce9-4271-9d02-977b60d46fce",
+        "outcome": "kernel_pass",
+        "problem_version_id": "b9083710-505a-413c-b0ed-f6b07301e1a0",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "477580ce029da911cc85f85c1bb2044abfd9112aade4a0d07d630b844e22de80"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "15117feb791835d45dee1c306ca845a6150333448ec7db8b83941a60f1667910"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

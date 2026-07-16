@@ -1,27 +1,27 @@
 # Erdős #647 — complete kernel-verified theorem catalog
 
-> **Living inventory. Problem OPEN.** Last updated 2026-07-13.
+> **Living inventory. Problem OPEN; global density theorem verified.** Last
+> updated 2026-07-15.
 >
-> This catalogs every kernel-verified theorem produced by the Erdős #647
-> campaign in the verifier-gated proof-search environment (~110 total). Each
+> This catalogs the kernel-verified theorem families produced by the Erdős
+> #647 campaign. The portable source currently has 216 top-level theorem
+> declarations across 100 Lean files. Each tracked row
 > row carries the `problem_version_id` — the authoritative lookup key in the
 > tracked pipeline — plus the exact root statement and, where recorded, the
 > statement hash and episode id. Nothing here resolves the open problem; this
 > is the machine-checked scaffolding *around* it.
 >
-> **What is portable vs. internal.** The **committed `.lean` files are the
-> public artifact** — they are self-contained Lean 4 source that checks against
-> Mathlib with `lake`, needing nothing from this project's database. The
-> `problem_version_id`/`episode_id` handles and the `proof_export` /
-> `episode_replay` tools referenced below operate against *our* local
-> proof-search environment DB; **they are not a retrieval path for anyone who
-> only has this public repo.** They are recorded here for our own reproduction
-> and audit trail, and so we can regenerate any `.lean` body on demand. If a
-> body you want is not yet committed as source, that is a gap in this repo, not
-> something a third party can resolve with an id.
+> **What is portable vs. internal.** The committed `.lean` files are the
+> simplest portable formal artifact: they check against Mathlib without this
+> project's database. The repository now also publishes the complete exports
+> for all 210 related episodes—redacted public summaries, full
+> Markdown proof dossiers, and structured training JSON—under
+> [dossiers/exports/](dossiers/exports/README.md). The IDs alone still are not
+> an external database API; the committed exports are what makes the audit
+> material public.
 >
-> Full Lean source: the eight headline theorems are in [proof/](proof/); the
-> rest of the campaign is being materialized into [proof/campaign/](proof/campaign/).
+> Full Lean source is in [proof/](proof/), with the five original modular
+> families consolidated under [proof/campaign/](proof/campaign/).
 > The `root_statement_hash` in each row lets anyone confirm they are checking the
 > exact statement claimed.
 >
@@ -32,6 +32,38 @@
 > (never "certified" — statements were authored in-project, not imported from a
 > neutral catalog). See [credit.md](credit.md) for attribution and limits.
 
+## Final density assembly (repository-level kernel replay)
+
+The campaign now contains a complete source-level composition of the
+seven-dimensional upper-bound sieve. This composition was replayed from a
+clean state in the pinned environment: 42 transitive campaign modules plus
+`proof/campaign/family2-classifications.lean`, exit code 0. It is a repository
+kernel replay rather than a single tracked proof-search episode.
+
+| source | role |
+|---|---|
+| [`proof/Erdos647_ConcreteCandidateBridge.lean`](proof/Erdos647_ConcreteCandidateBridge.lean) | bounded candidate set, large/small split, exact parameter reindexing, survivor bridge |
+| [`proof/Erdos647_ConcretePromotedSieve.lean`](proof/Erdos647_ConcretePromotedSieve.lean) | concrete repaired `BoundingSieve` and promoted `SelbergSieve` |
+| [`proof/Erdos647_ConcreteR20Density.lean`](proof/Erdos647_ConcreteR20Density.lean) | concrete `R=(2z)^20` candidate-density inequality |
+| [`proof/Erdos647_PrimeEulerProductLower.lean`](proof/Erdos647_PrimeEulerProductLower.lean) | elementary harmonic-sum/finite-Euler-product lower bound |
+| [`proof/Erdos647_ConcreteDenominatorLower.lean`](proof/Erdos647_ConcreteDenominatorLower.lean) | `(16/77)^7 (log z)^7 ≤ L` for the concrete denominator |
+| [`proof/Erdos647_ConcreteR20LogDensity.lean`](proof/Erdos647_ConcreteR20LogDensity.lean) | concrete `X/(log z)^7` estimate |
+| [`proof/Erdos647_ConcreteAsymptoticDensity.lean`](proof/Erdos647_ConcreteAsymptoticDensity.lean) | dyadic parameter assembly, explicit large-range bound, and global finite-range closure |
+
+Terminal statement:
+
+```lean
+theorem boundedCandidates_density_global (X : ℕ) :
+    ((boundedCandidates X).card : ℝ) ≤
+      globalDensityConstant * (X : ℝ) / (Real.log (X : ℝ)) ^ 7
+```
+
+The earlier quantitative Mertens theorem remains valid infrastructure, but
+its available leading coefficient is `log 2`, so it is not used to claim the
+seventh-power denominator. The final proof obtains that exponent through the
+factorial/Euler-product argument above. The density result does not resolve
+existence or nonexistence of a larger candidate.
+
 ## Proof-source coverage & full episode index
 
 **The portable, publicly-verifiable artifact is the committed Lean source**, not
@@ -39,21 +71,21 @@ any id. Anyone can check a committed `.lean` file against Mathlib with `lake` �
 no access to this project's database required.
 
 Committed Lean source:
-- **8 headline theorems** (Theorem 2 ×3, Layer A ×5): [proof/](proof/).
-- **The rest of the campaign** (sieve certificates, classifications, bridging
-  closures, residue closures, sub-AP closures): [proof/campaign/](proof/campaign/),
-  one consolidated file per family. All 5 families (~110 theorems total) are
-  fully committed as self-contained `.lean` source.
-  [proof/campaign/README.md](proof/campaign/README.md) tracks what is present.
 
-Internal reproduction handle (NOT a public retrieval path):
-[dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps every theorem to
-its `episode_id` in *our* environment. We use it to regenerate any `.lean` body
-via `proof_export`; it does nothing for someone who only has this repo. It was
-reconstructed by parsing the `episode_create` responses in the Claude- and
-Codex-lane session transcripts (each logs the full `(episode_id,
-problem_version_id)` pair). Committed for our own audit trail and so no body is
-ever unrecoverable on our side.
+- 100 `.lean` files under [proof/](proof/), containing 216 top-level theorem
+  declarations.
+- Five consolidated modular families under
+  [proof/campaign/](proof/campaign/), plus individual analytic, truncation,
+  candidate-transport, and final-assembly modules in the parent directory.
+
+Export and reproduction material:
+
+- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 210 related
+  problem/episode pairs.
+- [dossiers/exports/manifest.tsv](dossiers/exports/manifest.tsv) records the
+  outcome, fidelity, environment, statement hash, timestamps, and step count.
+- [dossiers/exports/](dossiers/exports/README.md) contains all three export
+  formats for every episode.
 
 ## Tally by family
 
@@ -65,7 +97,7 @@ ever unrecoverable on our side.
 | 4 | Residue closures (frontier 45→41) | 4 | four of the open residue classes closed unconditionally (direct-full-value + single-overlap) |
 | 5 | Novel sub-AP congruence closures | 48 | original-search sub-cell closures (mod 46189·p), unconditional for all N; 37 enumerated below with full data |
 | 6 | Theorem 2 (prime-chain reduction) | 3 | first machine-checked proof: every candidate is `8s+8` or `16s+8` with four forced primes |
-| 7 | Layer A (quantitative-Mertens infra) | 5 | Abel-summation Mertens identity + antiderivatives + first analytic error bound, toward a Selberg-sieve density bound |
+| 7 | Layer A (quantitative-Mertens infra) | 5 | Abel-summation identity and explicit analytic bounds; valid infrastructure, though the final seventh-power proof uses the stronger Euler-product route |
 | | **Total** | **~109** | |
 
 ---
@@ -235,7 +267,9 @@ result to Theorem 2's prime-chain forms as well. See
 First machine-checked proof of Hughes's Theorem 2 (paper-sketch only, absent
 from his Lean tree). Three composable stages; chaining them gives the two
 admissible 4-prime constellations. Full snapshots in [proof/](proof/);
-public-summary dossiers in [dossiers/public-summaries.md](dossiers/public-summaries.md).
+legacy headline summaries in
+[dossiers/public-summaries.md](dossiers/public-summaries.md), with the complete
+archive under [dossiers/exports/](dossiers/exports/README.md).
 
 | problem_version_id | statement | hash |
 |---|---|---|
@@ -252,8 +286,8 @@ Chained: **family A** `n=8s+8` with `s, 2s+1, 4s+3, 8s+7` all prime; **family B*
 
 Toward a machine-checked Brun/Selberg-sieve density bound (`|C(x)| ≪ x/(log x)⁷`).
 Mathlib has the Selberg sieve core but no quantitative Mertens theorem; this
-family builds it. Full snapshots in [proof/](proof/); public-summary dossiers
-in [dossiers/public-summaries.md](dossiers/public-summaries.md).
+family builds it. Full snapshots are in [proof/](proof/); the complete episode
+archive is in [dossiers/exports/](dossiers/exports/README.md).
 
 | problem_version_id | statement | hash |
 |---|---|---|
@@ -269,7 +303,96 @@ bound, then assembly into `∑_{p≤x} 1/p ≥ log2·loglog x − C`; then Layer
 
 ---
 
-*Counts are honest: "~110" spans the seven families above. The problem itself
-remains **open** — no witness, no disproof. What this catalog documents is the
-machine-checked scaffolding, dead-ends proven dead, and the live analytic
-frontier now under construction.*
+## Family 8 — level-truncated Selberg repair
+
+This family repairs the error-term defect caused by Mathlib's vestigial
+`SelbergSieve.level`: the campaign now constructs a genuinely supported weight,
+rather than summing an unrestricted error over every divisor of the primorial.
+
+| problem_version_id | statement | hash |
+|---|---|---|
+| `4fad80bd-e331-441f-bf57-4c6aed41c4aa` | `∀ s R, 1≤R → ∃ w, w 1=1 ∧ (∀d, R<d → w d=0) ∧ mainSum(lambdaSquared w)=1/∑_{l∣prodPrimes,l≤R}selbergTerms(l)` | `4f1a4ce8…` |
+| `481f490b-672c-4b2a-9f08-f630a371c606` | same supported optimal weight, strengthened with `∀d∣prodPrimes, |w d|≤selbergTerms(d)/ν(d)` | `594f3ced…` |
+| `fe23498c-ad0b-4c9a-97e1-93e38a1c32b2` | pointwise weight bound + prime factor bound `≤4` imply `|lambdaSquared(w)(d)|≤16^ω(d)` | `71060def…` |
+| `684cb8cf-bf0c-44e2-abec-7d0b7a0f5f28` | hard support plus `16^ω(d)`/`7^ω(d)` bounds imply `errSum≤(R²+1)^8` | `3c1e46fb…` |
+| `34305a84-6663-460a-a0e8-006337c85838` | Abel identity `∑_{p≤x}log(p)/p=θ(x)/x+∫θ(t)/t²` | `a35ce467…` |
+| `b6aa3391-d6b7-4f3b-bc08-9a73261ecf4d` | `∑_{p≤x}log(p)/p≤log(4)(1+log(x/2))` | `ff777997…` |
+| `e8710139-6736-43ff-a7d3-efa7a852e365` | `∑ν(p)log p≤log(R)/2 → L_R≥L/2` | `2ccac8ea…` |
+| `d6c321da-fb33-46c9-b1eb-114a339d01b8` | `z≥2 → 7log(4)(1+log(z/2))≤log((2z)^20)/2` | `7ed86d0c…` |
+| `c64e7c8d-088b-4dc2-814f-a98bebd7dd7c` | `z≥1 → ((((2z)^20)^2+1)^8)≤2^328·z^320` | `1f78e550…` |
+| `9f1f4f3c-7665-4fc6-8d71-0a6120ae145e` | `X≠0 → ∃k, (2^k)^400≤X<(2·2^k)^400` | `cfe2b3be…` |
+| `3544e7da-c8a9-4feb-844f-91be241dee92` | `E≤2^328z^320 ∧ z^400≤X → E^5≤2^1640X^4` | `c02c2ab4…` |
+| `e74ace30-3fd0-4192-aea1-1f0f348f6e9b` | `(2^k)^400≤X ∧ E≤2^328(2^k)^320 → E·k^7≤2^328X` | `7a390489…` |
+| `23d21971-6676-40d0-99cb-556e22be189b` | `k>0 ∧ E·k^7≤2^328X → E≤2^328(log2)^7X/(log(2^k))^7` | `1d46a1c9…` |
+| `372fc2d3-227e-4104-ac93-6657f6fd8538` | `mainSum=1/L_R ∧ L_R≥L/2 ∧ errSum≤(R²+1)^8 → siftedSum≤2M/L+(R²+1)^8` | `2670a2ea…` |
+| `6a01ac1e-442e-4f1b-a2d8-dc4935d8cfd1` | exposed two-parameter seven-form `BoundingSieve` witness with exact support/prodPrimes/weights/totalMass/nu fields | `30424491…` |
+| `640009dd-0b98-48b7-930a-c83c6e19c8ae` | exposed support and unit weights imply `s.multSum(d)` equals the raw seven-form filter count | `148469e0…` |
+| `874897f7-1348-4cd2-ab74-bbc93ebb2920` | exposed fields and concrete `nu(d)` rewrite `s.rem(d)` to the raw remainder | `c9b20538…` |
+| `21676a9b-32f0-497b-a903-cacd52211606` | for squarefree `d`, exposed `prodPrimeFactors` density equals the raw CRT density | `a0d0f134…` |
+| `776de7d6-9710-427e-a3fe-29ad9be73f50` | raw remainder/root-count bounds plus exposed fields imply `|s.rem(d)|≤7^ω(d)` | `dad741f9…` |
+| `dd9707c4-da49-47f6-8c3f-223bd9fef756` | exposed support and unit weights identify `s.siftedSum` with the exact seven-form coprime survivor count | `f689cbc5…` |
+| `8057d050-084d-49ef-8be3-91be624a6e36` | for `z≥2`, every odd `N` is rejected by the original active prime `2` | `318baf88…` |
+| `96815907-c5f3-4be5-9e6b-15b1812c118d` | finite-prime rebase constructs the same concrete sieve with `2,3,5,7` excluded | `0dd01bfe…` |
+| `3821e6ae-7ce0-40eb-913e-1a39e33e62b7` | any bounded coprime candidate Finset has real cardinality at most `s.siftedSum` | `6ef9f3e6…` |
+| `d1d08312-eea8-443a-9ff2-78f6c63d0014` | six prime forms plus the shift-8 `prime ∨ 2·prime` branch and `z<157N` imply coprimality with the repaired modulus | `3d8f14ca…` |
+| `cc5eabec-9ba7-4b38-9f8a-482998d707af` | the exceptional parameter band `157N≤z` inside `[1,X]` has cardinality at most `z` | `fd551191…` |
+| `20e17129-58dd-46aa-9a9f-d35e0d97c96b` | candidate coprimality for `z<157N` plus the exact survivor audit imply `C.card≤siftedSum+z` | `091284a0…` |
+| `7851c193-5d39-4302-a93f-a474a2ffa6c8` | concrete density values are `ν(2)=1/2` and `ν(3)=ν(5)=ν(7)=0` | `057a47bc…` |
+| `35439d12-2f15-43bd-81ce-2eabea637710` | deleting `2,3,5,7` changes the prime `ν` sum by exactly `1/2` | `7a62fdd6…` |
+| `dd157db4-78e2-4285-8069-b6ce4ee14526` | prime factors of the repaired modulus equal its defining active-prime Finset exactly | `efe8ee4f…` |
+| `ce61fdf7-5644-428c-a1ac-f3c7b3b9a5e1` | an all-prime lower bound `B` implies repaired Euler-product `log L≥B−1/2` | `090c8da3…` |
+| `e84e00c6-17b8-43e4-a832-b40909cb576a` | shift outputs at `1,2,3,4,6,8,12` under `n=2520N` imply the exact seven-form primality bundle | `2fbfb68c…` |
+| `a1095c68-7d6f-4e6a-91ad-894d73d35863` | every `BoundingSieve` promotes to a definitionally identical `SelbergSieve` at any natural level `R≥1` | `fcaef0ed…` |
+| `04896a5d-4423-44dc-ac03-424f8fba0689` | `C.card≤siftedSum+z`, `totalMass=X`, and the two-parameter sieve bound imply `C.card≤2X/L+(R²+1)^8+z` | `185531de…` |
+| `9ad9f4e4-11d4-4f40-89f9-39c3c990b7fa` | direct candidate-density assembly from main-sum, half-denominator, and polynomial-error hypotheses | `c15e88b4…` |
+| `5570a9ac-16d7-42ad-9c06-7a2a16e5d30d` | shift outputs at `1,2,3,4,6,8,12` imply coprimality with the parity-repaired seven-form modulus | `243afd8a…` |
+| `74892f8f-6612-4031-a686-23ba5be359dd` | exact predicate-generic reindexing from bounded `n` with `2520∣n` to bounded seven-form parameters `N` | `106d8dda…` |
+
+Snapshots: [truncated weight](proof/Erdos647_SelbergOptimalWeightTruncated.lean),
+[strengthened weight](proof/Erdos647_SelbergOptimalWeightTruncatedBound.lean),
+[lambda coefficient](proof/Erdos647_LambdaSquaredCardBound.lean),
+[polynomial errSum](proof/Erdos647_ErrSumTruncatedPolynomial.lean),
+[prime moment identity](proof/Erdos647_PrimeLogDivIdentity.lean), and
+[prime moment upper bound](proof/Erdos647_PrimeLogDivUpper.lean), and
+[half-denominator bound](proof/Erdos647_SelbergLTruncatedGeHalf.lean), and
+[R=(2z)^20 moment certification](proof/Erdos647_ParameterR20Moment.lean), and
+[explicit polynomial error](proof/Erdos647_ParameterErrorPolynomial.lean), and
+[dyadic parameter bracket](proof/Erdos647_DyadicParameterBracket.lean), and
+[fifth-power error absorption](proof/Erdos647_ErrorAbsorptionPower.lean), and
+[dyadic logarithmic-scale absorption](proof/Erdos647_DyadicErrorLogScale.lean), and
+[real-log error absorption](proof/Erdos647_DyadicErrorRealLog.lean), and
+[two-parameter sieve assembly](proof/Erdos647_TwoParameterSieveAssembly.lean),
+[exposed concrete witness](proof/Erdos647_BoundingSieveExposed.lean),
+[multSum audit](proof/Erdos647_MultSumFieldAudit.lean),
+[remainder audit](proof/Erdos647_RemFieldAudit.lean),
+[nu audit](proof/Erdos647_NuFieldAudit.lean), and
+[remainder-bound field assembly](proof/Erdos647_RemBoundFieldAssembly.lean),
+[siftedSum audit](proof/Erdos647_SiftedSumFieldAudit.lean),
+[active-prime parity obstruction](proof/Erdos647_OddParameterRejectedByTwo.lean),
+[exclude-two sieve repair](proof/Erdos647_BoundingSieveExcludeTwo.lean), and
+[candidate Finset bridge](proof/Erdos647_CandidateFinsetBridge.lean), and
+[repaired-modulus candidate coprimality](proof/Erdos647_RepairedModulusCandidateCoprime.lean), and
+[small-parameter band](proof/Erdos647_SmallParameterBand.lean), and
+[candidate bridge with additive z loss](proof/Erdos647_CandidateBridgeAddZ.lean),
+[small-prime density values](proof/Erdos647_NuSmallPrimeValues.lean), and
+[finite-prime sum correction](proof/Erdos647_PrimeSumExcludeSmall.lean),
+[repaired modulus primeFactors](proof/Erdos647_RepairedProdPrimeFactors.lean), and
+[repaired logarithmic denominator bound](proof/Erdos647_RepairedLogLLower.lean), and
+[shift-output seven-form bundle](proof/Erdos647_ShiftOutputsToSevenForms.lean), and
+[`BoundingSieve` to `SelbergSieve` adapter](proof/Erdos647_BoundingToSelberg.lean),
+[candidate two-parameter assembly](proof/Erdos647_CandidateTwoParameterAssembly.lean), and
+[direct candidate-density assembly](proof/Erdos647_DirectCandidateDensityAssembly.lean), and
+[shift outputs to repaired coprimality](proof/Erdos647_ShiftOutputsRepairedCoprime.lean), and
+[exact `n=2520N` candidate reindexing](proof/Erdos647_CandidateReindex2520.lean).
+The supporting generic kernel-verified lemmas are the square-support result
+`lambdaSquared(w)(d)=0` for `d>R²`, the Selberg log-moment identity, and the
+`L_R` tail bound; see [attack-plan.md](attack-plan.md).
+
+---
+
+*Counts are explicit: 216 top-level theorem declarations in 100 Lean files and
+210 related proof-search episodes in the export archive (203 kernel-verified,
+seven retained non-success histories). These are different metrics—one episode
+can assemble several helper declarations, while some final repository
+compositions are not standalone episodes. The global density theorem is
+complete; the original existence problem remains open.*

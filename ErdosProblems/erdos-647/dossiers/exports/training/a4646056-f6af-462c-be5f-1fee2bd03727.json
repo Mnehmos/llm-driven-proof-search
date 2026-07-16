@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro k X E hk h\n  have hR : (E:ℝ) * (k:ℝ)^7 ≤ (2:ℝ)^328 * (X:ℝ) := by\n    exact_mod_cast h\n  have hcast : (((2^k : ℕ):ℝ)) = (2:ℝ)^k := by norm_cast\n  have hlog : Real.log (((2^k : ℕ):ℝ)) = (k:ℝ) * Real.log 2 := by\n    rw [hcast, Real.log_pow]\n  have hkR : 0 < (k:ℝ) := by exact_mod_cast hk\n  have hlog2 : 0 < Real.log 2 := Real.log_pos (by norm_num)\n  have hden : 0 < (Real.log (((2^k : ℕ):ℝ)))^7 := by\n    rw [hlog]\n    positivity\n  apply (le_div_iff₀ hden).2\n  rw [hlog]\n  calc\n    (E:ℝ) * ((k:ℝ) * Real.log 2)^7 =\n        ((E:ℝ) * (k:ℝ)^7) * (Real.log 2)^7 := by ring\n    _ ≤ ((2:ℝ)^328 * (X:ℝ)) * (Real.log 2)^7 :=\n      mul_le_mul_of_nonneg_right hR (pow_nonneg (le_of_lt hlog2) 7)\n    _ = (2:ℝ)^328 * (Real.log 2)^7 * (X:ℝ) := by ring",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro k X E hk h\n  have hR : (E:ℝ) * (k:ℝ)^7 ≤ (2:ℝ)^328 * (X:ℝ) := by\n    exact_mod_cast h\n  have hcast : (((2^k : ℕ):ℝ)) = (2:ℝ)^k := by norm_cast\n  have hlog : Real.log (((2^k : ℕ):ℝ)) = (k:ℝ) * Real.log 2 := by\n    rw [hcast, Real.log_pow]\n  have hkR : 0 < (k:ℝ) := by exact_mod_cast hk\n  have hlog2 : 0 < Real.log 2 := Real.log_pos (by norm_num)\n  have hden : 0 < (Real.log (((2^k : ℕ):ℝ)))^7 := by\n    rw [hlog]\n    positivity\n  apply (le_div_iff₀ hden).2\n  rw [hlog]\n  calc\n    (E:ℝ) * ((k:ℝ) * Real.log 2)^7 =\n        ((E:ℝ) * (k:ℝ)^7) * (Real.log 2)^7 := by ring\n    _ ≤ ((2:ℝ)^328 * (X:ℝ)) * (Real.log 2)^7 :=\n      mul_le_mul_of_nonneg_right hR (pow_nonneg (le_of_lt hlog2) 7)\n    _ = (2:ℝ)^328 * (Real.log 2)^7 * (X:ℝ) := by ring",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ k X E : ℕ, 0 < k →\n  E * k^7 ≤ 2^328 * X →\n  (E:ℝ) ≤\n    ((2:ℝ)^328 * (Real.log 2)^7 * (X:ℝ)) /\n      (Real.log (((2^k : ℕ):ℝ)))^7",
+        "module_source_hash": null,
+        "obligation_id": "7f1792fa-3bf8-4862-b4b8-3a799c7f0c9e",
+        "outcome": "kernel_pass",
+        "problem_version_id": "23d21971-6676-40d0-99cb-556e22be189b",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "1d46a1c91a58507998f972e21cb91ba9e851a1a5a91546556d6da7a211140420"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "c215e73d937160d668ce3fde0f0845750da36e8fd36e5c7c6e41d011895d2964"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

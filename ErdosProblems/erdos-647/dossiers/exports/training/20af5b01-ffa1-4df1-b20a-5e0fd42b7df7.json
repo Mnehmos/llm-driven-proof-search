@@ -1,0 +1,86 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n hn H h2520\n  have shift : ArithmeticFunction.sigma 0 (n - 6) ≤ 8 := by\n    have hsub : n - 6 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 6, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  rcases h2520 with ⟨q, hq⟩\n  have h6div : 6 ∣ n - 6 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  let r : ℕ := (n - 6) / 6\n  have hcancel := Nat.div_mul_cancel h6div\n  have hr : n - 6 = 6 * r := by\n    dsimp [r]\n    omega\n  change Nat.Prime r\n  have hr2 : 2 ≤ r := by omega\n  have hrmod : r % 6 = 5 := by omega\n  have hcop : Nat.Coprime 6 r := by\n    refine Nat.coprime_of_dvd ?_\n    intro p hp hp6\n    intro hpr\n    have hpMul : p ∣ 2 * 3 := by\n      norm_num\n      exact hp6\n    rcases hp.dvd_mul.mp hpMul with hp2 | hp3\n    · have peq : p = 2 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp2\n      subst p\n      rw [Nat.dvd_iff_mod_eq_zero] at hpr\n      omega\n    · have peq : p = 3 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp3\n      subst p\n      rw [Nat.dvd_iff_mod_eq_zero] at hpr\n      omega\n  have h6ge : 4 ≤ ArithmeticFunction.sigma 0 6 := by\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hs : ({1, 2, 3, 6} : Finset ℕ) ⊆ (6 : ℕ).divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl | rfl <;> norm_num\n      · norm_num\n    norm_num at hs ⊢\n    exact Finset.card_le_card hs\n  have comp : ¬ Nat.Prime r → 3 ≤ ArithmeticFunction.sigma 0 r := by\n    intro hnp\n    rcases (Nat.not_prime_iff_exists_dvd_ne hr2).mp hnp with ⟨d, hd, hd1, hdr⟩\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hs : ({1, d, r} : Finset ℕ) ⊆ r.divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl\n        · exact one_dvd r\n        · exact hd\n        · exact dvd_rfl\n      · omega\n    have h1d : 1 ≠ d := Ne.symm hd1\n    have h1r : 1 ≠ r := by omega\n    have hcard : ({1, d, r} : Finset ℕ).card = 3 := by\n      simp [h1d, hd1, hdr, h1r]\n    calc\n      3 = ({1, d, r} : Finset ℕ).card := hcard.symm\n      _ ≤ r.divisors.card := Finset.card_le_card hs\n  by_contra hprime\n  have hcomp := comp hprime\n  have hmul : ArithmeticFunction.sigma 0 (6 * r) =\n      ArithmeticFunction.sigma 0 6 * ArithmeticFunction.sigma 0 r :=\n    ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n  rw [hr] at shift\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n hn H h2520\n  have shift : ArithmeticFunction.sigma 0 (n - 6) ≤ 8 := by\n    have hsub : n - 6 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 6, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  rcases h2520 with ⟨q, hq⟩\n  have h6div : 6 ∣ n - 6 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  let r : ℕ := (n - 6) / 6\n  have hcancel := Nat.div_mul_cancel h6div\n  have hr : n - 6 = 6 * r := by\n    dsimp [r]\n    omega\n  change Nat.Prime r\n  have hr2 : 2 ≤ r := by omega\n  have hrmod : r % 6 = 5 := by omega\n  have hcop : Nat.Coprime 6 r := by\n    refine Nat.coprime_of_dvd ?_\n    intro p hp hp6\n    intro hpr\n    have hpMul : p ∣ 2 * 3 := by\n      norm_num\n      exact hp6\n    rcases hp.dvd_mul.mp hpMul with hp2 | hp3\n    · have peq : p = 2 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp2\n      subst p\n      rw [Nat.dvd_iff_mod_eq_zero] at hpr\n      omega\n    · have peq : p = 3 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp3\n      subst p\n      rw [Nat.dvd_iff_mod_eq_zero] at hpr\n      omega\n  have h6ge : 4 ≤ ArithmeticFunction.sigma 0 6 := by\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hs : ({1, 2, 3, 6} : Finset ℕ) ⊆ (6 : ℕ).divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl | rfl <;> norm_num\n      · norm_num\n    norm_num at hs ⊢\n    exact Finset.card_le_card hs\n  have comp : ¬ Nat.Prime r → 3 ≤ ArithmeticFunction.sigma 0 r := by\n    intro hnp\n    rcases (Nat.not_prime_iff_exists_dvd_ne hr2).mp hnp with ⟨d, hd, hd1, hdr⟩\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hs : ({1, d, r} : Finset ℕ) ⊆ r.divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl\n        · exact one_dvd r\n        · exact hd\n        · exact dvd_rfl\n      · omega\n    have h1d : 1 ≠ d := Ne.symm hd1\n    have h1r : 1 ≠ r := by omega\n    have hcard : ({1, d, r} : Finset ℕ).card = 3 := by\n      simp [h1d, hd1, hdr, h1r]\n    calc\n      3 = ({1, d, r} : Finset ℕ).card := hcard.symm\n      _ ≤ r.divisors.card := Finset.card_le_card hs\n  by_contra hprime\n  have hcomp := comp hprime\n  have hmul : ArithmeticFunction.sigma 0 (6 * r) =\n      ArithmeticFunction.sigma 0 6 * ArithmeticFunction.sigma 0 r :=\n    ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n  rw [hr] at shift\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → 2520 ∣ n → Nat.Prime ((n - 6) / 6)",
+        "module_source_hash": null,
+        "obligation_id": "4826394b-0f7d-4351-bb98-89d2fb67c56b",
+        "outcome": "kernel_fail",
+        "problem_version_id": "c9de049c-a0eb-4a6b-95db-2fb056f1c5dc",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "0cce668770d8783c65c7aca324e222dcd81c4f634eb06b1206e3631ee475f32a"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "0d625f3de78fb0aff25d6432fa209d530641d73565a65ec6a5294af21f99113a"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n hn H h2520\n  have shift : ArithmeticFunction.sigma 0 (n - 6) ≤ 8 := by\n    have hsub : n - 6 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 6, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  rcases h2520 with ⟨q, hq⟩\n  have h6div : 6 ∣ n - 6 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  let r : ℕ := (n - 6) / 6\n  have hcancel := Nat.div_mul_cancel h6div\n  have hr : n - 6 = 6 * r := by\n    dsimp [r]\n    omega\n  change Nat.Prime r\n  have hr2 : 2 ≤ r := by omega\n  have hrmod : r % 6 = 5 := by omega\n  have hcop : Nat.Coprime 6 r := by\n    refine Nat.coprime_of_dvd ?_\n    intro p hp hp6\n    intro hpr\n    have hpMul : p ∣ 2 * 3 := by\n      norm_num\n      exact hp6\n    rcases hp.dvd_mul.mp hpMul with hp2 | hp3\n    · have peq : p = 2 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp2\n      subst p\n      rw [Nat.dvd_iff_mod_eq_zero] at hpr\n      omega\n    · have peq : p = 3 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp3\n      subst p\n      rw [Nat.dvd_iff_mod_eq_zero] at hpr\n      omega\n  have h6ge : 4 ≤ ArithmeticFunction.sigma 0 6 := by\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hs : ({1, 2, 3, 6} : Finset ℕ) ⊆ (6 : ℕ).divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl | rfl <;> norm_num\n      · norm_num\n    norm_num at hs ⊢\n    exact Finset.card_le_card hs\n  have comp : ¬ Nat.Prime r → 3 ≤ ArithmeticFunction.sigma 0 r := by\n    intro hnp\n    rcases (Nat.not_prime_iff_exists_dvd_ne hr2).mp hnp with ⟨d, hd, hd1, hdr⟩\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hs : ({1, d, r} : Finset ℕ) ⊆ r.divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl\n        · exact one_dvd r\n        · exact hd\n        · exact dvd_rfl\n      · omega\n    have h1d : 1 ≠ d := Ne.symm hd1\n    have h1r : 1 ≠ r := by omega\n    have hcard : ({1, d, r} : Finset ℕ).card = 3 := by\n      simp [h1d, hd1, hdr, h1r]\n    calc\n      3 = ({1, d, r} : Finset ℕ).card := hcard.symm\n      _ ≤ r.divisors.card := Finset.card_le_card hs\n  by_contra hprime\n  have hcomp := comp hprime\n  have hmul : ArithmeticFunction.sigma 0 (6 * r) =\n      ArithmeticFunction.sigma 0 6 * ArithmeticFunction.sigma 0 r :=\n    ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n  have hprod :\n      12 ≤ ArithmeticFunction.sigma 0 6 * ArithmeticFunction.sigma 0 r := by\n    calc\n      12 = 4 * 3 := by norm_num\n      _ ≤ ArithmeticFunction.sigma 0 6 * ArithmeticFunction.sigma 0 r :=\n        Nat.mul_le_mul h6ge hcomp\n  have hlarge : 12 ≤ ArithmeticFunction.sigma 0 (6 * r) := by\n    rw [hmul]\n    exact hprod\n  rw [hr] at shift\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n hn H h2520\n  have shift : ArithmeticFunction.sigma 0 (n - 6) ≤ 8 := by\n    have hsub : n - 6 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let m : Fin n := ⟨n - 6, hsub⟩\n    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [f, m] at hm\n    omega\n  rcases h2520 with ⟨q, hq⟩\n  have h6div : 6 ∣ n - 6 := by\n    apply Nat.dvd_iff_mod_eq_zero.mpr\n    omega\n  let r : ℕ := (n - 6) / 6\n  have hcancel := Nat.div_mul_cancel h6div\n  have hr : n - 6 = 6 * r := by\n    dsimp [r]\n    omega\n  change Nat.Prime r\n  have hr2 : 2 ≤ r := by omega\n  have hrmod : r % 6 = 5 := by omega\n  have hcop : Nat.Coprime 6 r := by\n    refine Nat.coprime_of_dvd ?_\n    intro p hp hp6\n    intro hpr\n    have hpMul : p ∣ 2 * 3 := by\n      norm_num\n      exact hp6\n    rcases hp.dvd_mul.mp hpMul with hp2 | hp3\n    · have peq : p = 2 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp2\n      subst p\n      rw [Nat.dvd_iff_mod_eq_zero] at hpr\n      omega\n    · have peq : p = 3 := (Nat.prime_dvd_prime_iff_eq hp (by norm_num)).mp hp3\n      subst p\n      rw [Nat.dvd_iff_mod_eq_zero] at hpr\n      omega\n  have h6ge : 4 ≤ ArithmeticFunction.sigma 0 6 := by\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hs : ({1, 2, 3, 6} : Finset ℕ) ⊆ (6 : ℕ).divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl | rfl <;> norm_num\n      · norm_num\n    norm_num at hs ⊢\n    exact Finset.card_le_card hs\n  have comp : ¬ Nat.Prime r → 3 ≤ ArithmeticFunction.sigma 0 r := by\n    intro hnp\n    rcases (Nat.not_prime_iff_exists_dvd_ne hr2).mp hnp with ⟨d, hd, hd1, hdr⟩\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hs : ({1, d, r} : Finset ℕ) ⊆ r.divisors := by\n      intro x hx\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n      rw [Nat.mem_divisors]\n      constructor\n      · rcases hx with rfl | rfl | rfl\n        · exact one_dvd r\n        · exact hd\n        · exact dvd_rfl\n      · omega\n    have h1d : 1 ≠ d := Ne.symm hd1\n    have h1r : 1 ≠ r := by omega\n    have hcard : ({1, d, r} : Finset ℕ).card = 3 := by\n      simp [h1d, hd1, hdr, h1r]\n    calc\n      3 = ({1, d, r} : Finset ℕ).card := hcard.symm\n      _ ≤ r.divisors.card := Finset.card_le_card hs\n  by_contra hprime\n  have hcomp := comp hprime\n  have hmul : ArithmeticFunction.sigma 0 (6 * r) =\n      ArithmeticFunction.sigma 0 6 * ArithmeticFunction.sigma 0 r :=\n    ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n  have hprod :\n      12 ≤ ArithmeticFunction.sigma 0 6 * ArithmeticFunction.sigma 0 r := by\n    calc\n      12 = 4 * 3 := by norm_num\n      _ ≤ ArithmeticFunction.sigma 0 6 * ArithmeticFunction.sigma 0 r :=\n        Nat.mul_le_mul h6ge hcomp\n  have hlarge : 12 ≤ ArithmeticFunction.sigma 0 (6 * r) := by\n    rw [hmul]\n    exact hprod\n  rw [hr] at shift\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → 2520 ∣ n → Nat.Prime ((n - 6) / 6)",
+        "module_source_hash": null,
+        "obligation_id": "4826394b-0f7d-4351-bb98-89d2fb67c56b",
+        "outcome": "kernel_pass",
+        "problem_version_id": "c9de049c-a0eb-4a6b-95db-2fb056f1c5dc",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "0cce668770d8783c65c7aca324e222dcd81c4f634eb06b1206e3631ee475f32a"
+      },
+      "next_state": {
+        "state_hash": "cf47e175675e6f78337bcffee524e4b958c64cc23e56c992d25491a74046817b"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "08e48a049935e04a692635ab10dd4c687f5ea456b6bd684bc6fc6c8f87f06bbb"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

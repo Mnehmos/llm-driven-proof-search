@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  intro s w R hs hlambda hrem\n  set A : ℕ := R*R+1 with hA_def\n  have hterm : ∀ d ∈ s.prodPrimes.divisors,\n      |BoundingSieve.lambdaSquared w d| * |s.rem d| ≤\n        if d < A then (A:ℝ)^7 else 0 := by\n    intro d hd\n    by_cases hdA : d < A\n    · simp only [hdA, if_true]\n      have hdvdN : d ∣ s.prodPrimes := Nat.dvd_of_mem_divisors hd\n      have hdsqfree : Squarefree d :=\n        Squarefree.squarefree_of_dvd hdvdN s.prodPrimes_squarefree\n      have htwo : 2 ^ d.primeFactors.card ≤ d := by\n        calc\n          2 ^ d.primeFactors.card = ∏ p ∈ d.primeFactors, 2 := by simp\n          _ ≤ ∏ p ∈ d.primeFactors, p := by\n            apply Finset.prod_le_prod'\n            intro p hp\n            exact (Nat.prime_of_mem_primeFactors hp).two_le\n          _ = d := Nat.prod_primeFactors_of_squarefree hdsqfree\n      have htwoR : (2:ℝ) ^ d.primeFactors.card ≤ (d:ℝ) := by\n        exact_mod_cast htwo\n      have h112 : (112:ℝ) ^ d.primeFactors.card ≤ (d:ℝ)^7 := by\n        calc\n          (112:ℝ) ^ d.primeFactors.card ≤\n              (128:ℝ) ^ d.primeFactors.card :=\n            pow_le_pow_left₀ (by norm_num) (by norm_num) _\n          _ = ((2:ℝ) ^ d.primeFactors.card)^7 := by\n            rw [show (128:ℝ) = 2^7 by norm_num, ← pow_mul, mul_comm, pow_mul]\n          _ ≤ (d:ℝ)^7 :=\n            pow_le_pow_left₀ (by positivity) htwoR 7\n      have hdAle : (d:ℝ) ≤ (A:ℝ) := by\n        exact_mod_cast (Nat.le_of_lt hdA)\n      calc\n        |BoundingSieve.lambdaSquared w d| * |s.rem d| ≤\n            (16:ℝ)^d.primeFactors.card * (7:ℝ)^d.primeFactors.card :=\n          mul_le_mul (hlambda d hd) (hrem d hd) (abs_nonneg _)\n            (pow_nonneg (by norm_num) _)\n        _ = (112:ℝ)^d.primeFactors.card := by rw [← mul_pow]; norm_num\n        _ ≤ (d:ℝ)^7 := h112\n        _ ≤ (A:ℝ)^7 := pow_le_pow_left₀ (by positivity) hdAle 7\n    · simp only [hdA, if_false]\n      have hRd : R*R < d := by omega\n      rw [hs d hRd, abs_zero, zero_mul]\n  have hsubset : s.prodPrimes.divisors.filter (fun d => d < A) ⊆ Finset.range A := by\n    intro d hd\n    exact Finset.mem_range.mpr (Finset.mem_filter.mp hd).2\n  have hcardNat : (s.prodPrimes.divisors.filter (fun d => d < A)).card ≤ A := by\n    simpa using Finset.card_le_card hsubset\n  have hcardR : ((s.prodPrimes.divisors.filter (fun d => d < A)).card : ℝ) ≤ (A:ℝ) := by\n    exact_mod_cast hcardNat\n  unfold BoundingSieve.errSum\n  calc\n    (∑ d ∈ s.prodPrimes.divisors,\n        |BoundingSieve.lambdaSquared w d| * |s.rem d|) ≤\n        ∑ d ∈ s.prodPrimes.divisors, if d < A then (A:ℝ)^7 else 0 :=\n      Finset.sum_le_sum hterm\n    _ = ∑ d ∈ s.prodPrimes.divisors.filter (fun d => d < A), (A:ℝ)^7 := by\n      rw [Finset.sum_filter]\n    _ = ((s.prodPrimes.divisors.filter (fun d => d < A)).card : ℝ) * (A:ℝ)^7 := by\n      simp\n    _ ≤ (A:ℝ) * (A:ℝ)^7 :=\n      mul_le_mul_of_nonneg_right hcardR (pow_nonneg (by positivity) 7)\n    _ = (A:ℝ)^8 := by ring\n    _ = (((R*R+1:ℕ):ℝ)^8) := by rw [hA_def]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  intro s w R hs hlambda hrem\n  set A : ℕ := R*R+1 with hA_def\n  have hterm : ∀ d ∈ s.prodPrimes.divisors,\n      |BoundingSieve.lambdaSquared w d| * |s.rem d| ≤\n        if d < A then (A:ℝ)^7 else 0 := by\n    intro d hd\n    by_cases hdA : d < A\n    · simp only [hdA, if_true]\n      have hdvdN : d ∣ s.prodPrimes := Nat.dvd_of_mem_divisors hd\n      have hdsqfree : Squarefree d :=\n        Squarefree.squarefree_of_dvd hdvdN s.prodPrimes_squarefree\n      have htwo : 2 ^ d.primeFactors.card ≤ d := by\n        calc\n          2 ^ d.primeFactors.card = ∏ p ∈ d.primeFactors, 2 := by simp\n          _ ≤ ∏ p ∈ d.primeFactors, p := by\n            apply Finset.prod_le_prod'\n            intro p hp\n            exact (Nat.prime_of_mem_primeFactors hp).two_le\n          _ = d := Nat.prod_primeFactors_of_squarefree hdsqfree\n      have htwoR : (2:ℝ) ^ d.primeFactors.card ≤ (d:ℝ) := by\n        exact_mod_cast htwo\n      have h112 : (112:ℝ) ^ d.primeFactors.card ≤ (d:ℝ)^7 := by\n        calc\n          (112:ℝ) ^ d.primeFactors.card ≤\n              (128:ℝ) ^ d.primeFactors.card :=\n            pow_le_pow_left₀ (by norm_num) (by norm_num) _\n          _ = ((2:ℝ) ^ d.primeFactors.card)^7 := by\n            rw [show (128:ℝ) = 2^7 by norm_num, ← pow_mul, mul_comm, pow_mul]\n          _ ≤ (d:ℝ)^7 :=\n            pow_le_pow_left₀ (by positivity) htwoR 7\n      have hdAle : (d:ℝ) ≤ (A:ℝ) := by\n        exact_mod_cast (Nat.le_of_lt hdA)\n      calc\n        |BoundingSieve.lambdaSquared w d| * |s.rem d| ≤\n            (16:ℝ)^d.primeFactors.card * (7:ℝ)^d.primeFactors.card :=\n          mul_le_mul (hlambda d hd) (hrem d hd) (abs_nonneg _)\n            (pow_nonneg (by norm_num) _)\n        _ = (112:ℝ)^d.primeFactors.card := by rw [← mul_pow]; norm_num\n        _ ≤ (d:ℝ)^7 := h112\n        _ ≤ (A:ℝ)^7 := pow_le_pow_left₀ (by positivity) hdAle 7\n    · simp only [hdA, if_false]\n      have hRd : R*R < d := by omega\n      rw [hs d hRd, abs_zero, zero_mul]\n  have hsubset : s.prodPrimes.divisors.filter (fun d => d < A) ⊆ Finset.range A := by\n    intro d hd\n    exact Finset.mem_range.mpr (Finset.mem_filter.mp hd).2\n  have hcardNat : (s.prodPrimes.divisors.filter (fun d => d < A)).card ≤ A := by\n    simpa using Finset.card_le_card hsubset\n  have hcardR : ((s.prodPrimes.divisors.filter (fun d => d < A)).card : ℝ) ≤ (A:ℝ) := by\n    exact_mod_cast hcardNat\n  unfold BoundingSieve.errSum\n  calc\n    (∑ d ∈ s.prodPrimes.divisors,\n        |BoundingSieve.lambdaSquared w d| * |s.rem d|) ≤\n        ∑ d ∈ s.prodPrimes.divisors, if d < A then (A:ℝ)^7 else 0 :=\n      Finset.sum_le_sum hterm\n    _ = ∑ d ∈ s.prodPrimes.divisors.filter (fun d => d < A), (A:ℝ)^7 := by\n      rw [Finset.sum_filter]\n    _ = ((s.prodPrimes.divisors.filter (fun d => d < A)).card : ℝ) * (A:ℝ)^7 := by\n      simp\n    _ ≤ (A:ℝ) * (A:ℝ)^7 :=\n      mul_le_mul_of_nonneg_right hcardR (pow_nonneg (by positivity) 7)\n    _ = (A:ℝ)^8 := by ring\n    _ = (((R*R+1:ℕ):ℝ)^8) := by rw [hA_def]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : SelbergSieve) (w : ℕ → ℝ) (R : ℕ),\n      (∀ d, R*R < d → BoundingSieve.lambdaSquared w d = 0) →\n      (∀ d ∈ s.prodPrimes.divisors,\n        |BoundingSieve.lambdaSquared w d| ≤ (16:ℝ) ^ d.primeFactors.card) →\n      (∀ d ∈ s.prodPrimes.divisors,\n        |s.rem d| ≤ (7:ℝ) ^ d.primeFactors.card) →\n      s.errSum (BoundingSieve.lambdaSquared w) ≤ (((R*R+1:ℕ):ℝ)^8)",
+        "module_source_hash": null,
+        "obligation_id": "71396a30-be9f-49bf-b8ab-fa41db09ee7a",
+        "outcome": "kernel_pass",
+        "problem_version_id": "684cb8cf-bf0c-44e2-abec-7d0b7a0f5f28",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "3c1e46fbc7804d2f063b72a31cebded17bd0e910f97c26551b7b6ecb13f62287"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "30af9d58aa15b5ac1b3493226e99037e71441a8c15e77f02a909ffd7acc54791"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro s z B hz hprod hnu2 hnu3 hnu5 hnu7 hB\n  set S := (Finset.Icc 1 z).filter Nat.Prime with hS\n  set A := (Finset.range (z+1)).filter\n    (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7) with hA\n  set Q : ℕ → Prop := fun p => p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7 with hQ\n  have hactive : S.filter Q = A := by\n    ext p\n    simp only [S, A, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_range]\n    constructor\n    · intro hp\n      exact ⟨by omega, hp.1.2, hp.2.1, hp.2.2.1,\n        hp.2.2.2.1, hp.2.2.2.2⟩\n    · intro hp\n      have hp2 : 2 ≤ p := hp.2.1.two_le\n      have hp1 : 1 ≤ p := by omega\n      exact ⟨⟨⟨hp1, by omega⟩, hp.2.1⟩,\n        hp.2.2.1, hp.2.2.2.1, hp.2.2.2.2.1, hp.2.2.2.2.2⟩\n  have hdeleted : S.filter (fun p => ¬ Q p) = {2,3,5,7} := by\n    ext p\n    simp only [S, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_insert, Finset.mem_singleton]\n    constructor\n    · intro hp\n      have hne := hp.2\n      simpa only [not_and_or, not_ne_iff] using hne\n    · intro hp\n      rcases hp with rfl | rfl | rfl | rfl\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n  have hsplit := Finset.sum_filter_add_sum_filter_not S Q s.nu\n  rw [hactive, hdeleted] at hsplit\n  have hsmall : (∑ p ∈ ({2,3,5,7} : Finset ℕ), s.nu p) = 1/2 := by\n    norm_num [Finset.sum_insert, hnu2, hnu3, hnu5, hnu7]\n  rw [hsmall] at hsplit\n  have hBactive : B - 1/2 ≤ ∑ p ∈ A, s.nu p := by\n    change B ≤ ∑ p ∈ S, s.nu p at hB\n    linarith\n  have hpf : s.prodPrimes.primeFactors = A := by\n    rw [hprod]\n    apply Nat.primeFactors_prod\n    intro p hp\n    exact (Finset.mem_filter.mp hp).2.1\n  have hlog : ∑ p ∈ s.prodPrimes.primeFactors, s.nu p ≤\n      Real.log (∏ p ∈ s.prodPrimes.primeFactors, (1 - s.nu p)⁻¹) := by\n    rw [Real.log_prod]\n    · apply Finset.sum_le_sum\n      intro p hp\n      have hp_prime : p.Prime := Nat.prime_of_mem_primeFactors hp\n      have hp_dvd : p ∣ s.prodPrimes := Nat.dvd_of_mem_primeFactors hp\n      have hnu_pos : 0 < s.nu p := s.nu_pos_of_prime p hp_prime hp_dvd\n      have hnu_lt1 : s.nu p < 1 := s.nu_lt_one_of_prime p hp_prime hp_dvd\n      rw [Real.log_inv]\n      have h1mx_pos : 0 < 1 - s.nu p := by linarith\n      have hh := Real.log_le_sub_one_of_pos h1mx_pos\n      linarith\n    · intro p hp\n      have hp_prime : p.Prime := Nat.prime_of_mem_primeFactors hp\n      have hp_dvd : p ∣ s.prodPrimes := Nat.dvd_of_mem_primeFactors hp\n      have hnu_lt1 : s.nu p < 1 := s.nu_lt_one_of_prime p hp_prime hp_dvd\n      have h1mx_pos : 0 < 1 - s.nu p := by linarith\n      exact inv_ne_zero h1mx_pos.ne'\n  rw [hpf] at hlog\n  linarith",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro s z B hz hprod hnu2 hnu3 hnu5 hnu7 hB\n  set S := (Finset.Icc 1 z).filter Nat.Prime with hS\n  set A := (Finset.range (z+1)).filter\n    (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7) with hA\n  set Q : ℕ → Prop := fun p => p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7 with hQ\n  have hactive : S.filter Q = A := by\n    ext p\n    simp only [S, A, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_range]\n    constructor\n    · intro hp\n      exact ⟨by omega, hp.1.2, hp.2.1, hp.2.2.1,\n        hp.2.2.2.1, hp.2.2.2.2⟩\n    · intro hp\n      have hp2 : 2 ≤ p := hp.2.1.two_le\n      have hp1 : 1 ≤ p := by omega\n      exact ⟨⟨⟨hp1, by omega⟩, hp.2.1⟩,\n        hp.2.2.1, hp.2.2.2.1, hp.2.2.2.2.1, hp.2.2.2.2.2⟩\n  have hdeleted : S.filter (fun p => ¬ Q p) = {2,3,5,7} := by\n    ext p\n    simp only [S, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_insert, Finset.mem_singleton]\n    constructor\n    · intro hp\n      have hne := hp.2\n      simpa only [not_and_or, not_ne_iff] using hne\n    · intro hp\n      rcases hp with rfl | rfl | rfl | rfl\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n  have hsplit := Finset.sum_filter_add_sum_filter_not S Q s.nu\n  rw [hactive, hdeleted] at hsplit\n  have hsmall : (∑ p ∈ ({2,3,5,7} : Finset ℕ), s.nu p) = 1/2 := by\n    norm_num [Finset.sum_insert, hnu2, hnu3, hnu5, hnu7]\n  rw [hsmall] at hsplit\n  have hBactive : B - 1/2 ≤ ∑ p ∈ A, s.nu p := by\n    change B ≤ ∑ p ∈ S, s.nu p at hB\n    linarith\n  have hpf : s.prodPrimes.primeFactors = A := by\n    rw [hprod]\n    apply Nat.primeFactors_prod\n    intro p hp\n    exact (Finset.mem_filter.mp hp).2.1\n  have hlog : ∑ p ∈ s.prodPrimes.primeFactors, s.nu p ≤\n      Real.log (∏ p ∈ s.prodPrimes.primeFactors, (1 - s.nu p)⁻¹) := by\n    rw [Real.log_prod]\n    · apply Finset.sum_le_sum\n      intro p hp\n      have hp_prime : p.Prime := Nat.prime_of_mem_primeFactors hp\n      have hp_dvd : p ∣ s.prodPrimes := Nat.dvd_of_mem_primeFactors hp\n      have hnu_pos : 0 < s.nu p := s.nu_pos_of_prime p hp_prime hp_dvd\n      have hnu_lt1 : s.nu p < 1 := s.nu_lt_one_of_prime p hp_prime hp_dvd\n      rw [Real.log_inv]\n      have h1mx_pos : 0 < 1 - s.nu p := by linarith\n      have hh := Real.log_le_sub_one_of_pos h1mx_pos\n      linarith\n    · intro p hp\n      have hp_prime : p.Prime := Nat.prime_of_mem_primeFactors hp\n      have hp_dvd : p ∣ s.prodPrimes := Nat.dvd_of_mem_primeFactors hp\n      have hnu_lt1 : s.nu p < 1 := s.nu_lt_one_of_prime p hp_prime hp_dvd\n      have h1mx_pos : 0 < 1 - s.nu p := by linarith\n      exact inv_ne_zero h1mx_pos.ne'\n  rw [hpf] at hlog\n  linarith",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : BoundingSieve) (z : ℕ) (B : ℝ), 7 ≤ z →\n      s.prodPrimes =\n        ∏ p ∈ (Finset.range (z+1)).filter\n          (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7), p →\n      s.nu 2 = 1/2 → s.nu 3 = 0 → s.nu 5 = 0 → s.nu 7 = 0 →\n      B ≤ ∑ p ∈ (Finset.Icc 1 z).filter Nat.Prime, s.nu p →\n      B - 1/2 ≤\n        Real.log (∏ p ∈ s.prodPrimes.primeFactors, (1 - s.nu p)⁻¹)",
+        "module_source_hash": null,
+        "obligation_id": "fae3c554-ecc0-4504-8f1d-f0eed7c6a7b9",
+        "outcome": "kernel_fail",
+        "problem_version_id": "ce61fdf7-5644-428c-a1ac-f3c7b3b9a5e1",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "090c8da35d45ab27dc6f7ee42c12b2e2048edb54cf8a916be4b420106502378f"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "1dffaa888cce428783f437167d2513ef8ccd63455d333f7b835840eb435f8176"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro s z B hz hprod hnu2 hnu3 hnu5 hnu7 hB\n  set S := (Finset.Icc 1 z).filter Nat.Prime with hS\n  set A := (Finset.range (z+1)).filter\n    (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7) with hA\n  set Q : ℕ → Prop := fun p => p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7 with hQ\n  have hactive : S.filter Q = A := by\n    ext p\n    simp only [S, A, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_range]\n    constructor\n    · intro hp\n      exact ⟨by omega, hp.1.2, hp.2.1, hp.2.2.1,\n        hp.2.2.2.1, hp.2.2.2.2⟩\n    · intro hp\n      have hp2 : 2 ≤ p := hp.2.1.two_le\n      have hp1 : 1 ≤ p := by omega\n      exact ⟨⟨⟨hp1, by omega⟩, hp.2.1⟩,\n        hp.2.2.1, hp.2.2.2.1, hp.2.2.2.2.1, hp.2.2.2.2.2⟩\n  have hdeleted : S.filter (fun p => ¬ Q p) = {2,3,5,7} := by\n    ext p\n    simp only [S, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_insert, Finset.mem_singleton]\n    constructor\n    · intro hp\n      have hne := hp.2\n      simpa only [not_and_or, not_ne_iff] using hne\n    · intro hp\n      rcases hp with rfl | rfl | rfl | rfl\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n  have hsplit := Finset.sum_filter_add_sum_filter_not S Q s.nu\n  rw [hactive, hdeleted] at hsplit\n  have hsmall : (∑ p ∈ ({2,3,5,7} : Finset ℕ), s.nu p) = 1/2 := by\n    norm_num [Finset.sum_insert, hnu2, hnu3, hnu5, hnu7]\n  rw [hsmall] at hsplit\n  have hBactive : B - 1/2 ≤ ∑ p ∈ A, s.nu p := by\n    change B ≤ ∑ p ∈ S, s.nu p at hB\n    linarith\n  have hpf : s.prodPrimes.primeFactors = A := by\n    rw [hprod]\n    apply Nat.primeFactors_prod\n    intro p hp\n    exact (Finset.mem_filter.mp hp).2.1\n  have hlog : ∑ p ∈ s.prodPrimes.primeFactors, s.nu p ≤\n      Real.log (∏ p ∈ s.prodPrimes.primeFactors, (1 - s.nu p)⁻¹) := by\n    rw [Real.log_prod]\n    · apply Finset.sum_le_sum\n      intro p hp\n      have hp_prime : p.Prime := Nat.prime_of_mem_primeFactors hp\n      have hp_dvd : p ∣ s.prodPrimes := Nat.dvd_of_mem_primeFactors hp\n      have hnu_pos : 0 < s.nu p := s.nu_pos_of_prime p hp_prime hp_dvd\n      have hnu_lt1 : s.nu p < 1 := s.nu_lt_one_of_prime p hp_prime hp_dvd\n      rw [Real.log_inv]\n      have h1mx_pos : 0 < 1 - s.nu p := by linarith\n      have hh := Real.log_le_sub_one_of_pos h1mx_pos\n      linarith\n    · intro p hp\n      have hp_prime : p.Prime := Nat.prime_of_mem_primeFactors hp\n      have hp_dvd : p ∣ s.prodPrimes := Nat.dvd_of_mem_primeFactors hp\n      have hnu_lt1 : s.nu p < 1 := s.nu_lt_one_of_prime p hp_prime hp_dvd\n      have h1mx_pos : 0 < 1 - s.nu p := by linarith\n      exact inv_ne_zero h1mx_pos.ne'\n  rw [hpf] at hlog\n  rw [hpf]\n  linarith",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro s z B hz hprod hnu2 hnu3 hnu5 hnu7 hB\n  set S := (Finset.Icc 1 z).filter Nat.Prime with hS\n  set A := (Finset.range (z+1)).filter\n    (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7) with hA\n  set Q : ℕ → Prop := fun p => p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7 with hQ\n  have hactive : S.filter Q = A := by\n    ext p\n    simp only [S, A, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_range]\n    constructor\n    · intro hp\n      exact ⟨by omega, hp.1.2, hp.2.1, hp.2.2.1,\n        hp.2.2.2.1, hp.2.2.2.2⟩\n    · intro hp\n      have hp2 : 2 ≤ p := hp.2.1.two_le\n      have hp1 : 1 ≤ p := by omega\n      exact ⟨⟨⟨hp1, by omega⟩, hp.2.1⟩,\n        hp.2.2.1, hp.2.2.2.1, hp.2.2.2.2.1, hp.2.2.2.2.2⟩\n  have hdeleted : S.filter (fun p => ¬ Q p) = {2,3,5,7} := by\n    ext p\n    simp only [S, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_insert, Finset.mem_singleton]\n    constructor\n    · intro hp\n      have hne := hp.2\n      simpa only [not_and_or, not_ne_iff] using hne\n    · intro hp\n      rcases hp with rfl | rfl | rfl | rfl\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n  have hsplit := Finset.sum_filter_add_sum_filter_not S Q s.nu\n  rw [hactive, hdeleted] at hsplit\n  have hsmall : (∑ p ∈ ({2,3,5,7} : Finset ℕ), s.nu p) = 1/2 := by\n    norm_num [Finset.sum_insert, hnu2, hnu3, hnu5, hnu7]\n  rw [hsmall] at hsplit\n  have hBactive : B - 1/2 ≤ ∑ p ∈ A, s.nu p := by\n    change B ≤ ∑ p ∈ S, s.nu p at hB\n    linarith\n  have hpf : s.prodPrimes.primeFactors = A := by\n    rw [hprod]\n    apply Nat.primeFactors_prod\n    intro p hp\n    exact (Finset.mem_filter.mp hp).2.1\n  have hlog : ∑ p ∈ s.prodPrimes.primeFactors, s.nu p ≤\n      Real.log (∏ p ∈ s.prodPrimes.primeFactors, (1 - s.nu p)⁻¹) := by\n    rw [Real.log_prod]\n    · apply Finset.sum_le_sum\n      intro p hp\n      have hp_prime : p.Prime := Nat.prime_of_mem_primeFactors hp\n      have hp_dvd : p ∣ s.prodPrimes := Nat.dvd_of_mem_primeFactors hp\n      have hnu_pos : 0 < s.nu p := s.nu_pos_of_prime p hp_prime hp_dvd\n      have hnu_lt1 : s.nu p < 1 := s.nu_lt_one_of_prime p hp_prime hp_dvd\n      rw [Real.log_inv]\n      have h1mx_pos : 0 < 1 - s.nu p := by linarith\n      have hh := Real.log_le_sub_one_of_pos h1mx_pos\n      linarith\n    · intro p hp\n      have hp_prime : p.Prime := Nat.prime_of_mem_primeFactors hp\n      have hp_dvd : p ∣ s.prodPrimes := Nat.dvd_of_mem_primeFactors hp\n      have hnu_lt1 : s.nu p < 1 := s.nu_lt_one_of_prime p hp_prime hp_dvd\n      have h1mx_pos : 0 < 1 - s.nu p := by linarith\n      exact inv_ne_zero h1mx_pos.ne'\n  rw [hpf] at hlog\n  rw [hpf]\n  linarith",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : BoundingSieve) (z : ℕ) (B : ℝ), 7 ≤ z →\n      s.prodPrimes =\n        ∏ p ∈ (Finset.range (z+1)).filter\n          (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7), p →\n      s.nu 2 = 1/2 → s.nu 3 = 0 → s.nu 5 = 0 → s.nu 7 = 0 →\n      B ≤ ∑ p ∈ (Finset.Icc 1 z).filter Nat.Prime, s.nu p →\n      B - 1/2 ≤\n        Real.log (∏ p ∈ s.prodPrimes.primeFactors, (1 - s.nu p)⁻¹)",
+        "module_source_hash": null,
+        "obligation_id": "fae3c554-ecc0-4504-8f1d-f0eed7c6a7b9",
+        "outcome": "kernel_pass",
+        "problem_version_id": "ce61fdf7-5644-428c-a1ac-f3c7b3b9a5e1",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "090c8da35d45ab27dc6f7ee42c12b2e2048edb54cf8a916be4b420106502378f"
+      },
+      "next_state": {
+        "state_hash": "cf47e175675e6f78337bcffee524e4b958c64cc23e56c992d25491a74046817b"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "3d5fd0d246870789d210f8bc97d3aa9e7a67c5ac08e95c1ca24aa4c51ecb762e"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

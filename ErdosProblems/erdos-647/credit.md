@@ -1,67 +1,79 @@
 # Credit & disclosure — Erdős #647
 
-> Living document; last updated 2026-07-13.
+> Last updated 2026-07-15. The global seventh-power density theorem is
+> kernel-verified; the original existence problem remains open.
 
 ## Mathematics
 
-- **Problem:** Erdős #647 (Erdős–Selfridge, ~1979): is there `n > 24` with
-  `max_{m<n}(m + τ(m)) ≤ n + 2`? **Open.** Catalogued by Thomas Bloom at
-  [erdosproblems.com/647](https://www.erdosproblems.com/647).
-- **Scott Hughes** ([erdos647-proof-chain](https://github.com/scottdhughes/erdos647-proof-chain)):
-  the Stage-1 modular reduction (2520·N, 41 residues mod 46189) and its Lean
-  formalization; the 6.16×10¹⁷ finite-range certificate; the
-  direct-full-value and single-overlap closure techniques; **Theorem 2**
-  (prime-chain reduction — *statement and paper sketch*; the Lean
-  formalization in this folder is ours); the **all-avoid obstruction**; and,
-  with Kitamura, the Brun-sieve density program (`≪ x/(log x)⁷`).
-- **Kenta Kitamura**: necessary conditions (e.g. `(n−3)/3` prime),
-  co-development of the prime-7-tuple/Brun-sieve direction.
-- **Patrik Idén**: computational verification to 10¹² (Zenodo-deposited),
-  `D(n)` depth records, gap-growth analysis.
-- Both Hughes and Kitamura publicly disclose AI assistance in their own
-  posted work; this project matches that community norm (see below).
+- **Problem:** Erdős #647 (Erdős–Selfridge, ~1979), catalogued by Thomas Bloom
+  at [erdosproblems.com/647](https://www.erdosproblems.com/647).
+- **Scott Hughes**
+  ([erdos647-proof-chain](https://github.com/scottdhughes/erdos647-proof-chain)):
+  Stage-1 modular reduction, the 41-residue frontier, the finite exclusion to
+  6.16×10¹⁷, the direct-full-value and single-overlap techniques, Theorem 2's
+  statement and sketch, the all-avoid obstruction, and—with Kitamura—the
+  seventh-power density program.
+- **Kenta Kitamura:** necessary prime-shift conditions and co-development of
+  the prime-seven-tuple/Brun-sieve direction.
+- **Patrik Idén:** independent computation to 10¹², depth records, and
+  gap-growth analysis.
+- **Mathlib contributors:** the abstract `BoundingSieve`/`SelbergSieve`
+  framework and supporting number-theory/analysis library used here.
 
 ## This folder's contributions
 
-- Independent re-derivation and kernel-verification of the modular
-  reduction under a second verifier setup, with a **tighter base sieve**
-  (48 survivors vs 96) and a **bridging-closure layer** deriving every
-  sieve row from classification theorems (so the reduction is proven, not
-  scanned).
-- Fresh Lean proofs (not ports) of four residue closures, reaching Hughes's
-  exact 41-class frontier independently.
-- **48 previously-unrecorded sub-AP congruence closures** from an original
-  search (same species as the 6549 inside Hughes's certificate; frozen once
-  their structural limits were clear).
-- **First machine-checked proof of Hughes's Theorem 2** (three
-  kernel-verified stages) — to our knowledge; we'd welcome a correction.
-- An **extension of the all-avoid negative result** to Theorem-2 chain
-  forms (informal argument recorded in the whitepaper; formalizing it is an
-  open task).
-- A kernel-verified **exact Mertens-style identity** (`∑ 1/p` in terms of
-  Chebyshev θ via Abel summation) — the first brick of a quantitative
-  Mertens theorem that Mathlib currently lacks, aimed at the density-bound
-  program.
+- Independent rederivation and kernel verification of the modular reduction,
+  using a tighter 48-survivor base sieve and a proof-producing bridge from
+  every shift classification to its sieve row.
+- Fresh Lean proofs of four residue closures, reaching the 41-class frontier,
+  plus 48 previously unrecorded sub-AP closures.
+- What we believe is the first machine-checked proof of Hughes's Theorem 2;
+  corrections or earlier references are welcome.
+- Extension of the all-avoid negative argument to Theorem-2 chain forms
+  (currently prose rather than a terminal Lean theorem).
+- A concrete seven-dimensional Selberg upper-bound sieve for
+  `{210N−1,315N−1,420N−1,630N−1,840N−1,1260N−1,2520N−1}`.
+- Discovery and repair of an integration gap: Mathlib's
+  `SelbergSieve.level` does not itself truncate `lambdaSquared`. The
+  campaign constructs an explicit level-truncated optimal weight, proves
+  support above `R²` vanishes, and obtains `errSum≤(R²+1)^8`.
+- An exact Mertens-style identity and effective Chebyshev bounds. These are
+  valid infrastructure, but their `log 2` coefficient is explicitly not used
+  to claim seventh-power growth.
+- An elementary factorial/Euler-product denominator proof yielding
+  `(16/77)^7(log z)^7≤L`, explicit dyadic parameter certification, and
+  finite-range closure.
+- The global theorem `|C(X)|≤K·X/(log X)^7` for every natural `X`, with
+  explicit effective `K`.
+- A complete public export archive for all 210 related episodes: 203
+  kernel-verified successes and seven retained non-success histories.
 
-## Tools & authorship
+## Tools and authorship
 
-- Proofs authored by an LLM agent (Claude, Anthropic) operating in a
-  verifier-gated proof-search environment built by **Mnehmos** (this
-  repository); human direction and review by Mnehmos throughout.
-- **Verified solely by the Lean 4 kernel + pinned Mathlib.** No claim in
-  this folder rests on trusting the model or the human. Where we made
-  errors mid-campaign (an initially wrong "Mathlib has no sieve theory"
-  verdict; a stale automation loop), the whitepaper records them.
+- Proofs and assembly were authored through LLM agents (Claude/Anthropic and
+  Codex/OpenAI) in the verifier-gated proof-search environment built by
+  **Mnehmos**; Mnehmos supplied direction, review, and publication decisions.
+- Formal claims are checked by the Lean 4 kernel against pinned Mathlib. Model
+  prose, human confidence, numerical experiments, and literature summaries do
+  not substitute for kernel evidence.
+- Mid-campaign errors and corrections—including the inert-level diagnosis and
+  the insufficient Mertens coefficient—are retained in the record rather than
+  silently rewritten away.
 
 ## Honest limits
 
-- **The problem remains open.** Nothing here is a resolution, and the
-  known exclusion bound (6.16×10¹⁷) is Hughes's computation, not ours
-  (we independently replicated only to 5×10⁹).
-- Theorem 2's mathematics is Hughes's; our contribution is the rigorous
-  reconstruction of the proof from his sketch and its formalization.
-- The density-bound program (Theorems 3–4) is Hughes–Kitamura mathematics;
-  our Layer A work formalizes *supporting* analytic infrastructure and has
-  not yet reached their bound.
-- The proof snapshots await an independent local-toolchain replay (see
-  evidence.md caveat).
+- **Erdős #647 remains open.** The density theorem neither constructs a larger
+  candidate nor proves the candidate set empty.
+- Hughes's 6.16×10¹⁷ exclusion is Hughes's computation, not ours.
+- Theorem 2's mathematics and the density target are Hughes–Kitamura
+  mathematics. Our contribution is the independent Lean reconstruction,
+  truncation-gap diagnosis and repair, explicit constants, and final assembly.
+- The 210 proof-search episodes have `fidelity_status = attested`: Lean checks
+  project-authored formal statements, but this is not neutral-corpus
+  certification. Kernel verification applies to 203 of those episodes; the
+  other seven are retained as explicit negative or unfinished trajectories.
+- The terminal density theorem is supported by a clean transitive source
+  replay. It is not misrepresented as an additional standalone tracked
+  episode.
+- Full proof dossiers and structured trajectories are published deliberately.
+  Attribution and fidelity metadata should remain attached to downstream use.

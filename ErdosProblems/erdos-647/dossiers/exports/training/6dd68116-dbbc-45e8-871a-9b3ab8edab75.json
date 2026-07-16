@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n N hN hn hp12 hp8 hp6 hp4 hp3 hp2 hp1\n  have h12 : (n-12)/12 = 210*N-1 := by omega\n  have h8 : (n-8)/8 = 315*N-1 := by omega\n  have h6 : (n-6)/6 = 420*N-1 := by omega\n  have h4 : (n-4)/4 = 630*N-1 := by omega\n  have h3 : (n-3)/3 = 840*N-1 := by omega\n  have h2 : (n-2)/2 = 1260*N-1 := by omega\n  have h1 : n-1 = 2520*N-1 := by omega\n  rw [h12] at hp12\n  rw [h8] at hp8\n  rw [h6] at hp6\n  rw [h4] at hp4\n  rw [h3] at hp3\n  rw [h2] at hp2\n  rw [h1] at hp1\n  exact ⟨hp12, hp8, hp6, hp4, hp3, hp2, hp1⟩",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n N hN hn hp12 hp8 hp6 hp4 hp3 hp2 hp1\n  have h12 : (n-12)/12 = 210*N-1 := by omega\n  have h8 : (n-8)/8 = 315*N-1 := by omega\n  have h6 : (n-6)/6 = 420*N-1 := by omega\n  have h4 : (n-4)/4 = 630*N-1 := by omega\n  have h3 : (n-3)/3 = 840*N-1 := by omega\n  have h2 : (n-2)/2 = 1260*N-1 := by omega\n  have h1 : n-1 = 2520*N-1 := by omega\n  rw [h12] at hp12\n  rw [h8] at hp8\n  rw [h6] at hp6\n  rw [h4] at hp4\n  rw [h3] at hp3\n  rw [h2] at hp2\n  rw [h1] at hp1\n  exact ⟨hp12, hp8, hp6, hp4, hp3, hp2, hp1⟩",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (n N : ℕ), 1 ≤ N → n = 2520*N →\n      ((n-12)/12).Prime →\n      (((n-8)/8).Prime ∨ ∃ q : ℕ, q.Prime ∧ (n-8)/8 = 2*q) →\n      ((n-6)/6).Prime →\n      ((n-4)/4).Prime →\n      ((n-3)/3).Prime →\n      ((n-2)/2).Prime →\n      (n-1).Prime →\n      (210*N-1).Prime ∧\n      ((315*N-1).Prime ∨ ∃ q : ℕ, q.Prime ∧ 315*N-1 = 2*q) ∧\n      (420*N-1).Prime ∧\n      (630*N-1).Prime ∧\n      (840*N-1).Prime ∧\n      (1260*N-1).Prime ∧\n      (2520*N-1).Prime",
+        "module_source_hash": null,
+        "obligation_id": "3a81d77c-2eb9-4159-abbf-f516b5e2a25a",
+        "outcome": "kernel_pass",
+        "problem_version_id": "e84e00c6-17b8-43e4-a832-b40909cb576a",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "2fbfb68c85117c41163b2c1acd682a353ea5cf1bac0e879976136c68b69f44c8"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "d815bfd75d0c58a6a4ed455261165296bf92e16f1f24bb6367a4102921c0284a"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

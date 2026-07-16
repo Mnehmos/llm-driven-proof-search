@@ -1,0 +1,31 @@
+{
+  "benchmark_suite": null,
+  "benchmark_upstream_problem_id": null,
+  "certified": false,
+  "completed_at": "2026-07-15T19:14:22.035680400+00:00",
+  "created_at": "2026-07-15T19:13:49.968664+00:00",
+  "environment_hash": "9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d",
+  "episode_id": "312120f0-82e4-49d8-a0a5-022822683064",
+  "fidelity_basis": null,
+  "fidelity_status": "attested",
+  "formal_target_matched": false,
+  "import_manifest_hash": "aaf21893d520a78dee0787a1bcaf939ee6b922265ff670c272e2e1d450dd29a7",
+  "interactive_sessions": {
+    "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
+    "proof_body_redacted": true,
+    "session_count": 0,
+    "sessions": []
+  },
+  "kernel_verified": true,
+  "mode": "public_summary",
+  "obligation_counts_by_status": {
+    "proved": 1
+  },
+  "outcome": "KERNEL_VERIFIED",
+  "proof_body_redacted": true,
+  "root_formal_statement": "∀ (s : SelbergSieve) (w : ℕ → ℝ) (R : ℕ),\n      (∀ d, R*R < d → BoundingSieve.lambdaSquared w d = 0) →\n      (∀ d ∈ s.prodPrimes.divisors,\n        |BoundingSieve.lambdaSquared w d| ≤ (16:ℝ) ^ d.primeFactors.card) →\n      (∀ d ∈ s.prodPrimes.divisors,\n        |s.rem d| ≤ (7:ℝ) ^ d.primeFactors.card) →\n      s.errSum (BoundingSieve.lambdaSquared w) ≤ (((R*R+1:ℕ):ℝ)^8)",
+  "step_count": 1,
+  "trajectory_event_count": 3,
+  "trajectory_first_hash": "be79405427e4128f6093c8452b0e85e1d466eb54e4f880e44afc43861de7a4bf",
+  "trajectory_last_hash": "eba83493109aa8367111eb172c1f0a0a187a3b321f97290e1b1249bec0364357"
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro t ht\n  set n := ⌊t⌋₊ with hn_def\n  have ht0 : (0:ℝ) ≤ t := by linarith\n  have hn2 : 2 ≤ n := by\n    have h2n : ((2:ℕ):ℝ) ≤ t := by exact_mod_cast ht\n    exact_mod_cast Nat.le_floor h2n\n  have hnt : (n:ℝ) ≤ t := Nat.floor_le ht0\n  have htn1 : t < (n:ℝ) + 1 := Nat.lt_floor_add_one t\n  have hthle : Chebyshev.theta (n:ℝ) ≤ Chebyshev.theta t := Chebyshev.theta_mono hnt\n  have hnge := Chebyshev.theta_ge n\n  have hnpos : (0:ℝ) < (n:ℝ) := by exact_mod_cast (show 0 < n by omega)\n  have hlog2pos : 0 < Real.log 2 := Real.log_pos (by norm_num)\n  have hterm1 : (t-1)*Real.log 2 ≤ (n:ℝ)*Real.log 2 := by\n    apply mul_le_mul_of_nonneg_right _ (le_of_lt hlog2pos)\n    linarith [htn1]\n  have hterm2 : -Real.log (t+2) ≤ -Real.log ((n:ℝ)+1) := by\n    have hle : Real.log ((n:ℝ)+1) ≤ Real.log (t+2) := Real.log_le_log (by linarith) (by linarith)\n    linarith\n  have hterm3 : -2*Real.sqrt t*Real.log t ≤ -2*Real.sqrt (n:ℝ)*Real.log (n:ℝ) := by\n    have hsqrt_mono : Real.sqrt (n:ℝ) ≤ Real.sqrt t := Real.sqrt_le_sqrt hnt\n    have hlog_mono : Real.log (n:ℝ) ≤ Real.log t := Real.log_le_log hnpos hnt\n    have hln : 0 ≤ Real.log (n:ℝ) := Real.log_nonneg (by linarith [hn2, hnpos])\n    have hsqt : 0 ≤ Real.sqrt t := Real.sqrt_nonneg t\n    have hmul : Real.sqrt (n:ℝ) * Real.log (n:ℝ) ≤ Real.sqrt t * Real.log t := mul_le_mul hsqrt_mono hlog_mono hln hsqt\n    nlinarith [hmul]\n  calc (t-1)*Real.log 2 - Real.log (t+2) - 2*Real.sqrt t*Real.log t\n      ≤ (n:ℝ)*Real.log 2 - Real.log ((n:ℝ)+1) - 2*Real.sqrt (n:ℝ)*Real.log (n:ℝ) := by linarith [hterm1, hterm2, hterm3]\n    _ ≤ Chebyshev.theta (n:ℝ) := hnge\n    _ ≤ Chebyshev.theta t := hthle",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro t ht\n  set n := ⌊t⌋₊ with hn_def\n  have ht0 : (0:ℝ) ≤ t := by linarith\n  have hn2 : 2 ≤ n := by\n    have h2n : ((2:ℕ):ℝ) ≤ t := by exact_mod_cast ht\n    exact_mod_cast Nat.le_floor h2n\n  have hnt : (n:ℝ) ≤ t := Nat.floor_le ht0\n  have htn1 : t < (n:ℝ) + 1 := Nat.lt_floor_add_one t\n  have hthle : Chebyshev.theta (n:ℝ) ≤ Chebyshev.theta t := Chebyshev.theta_mono hnt\n  have hnge := Chebyshev.theta_ge n\n  have hnpos : (0:ℝ) < (n:ℝ) := by exact_mod_cast (show 0 < n by omega)\n  have hlog2pos : 0 < Real.log 2 := Real.log_pos (by norm_num)\n  have hterm1 : (t-1)*Real.log 2 ≤ (n:ℝ)*Real.log 2 := by\n    apply mul_le_mul_of_nonneg_right _ (le_of_lt hlog2pos)\n    linarith [htn1]\n  have hterm2 : -Real.log (t+2) ≤ -Real.log ((n:ℝ)+1) := by\n    have hle : Real.log ((n:ℝ)+1) ≤ Real.log (t+2) := Real.log_le_log (by linarith) (by linarith)\n    linarith\n  have hterm3 : -2*Real.sqrt t*Real.log t ≤ -2*Real.sqrt (n:ℝ)*Real.log (n:ℝ) := by\n    have hsqrt_mono : Real.sqrt (n:ℝ) ≤ Real.sqrt t := Real.sqrt_le_sqrt hnt\n    have hlog_mono : Real.log (n:ℝ) ≤ Real.log t := Real.log_le_log hnpos hnt\n    have hln : 0 ≤ Real.log (n:ℝ) := Real.log_nonneg (by linarith [hn2, hnpos])\n    have hsqt : 0 ≤ Real.sqrt t := Real.sqrt_nonneg t\n    have hmul : Real.sqrt (n:ℝ) * Real.log (n:ℝ) ≤ Real.sqrt t * Real.log t := mul_le_mul hsqrt_mono hlog_mono hln hsqt\n    nlinarith [hmul]\n  calc (t-1)*Real.log 2 - Real.log (t+2) - 2*Real.sqrt t*Real.log t\n      ≤ (n:ℝ)*Real.log 2 - Real.log ((n:ℝ)+1) - 2*Real.sqrt (n:ℝ)*Real.log (n:ℝ) := by linarith [hterm1, hterm2, hterm3]\n    _ ≤ Chebyshev.theta (n:ℝ) := hnge\n    _ ≤ Chebyshev.theta t := hthle",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ t : ℝ, 2 ≤ t → (t - 1) * Real.log 2 - Real.log (t + 2) - 2 * Real.sqrt t * Real.log t ≤ Chebyshev.theta t",
+        "module_source_hash": null,
+        "obligation_id": "4baa445c-aaaa-4831-940a-4abf2ce239d6",
+        "outcome": "kernel_pass",
+        "problem_version_id": "baa73c15-f4de-4148-bec9-c6009fee1996",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "72cb80ab472e749d02f2ec9507b84f08254d17a1a8d971e0f5ee69028e709531"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "78b999a9f0da82b25c1fcbca5df1b752d465346bcf032195d55d4fb5ab358fa7"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  have hp2 : Nat.Prime 2 := by norm_num\n  have hp3 : Nat.Prime 3 := by norm_num\n  have hp5 : Nat.Prime 5 := by norm_num\n  have hp7 : Nat.Prime 7 := by norm_num\n  have hcard2 : ((Finset.range 2).filter (fun r =>\n      (210*r)%2=1 ∨ (315*r)%2=1 ∨ (420*r)%2=1 ∨\n      (630*r)%2=1 ∨ (840*r)%2=1 ∨ (1260*r)%2=1 ∨\n      (2520*r)%2=1)).card = 1 := by native_decide\n  have hcard3 : ((Finset.range 3).filter (fun r =>\n      (210*r)%3=1 ∨ (315*r)%3=1 ∨ (420*r)%3=1 ∨\n      (630*r)%3=1 ∨ (840*r)%3=1 ∨ (1260*r)%3=1 ∨\n      (2520*r)%3=1)).card = 0 := by native_decide\n  have hcard5 : ((Finset.range 5).filter (fun r =>\n      (210*r)%5=1 ∨ (315*r)%5=1 ∨ (420*r)%5=1 ∨\n      (630*r)%5=1 ∨ (840*r)%5=1 ∨ (1260*r)%5=1 ∨\n      (2520*r)%5=1)).card = 0 := by native_decide\n  have hcard7 : ((Finset.range 7).filter (fun r =>\n      (210*r)%7=1 ∨ (315*r)%7=1 ∨ (420*r)%7=1 ∨\n      (630*r)%7=1 ∨ (840*r)%7=1 ∨ (1260*r)%7=1 ∨\n      (2520*r)%7=1)).card = 0 := by native_decide\n  constructor\n  · rw [ArithmeticFunction.prodPrimeFactors_apply (by norm_num),\n      hp2.primeFactors, Finset.prod_singleton, hcard2]\n    norm_num\n  constructor\n  · rw [ArithmeticFunction.prodPrimeFactors_apply (by norm_num),\n      hp3.primeFactors, Finset.prod_singleton, hcard3]\n    norm_num\n  constructor\n  · rw [ArithmeticFunction.prodPrimeFactors_apply (by norm_num),\n      hp5.primeFactors, Finset.prod_singleton, hcard5]\n    norm_num\n  · rw [ArithmeticFunction.prodPrimeFactors_apply (by norm_num),\n      hp7.primeFactors, Finset.prod_singleton, hcard7]\n    norm_num",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  have hp2 : Nat.Prime 2 := by norm_num\n  have hp3 : Nat.Prime 3 := by norm_num\n  have hp5 : Nat.Prime 5 := by norm_num\n  have hp7 : Nat.Prime 7 := by norm_num\n  have hcard2 : ((Finset.range 2).filter (fun r =>\n      (210*r)%2=1 ∨ (315*r)%2=1 ∨ (420*r)%2=1 ∨\n      (630*r)%2=1 ∨ (840*r)%2=1 ∨ (1260*r)%2=1 ∨\n      (2520*r)%2=1)).card = 1 := by native_decide\n  have hcard3 : ((Finset.range 3).filter (fun r =>\n      (210*r)%3=1 ∨ (315*r)%3=1 ∨ (420*r)%3=1 ∨\n      (630*r)%3=1 ∨ (840*r)%3=1 ∨ (1260*r)%3=1 ∨\n      (2520*r)%3=1)).card = 0 := by native_decide\n  have hcard5 : ((Finset.range 5).filter (fun r =>\n      (210*r)%5=1 ∨ (315*r)%5=1 ∨ (420*r)%5=1 ∨\n      (630*r)%5=1 ∨ (840*r)%5=1 ∨ (1260*r)%5=1 ∨\n      (2520*r)%5=1)).card = 0 := by native_decide\n  have hcard7 : ((Finset.range 7).filter (fun r =>\n      (210*r)%7=1 ∨ (315*r)%7=1 ∨ (420*r)%7=1 ∨\n      (630*r)%7=1 ∨ (840*r)%7=1 ∨ (1260*r)%7=1 ∨\n      (2520*r)%7=1)).card = 0 := by native_decide\n  constructor\n  · rw [ArithmeticFunction.prodPrimeFactors_apply (by norm_num),\n      hp2.primeFactors, Finset.prod_singleton, hcard2]\n    norm_num\n  constructor\n  · rw [ArithmeticFunction.prodPrimeFactors_apply (by norm_num),\n      hp3.primeFactors, Finset.prod_singleton, hcard3]\n    norm_num\n  constructor\n  · rw [ArithmeticFunction.prodPrimeFactors_apply (by norm_num),\n      hp5.primeFactors, Finset.prod_singleton, hcard5]\n    norm_num\n  · rw [ArithmeticFunction.prodPrimeFactors_apply (by norm_num),\n      hp7.primeFactors, Finset.prod_singleton, hcard7]\n    norm_num",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "(ArithmeticFunction.prodPrimeFactors\n        (fun q : ℕ => (((Finset.range q).filter (fun r =>\n          (210*r)%q=1 ∨ (315*r)%q=1 ∨ (420*r)%q=1 ∨\n          (630*r)%q=1 ∨ (840*r)%q=1 ∨ (1260*r)%q=1 ∨\n          (2520*r)%q=1)).card : ℝ) / q) : ArithmeticFunction ℝ) 2 = 1/2 ∧\n      (ArithmeticFunction.prodPrimeFactors\n        (fun q : ℕ => (((Finset.range q).filter (fun r =>\n          (210*r)%q=1 ∨ (315*r)%q=1 ∨ (420*r)%q=1 ∨\n          (630*r)%q=1 ∨ (840*r)%q=1 ∨ (1260*r)%q=1 ∨\n          (2520*r)%q=1)).card : ℝ) / q) : ArithmeticFunction ℝ) 3 = 0 ∧\n      (ArithmeticFunction.prodPrimeFactors\n        (fun q : ℕ => (((Finset.range q).filter (fun r =>\n          (210*r)%q=1 ∨ (315*r)%q=1 ∨ (420*r)%q=1 ∨\n          (630*r)%q=1 ∨ (840*r)%q=1 ∨ (1260*r)%q=1 ∨\n          (2520*r)%q=1)).card : ℝ) / q) : ArithmeticFunction ℝ) 5 = 0 ∧\n      (ArithmeticFunction.prodPrimeFactors\n        (fun q : ℕ => (((Finset.range q).filter (fun r =>\n          (210*r)%q=1 ∨ (315*r)%q=1 ∨ (420*r)%q=1 ∨\n          (630*r)%q=1 ∨ (840*r)%q=1 ∨ (1260*r)%q=1 ∨\n          (2520*r)%q=1)).card : ℝ) / q) : ArithmeticFunction ℝ) 7 = 0",
+        "module_source_hash": null,
+        "obligation_id": "6ea6d76b-07a2-4bd0-ba8b-d35ccaa01baa",
+        "outcome": "kernel_pass",
+        "problem_version_id": "7851c193-5d39-4302-a93f-a474a2ffa6c8",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "057a47bc28d86c645c29c77546fc05686d12c7126314e000dd8a8ccee52832f2"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "ff4eb55f75b2bb7d4583cb298664d31e23caa921a319d20605b625f400a15dfd"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}
