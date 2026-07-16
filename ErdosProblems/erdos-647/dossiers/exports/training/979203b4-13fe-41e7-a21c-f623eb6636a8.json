@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "refine ⟨?_, ?_, ?_, ?_⟩ <;> native_decide",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "refine ⟨?_, ?_, ?_, ?_⟩ <;> native_decide",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "((Finset.range 2).filter (fun r => (210*r)%2=1 ∨ (315*r)%2=1 ∨ (420*r)%2=1 ∨ (630*r)%2=1 ∨ (840*r)%2=1 ∨ (1260*r)%2=1 ∨ (2520*r)%2=1)).card = 1 ∧ ((Finset.range 3).filter (fun r => (210*r)%3=1 ∨ (315*r)%3=1 ∨ (420*r)%3=1 ∨ (630*r)%3=1 ∨ (840*r)%3=1 ∨ (1260*r)%3=1 ∨ (2520*r)%3=1)).card = 0 ∧ ((Finset.range 5).filter (fun r => (210*r)%5=1 ∨ (315*r)%5=1 ∨ (420*r)%5=1 ∨ (630*r)%5=1 ∨ (840*r)%5=1 ∨ (1260*r)%5=1 ∨ (2520*r)%5=1)).card = 0 ∧ ((Finset.range 7).filter (fun r => (210*r)%7=1 ∨ (315*r)%7=1 ∨ (420*r)%7=1 ∨ (630*r)%7=1 ∨ (840*r)%7=1 ∨ (1260*r)%7=1 ∨ (2520*r)%7=1)).card = 0",
+        "module_source_hash": null,
+        "obligation_id": "353631ba-14f7-4452-bba1-09a82ad8ae28",
+        "outcome": "kernel_pass",
+        "problem_version_id": "92b5e5ae-10c1-4bf5-afe5-a92f2e8a370e",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "3b8f0bf87d2f0dc4c7b085752b9c7e3d93ad7741e4f34ebfcf88d73c017d241d"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "2891d569e46d11bcd7c08d10c06dd13b4490973d99c06d2b9a435999f202944f"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

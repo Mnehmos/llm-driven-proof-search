@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro s C w X z R L LR hmass hcard hw1 hmain hL hhalf herr\nhave hmassnonneg : 0 ≤ s.totalMass := by\n  rw [hmass]\n  positivity\nhave hupper : BoundingSieve.IsUpperMoebius\n    (BoundingSieve.lambdaSquared w) :=\n  BoundingSieve.upperMoebius_lambdaSquared w hw1\nhave hsifted :=\n  s.siftedSum_le_mainSum_errSum_of_upperMoebius\n    (BoundingSieve.lambdaSquared w) hupper\nhave hhalfpos : 0 < L / 2 := by linarith\nhave hrecip : 1 / LR ≤ 2 / L := by\n  calc\n    1 / LR ≤ 1 / (L / 2) :=\n      one_div_le_one_div_of_le hhalfpos hhalf\n    _ = 2 / L := by field_simp\nrw [hmain] at hsifted\nhave hsiftedBound :\n    s.siftedSum ≤\n      2 * s.totalMass / L + (((R * R + 1 : ℕ) : ℝ) ^ 8) := by\n  calc\n    s.siftedSum ≤\n        s.totalMass * (1 / LR) +\n          s.errSum (BoundingSieve.lambdaSquared w) := hsifted\n    _ ≤ s.totalMass * (2 / L) +\n          (((R * R + 1 : ℕ) : ℝ) ^ 8) :=\n      add_le_add (mul_le_mul_of_nonneg_left hrecip hmassnonneg) herr\n    _ = 2 * s.totalMass / L +\n          (((R * R + 1 : ℕ) : ℝ) ^ 8) := by ring\nrw [hmass] at hsiftedBound\nlinarith",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro s C w X z R L LR hmass hcard hw1 hmain hL hhalf herr\nhave hmassnonneg : 0 ≤ s.totalMass := by\n  rw [hmass]\n  positivity\nhave hupper : BoundingSieve.IsUpperMoebius\n    (BoundingSieve.lambdaSquared w) :=\n  BoundingSieve.upperMoebius_lambdaSquared w hw1\nhave hsifted :=\n  s.siftedSum_le_mainSum_errSum_of_upperMoebius\n    (BoundingSieve.lambdaSquared w) hupper\nhave hhalfpos : 0 < L / 2 := by linarith\nhave hrecip : 1 / LR ≤ 2 / L := by\n  calc\n    1 / LR ≤ 1 / (L / 2) :=\n      one_div_le_one_div_of_le hhalfpos hhalf\n    _ = 2 / L := by field_simp\nrw [hmain] at hsifted\nhave hsiftedBound :\n    s.siftedSum ≤\n      2 * s.totalMass / L + (((R * R + 1 : ℕ) : ℝ) ^ 8) := by\n  calc\n    s.siftedSum ≤\n        s.totalMass * (1 / LR) +\n          s.errSum (BoundingSieve.lambdaSquared w) := hsifted\n    _ ≤ s.totalMass * (2 / L) +\n          (((R * R + 1 : ℕ) : ℝ) ^ 8) :=\n      add_le_add (mul_le_mul_of_nonneg_left hrecip hmassnonneg) herr\n    _ = 2 * s.totalMass / L +\n          (((R * R + 1 : ℕ) : ℝ) ^ 8) := by ring\nrw [hmass] at hsiftedBound\nlinarith",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : SelbergSieve) (C : Finset ℕ) (w : ℕ → ℝ)\n    (X z R : ℕ) (L LR : ℝ),\n  s.totalMass = X →\n  (C.card : ℝ) ≤ s.siftedSum + z →\n  w 1 = 1 →\n  s.mainSum (BoundingSieve.lambdaSquared w) = 1 / LR →\n  0 < L →\n  L / 2 ≤ LR →\n  s.errSum (BoundingSieve.lambdaSquared w) ≤ (((R * R + 1 : ℕ) : ℝ) ^ 8) →\n  (C.card : ℝ) ≤ 2 * X / L + (((R * R + 1 : ℕ) : ℝ) ^ 8) + z",
+        "module_source_hash": null,
+        "obligation_id": "8d918a4b-7997-48fa-af5f-b84820d8156a",
+        "outcome": "kernel_pass",
+        "problem_version_id": "9ad9f4e4-11d4-4f40-89f9-39c3c990b7fa",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "c15e88b4e9d19c53b514d0df428e04566b8c1fe43cd2faa685fb35f4b2999f30"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "aa31ecf0b9f3427117c7392f45cd0973158d803dcfc62dfde5cf89a08ff80c09"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

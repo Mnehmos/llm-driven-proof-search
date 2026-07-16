@@ -1,0 +1,31 @@
+{
+  "benchmark_suite": null,
+  "benchmark_upstream_problem_id": null,
+  "certified": false,
+  "completed_at": "2026-07-15T19:22:58.218693100+00:00",
+  "created_at": "2026-07-15T19:19:39.301351200+00:00",
+  "environment_hash": "9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d",
+  "episode_id": "fbf2047c-f3aa-4a54-9529-8ab7ecdd81e5",
+  "fidelity_basis": null,
+  "fidelity_status": "attested",
+  "formal_target_matched": false,
+  "import_manifest_hash": "aaf21893d520a78dee0787a1bcaf939ee6b922265ff670c272e2e1d450dd29a7",
+  "interactive_sessions": {
+    "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
+    "proof_body_redacted": true,
+    "session_count": 0,
+    "sessions": []
+  },
+  "kernel_verified": true,
+  "mode": "public_summary",
+  "obligation_counts_by_status": {
+    "proved": 1
+  },
+  "outcome": "KERNEL_VERIFIED",
+  "proof_body_redacted": true,
+  "root_formal_statement": "∀ x : ℝ, 2 ≤ x →\n      ∑ p ∈ Finset.Icc 1 ⌊x⌋₊ with p.Prime, Real.log p / (p:ℝ)\n        = Chebyshev.theta x / x +\n          ∫ t in Set.Ioc (2:ℝ) x, Chebyshev.theta t / t^2",
+  "step_count": 4,
+  "trajectory_event_count": 6,
+  "trajectory_first_hash": "07a98c5da9c08f14a6daf19b64b57b675bc69ddd5ce37f7c851ef7df5c8adec0",
+  "trajectory_last_hash": "a99a29b43a3e917ca32d360dbcabe044a726dcdb4b04f957a43863b2238bfeb9"
+}

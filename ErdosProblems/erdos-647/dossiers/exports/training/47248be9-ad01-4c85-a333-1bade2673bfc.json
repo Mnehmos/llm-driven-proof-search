@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro s w R L LR hw1 hmain hmass hL hhalf herr\n  have hupper : BoundingSieve.IsUpperMoebius\n      (BoundingSieve.lambdaSquared w) :=\n    BoundingSieve.upperMoebius_lambdaSquared w hw1\n  have hsifted :=\n    s.siftedSum_le_mainSum_errSum_of_upperMoebius\n      (BoundingSieve.lambdaSquared w) hupper\n  have hhalfpos : 0 < L / 2 := by linarith\n  have hrecip : 1 / LR ≤ 2 / L := by\n    calc\n      1 / LR ≤ 1 / (L/2) := one_div_le_one_div_of_le hhalfpos hhalf\n      _ = 2 / L := by field_simp\n  rw [hmain] at hsifted\n  calc\n    s.siftedSum ≤ s.totalMass * (1 / LR) +\n        s.errSum (BoundingSieve.lambdaSquared w) := hsifted\n    _ ≤ s.totalMass * (2 / L) + (((R*R+1:ℕ):ℝ)^8) :=\n      add_le_add (mul_le_mul_of_nonneg_left hrecip hmass) herr\n    _ = 2 * s.totalMass / L + (((R*R+1:ℕ):ℝ)^8) := by ring",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro s w R L LR hw1 hmain hmass hL hhalf herr\n  have hupper : BoundingSieve.IsUpperMoebius\n      (BoundingSieve.lambdaSquared w) :=\n    BoundingSieve.upperMoebius_lambdaSquared w hw1\n  have hsifted :=\n    s.siftedSum_le_mainSum_errSum_of_upperMoebius\n      (BoundingSieve.lambdaSquared w) hupper\n  have hhalfpos : 0 < L / 2 := by linarith\n  have hrecip : 1 / LR ≤ 2 / L := by\n    calc\n      1 / LR ≤ 1 / (L/2) := one_div_le_one_div_of_le hhalfpos hhalf\n      _ = 2 / L := by field_simp\n  rw [hmain] at hsifted\n  calc\n    s.siftedSum ≤ s.totalMass * (1 / LR) +\n        s.errSum (BoundingSieve.lambdaSquared w) := hsifted\n    _ ≤ s.totalMass * (2 / L) + (((R*R+1:ℕ):ℝ)^8) :=\n      add_le_add (mul_le_mul_of_nonneg_left hrecip hmass) herr\n    _ = 2 * s.totalMass / L + (((R*R+1:ℕ):ℝ)^8) := by ring",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : SelbergSieve) (w : ℕ → ℝ) (R : ℕ) (L LR : ℝ),\n  w 1 = 1 →\n  s.mainSum (BoundingSieve.lambdaSquared w) = 1 / LR →\n  0 ≤ s.totalMass →\n  0 < L →\n  L / 2 ≤ LR →\n  s.errSum (BoundingSieve.lambdaSquared w) ≤ (((R*R+1:ℕ):ℝ)^8) →\n  s.siftedSum ≤ 2 * s.totalMass / L + (((R*R+1:ℕ):ℝ)^8)",
+        "module_source_hash": null,
+        "obligation_id": "b20d7acb-bcc9-4734-8f7e-67480845fa03",
+        "outcome": "kernel_pass",
+        "problem_version_id": "372fc2d3-227e-4104-ac93-6657f6fd8538",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "2670a2ea7507bf270826b978d761107e40e07564ff85cf843e340f47893d532c"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "afc617715de463ddc42e47142c5cd170cd928b55632e61aa47e0410c0779e278"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

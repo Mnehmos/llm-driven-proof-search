@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n hn hdvd hclass\n  rcases hclass with hp | ⟨p, hp, hp2⟩\n  · exact hp\n  · exfalso\n    obtain ⟨q, hq⟩ := hdvd\n    rcases hp.eq_two_or_odd' with htwo | hodd\n    · rw [htwo] at hp2\n      norm_num at hp2\n      omega\n    · obtain ⟨r, hr⟩ := hodd\n      obtain ⟨t, ht⟩ := Nat.even_mul_succ_self r\n      have hsq : p ^ 2 = 8 * t + 1 := by\n        rw [hr]\n        nlinarith [ht]\n      omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n hn hdvd hclass\n  rcases hclass with hp | ⟨p, hp, hp2⟩\n  · exact hp\n  · exfalso\n    obtain ⟨q, hq⟩ := hdvd\n    rcases hp.eq_two_or_odd' with htwo | hodd\n    · rw [htwo] at hp2\n      norm_num at hp2\n      omega\n    · obtain ⟨r, hr⟩ := hodd\n      obtain ⟨t, ht⟩ := Nat.even_mul_succ_self r\n      have hsq : p ^ 2 = 8 * t + 1 := by\n        rw [hr]\n        nlinarith [ht]\n      omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 84 < n → 2520 ∣ n → (Nat.Prime (n - 1) ∨ ∃ p : ℕ, Nat.Prime p ∧ n - 1 = p ^ 2) → Nat.Prime (n - 1)",
+        "module_source_hash": null,
+        "obligation_id": "5defcf67-d631-432c-a8c9-0e584c064a50",
+        "outcome": "kernel_pass",
+        "problem_version_id": "ec29c1bd-1b37-4e1e-ae50-e43554a09746",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "1ba8a63cb390dff8e827a7a4b733b40dca60e3b0003a5fd7f5e1c366972decc3"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "7d1bf0f3d6a1dc71758a7b8e8e1b6d8df87abe911f6dbf56e998af7a340dfbb7"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

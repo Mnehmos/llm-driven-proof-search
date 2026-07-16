@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n N hn H hnN hres\n  have shift : ArithmeticFunction.sigma 0 (n - 6) ≤ 8 := by\n    have hsub : n - 6 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let mm : Fin n := ⟨n - 6, hsub⟩\n    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H\n    dsimp [f, mm] at hm\n    omega\n  set q := N / 1062347 with hq_def\n  have hNeq : N = 1062347 * q + 24453 := by omega\n  have hnk : n - 6 = 138 * (19399380 * q + 446533) := by\n    have h1 : n - 6 = 138 * 19399380 * q + 138 * 446533 := by omega\n    rw [h1]; ring\n  set eval := 19399380 * q + 446533 with heval_def\n  have heval_ge : 446533 ≤ eval := by dsimp [eval]; omega\n  have hnkne : n - 6 ≠ 0 := by omega\n  have hmono : ∀ a : ℕ, a ∣ (n - 6) → ArithmeticFunction.sigma 0 a ≤ ArithmeticFunction.sigma 0 (n - 6) := by\n    intro a hadvd\n    have hsub2 : a.divisors ⊆ (n - 6).divisors := by\n      intro d hd\n      rw [Nat.mem_divisors] at hd ⊢\n      exact ⟨hd.1.trans hadvd, hnkne⟩\n    rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]\n    exact Finset.card_le_card hsub2\n  have hclose : ∀ D : ℕ, D ∣ eval → 8 < ArithmeticFunction.sigma 0 (138 * D) → False := by\n    intro D hDdvd hsig\n    have hDm : 138 * D ∣ (n - 6) := by rw [hnk]; exact Nat.mul_dvd_mul_left 138 hDdvd\n    have := hmono (138 * D) hDm\n    omega\n  by_cases hq1 : 2 ∣ eval\n  · exact hclose 2 hq1 (by native_decide)\n  · by_cases hq2 : 3 ∣ eval\n    · exact hclose 3 hq2 (by native_decide)\n    · by_cases hq3 : 23 ∣ eval\n      · exact hclose 23 hq3 (by native_decide)\n      · obtain ⟨p, hp, hpdvd⟩ := Nat.exists_prime_and_dvd (show eval ≠ 1 by omega)\n        have hcopg : Nat.Coprime 138 p := by\n          have hfac : (138:ℕ).primeFactors = {2, 3, 23} := by native_decide\n          refine ((hp.coprime_iff_not_dvd).mpr ?_).symm\n          intro hpdvdg\n          have hpmem : p ∈ (138:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩\n          rw [hfac] at hpmem\n          simp at hpmem\n          rcases hpmem with rfl | rfl | rfl\n          · exact hq1 hpdvd\n          · exact hq2 hpdvd\n          · exact hq3 hpdvd\n        have hsigp : ArithmeticFunction.sigma 0 p = 2 := by\n          rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]\n        have hsg : ArithmeticFunction.sigma 0 138 = 8 := by native_decide\n        have hfinal : 8 < ArithmeticFunction.sigma 0 (138 * p) := by\n          rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]\n          norm_num\n        exact hclose p hpdvd hfinal",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n N hn H hnN hres\n  have shift : ArithmeticFunction.sigma 0 (n - 6) ≤ 8 := by\n    have hsub : n - 6 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let mm : Fin n := ⟨n - 6, hsub⟩\n    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H\n    dsimp [f, mm] at hm\n    omega\n  set q := N / 1062347 with hq_def\n  have hNeq : N = 1062347 * q + 24453 := by omega\n  have hnk : n - 6 = 138 * (19399380 * q + 446533) := by\n    have h1 : n - 6 = 138 * 19399380 * q + 138 * 446533 := by omega\n    rw [h1]; ring\n  set eval := 19399380 * q + 446533 with heval_def\n  have heval_ge : 446533 ≤ eval := by dsimp [eval]; omega\n  have hnkne : n - 6 ≠ 0 := by omega\n  have hmono : ∀ a : ℕ, a ∣ (n - 6) → ArithmeticFunction.sigma 0 a ≤ ArithmeticFunction.sigma 0 (n - 6) := by\n    intro a hadvd\n    have hsub2 : a.divisors ⊆ (n - 6).divisors := by\n      intro d hd\n      rw [Nat.mem_divisors] at hd ⊢\n      exact ⟨hd.1.trans hadvd, hnkne⟩\n    rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]\n    exact Finset.card_le_card hsub2\n  have hclose : ∀ D : ℕ, D ∣ eval → 8 < ArithmeticFunction.sigma 0 (138 * D) → False := by\n    intro D hDdvd hsig\n    have hDm : 138 * D ∣ (n - 6) := by rw [hnk]; exact Nat.mul_dvd_mul_left 138 hDdvd\n    have := hmono (138 * D) hDm\n    omega\n  by_cases hq1 : 2 ∣ eval\n  · exact hclose 2 hq1 (by native_decide)\n  · by_cases hq2 : 3 ∣ eval\n    · exact hclose 3 hq2 (by native_decide)\n    · by_cases hq3 : 23 ∣ eval\n      · exact hclose 23 hq3 (by native_decide)\n      · obtain ⟨p, hp, hpdvd⟩ := Nat.exists_prime_and_dvd (show eval ≠ 1 by omega)\n        have hcopg : Nat.Coprime 138 p := by\n          have hfac : (138:ℕ).primeFactors = {2, 3, 23} := by native_decide\n          refine ((hp.coprime_iff_not_dvd).mpr ?_).symm\n          intro hpdvdg\n          have hpmem : p ∈ (138:ℕ).primeFactors := Nat.mem_primeFactors.mpr ⟨hp, hpdvdg, by norm_num⟩\n          rw [hfac] at hpmem\n          simp at hpmem\n          rcases hpmem with rfl | rfl | rfl\n          · exact hq1 hpdvd\n          · exact hq2 hpdvd\n          · exact hq3 hpdvd\n        have hsigp : ArithmeticFunction.sigma 0 p = 2 := by\n          rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hp]\n        have hsg : ArithmeticFunction.sigma 0 138 = 8 := by native_decide\n        have hfinal : 8 < ArithmeticFunction.sigma 0 (138 * p) := by\n          rw [ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcopg, hsg, hsigp]\n          norm_num\n        exact hclose p hpdvd hfinal",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n N : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → N % 1062347 = 24453 → False",
+        "module_source_hash": null,
+        "obligation_id": "0ed650c2-cd46-43d5-8b29-a8d169fcb464",
+        "outcome": "kernel_pass",
+        "problem_version_id": "b374b2c1-4b3d-428b-8c37-2e97999feb95",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "cac30a642696160de7d16c1299452058ef18c7c79d18d722bbac098eaa57d4c9"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "5cdfa28cd4c3ab6a0b960da8ae632bb6696b1cb016b67964cdd7a7e7a406a7ca"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

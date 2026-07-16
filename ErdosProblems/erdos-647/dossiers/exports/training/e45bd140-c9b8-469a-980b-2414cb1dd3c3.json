@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro s C X z R L hmass hcard hsifted\nrw [hmass] at hsifted\nlinarith",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro s C X z R L hmass hcard hsifted\nrw [hmass] at hsifted\nlinarith",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (s : SelbergSieve) (C : Finset ℕ) (X z R : ℕ) (L : ℝ),\n  s.totalMass = X →\n  (C.card : ℝ) ≤ s.siftedSum + z →\n  s.siftedSum ≤ 2 * s.totalMass / L + (((R * R + 1 : ℕ) : ℝ) ^ 8) →\n  (C.card : ℝ) ≤ 2 * X / L + (((R * R + 1 : ℕ) : ℝ) ^ 8) + z",
+        "module_source_hash": null,
+        "obligation_id": "f911c6c6-3f17-4c12-a0a2-c15b275d1be8",
+        "outcome": "kernel_pass",
+        "problem_version_id": "04896a5d-4423-44dc-ac03-424f8fba0689",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "185531de8d717c7c4dde91ffb618ab216796fec1b0e322ebb0b4342514cf6b34"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "3637f1c04e01aabab018a98885b6d3433945708d8268bd4f67777b7da47ca29c"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

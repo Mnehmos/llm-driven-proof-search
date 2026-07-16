@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro d r X hd hr\nhave hcard : ((Finset.Icc 1 X).filter (fun N => N % d = r)).card ≤ (Finset.range (X/d+1)).card := by\n  apply Finset.card_le_card_of_injOn (fun N => N / d) (t := Finset.range (X/d+1))\n  · intro N hN\n    have hN' := Finset.mem_filter.mp (Finset.mem_coe.mp hN)\n    simp only [Finset.mem_coe, Finset.mem_range]\n    have hle : N / d ≤ X / d := Nat.div_le_div_right (Finset.mem_Icc.mp hN'.1).2\n    omega\n  · intro N1 hN1 N2 hN2 heq\n    have heq' : N1 / d = N2 / d := heq\n    have hN1' := Finset.mem_filter.mp (Finset.mem_coe.mp hN1)\n    have hN2' := Finset.mem_filter.mp (Finset.mem_coe.mp hN2)\n    have h1 : d * (N1 / d) + r = N1 := by rw [← hN1'.2]; exact Nat.div_add_mod N1 d\n    have h2 : d * (N2 / d) + r = N2 := by rw [← hN2'.2]; exact Nat.div_add_mod N2 d\n    rw [← h1, ← h2, heq']\nrwa [Finset.card_range] at hcard",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro d r X hd hr\nhave hcard : ((Finset.Icc 1 X).filter (fun N => N % d = r)).card ≤ (Finset.range (X/d+1)).card := by\n  apply Finset.card_le_card_of_injOn (fun N => N / d) (t := Finset.range (X/d+1))\n  · intro N hN\n    have hN' := Finset.mem_filter.mp (Finset.mem_coe.mp hN)\n    simp only [Finset.mem_coe, Finset.mem_range]\n    have hle : N / d ≤ X / d := Nat.div_le_div_right (Finset.mem_Icc.mp hN'.1).2\n    omega\n  · intro N1 hN1 N2 hN2 heq\n    have heq' : N1 / d = N2 / d := heq\n    have hN1' := Finset.mem_filter.mp (Finset.mem_coe.mp hN1)\n    have hN2' := Finset.mem_filter.mp (Finset.mem_coe.mp hN2)\n    have h1 : d * (N1 / d) + r = N1 := by rw [← hN1'.2]; exact Nat.div_add_mod N1 d\n    have h2 : d * (N2 / d) + r = N2 := by rw [← hN2'.2]; exact Nat.div_add_mod N2 d\n    rw [← h1, ← h2, heq']\nrwa [Finset.card_range] at hcard",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (d r X : ℕ), 0 < d → r < d → ((Finset.Icc 1 X).filter (fun N => N % d = r)).card ≤ X / d + 1",
+        "module_source_hash": null,
+        "obligation_id": "f16b3b2c-22de-4426-abf0-b0551f7b60ab",
+        "outcome": "kernel_pass",
+        "problem_version_id": "515e1234-c98c-4439-ab58-def605b1ed08",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "3307106242e4ba7dea1fa0529daeb36303f24588f4608ec6758717f6fd6c2b7a"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "c5a3a5d8a0df55e17ee440ad1d735239194b1fa41941a71549a804cf6713d37d"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

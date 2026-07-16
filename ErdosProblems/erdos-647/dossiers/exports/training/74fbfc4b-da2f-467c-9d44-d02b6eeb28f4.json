@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n k\n  constructor\n  · intro H j hj0 hjk hjn\n    let g : Set.Ioo (n - k) n → ℕ := fun m =>\n      (m : ℕ) + ArithmeticFunction.sigma 0 m\n    have hbdd : BddAbove (Set.range g) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [g]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.property.2\n      omega\n    have hjk' : j < k := by omega\n    let m : Set.Ioo (n - k) n :=\n      ⟨n - j, by constructor <;> omega⟩\n    have hm : g m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [g, m] at hm\n    omega\n  · intro H\n    apply ciSup_le'\n    intro m\n    have hmlo : n - k < (m : ℕ) := m.property.1\n    have hmhi : (m : ℕ) < n := m.property.2\n    let j := n - (m : ℕ)\n    have hj0 : 0 < j := by dsimp [j]; omega\n    have hjk : j ≤ k - 1 := by dsimp [j]; omega\n    have hjn : j < n := by dsimp [j]; omega\n    have hs := H j hj0 hjk hjn\n    have hsubeq : n - (n - (m : ℕ)) = (m : ℕ) := by omega\n    dsimp [j] at hs\n    rw [hsubeq] at hs\n    omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n k\n  constructor\n  · intro H j hj0 hjk hjn\n    let g : Set.Ioo (n - k) n → ℕ := fun m =>\n      (m : ℕ) + ArithmeticFunction.sigma 0 m\n    have hbdd : BddAbove (Set.range g) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [g]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.property.2\n      omega\n    have hjk' : j < k := by omega\n    let m : Set.Ioo (n - k) n :=\n      ⟨n - j, by constructor <;> omega⟩\n    have hm : g m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n    dsimp [g, m] at hm\n    omega\n  · intro H\n    apply ciSup_le'\n    intro m\n    have hmlo : n - k < (m : ℕ) := m.property.1\n    have hmhi : (m : ℕ) < n := m.property.2\n    let j := n - (m : ℕ)\n    have hj0 : 0 < j := by dsimp [j]; omega\n    have hjk : j ≤ k - 1 := by dsimp [j]; omega\n    have hjn : j < n := by dsimp [j]; omega\n    have hs := H j hj0 hjk hjn\n    have hsubeq : n - (n - (m : ℕ)) = (m : ℕ) := by omega\n    dsimp [j] at hs\n    rw [hsubeq] at hs\n    omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n k : ℕ,\n      ((⨆ m : Set.Ioo (n - k) n,\n          (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2) ↔\n        ∀ j : ℕ, 0 < j → j ≤ k - 1 → j < n →\n          ArithmeticFunction.sigma 0 (n - j) ≤ j + 2",
+        "module_source_hash": null,
+        "obligation_id": "f32436b7-e482-466b-b085-dd9d04ad2579",
+        "outcome": "kernel_pass",
+        "problem_version_id": "0c4b9003-af8d-4da4-8fb0-0129d1f85a67",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "bdf2ab2b8d18289e8a6131c18f9fd0da555d7571ecf7f24b8243005adcca5409"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "d5e15deea87f4ac745cd0cd798e569538f23ebbca25d044e74db091bb036c320"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

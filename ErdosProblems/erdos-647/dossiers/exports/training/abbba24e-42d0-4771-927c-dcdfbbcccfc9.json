@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n N hn H hnN hres\n  have shift : ArithmeticFunction.sigma 0 (n - 16) ≤ 18 := by\n    have hsub : n - 16 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let mm : Fin n := ⟨n - 16, hsub⟩\n    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H\n    dsimp [f, mm] at hm\n    omega\n  set q := N / 46189 with hq_def\n  have hNeq : N = 46189 * q + 39325 := by omega\n  have hn16lin : n = 2584 * 45045 * q + 2584 * 38351 + 16 := by rw [hnN, hNeq]; ring\n  have hn16 : n - 16 = 2584 * (45045 * q + 38351) := by\n    have : n - 16 = 2584 * 45045 * q + 2584 * 38351 := by omega\n    rw [this]; ring\n  set eval := 45045 * q + 38351 with heval_def\n  have heval2 : eval ≠ 1 := by dsimp [eval]; omega\n  have hsig2584 : ArithmeticFunction.sigma 0 2584 = 16 := by native_decide\n  obtain ⟨p, hpp, hpdvd⟩ := Nat.exists_prime_and_dvd heval2\n  have hn16ne : n - 16 ≠ 0 := by omega\n  by_cases hp2584 : p ∣ 2584\n  · have hp2584fac : p = 2 ∨ p = 17 ∨ p = 19 := by\n      have h2584eq : (2584 : ℕ) = 8 * (17 * 19) := by norm_num\n      rw [h2584eq] at hp2584\n      rcases (hpp.dvd_mul).mp hp2584 with h8 | h1719\n      · left\n        have h8pow : (8:ℕ) = 2 ^ 3 := by norm_num\n        rw [h8pow] at h8\n        have hp2 : p ∣ 2 := hpp.dvd_of_dvd_pow h8\n        exact (Nat.prime_dvd_prime_iff_eq hpp Nat.prime_two).mp hp2\n      · rcases (hpp.dvd_mul).mp h1719 with h17 | h19\n        · right; left\n          exact (Nat.prime_dvd_prime_iff_eq hpp (by norm_num)).mp h17\n        · right; right\n          exact (Nat.prime_dvd_prime_iff_eq hpp (by norm_num)).mp h19\n    have h2584p_dvd : 2584 * p ∣ (n - 16) := by\n      rw [hn16]; exact Nat.mul_dvd_mul_left 2584 hpdvd\n    have hsig_ge : 19 ≤ ArithmeticFunction.sigma 0 (2584 * p) := by\n      rcases hp2584fac with rfl | rfl | rfl\n      · native_decide\n      · native_decide\n      · native_decide\n    have hsub2 : (2584 * p).divisors ⊆ (n - 16).divisors := by\n      intro d hd\n      rw [Nat.mem_divisors] at hd ⊢\n      exact ⟨hd.1.trans h2584p_dvd, hn16ne⟩\n    have hcard_le : ArithmeticFunction.sigma 0 (2584 * p) ≤ ArithmeticFunction.sigma 0 (n - 16) := by\n      rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]\n      exact Finset.card_le_card hsub2\n    omega\n  · have hcop : Nat.Coprime 2584 p := ((hpp.coprime_iff_not_dvd).mpr hp2584).symm\n    have h2584p_dvd : 2584 * p ∣ (n - 16) := by\n      rw [hn16]; exact Nat.mul_dvd_mul_left 2584 hpdvd\n    have hsigp : ArithmeticFunction.sigma 0 p = 2 := by\n      rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hpp]\n    have hsig_mul : ArithmeticFunction.sigma 0 (2584 * p) = ArithmeticFunction.sigma 0 2584 * ArithmeticFunction.sigma 0 p :=\n      ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n    have hsig_ge : 19 ≤ ArithmeticFunction.sigma 0 (2584 * p) := by\n      rw [hsig_mul, hsig2584, hsigp]; norm_num\n    have hsub2 : (2584 * p).divisors ⊆ (n - 16).divisors := by\n      intro d hd\n      rw [Nat.mem_divisors] at hd ⊢\n      exact ⟨hd.1.trans h2584p_dvd, hn16ne⟩\n    have hcard_le : ArithmeticFunction.sigma 0 (2584 * p) ≤ ArithmeticFunction.sigma 0 (n - 16) := by\n      rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]\n      exact Finset.card_le_card hsub2\n    omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n N hn H hnN hres\n  have shift : ArithmeticFunction.sigma 0 (n - 16) ≤ 18 := by\n    have hsub : n - 16 < n := by omega\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let mm : Fin n := ⟨n - 16, hsub⟩\n    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H\n    dsimp [f, mm] at hm\n    omega\n  set q := N / 46189 with hq_def\n  have hNeq : N = 46189 * q + 39325 := by omega\n  have hn16lin : n = 2584 * 45045 * q + 2584 * 38351 + 16 := by rw [hnN, hNeq]; ring\n  have hn16 : n - 16 = 2584 * (45045 * q + 38351) := by\n    have : n - 16 = 2584 * 45045 * q + 2584 * 38351 := by omega\n    rw [this]; ring\n  set eval := 45045 * q + 38351 with heval_def\n  have heval2 : eval ≠ 1 := by dsimp [eval]; omega\n  have hsig2584 : ArithmeticFunction.sigma 0 2584 = 16 := by native_decide\n  obtain ⟨p, hpp, hpdvd⟩ := Nat.exists_prime_and_dvd heval2\n  have hn16ne : n - 16 ≠ 0 := by omega\n  by_cases hp2584 : p ∣ 2584\n  · have hp2584fac : p = 2 ∨ p = 17 ∨ p = 19 := by\n      have h2584eq : (2584 : ℕ) = 8 * (17 * 19) := by norm_num\n      rw [h2584eq] at hp2584\n      rcases (hpp.dvd_mul).mp hp2584 with h8 | h1719\n      · left\n        have h8pow : (8:ℕ) = 2 ^ 3 := by norm_num\n        rw [h8pow] at h8\n        have hp2 : p ∣ 2 := hpp.dvd_of_dvd_pow h8\n        exact (Nat.prime_dvd_prime_iff_eq hpp Nat.prime_two).mp hp2\n      · rcases (hpp.dvd_mul).mp h1719 with h17 | h19\n        · right; left\n          exact (Nat.prime_dvd_prime_iff_eq hpp (by norm_num)).mp h17\n        · right; right\n          exact (Nat.prime_dvd_prime_iff_eq hpp (by norm_num)).mp h19\n    have h2584p_dvd : 2584 * p ∣ (n - 16) := by\n      rw [hn16]; exact Nat.mul_dvd_mul_left 2584 hpdvd\n    have hsig_ge : 19 ≤ ArithmeticFunction.sigma 0 (2584 * p) := by\n      rcases hp2584fac with rfl | rfl | rfl\n      · native_decide\n      · native_decide\n      · native_decide\n    have hsub2 : (2584 * p).divisors ⊆ (n - 16).divisors := by\n      intro d hd\n      rw [Nat.mem_divisors] at hd ⊢\n      exact ⟨hd.1.trans h2584p_dvd, hn16ne⟩\n    have hcard_le : ArithmeticFunction.sigma 0 (2584 * p) ≤ ArithmeticFunction.sigma 0 (n - 16) := by\n      rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]\n      exact Finset.card_le_card hsub2\n    omega\n  · have hcop : Nat.Coprime 2584 p := ((hpp.coprime_iff_not_dvd).mpr hp2584).symm\n    have h2584p_dvd : 2584 * p ∣ (n - 16) := by\n      rw [hn16]; exact Nat.mul_dvd_mul_left 2584 hpdvd\n    have hsigp : ArithmeticFunction.sigma 0 p = 2 := by\n      rw [show p = p ^ 1 from (pow_one p).symm, ArithmeticFunction.sigma_zero_apply_prime_pow hpp]\n    have hsig_mul : ArithmeticFunction.sigma 0 (2584 * p) = ArithmeticFunction.sigma 0 2584 * ArithmeticFunction.sigma 0 p :=\n      ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop\n    have hsig_ge : 19 ≤ ArithmeticFunction.sigma 0 (2584 * p) := by\n      rw [hsig_mul, hsig2584, hsigp]; norm_num\n    have hsub2 : (2584 * p).divisors ⊆ (n - 16).divisors := by\n      intro d hd\n      rw [Nat.mem_divisors] at hd ⊢\n      exact ⟨hd.1.trans h2584p_dvd, hn16ne⟩\n    have hcard_le : ArithmeticFunction.sigma 0 (2584 * p) ≤ ArithmeticFunction.sigma 0 (n - 16) := by\n      rw [ArithmeticFunction.sigma_zero_apply, ArithmeticFunction.sigma_zero_apply]\n      exact Finset.card_le_card hsub2\n    omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n N : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → N % 46189 = 39325 → False",
+        "module_source_hash": null,
+        "obligation_id": "c8ebac33-ecfe-484a-b337-2f2641357e1b",
+        "outcome": "kernel_pass",
+        "problem_version_id": "e8e7b8cd-2383-4225-ba89-f96c4534d903",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "ae652809d6ba0e5ab511d77b752173946aa71bb3b144f68aea027284998b6da7"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "46af760ec17206af19795a77a91c3b9aeb06ef3a064f7c57cd66c9b18b3c4ddd"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n h30 h7 h8 h9\n  rw [Nat.dvd_iff_mod_eq_zero] at h30 h7 h8 h9 ⊢\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n h30 h7 h8 h9\n  rw [Nat.dvd_iff_mod_eq_zero] at h30 h7 h8 h9 ⊢\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, 30 ∣ n → 7 ∣ n → 8 ∣ n → 9 ∣ n → 2520 ∣ n",
+        "module_source_hash": null,
+        "obligation_id": "c4ba6f6f-b206-4eb4-996f-c8d1ce795e71",
+        "outcome": "kernel_fail",
+        "problem_version_id": "e9e592b3-1c08-4ac8-a6d8-27db462ca76b",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "905734a43dfc484150bcbfcfe5f35b641894a4102c83b148b3744d47646ced70"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "9886d27f7f5596b785aa8333da5e88a66d8f0a645f05aa8059bd615905b1b06f"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n h30 h7 h8 h9\n  have h5 : 5 ∣ n := dvd_trans (by norm_num : 5 ∣ 30) h30\n  have h72 : 8 * 9 ∣ n :=\n    (show Nat.Coprime 8 9 by norm_num).mul_dvd_of_dvd_of_dvd h8 h9\n  have h360 : (8 * 9) * 5 ∣ n :=\n    (show Nat.Coprime (8 * 9) 5 by norm_num).mul_dvd_of_dvd_of_dvd h72 h5\n  have h2520 : ((8 * 9) * 5) * 7 ∣ n :=\n    (show Nat.Coprime ((8 * 9) * 5) 7 by norm_num).mul_dvd_of_dvd_of_dvd h360 h7\n  norm_num at h2520 ⊢\n  exact h2520",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n h30 h7 h8 h9\n  have h5 : 5 ∣ n := dvd_trans (by norm_num : 5 ∣ 30) h30\n  have h72 : 8 * 9 ∣ n :=\n    (show Nat.Coprime 8 9 by norm_num).mul_dvd_of_dvd_of_dvd h8 h9\n  have h360 : (8 * 9) * 5 ∣ n :=\n    (show Nat.Coprime (8 * 9) 5 by norm_num).mul_dvd_of_dvd_of_dvd h72 h5\n  have h2520 : ((8 * 9) * 5) * 7 ∣ n :=\n    (show Nat.Coprime ((8 * 9) * 5) 7 by norm_num).mul_dvd_of_dvd_of_dvd h360 h7\n  norm_num at h2520 ⊢\n  exact h2520",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": "Invalid attempt claim or status",
+        "disposition": "invalid_response",
+        "lean_statement": "∀ n : ℕ, 30 ∣ n → 7 ∣ n → 8 ∣ n → 9 ∣ n → 2520 ∣ n",
+        "module_source_hash": null,
+        "obligation_id": "c4ba6f6f-b206-4eb4-996f-c8d1ce795e71",
+        "outcome": null,
+        "problem_version_id": "e9e592b3-1c08-4ac8-a6d8-27db462ca76b",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "905734a43dfc484150bcbfcfe5f35b641894a4102c83b148b3744d47646ced70"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "7319ad53611c7e1cb671077f0dfe53ae4249fbb89a546da3aad7aee9d3285b4f"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

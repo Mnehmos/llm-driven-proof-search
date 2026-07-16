@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro A N k g q hgA hqN hk hkAN hd hdiv\nobtain ⟨a, ha⟩ := hgA\nobtain ⟨b, hb⟩ := hqN\nhave hdAN : g * q ∣ A * N := by\n  refine ⟨a * b, ?_⟩\n  rw [ha, hb]\n  ring\nhave hdk : g * q ∣ k := by\n  have hsub : A * N - (A * N - k) = k := by omega\n  rw [← hsub]\n  exact Nat.dvd_sub hdAN hdiv\nrw [ArithmeticFunction.sigma_zero_apply]\nexact le_trans (Nat.card_divisors_le_self (g * q))\n  (Nat.le_of_dvd hk hdk)",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro A N k g q hgA hqN hk hkAN hd hdiv\nobtain ⟨a, ha⟩ := hgA\nobtain ⟨b, hb⟩ := hqN\nhave hdAN : g * q ∣ A * N := by\n  refine ⟨a * b, ?_⟩\n  rw [ha, hb]\n  ring\nhave hdk : g * q ∣ k := by\n  have hsub : A * N - (A * N - k) = k := by omega\n  rw [← hsub]\n  exact Nat.dvd_sub hdAN hdiv\nrw [ArithmeticFunction.sigma_zero_apply]\nexact le_trans (Nat.card_divisors_le_self (g * q))\n  (Nat.le_of_dvd hk hdk)",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (A N k g q : ℕ),\n      g ∣ A → q ∣ N → 0 < k → k ≤ A * N → 0 < g * q →\n      g * q ∣ A * N - k →\n      ArithmeticFunction.sigma 0 (g * q) ≤ k",
+        "module_source_hash": null,
+        "obligation_id": "56b3b9d6-7a71-4edc-847f-bab2a7c3f195",
+        "outcome": "kernel_pass",
+        "problem_version_id": "04da2717-8f99-42f3-88c2-0419b8c623da",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "97912856df9b6342d7cceb3f79c0041e3defddd897daff7afb99e66bcc3f6bdc"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "cf625e7b1030180fa37847c258c3218970cc0bbf13c7809424c6f326d271c17c"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

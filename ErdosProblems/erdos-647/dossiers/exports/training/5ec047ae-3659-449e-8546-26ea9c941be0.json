@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro p e q a b N hp hba hfactor\ncalc\n  p ∣ q ↔ p ^ (e + 1) ∣ a * N - b := by\n    rw [hfactor, show e + 1 = e.succ by omega, Nat.pow_succ]\n    exact (mul_dvd_mul_iff_left (pow_ne_zero e hp.ne_zero)).symm\n  _ ↔ b ≡ a * N [MOD p ^ (e + 1)] :=\n    (Nat.modEq_iff_dvd' hba).symm",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro p e q a b N hp hba hfactor\ncalc\n  p ∣ q ↔ p ^ (e + 1) ∣ a * N - b := by\n    rw [hfactor, show e + 1 = e.succ by omega, Nat.pow_succ]\n    exact (mul_dvd_mul_iff_left (pow_ne_zero e hp.ne_zero)).symm\n  _ ↔ b ≡ a * N [MOD p ^ (e + 1)] :=\n    (Nat.modEq_iff_dvd' hba).symm",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ p e q a b N : ℕ, Nat.Prime p → b ≤ a * N → a * N - b = p ^ e * q → (p ∣ q ↔ b ≡ a * N [MOD p ^ (e + 1)])",
+        "module_source_hash": null,
+        "obligation_id": "977454cb-241e-4d64-a24b-0ddd5e991513",
+        "outcome": "kernel_pass",
+        "problem_version_id": "8f86185e-db7a-45af-8ffa-74d933439eb6",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "93d50cfc2b86bcc66a00e1f05f3b552527bd463e6d9e94cba64766621f0580f9"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "1d93c55e48e70c45958cdda119abaffbabf72689e24947700106100287979fca"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "flat_tactic_sequence",
+        "proof_term": "  native_decide",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "flat_tactic_sequence",
+          "proof_term": "  native_decide",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n ∈ Finset.Icc 25 84,\n  ∃ k ∈ Finset.Icc 1 (n - 1),\n    k + 2 < ArithmeticFunction.sigma 0 (n - k)",
+        "module_source_hash": null,
+        "obligation_id": "06ea4713-38fe-4605-8f5e-b688bd3adba4",
+        "outcome": "kernel_pass",
+        "problem_version_id": "2c7952fa-4342-40ed-8a1d-43b093f585aa",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "0b8b7fe73cb4aecbdb9e650fe50ee9e982ecab4d23273c92297fa331c6f8724d"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "d85332e9ffa7ff96d0502b63013d7befa6105100006a2194a69a24b723abca44"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

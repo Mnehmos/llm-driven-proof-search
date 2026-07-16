@@ -1,8 +1,8 @@
 # Full campaign proof bodies
 
-The eight headline theorems (Theorem 2 ×3, Layer A ×5) have their full Lean
-source in the parent [proof/](../) directory. This subfolder holds full proof
-bodies for the rest of the campaign, recovered from the tracked pipeline. Every
+The parent [proof/](../) directory now contains the full analytic and density
+assembly as individual Lean modules. This subfolder holds the five consolidated
+modular-campaign families recovered from the tracked pipeline. Every
 `.lean` file here is self-contained: it checks against Mathlib with `lake`
 alone, with no dependency on the project's local database.
 
@@ -30,8 +30,11 @@ is the only thing that is actually publicly checkable.
 - [family5-subap-closures.lean](family5-subap-closures.lean) — all 48 sub-AP
   congruence closures, one per (residue, extra-prime) pair.
 
-Every catalogued theorem across all 5 families is now published as committed,
-self-contained `.lean` source.
+Every catalogued theorem across all five modular families is published as
+committed, self-contained `.lean` source. The later analytic episodes have
+individual source modules in the parent directory and complete provenance
+exports under [../../dossiers/exports/](../../dossiers/exports/README.md).
 
 Everything here is `kernel_verified`, pinned to
-`environment_hash 9e26d28edb…`; the problem itself remains **open**.
+`environment_hash 9e26d28e…`; the global density theorem is complete, while
+the original existence problem itself remains **open**.

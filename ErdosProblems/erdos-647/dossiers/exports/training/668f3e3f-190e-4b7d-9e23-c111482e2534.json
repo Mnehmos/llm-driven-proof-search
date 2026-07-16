@@ -1,0 +1,121 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro z hz\n  have hzbase : 1 ≤ 2*z := by omega\n  have hzpow : 1 ≤ (2*z)^40 := one_le_pow_of_le hzbase 40\n  have hsq : ((2*z)^20)^2 = (2*z)^40 := by\n    rw [← pow_mul]\n    norm_num\n  have hbase : ((2*z)^20)^2 + 1 ≤ 2 * (2*z)^40 := by\n    rw [hsq]\n    omega\n  calc\n    ((((2*z)^20)^2 + 1)^8) ≤ (2 * (2*z)^40)^8 := by gcongr\n    _ = 2^8 * ((2*z)^40)^8 := by rw [mul_pow]\n    _ = 2^8 * (2*z)^320 := by rw [← pow_mul]; norm_num\n    _ = 2^8 * (2^320 * z^320) := by rw [mul_pow]\n    _ = (2^8 * 2^320) * z^320 := by ac_rfl\n    _ = 2^328 * z^320 := by rw [← pow_add]; norm_num",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro z hz\n  have hzbase : 1 ≤ 2*z := by omega\n  have hzpow : 1 ≤ (2*z)^40 := one_le_pow_of_le hzbase 40\n  have hsq : ((2*z)^20)^2 = (2*z)^40 := by\n    rw [← pow_mul]\n    norm_num\n  have hbase : ((2*z)^20)^2 + 1 ≤ 2 * (2*z)^40 := by\n    rw [hsq]\n    omega\n  calc\n    ((((2*z)^20)^2 + 1)^8) ≤ (2 * (2*z)^40)^8 := by gcongr\n    _ = 2^8 * ((2*z)^40)^8 := by rw [mul_pow]\n    _ = 2^8 * (2*z)^320 := by rw [← pow_mul]; norm_num\n    _ = 2^8 * (2^320 * z^320) := by rw [mul_pow]\n    _ = (2^8 * 2^320) * z^320 := by ac_rfl\n    _ = 2^328 * z^320 := by rw [← pow_add]; norm_num",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ z : ℕ, 1 ≤ z →\n  ((((2*z)^20)^2 + 1)^8) ≤ 2^328 * z^320",
+        "module_source_hash": null,
+        "obligation_id": "3102365b-8659-4a02-94b5-554b2847824f",
+        "outcome": "kernel_fail",
+        "problem_version_id": "c64e7c8d-088b-4dc2-814f-a98bebd7dd7c",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "1f78e550b89c6a39a159f2c6900d34e701ec2f34dbdd88fcb9eea4fcd4920bb7"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "cef6df910750e7525b7e6784817fca2e635a36fd4d457608a0a92eb66721c337"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro z hz\n  have hzbase : 1 ≤ 2*z := by omega\n  have hzpow : 1 ≤ (2*z)^40 := by positivity\n  have hsq : ((2*z)^20)^2 = (2*z)^40 := by\n    rw [← pow_mul]\n  have hbase : ((2*z)^20)^2 + 1 ≤ 2 * (2*z)^40 := by\n    rw [hsq]\n    omega\n  calc\n    ((((2*z)^20)^2 + 1)^8) ≤ (2 * (2*z)^40)^8 := by gcongr\n    _ = 2^8 * ((2*z)^40)^8 := by rw [mul_pow]\n    _ = 2^8 * (2*z)^320 := by rw [← pow_mul]\n    _ = 2^8 * (2^320 * z^320) := by rw [mul_pow]\n    _ = (2^8 * 2^320) * z^320 := by ac_rfl\n    _ = 2^328 * z^320 := by rw [← pow_add]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro z hz\n  have hzbase : 1 ≤ 2*z := by omega\n  have hzpow : 1 ≤ (2*z)^40 := by positivity\n  have hsq : ((2*z)^20)^2 = (2*z)^40 := by\n    rw [← pow_mul]\n  have hbase : ((2*z)^20)^2 + 1 ≤ 2 * (2*z)^40 := by\n    rw [hsq]\n    omega\n  calc\n    ((((2*z)^20)^2 + 1)^8) ≤ (2 * (2*z)^40)^8 := by gcongr\n    _ = 2^8 * ((2*z)^40)^8 := by rw [mul_pow]\n    _ = 2^8 * (2*z)^320 := by rw [← pow_mul]\n    _ = 2^8 * (2^320 * z^320) := by rw [mul_pow]\n    _ = (2^8 * 2^320) * z^320 := by ac_rfl\n    _ = 2^328 * z^320 := by rw [← pow_add]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ z : ℕ, 1 ≤ z →\n  ((((2*z)^20)^2 + 1)^8) ≤ 2^328 * z^320",
+        "module_source_hash": null,
+        "obligation_id": "3102365b-8659-4a02-94b5-554b2847824f",
+        "outcome": "kernel_fail",
+        "problem_version_id": "c64e7c8d-088b-4dc2-814f-a98bebd7dd7c",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "1f78e550b89c6a39a159f2c6900d34e701ec2f34dbdd88fcb9eea4fcd4920bb7"
+      },
+      "next_state": {
+        "state_hash": "0f5715f4f57f4d6b72fc45f03af811a8619ba4c42cdccba12ae3f20d7e104d53"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "7f239fd4bc1e27c154fd1b2e84d5fa90a5710b11fedb554c24e48976a29309a3"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro z hz\n  have hzbase : 1 ≤ 2*z := by omega\n  have hzpow : 1 ≤ (2*z)^40 :=\n    Nat.one_le_pow 40 (2*z) (by omega)\n  have hsq : ((2*z)^20)^2 = (2*z)^40 := by\n    rw [← pow_mul]\n  have hbase : ((2*z)^20)^2 + 1 ≤ 2 * (2*z)^40 := by\n    rw [hsq]\n    omega\n  calc\n    ((((2*z)^20)^2 + 1)^8) ≤ (2 * (2*z)^40)^8 := by gcongr\n    _ = 2^8 * ((2*z)^40)^8 := by rw [mul_pow]\n    _ = 2^8 * (2*z)^320 := by rw [← pow_mul]\n    _ = 2^8 * (2^320 * z^320) := by rw [mul_pow]\n    _ = (2^8 * 2^320) * z^320 := by ac_rfl\n    _ = 2^328 * z^320 := by rw [← pow_add]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro z hz\n  have hzbase : 1 ≤ 2*z := by omega\n  have hzpow : 1 ≤ (2*z)^40 :=\n    Nat.one_le_pow 40 (2*z) (by omega)\n  have hsq : ((2*z)^20)^2 = (2*z)^40 := by\n    rw [← pow_mul]\n  have hbase : ((2*z)^20)^2 + 1 ≤ 2 * (2*z)^40 := by\n    rw [hsq]\n    omega\n  calc\n    ((((2*z)^20)^2 + 1)^8) ≤ (2 * (2*z)^40)^8 := by gcongr\n    _ = 2^8 * ((2*z)^40)^8 := by rw [mul_pow]\n    _ = 2^8 * (2*z)^320 := by rw [← pow_mul]\n    _ = 2^8 * (2^320 * z^320) := by rw [mul_pow]\n    _ = (2^8 * 2^320) * z^320 := by ac_rfl\n    _ = 2^328 * z^320 := by rw [← pow_add]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ z : ℕ, 1 ≤ z →\n  ((((2*z)^20)^2 + 1)^8) ≤ 2^328 * z^320",
+        "module_source_hash": null,
+        "obligation_id": "3102365b-8659-4a02-94b5-554b2847824f",
+        "outcome": "kernel_pass",
+        "problem_version_id": "c64e7c8d-088b-4dc2-814f-a98bebd7dd7c",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "1f78e550b89c6a39a159f2c6900d34e701ec2f34dbdd88fcb9eea4fcd4920bb7"
+      },
+      "next_state": {
+        "state_hash": "d763c56a392ce6f0e2f004121d55ac800ff5ba92044b4e825ed7258fb284d6f3"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "e19c97cedb64914b4da3df3bb86096825479933c0bf822757d84642beaf3e6f5"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

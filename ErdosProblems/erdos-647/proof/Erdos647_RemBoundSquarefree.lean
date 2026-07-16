@@ -105,22 +105,17 @@ theorem erdos647_rem_bound_squarefree :
         exact ⟨c*N/p, by omega⟩
     constructor
     · intro hdvd
-      rw [hp.prime.dvd_mul] at hdvd
-      rcases hdvd with hd | hd
-      · rw [hp.prime.dvd_mul] at hd
-        rcases hd with hd | hd
-        · rw [hp.prime.dvd_mul] at hd
-          rcases hd with hd | hd
-          · rw [hp.prime.dvd_mul] at hd
-            rcases hd with hd | hd
-            · rw [hp.prime.dvd_mul] at hd
-              rcases hd with hd | hd
-              · left; exact (key 210 (by omega)).mp hd
-              · right;left; exact (key 315 (by omega)).mp hd
-            · right;right;left; exact (key 420 (by omega)).mp hd
-          · right;right;right;left; exact (key 630 (by omega)).mp hd
-        · right;right;right;right;left; exact (key 840 (by omega)).mp hd
-      · right;right;right;right;right;left; exact (key 1260 (by omega)).mp hd
+      simp only [hp.prime.dvd_mul] at hdvd
+      rcases hdvd with (((((h210 | h315) | h420) | h630) | h840) | h1260) | h2520
+      · left; exact (key 210 (by omega)).mp h210
+      · right; left; exact (key 315 (by omega)).mp h315
+      · right; right; left; exact (key 420 (by omega)).mp h420
+      · right; right; right; left; exact (key 630 (by omega)).mp h630
+      · right; right; right; right; left; exact (key 840 (by omega)).mp h840
+      · right; right; right; right; right; left
+        exact (key 1260 (by omega)).mp h1260
+      · right; right; right; right; right; right
+        exact (key 2520 (by omega)).mp h2520
     · intro h
       rcases h with h|h|h|h|h|h|h
       · exact Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right (Dvd.dvd.mul_right ((key 210 (by omega)).mpr h) _) _) _) _) _) _

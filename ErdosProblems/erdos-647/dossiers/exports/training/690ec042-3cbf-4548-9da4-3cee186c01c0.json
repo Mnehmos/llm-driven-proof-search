@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro X d\nhave hmono : ∀ N1 N2 : ℕ, 1 ≤ N1 → N1 < N2 →\n    (210*N1-1)*(315*N1-1)*(420*N1-1)*(630*N1-1)*(840*N1-1)*(1260*N1-1)*(2520*N1-1) <\n    (210*N2-1)*(315*N2-1)*(420*N2-1)*(630*N2-1)*(840*N2-1)*(1260*N2-1)*(2520*N2-1) := by\n  intro N1 N2 h1 h2\n  gcongr <;> omega\nhave hinj : Set.InjOn (fun N => (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*(840*N-1)*(1260*N-1)*(2520*N-1)) (Finset.Icc 1 X) := by\n  intro N1 hN1 N2 hN2 heq\n  simp only [Finset.mem_coe, Finset.mem_Icc] at hN1 hN2\n  by_contra hne\n  rcases lt_or_gt_of_ne hne with hlt | hgt\n  · exact absurd heq (Nat.ne_of_lt (hmono N1 N2 hN1.1 hlt))\n  · exact absurd heq.symm (Nat.ne_of_lt (hmono N2 N1 hN2.1 hgt))\nrw [Finset.sum_image (fun N1 hN1 N2 hN2 heq => hinj hN1 hN2 heq)]\nrw [Finset.sum_boole]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro X d\nhave hmono : ∀ N1 N2 : ℕ, 1 ≤ N1 → N1 < N2 →\n    (210*N1-1)*(315*N1-1)*(420*N1-1)*(630*N1-1)*(840*N1-1)*(1260*N1-1)*(2520*N1-1) <\n    (210*N2-1)*(315*N2-1)*(420*N2-1)*(630*N2-1)*(840*N2-1)*(1260*N2-1)*(2520*N2-1) := by\n  intro N1 N2 h1 h2\n  gcongr <;> omega\nhave hinj : Set.InjOn (fun N => (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*(840*N-1)*(1260*N-1)*(2520*N-1)) (Finset.Icc 1 X) := by\n  intro N1 hN1 N2 hN2 heq\n  simp only [Finset.mem_coe, Finset.mem_Icc] at hN1 hN2\n  by_contra hne\n  rcases lt_or_gt_of_ne hne with hlt | hgt\n  · exact absurd heq (Nat.ne_of_lt (hmono N1 N2 hN1.1 hlt))\n  · exact absurd heq.symm (Nat.ne_of_lt (hmono N2 N1 hN2.1 hgt))\nrw [Finset.sum_image (fun N1 hN1 N2 hN2 heq => hinj hN1 hN2 heq)]\nrw [Finset.sum_boole]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (X d : ℕ),\n  (∑ n ∈ (Finset.Icc 1 X).image (fun N => (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*(840*N-1)*(1260*N-1)*(2520*N-1)), if d ∣ n then (1:ℝ) else 0)\n  = (((Finset.Icc 1 X).filter (fun N => d ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*(840*N-1)*(1260*N-1)*(2520*N-1))).card : ℝ)",
+        "module_source_hash": null,
+        "obligation_id": "91539c84-bdad-483b-b30d-aed6f41d45e8",
+        "outcome": "kernel_pass",
+        "problem_version_id": "3bae0c41-ac9c-4bb5-8844-47e670789d48",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "467cad0fe87078a91660e63cbd05740a3d60b66254b0e22014a28ba2863e8227"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "1e16a76bd2243b36e803bf46465cd0b9c17ef4da798455dd8e127656247d066b"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

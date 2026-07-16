@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n h1 h2 h3 h4 h5 h6\n  have hmod : n % 7 = 0 ∨ n % 7 = 1 ∨ n % 7 = 2 ∨ n % 7 = 3 ∨\n      n % 7 = 4 ∨ n % 7 = 5 ∨ n % 7 = 6 := by omega\n  rcases hmod with h0 | h1' | h2' | h3' | h4' | h5' | h6'\n  · exact Nat.dvd_iff_mod_eq_zero.mpr h0\n  · exact False.elim (h1 h1')\n  · exact False.elim (h2 h2')\n  · exact False.elim (h3 h3')\n  · exact False.elim (h4 h4')\n  · exact False.elim (h5 h5')\n  · exact False.elim (h6 h6')",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n h1 h2 h3 h4 h5 h6\n  have hmod : n % 7 = 0 ∨ n % 7 = 1 ∨ n % 7 = 2 ∨ n % 7 = 3 ∨\n      n % 7 = 4 ∨ n % 7 = 5 ∨ n % 7 = 6 := by omega\n  rcases hmod with h0 | h1' | h2' | h3' | h4' | h5' | h6'\n  · exact Nat.dvd_iff_mod_eq_zero.mpr h0\n  · exact False.elim (h1 h1')\n  · exact False.elim (h2 h2')\n  · exact False.elim (h3 h3')\n  · exact False.elim (h4 h4')\n  · exact False.elim (h5 h5')\n  · exact False.elim (h6 h6')",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n : ℕ, (n % 7 = 1 → False) → (n % 7 = 2 → False) → (n % 7 = 3 → False) → (n % 7 = 4 → False) → (n % 7 = 5 → False) → (n % 7 = 6 → False) → 7 ∣ n",
+        "module_source_hash": null,
+        "obligation_id": "677bbb51-439d-4ff5-96a3-e507bbcfc86e",
+        "outcome": "kernel_pass",
+        "problem_version_id": "42ed3331-5479-49c7-84bd-7abe035fa694",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "8a92864b4c391ace90e70ffd7a031eafe1f81336cd45446c571b2aec486b454c"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "d0af1e9594dea822fb5dbc284dfb272cdcfb9aec0e6ca3e82f645d5068d7d18a"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

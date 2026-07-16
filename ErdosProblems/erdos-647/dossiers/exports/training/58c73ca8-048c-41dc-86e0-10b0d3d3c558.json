@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro K hK p hp\nrefine ⟨⟨0, hp.pos⟩, ?_⟩\nintro k hk hroot\nchange ((((Finset.Icc 1 K).lcm id / k) * 0) % p) = 1 % p at hroot\nsimp [Nat.mod_eq_of_lt hp.one_lt] at hroot",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro K hK p hp\nrefine ⟨⟨0, hp.pos⟩, ?_⟩\nintro k hk hroot\nchange ((((Finset.Icc 1 K).lcm id / k) * 0) % p) = 1 % p at hroot\nsimp [Nat.mod_eq_of_lt hp.one_lt] at hroot",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ K : ℕ, 1 ≤ K → ∀ p : ℕ, p.Prime →\n  ∃ a : Fin p, ∀ k ∈ Finset.Icc 1 K,\n    ¬ Nat.ModEq p\n      (((Finset.Icc 1 K).lcm id / k) * (a : ℕ)) 1",
+        "module_source_hash": null,
+        "obligation_id": "fc9994e9-f55b-44e0-ad7a-a8e5a0d41e24",
+        "outcome": "kernel_pass",
+        "problem_version_id": "76570114-2102-49c7-b367-2c340e3da12e",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "ae72c973327df84a81f88f25910331468e19c3ac06176f456a17598c51b6f026"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "b3c3cf8c14e7000715583f760084d067c0fb47b59d6f933359fe9b0a11c600fd"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro z\n  apply Nat.primeFactors_prod\n  intro p hp\n  exact (Finset.mem_filter.mp hp).2.1",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro z\n  apply Nat.primeFactors_prod\n  intro p hp\n  exact (Finset.mem_filter.mp hp).2.1",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ z : ℕ,\n      Nat.primeFactors\n        (∏ p ∈ (Finset.range (z+1)).filter\n          (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7), p) =\n        (Finset.range (z+1)).filter\n          (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7)",
+        "module_source_hash": null,
+        "obligation_id": "46d56ce3-f293-4cd0-af20-bd1cb8a8e138",
+        "outcome": "kernel_pass",
+        "problem_version_id": "dd157db4-78e2-4285-8069-b6ce4ee14526",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "efe8ee4f7a731426d19c8df450b119aa2f170e57ba8c8d91489f3d854361750d"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "91e0281f40bd0751d52ada2966968ca1becf850f3161d3c6d1ed658956c87a0c"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

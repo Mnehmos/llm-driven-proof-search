@@ -1,0 +1,121 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "by\n  intro z hz\n  have hzdivpos : 0 < z / 2 := by positivity\n  have hzdivone : 1 ≤ z / 2 := by linarith\n  have hy : 0 ≤ Real.log (z / 2) := Real.log_nonneg hzdivone\n  have ha : 0 < Real.log 4 := Real.log_pos (by norm_num)\n  have hlog4 : Real.log 4 = 2 * Real.log 2 := by\n    calc\n      Real.log 4 = Real.log ((2:ℝ)^2) := by norm_num\n      _ = 2 * Real.log 2 := by rw [Real.log_pow]; norm_num\n  have hlog4lt : Real.log 4 < 10 / 7 := by\n    rw [hlog4]\n    nlinarith [Real.log_two_lt_d9]\n  have hcoef : 0 ≤ 10 - 7 * Real.log 4 := by linarith\n  have hnonneg : 0 ≤ Real.log (z / 2) * (10 - 7 * Real.log 4) :=\n    mul_nonneg hy hcoef\n  have hmul : Real.log (2*z) = Real.log 4 + Real.log (z/2) := by\n    have heq : (2:ℝ)*z = 4*(z/2) := by ring\n    rw [heq, Real.log_mul (by norm_num) (ne_of_gt hzdivpos)]\n  have hrhs : Real.log ((2*z)^20) / 2 =\n      10 * (Real.log 4 + Real.log (z/2)) := by\n    rw [Real.log_pow, hmul]\n    norm_num\n  rw [hrhs]\n  nlinarith [hnonneg]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "by\n  intro z hz\n  have hzdivpos : 0 < z / 2 := by positivity\n  have hzdivone : 1 ≤ z / 2 := by linarith\n  have hy : 0 ≤ Real.log (z / 2) := Real.log_nonneg hzdivone\n  have ha : 0 < Real.log 4 := Real.log_pos (by norm_num)\n  have hlog4 : Real.log 4 = 2 * Real.log 2 := by\n    calc\n      Real.log 4 = Real.log ((2:ℝ)^2) := by norm_num\n      _ = 2 * Real.log 2 := by rw [Real.log_pow]; norm_num\n  have hlog4lt : Real.log 4 < 10 / 7 := by\n    rw [hlog4]\n    nlinarith [Real.log_two_lt_d9]\n  have hcoef : 0 ≤ 10 - 7 * Real.log 4 := by linarith\n  have hnonneg : 0 ≤ Real.log (z / 2) * (10 - 7 * Real.log 4) :=\n    mul_nonneg hy hcoef\n  have hmul : Real.log (2*z) = Real.log 4 + Real.log (z/2) := by\n    have heq : (2:ℝ)*z = 4*(z/2) := by ring\n    rw [heq, Real.log_mul (by norm_num) (ne_of_gt hzdivpos)]\n  have hrhs : Real.log ((2*z)^20) / 2 =\n      10 * (Real.log 4 + Real.log (z/2)) := by\n    rw [Real.log_pow, hmul]\n    norm_num\n  rw [hrhs]\n  nlinarith [hnonneg]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ z : ℝ, 2 ≤ z →\n  7 * Real.log 4 * (1 + Real.log (z / 2)) ≤\n    Real.log ((2*z)^20) / 2",
+        "module_source_hash": null,
+        "obligation_id": "7dd51652-ce1e-4eb2-b9b9-1b4433adbd19",
+        "outcome": "kernel_fail",
+        "problem_version_id": "d6c321da-fb33-46c9-b1eb-114a339d01b8",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "7ed86d0c64adc313bc2f30c519577cf093fb1ec96ee833250cbd76a7475b7612"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "9072741095c3e6cf515fe1a461fc5cf17951cc346d36c0f836d4c179678c62da"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro z hz\n  have hzdivpos : 0 < z / 2 := by positivity\n  have hzdivone : 1 ≤ z / 2 := by linarith\n  have hy : 0 ≤ Real.log (z / 2) := Real.log_nonneg hzdivone\n  have ha : 0 < Real.log 4 := Real.log_pos (by norm_num)\n  have hlog4 : Real.log 4 = 2 * Real.log 2 := by\n    calc\n      Real.log 4 = Real.log ((2:ℝ)^2) := by norm_num\n      _ = 2 * Real.log 2 := by rw [Real.log_pow]; norm_num\n  have hlog4lt : Real.log 4 < 10 / 7 := by\n    rw [hlog4]\n    nlinarith [Real.log_two_lt_d9]\n  have hcoef : 0 ≤ 10 - 7 * Real.log 4 := by linarith\n  have hnonneg : 0 ≤ Real.log (z / 2) * (10 - 7 * Real.log 4) :=\n    mul_nonneg hy hcoef\n  have hmul : Real.log (2*z) = Real.log 4 + Real.log (z/2) := by\n    have heq : (2:ℝ)*z = 4*(z/2) := by ring\n    rw [heq, Real.log_mul (by norm_num) (ne_of_gt hzdivpos)]\n  have hrhs : Real.log ((2*z)^20) / 2 =\n      10 * (Real.log 4 + Real.log (z/2)) := by\n    rw [Real.log_pow, hmul]\n    norm_num\n  rw [hrhs]\n  nlinarith [hnonneg]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro z hz\n  have hzdivpos : 0 < z / 2 := by positivity\n  have hzdivone : 1 ≤ z / 2 := by linarith\n  have hy : 0 ≤ Real.log (z / 2) := Real.log_nonneg hzdivone\n  have ha : 0 < Real.log 4 := Real.log_pos (by norm_num)\n  have hlog4 : Real.log 4 = 2 * Real.log 2 := by\n    calc\n      Real.log 4 = Real.log ((2:ℝ)^2) := by norm_num\n      _ = 2 * Real.log 2 := by rw [Real.log_pow]; norm_num\n  have hlog4lt : Real.log 4 < 10 / 7 := by\n    rw [hlog4]\n    nlinarith [Real.log_two_lt_d9]\n  have hcoef : 0 ≤ 10 - 7 * Real.log 4 := by linarith\n  have hnonneg : 0 ≤ Real.log (z / 2) * (10 - 7 * Real.log 4) :=\n    mul_nonneg hy hcoef\n  have hmul : Real.log (2*z) = Real.log 4 + Real.log (z/2) := by\n    have heq : (2:ℝ)*z = 4*(z/2) := by ring\n    rw [heq, Real.log_mul (by norm_num) (ne_of_gt hzdivpos)]\n  have hrhs : Real.log ((2*z)^20) / 2 =\n      10 * (Real.log 4 + Real.log (z/2)) := by\n    rw [Real.log_pow, hmul]\n    norm_num\n  rw [hrhs]\n  nlinarith [hnonneg]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ z : ℝ, 2 ≤ z →\n  7 * Real.log 4 * (1 + Real.log (z / 2)) ≤\n    Real.log ((2*z)^20) / 2",
+        "module_source_hash": null,
+        "obligation_id": "7dd51652-ce1e-4eb2-b9b9-1b4433adbd19",
+        "outcome": "kernel_fail",
+        "problem_version_id": "d6c321da-fb33-46c9-b1eb-114a339d01b8",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "7ed86d0c64adc313bc2f30c519577cf093fb1ec96ee833250cbd76a7475b7612"
+      },
+      "next_state": {
+        "state_hash": "0f5715f4f57f4d6b72fc45f03af811a8619ba4c42cdccba12ae3f20d7e104d53"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "310e337a32000603aa982de8ed4b6e185010bfd89b77c6b2091c0b21565817a8"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro z hz\n  have hzdivpos : 0 < z / 2 := by positivity\n  have hzdivone : 1 ≤ z / 2 := by linarith\n  have hy : 0 ≤ Real.log (z / 2) := Real.log_nonneg hzdivone\n  have ha : 0 < Real.log 4 := Real.log_pos (by norm_num)\n  have hlog4 : Real.log 4 = 2 * Real.log 2 := by\n    calc\n      Real.log 4 = Real.log ((2:ℝ)^2) := by norm_num\n      _ = 2 * Real.log 2 := by rw [Real.log_pow]; norm_num\n  have hlog4lt : Real.log 4 < 10 / 7 := by\n    rw [hlog4]\n    nlinarith [Real.log_two_lt_d9]\n  have hcoef : 0 ≤ 10 - 7 * Real.log 4 := by linarith\n  have hnonneg : 0 ≤ Real.log (z / 2) * (10 - 7 * Real.log 4) :=\n    mul_nonneg hy hcoef\n  have hmul : Real.log (2*z) = Real.log 4 + Real.log (z/2) := by\n    have heq : (2:ℝ)*z = 4*(z/2) := by ring\n    rw [heq, Real.log_mul (by norm_num) (ne_of_gt hzdivpos)]\n  have hrhs : Real.log ((2*z)^20) / 2 =\n      10 * (Real.log 4 + Real.log (z/2)) := by\n    rw [Real.log_pow, hmul]\n    ring\n  rw [hrhs]\n  nlinarith [hnonneg]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro z hz\n  have hzdivpos : 0 < z / 2 := by positivity\n  have hzdivone : 1 ≤ z / 2 := by linarith\n  have hy : 0 ≤ Real.log (z / 2) := Real.log_nonneg hzdivone\n  have ha : 0 < Real.log 4 := Real.log_pos (by norm_num)\n  have hlog4 : Real.log 4 = 2 * Real.log 2 := by\n    calc\n      Real.log 4 = Real.log ((2:ℝ)^2) := by norm_num\n      _ = 2 * Real.log 2 := by rw [Real.log_pow]; norm_num\n  have hlog4lt : Real.log 4 < 10 / 7 := by\n    rw [hlog4]\n    nlinarith [Real.log_two_lt_d9]\n  have hcoef : 0 ≤ 10 - 7 * Real.log 4 := by linarith\n  have hnonneg : 0 ≤ Real.log (z / 2) * (10 - 7 * Real.log 4) :=\n    mul_nonneg hy hcoef\n  have hmul : Real.log (2*z) = Real.log 4 + Real.log (z/2) := by\n    have heq : (2:ℝ)*z = 4*(z/2) := by ring\n    rw [heq, Real.log_mul (by norm_num) (ne_of_gt hzdivpos)]\n  have hrhs : Real.log ((2*z)^20) / 2 =\n      10 * (Real.log 4 + Real.log (z/2)) := by\n    rw [Real.log_pow, hmul]\n    ring\n  rw [hrhs]\n  nlinarith [hnonneg]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ z : ℝ, 2 ≤ z →\n  7 * Real.log 4 * (1 + Real.log (z / 2)) ≤\n    Real.log ((2*z)^20) / 2",
+        "module_source_hash": null,
+        "obligation_id": "7dd51652-ce1e-4eb2-b9b9-1b4433adbd19",
+        "outcome": "kernel_pass",
+        "problem_version_id": "d6c321da-fb33-46c9-b1eb-114a339d01b8",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "7ed86d0c64adc313bc2f30c519577cf093fb1ec96ee833250cbd76a7475b7612"
+      },
+      "next_state": {
+        "state_hash": "d763c56a392ce6f0e2f004121d55ac800ff5ba92044b4e825ed7258fb284d6f3"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "3814a1916a2a57ebc05b23cddd02c6aafcfcb256190214f74b760692566124e2"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  dsimp\n  intro c\n  have hc17 : c % 323 % 17 = c % 17 :=\n    Nat.mod_mod_of_dvd c (by norm_num)\n  have hc19 : c % 323 % 19 = c % 19 :=\n    Nat.mod_mod_of_dvd c (by norm_num)\n  have h17 : ∀ N : ℕ, (c % 323) * N % 17 = c * N % 17 := by\n    intro N\n    simp [Nat.mul_mod, hc17]\n  have h19 : ∀ N : ℕ, (c % 323) * N % 19 = c * N % 19 := by\n    intro N\n    simp [Nat.mul_mod, hc19]\n  have heq :\n      ((Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18))).filter (fun N => c * N % 17 ≠ 1 ∧ c * N % 19 ≠ 1) =\n      ((Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18))).filter (fun N => (c % 323) * N % 17 ≠ 1 ∧\n        (c % 323) * N % 19 ≠ 1) := by\n    ext N\n    simp only [Finset.mem_filter]\n    rw [h17 N, h19 N]\n  rw [heq]\n  have hfinite : ∀ d : Fin 323,\n      (((Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18))).filter (fun N => (d : ℕ) * N % 17 ≠ 1 ∧\n        (d : ℕ) * N % 19 ≠ 1)).card = 48 ∨\n      (((Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18))).filter (fun N => (d : ℕ) * N % 17 ≠ 1 ∧\n        (d : ℕ) * N % 19 ≠ 1)).card = 42 ∨\n      (((Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18))).filter (fun N => (d : ℕ) * N % 17 ≠ 1 ∧\n        (d : ℕ) * N % 19 ≠ 1)).card = 40 ∨\n      (((Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18))).filter (fun N => (d : ℕ) * N % 17 ≠ 1 ∧\n        (d : ℕ) * N % 19 ≠ 1)).card = 35 := by\n    native_decide\n  exact hfinite ⟨c % 323, Nat.mod_lt c (by norm_num)⟩",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  dsimp\n  intro c\n  have hc17 : c % 323 % 17 = c % 17 :=\n    Nat.mod_mod_of_dvd c (by norm_num)\n  have hc19 : c % 323 % 19 = c % 19 :=\n    Nat.mod_mod_of_dvd c (by norm_num)\n  have h17 : ∀ N : ℕ, (c % 323) * N % 17 = c * N % 17 := by\n    intro N\n    simp [Nat.mul_mod, hc17]\n  have h19 : ∀ N : ℕ, (c % 323) * N % 19 = c * N % 19 := by\n    intro N\n    simp [Nat.mul_mod, hc19]\n  have heq :\n      ((Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18))).filter (fun N => c * N % 17 ≠ 1 ∧ c * N % 19 ≠ 1) =\n      ((Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18))).filter (fun N => (c % 323) * N % 17 ≠ 1 ∧\n        (c % 323) * N % 19 ≠ 1) := by\n    ext N\n    simp only [Finset.mem_filter]\n    rw [h17 N, h19 N]\n  rw [heq]\n  have hfinite : ∀ d : Fin 323,\n      (((Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18))).filter (fun N => (d : ℕ) * N % 17 ≠ 1 ∧\n        (d : ℕ) * N % 19 ≠ 1)).card = 48 ∨\n      (((Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18))).filter (fun N => (d : ℕ) * N % 17 ≠ 1 ∧\n        (d : ℕ) * N % 19 ≠ 1)).card = 42 ∨\n      (((Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18))).filter (fun N => (d : ℕ) * N % 17 ≠ 1 ∧\n        (d : ℕ) * N % 19 ≠ 1)).card = 40 ∨\n      (((Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18))).filter (fun N => (d : ℕ) * N % 17 ≠ 1 ∧\n        (d : ℕ) * N % 19 ≠ 1)).card = 35 := by\n    native_decide\n  exact hfinite ⟨c % 323, Nat.mod_lt c (by norm_num)⟩",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "let S : Finset ℕ := (Finset.range 46189).filter (fun N => N % 11 = 0 ∧ N % 13 = 0 ∧ (N % 17 = 0 ∨ N % 17 = 4 ∨ N % 17 = 7 ∨ N % 17 = 8 ∨ N % 17 = 12 ∨ N % 17 = 16) ∧ (N % 19 = 0 ∨ N % 19 = 3 ∨ N % 19 = 6 ∨ N % 19 = 9 ∨ N % 19 = 12 ∨ N % 19 = 14 ∨ N % 19 = 17 ∨ N % 19 = 18)); ∀ c : ℕ, let T : Finset ℕ := S.filter (fun N => c * N % 17 ≠ 1 ∧ c * N % 19 ≠ 1); T.card = 48 ∨ T.card = 42 ∨ T.card = 40 ∨ T.card = 35",
+        "module_source_hash": null,
+        "obligation_id": "ab0eb0b1-59d1-486c-971d-4da5c11fa6c0",
+        "outcome": "kernel_pass",
+        "problem_version_id": "b1b53eb3-9c62-46ce-8a0d-7d54d80769a0",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "a6f03e8ba3bf1c76c76f6e84cb65bd57f2b9ab080acc5af06915797ab2eea4ac"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "448c19382a410b3e453599b8b0b801768dba354a928ebf5fe44967e60319b3d2"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

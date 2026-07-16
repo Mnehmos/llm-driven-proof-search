@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro X\nhave heq : (Finset.Icc 1 X).filter (fun N => (1:ℕ) ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*(840*N-1)*(1260*N-1)*(2520*N-1)) = Finset.Icc 1 X := by\n  apply Finset.filter_true_of_mem\n  intro N _\n  exact one_dvd _\nrw [heq, Nat.card_Icc]\nsimp",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro X\nhave heq : (Finset.Icc 1 X).filter (fun N => (1:ℕ) ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*(840*N-1)*(1260*N-1)*(2520*N-1)) = Finset.Icc 1 X := by\n  apply Finset.filter_true_of_mem\n  intro N _\n  exact one_dvd _\nrw [heq, Nat.card_Icc]\nsimp",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ X : ℕ, (((Finset.Icc 1 X).filter (fun N => (1:ℕ) ∣ (210*N-1)*(315*N-1)*(420*N-1)*(630*N-1)*(840*N-1)*(1260*N-1)*(2520*N-1))).card : ℝ) - (1:ℝ)/1*X = 0",
+        "module_source_hash": null,
+        "obligation_id": "c75146ea-bc6d-4d72-a8ad-0b1b885266f9",
+        "outcome": "kernel_pass",
+        "problem_version_id": "6abde75c-9a06-4d00-bdf8-b7038257ede6",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "af350969b34c717abbd971b3a92c1651c3a634ad3e455256010ce627d1282526"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "2a2c568ffd7f55ff6ac1855941af4c78518f141e056b9bbd76e79185b73e14fe"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro z f hz hf2 hf3 hf5 hf7\n  set S := (Finset.Icc 1 z).filter Nat.Prime with hS\n  set A := (Finset.range (z+1)).filter\n    (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7) with hA\n  set Q : ℕ → Prop := fun p => p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7 with hQ\n  have hactive : S.filter Q = A := by\n    ext p\n    simp only [S, A, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_range]\n    constructor\n    · intro hp\n      exact ⟨by omega, hp.1.2, hp.2.1, hp.2.2.1,\n        hp.2.2.2.1, hp.2.2.2.2⟩\n    · intro hp\n      have hp1 : 1 ≤ p := hp.2.1.two_le.trans (by omega)\n      exact ⟨⟨⟨hp1, by omega⟩, hp.2.1⟩,\n        hp.2.2.1, hp.2.2.2.1, hp.2.2.2.2.1, hp.2.2.2.2.2⟩\n  have hdeleted : S.filter (fun p => ¬ Q p) = {2,3,5,7} := by\n    ext p\n    simp only [S, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_insert, Finset.mem_singleton]\n    constructor\n    · intro hp\n      have hne := hp.2\n      simpa only [not_and_or, not_ne_iff] using hne\n    · intro hp\n      rcases hp with rfl | rfl | rfl | rfl\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n  have hsplit := Finset.sum_filter_add_sum_filter_not S Q f\n  rw [hactive, hdeleted] at hsplit\n  have hsmall : (∑ p ∈ ({2,3,5,7} : Finset ℕ), f p) = 1/2 := by\n    norm_num [Finset.sum_insert, hf2, hf3, hf5, hf7]\n  rw [hsmall] at hsplit\n  rw [← hS, ← hA]\n  linarith",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro z f hz hf2 hf3 hf5 hf7\n  set S := (Finset.Icc 1 z).filter Nat.Prime with hS\n  set A := (Finset.range (z+1)).filter\n    (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7) with hA\n  set Q : ℕ → Prop := fun p => p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7 with hQ\n  have hactive : S.filter Q = A := by\n    ext p\n    simp only [S, A, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_range]\n    constructor\n    · intro hp\n      exact ⟨by omega, hp.1.2, hp.2.1, hp.2.2.1,\n        hp.2.2.2.1, hp.2.2.2.2⟩\n    · intro hp\n      have hp1 : 1 ≤ p := hp.2.1.two_le.trans (by omega)\n      exact ⟨⟨⟨hp1, by omega⟩, hp.2.1⟩,\n        hp.2.2.1, hp.2.2.2.1, hp.2.2.2.2.1, hp.2.2.2.2.2⟩\n  have hdeleted : S.filter (fun p => ¬ Q p) = {2,3,5,7} := by\n    ext p\n    simp only [S, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_insert, Finset.mem_singleton]\n    constructor\n    · intro hp\n      have hne := hp.2\n      simpa only [not_and_or, not_ne_iff] using hne\n    · intro hp\n      rcases hp with rfl | rfl | rfl | rfl\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n  have hsplit := Finset.sum_filter_add_sum_filter_not S Q f\n  rw [hactive, hdeleted] at hsplit\n  have hsmall : (∑ p ∈ ({2,3,5,7} : Finset ℕ), f p) = 1/2 := by\n    norm_num [Finset.sum_insert, hf2, hf3, hf5, hf7]\n  rw [hsmall] at hsplit\n  rw [← hS, ← hA]\n  linarith",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (z : ℕ) (f : ℕ → ℝ), 7 ≤ z →\n      f 2 = 1/2 → f 3 = 0 → f 5 = 0 → f 7 = 0 →\n      (∑ p ∈ (Finset.Icc 1 z).filter Nat.Prime, f p) =\n        (∑ p ∈ (Finset.range (z+1)).filter\n          (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7), f p) + 1/2",
+        "module_source_hash": null,
+        "obligation_id": "304be8de-1a84-4ea1-b9ce-2b9de42d7f2d",
+        "outcome": "kernel_fail",
+        "problem_version_id": "35439d12-2f15-43bd-81ce-2eabea637710",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "7a62fdd6409e716383ae7beb65058b57665b8dbca26d8f1878a126db3088b1fc"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "67e0bf37d9efaed6a085380f4e6a9cae51a63c65f8d2f0491a06b6dc16722131"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro z f hz hf2 hf3 hf5 hf7\n  set S := (Finset.Icc 1 z).filter Nat.Prime with hS\n  set A := (Finset.range (z+1)).filter\n    (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7) with hA\n  set Q : ℕ → Prop := fun p => p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7 with hQ\n  have hactive : S.filter Q = A := by\n    ext p\n    simp only [S, A, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_range]\n    constructor\n    · intro hp\n      exact ⟨by omega, hp.1.2, hp.2.1, hp.2.2.1,\n        hp.2.2.2.1, hp.2.2.2.2⟩\n    · intro hp\n      have hp2 : 2 ≤ p := hp.2.1.two_le\n      have hp1 : 1 ≤ p := by omega\n      exact ⟨⟨⟨hp1, by omega⟩, hp.2.1⟩,\n        hp.2.2.1, hp.2.2.2.1, hp.2.2.2.2.1, hp.2.2.2.2.2⟩\n  have hdeleted : S.filter (fun p => ¬ Q p) = {2,3,5,7} := by\n    ext p\n    simp only [S, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_insert, Finset.mem_singleton]\n    constructor\n    · intro hp\n      have hne := hp.2\n      simpa only [not_and_or, not_ne_iff] using hne\n    · intro hp\n      rcases hp with rfl | rfl | rfl | rfl\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n  have hsplit := Finset.sum_filter_add_sum_filter_not S Q f\n  rw [hactive, hdeleted] at hsplit\n  have hsmall : (∑ p ∈ ({2,3,5,7} : Finset ℕ), f p) = 1/2 := by\n    norm_num [Finset.sum_insert, hf2, hf3, hf5, hf7]\n  rw [hsmall] at hsplit\n  linarith",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro z f hz hf2 hf3 hf5 hf7\n  set S := (Finset.Icc 1 z).filter Nat.Prime with hS\n  set A := (Finset.range (z+1)).filter\n    (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7) with hA\n  set Q : ℕ → Prop := fun p => p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7 with hQ\n  have hactive : S.filter Q = A := by\n    ext p\n    simp only [S, A, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_range]\n    constructor\n    · intro hp\n      exact ⟨by omega, hp.1.2, hp.2.1, hp.2.2.1,\n        hp.2.2.2.1, hp.2.2.2.2⟩\n    · intro hp\n      have hp2 : 2 ≤ p := hp.2.1.two_le\n      have hp1 : 1 ≤ p := by omega\n      exact ⟨⟨⟨hp1, by omega⟩, hp.2.1⟩,\n        hp.2.2.1, hp.2.2.2.1, hp.2.2.2.2.1, hp.2.2.2.2.2⟩\n  have hdeleted : S.filter (fun p => ¬ Q p) = {2,3,5,7} := by\n    ext p\n    simp only [S, Q, Finset.mem_filter, Finset.mem_Icc,\n      Finset.mem_insert, Finset.mem_singleton]\n    constructor\n    · intro hp\n      have hne := hp.2\n      simpa only [not_and_or, not_ne_iff] using hne\n    · intro hp\n      rcases hp with rfl | rfl | rfl | rfl\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n      · exact ⟨⟨⟨by norm_num, by omega⟩, by norm_num⟩, by simp⟩\n  have hsplit := Finset.sum_filter_add_sum_filter_not S Q f\n  rw [hactive, hdeleted] at hsplit\n  have hsmall : (∑ p ∈ ({2,3,5,7} : Finset ℕ), f p) = 1/2 := by\n    norm_num [Finset.sum_insert, hf2, hf3, hf5, hf7]\n  rw [hsmall] at hsplit\n  linarith",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (z : ℕ) (f : ℕ → ℝ), 7 ≤ z →\n      f 2 = 1/2 → f 3 = 0 → f 5 = 0 → f 7 = 0 →\n      (∑ p ∈ (Finset.Icc 1 z).filter Nat.Prime, f p) =\n        (∑ p ∈ (Finset.range (z+1)).filter\n          (fun p => p.Prime ∧ p ≠ 2 ∧ p ≠ 3 ∧ p ≠ 5 ∧ p ≠ 7), f p) + 1/2",
+        "module_source_hash": null,
+        "obligation_id": "304be8de-1a84-4ea1-b9ce-2b9de42d7f2d",
+        "outcome": "kernel_pass",
+        "problem_version_id": "35439d12-2f15-43bd-81ce-2eabea637710",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "7a62fdd6409e716383ae7beb65058b57665b8dbca26d8f1878a126db3088b1fc"
+      },
+      "next_state": {
+        "state_hash": "cf47e175675e6f78337bcffee524e4b958c64cc23e56c992d25491a74046817b"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "6e91b4968e5451cb945ff826b01c2d11de7b8e01d668a23a1d25f62884c5ff92"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

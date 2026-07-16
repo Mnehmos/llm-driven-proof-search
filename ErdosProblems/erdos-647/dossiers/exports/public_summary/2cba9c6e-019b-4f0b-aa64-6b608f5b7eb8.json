@@ -1,0 +1,31 @@
+{
+  "benchmark_suite": null,
+  "benchmark_upstream_problem_id": null,
+  "certified": false,
+  "completed_at": "2026-07-13T05:06:37.117463100+00:00",
+  "created_at": "2026-07-13T04:44:29.388715+00:00",
+  "environment_hash": "9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d",
+  "episode_id": "2cba9c6e-019b-4f0b-aa64-6b608f5b7eb8",
+  "fidelity_basis": null,
+  "fidelity_status": "attested",
+  "formal_target_matched": false,
+  "import_manifest_hash": "aaf21893d520a78dee0787a1bcaf939ee6b922265ff670c272e2e1d450dd29a7",
+  "interactive_sessions": {
+    "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
+    "proof_body_redacted": true,
+    "session_count": 0,
+    "sessions": []
+  },
+  "kernel_verified": false,
+  "mode": "public_summary",
+  "obligation_counts_by_status": {
+    "open": 1
+  },
+  "outcome": "GAVE_UP",
+  "proof_body_redacted": true,
+  "root_formal_statement": "∀ n : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → 2520 ∣ n → Nat.Prime ((n - 8) / 8) ∨ ∃ p : ℕ, Nat.Prime p ∧ (n - 8) / 8 = 2 * p",
+  "step_count": 8,
+  "trajectory_event_count": 10,
+  "trajectory_first_hash": "268152686947d39f1dce868d014753aabed1a5f4f2ec4dccb1d139e9aaf0c3d0",
+  "trajectory_last_hash": "c803a597c4d97c0d21e54963eabd0d27d85cfdf8cfc6eaa6c8f8cca44cb2f844"
+}

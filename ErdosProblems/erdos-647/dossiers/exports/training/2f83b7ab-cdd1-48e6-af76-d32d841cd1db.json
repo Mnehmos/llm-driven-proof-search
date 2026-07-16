@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro x hx hsigma hnsq\n  by_contra hprime\n  obtain ⟨a, b, ha, hb, hab⟩ :=\n    (Nat.not_prime_iff_exists_mul_eq hx).mp hprime\n  by_cases heq : a = b\n  · apply hnsq a\n    simpa [heq, pow_two] using hab.symm\n  have hx0 : x ≠ 0 := by omega\n  have hx1 : x ≠ 1 := by omega\n  have ha1 : a ≠ 1 := by\n    intro h\n    rw [h, one_mul] at hab\n    omega\n  have hb1 : b ≠ 1 := by\n    intro h\n    rw [h, mul_one] at hab\n    omega\n  have hsub : ({1, a, b, x} : Finset ℕ) ⊆ x.divisors := by\n    intro y hy\n    simp only [Finset.mem_insert, Finset.mem_singleton] at hy\n    rw [Nat.mem_divisors]\n    rcases hy with rfl | rfl | rfl | rfl\n    · exact ⟨one_dvd _, hx0⟩\n    · exact ⟨⟨b, hab.symm⟩, hx0⟩\n    · exact ⟨⟨a, by simpa [mul_comm] using hab.symm⟩, hx0⟩\n    · exact ⟨dvd_rfl, hx0⟩\n  have hcard : ({1, a, b, x} : Finset ℕ).card = 4 := by\n    have h1not : 1 ∉ ({a, b, x} : Finset ℕ) := by\n      simp only [Finset.mem_insert, Finset.mem_singleton, not_or]\n      exact ⟨Ne.symm ha1, Ne.symm hb1, Ne.symm hx1⟩\n    have hanot : a ∉ ({b, x} : Finset ℕ) := by\n      simp only [Finset.mem_insert, Finset.mem_singleton, not_or]\n      exact ⟨heq, ne_of_lt ha⟩\n    have hbnot : b ∉ ({x} : Finset ℕ) := by\n      simpa only [Finset.mem_singleton] using ne_of_lt hb\n    rw [Finset.card_insert_of_notMem h1not,\n      Finset.card_insert_of_notMem hanot,\n      Finset.card_insert_of_notMem hbnot,\n      Finset.card_singleton]\n  have hfour : 4 ≤ x.divisors.card := by\n    rw [← hcard]\n    exact Finset.card_le_card hsub\n  rw [ArithmeticFunction.sigma_zero_apply] at hsigma\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro x hx hsigma hnsq\n  by_contra hprime\n  obtain ⟨a, b, ha, hb, hab⟩ :=\n    (Nat.not_prime_iff_exists_mul_eq hx).mp hprime\n  by_cases heq : a = b\n  · apply hnsq a\n    simpa [heq, pow_two] using hab.symm\n  have hx0 : x ≠ 0 := by omega\n  have hx1 : x ≠ 1 := by omega\n  have ha1 : a ≠ 1 := by\n    intro h\n    rw [h, one_mul] at hab\n    omega\n  have hb1 : b ≠ 1 := by\n    intro h\n    rw [h, mul_one] at hab\n    omega\n  have hsub : ({1, a, b, x} : Finset ℕ) ⊆ x.divisors := by\n    intro y hy\n    simp only [Finset.mem_insert, Finset.mem_singleton] at hy\n    rw [Nat.mem_divisors]\n    rcases hy with rfl | rfl | rfl | rfl\n    · exact ⟨one_dvd _, hx0⟩\n    · exact ⟨⟨b, hab.symm⟩, hx0⟩\n    · exact ⟨⟨a, by simpa [mul_comm] using hab.symm⟩, hx0⟩\n    · exact ⟨dvd_rfl, hx0⟩\n  have hcard : ({1, a, b, x} : Finset ℕ).card = 4 := by\n    have h1not : 1 ∉ ({a, b, x} : Finset ℕ) := by\n      simp only [Finset.mem_insert, Finset.mem_singleton, not_or]\n      exact ⟨Ne.symm ha1, Ne.symm hb1, Ne.symm hx1⟩\n    have hanot : a ∉ ({b, x} : Finset ℕ) := by\n      simp only [Finset.mem_insert, Finset.mem_singleton, not_or]\n      exact ⟨heq, ne_of_lt ha⟩\n    have hbnot : b ∉ ({x} : Finset ℕ) := by\n      simpa only [Finset.mem_singleton] using ne_of_lt hb\n    rw [Finset.card_insert_of_notMem h1not,\n      Finset.card_insert_of_notMem hanot,\n      Finset.card_insert_of_notMem hbnot,\n      Finset.card_singleton]\n  have hfour : 4 ≤ x.divisors.card := by\n    rw [← hcard]\n    exact Finset.card_le_card hsub\n  rw [ArithmeticFunction.sigma_zero_apply] at hsigma\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ x : ℕ, 2 ≤ x → ArithmeticFunction.sigma 0 x ≤ 3 → (∀ a : ℕ, x ≠ a ^ 2) → Nat.Prime x",
+        "module_source_hash": null,
+        "obligation_id": "c480c807-1918-4bfd-a1c8-7c5b13629ed4",
+        "outcome": "kernel_pass",
+        "problem_version_id": "e8bf4329-f948-4a64-8ff1-5b7765f6adf1",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "cfd585160ca963a71aed4dbe0d741a1a4de9ac81fc64a6edb5292f8d5f2d5018"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "c9d56b25ea0e98de61716ac3b87ba30a24fa168efa3f063257dc0fb951a6b908"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

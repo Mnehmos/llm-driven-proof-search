@@ -1,0 +1,86 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro X hX\n  let B : ℕ := 2^400\n  let k : ℕ := Nat.log B X\n  have hB : 1 < B := by\n    dsimp [B]\n    norm_num\n  refine ⟨k, ?_, ?_⟩\n  · calc\n      (2^k)^400 = 2^(k*400) := by rw [pow_mul]\n      _ = 2^(400*k) := by rw [Nat.mul_comm]\n      _ = (2^400)^k := by rw [pow_mul]\n      _ = B^k := by rfl\n      _ ≤ X := by\n        dsimp [k]\n        exact Nat.pow_log_le_self B hX\n  · have hu : X < B^k.succ := by\n      simpa [k] using Nat.lt_pow_succ_log_self hB X\n    calc\n      X < B^k.succ := hu\n      _ = (2^400)^k.succ := by rfl\n      _ = 2^(400*k.succ) := by rw [pow_mul]\n      _ = 2^(k.succ*400) := by rw [Nat.mul_comm]\n      _ = (2^k.succ)^400 := by rw [pow_mul]\n      _ = (2*(2^k))^400 := by\n        simp [pow_succ, Nat.mul_comm]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": false,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro X hX\n  let B : ℕ := 2^400\n  let k : ℕ := Nat.log B X\n  have hB : 1 < B := by\n    dsimp [B]\n    norm_num\n  refine ⟨k, ?_, ?_⟩\n  · calc\n      (2^k)^400 = 2^(k*400) := by rw [pow_mul]\n      _ = 2^(400*k) := by rw [Nat.mul_comm]\n      _ = (2^400)^k := by rw [pow_mul]\n      _ = B^k := by rfl\n      _ ≤ X := by\n        dsimp [k]\n        exact Nat.pow_log_le_self B hX\n  · have hu : X < B^k.succ := by\n      simpa [k] using Nat.lt_pow_succ_log_self hB X\n    calc\n      X < B^k.succ := hu\n      _ = (2^400)^k.succ := by rfl\n      _ = 2^(400*k.succ) := by rw [pow_mul]\n      _ = 2^(k.succ*400) := by rw [Nat.mul_comm]\n      _ = (2^k.succ)^400 := by rw [pow_mul]\n      _ = (2*(2^k))^400 := by\n        simp [pow_succ, Nat.mul_comm]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ X : ℕ, X ≠ 0 →\n  ∃ k : ℕ, (2^k)^400 ≤ X ∧ X < (2*(2^k))^400",
+        "module_source_hash": null,
+        "obligation_id": "dabea359-c2e9-46df-a0b4-6f9da3caae24",
+        "outcome": "kernel_fail",
+        "problem_version_id": "9f1f4f3c-7665-4fc6-8d71-0a6120ae145e",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "cfe2b3be87e35a6e6a6c88137f2282074d5b894fead1755dbfd4eaba758986c9"
+      },
+      "next_state": {
+        "state_hash": "e5ecec4277a463c181b5d2338c41fce671944a7772efcc1c0bb30fb58f2c39d6"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "65f279ab7769423a58d7e1617ada16785232d6fab9e79375f8563aa0cc4b2328"
+      },
+      "terminated": false,
+      "truncated": false
+    },
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro X hX\n  let B : ℕ := 2^400\n  let k : ℕ := Nat.log B X\n  have hB : 1 < B := by\n    dsimp [B]\n    norm_num\n  refine ⟨k, ?_, ?_⟩\n  · calc\n      (2^k)^400 = 2^(k*400) := by rw [pow_mul]\n      _ = 2^(400*k) := by rw [Nat.mul_comm]\n      _ = (2^400)^k := by rw [pow_mul]\n      _ = B^k := by rfl\n      _ ≤ X := by\n        dsimp [k]\n        exact Nat.pow_log_le_self B hX\n  · have hu : X < B^k.succ := by\n      simpa [k] using Nat.lt_pow_succ_log_self hB X\n    calc\n      X < B^k.succ := hu\n      _ = (2^400)^k.succ := by rfl\n      _ = 2^(400*k.succ) := by rw [pow_mul]\n      _ = 2^(k.succ*400) := by rw [Nat.mul_comm]\n      _ = (2^k.succ)^400 := by rw [pow_mul]\n      _ = (2*(2^k))^400 := by\n        have hpow : 2^k.succ = 2*(2^k) := by\n          rw [pow_succ]\n          exact Nat.mul_comm _ _\n        rw [hpow]",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro X hX\n  let B : ℕ := 2^400\n  let k : ℕ := Nat.log B X\n  have hB : 1 < B := by\n    dsimp [B]\n    norm_num\n  refine ⟨k, ?_, ?_⟩\n  · calc\n      (2^k)^400 = 2^(k*400) := by rw [pow_mul]\n      _ = 2^(400*k) := by rw [Nat.mul_comm]\n      _ = (2^400)^k := by rw [pow_mul]\n      _ = B^k := by rfl\n      _ ≤ X := by\n        dsimp [k]\n        exact Nat.pow_log_le_self B hX\n  · have hu : X < B^k.succ := by\n      simpa [k] using Nat.lt_pow_succ_log_self hB X\n    calc\n      X < B^k.succ := hu\n      _ = (2^400)^k.succ := by rfl\n      _ = 2^(400*k.succ) := by rw [pow_mul]\n      _ = 2^(k.succ*400) := by rw [Nat.mul_comm]\n      _ = (2^k.succ)^400 := by rw [pow_mul]\n      _ = (2*(2^k))^400 := by\n        have hpow : 2^k.succ = 2*(2^k) := by\n          rw [pow_succ]\n          exact Nat.mul_comm _ _\n        rw [hpow]",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ X : ℕ, X ≠ 0 →\n  ∃ k : ℕ, (2^k)^400 ≤ X ∧ X < (2*(2^k))^400",
+        "module_source_hash": null,
+        "obligation_id": "dabea359-c2e9-46df-a0b4-6f9da3caae24",
+        "outcome": "kernel_pass",
+        "problem_version_id": "9f1f4f3c-7665-4fc6-8d71-0a6120ae145e",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "cfe2b3be87e35a6e6a6c88137f2282074d5b894fead1755dbfd4eaba758986c9"
+      },
+      "next_state": {
+        "state_hash": "cf47e175675e6f78337bcffee524e4b958c64cc23e56c992d25491a74046817b"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "b60cd7f5ed3c742a1b96e2886e47698907f77a041cb06f54552f53fdb58011d3"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

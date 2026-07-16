@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro n N ℓ hn H hnN hℓ h11 h29 hmod\n  have shift : ArithmeticFunction.sigma 0 (n - 1) ≤ 3 := by\n    have hsub : n - 1 < n := (by omega)\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let mm : Fin n := ⟨n - 1, hsub⟩\n    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H\n    dsimp [f, mm] at hm\n    omega\n  have hn1 : 2 ≤ n - 1 := (by omega)\n  have hchar : Nat.Prime (n - 1) ∨ ∃ p : ℕ, Nat.Prime p ∧ n - 1 = p ^ 2 := by\n    have hcard := shift\n    rw [ArithmeticFunction.sigma_zero_apply] at hcard\n    have hr0 : n - 1 ≠ 0 := (by omega)\n    have hr1 : n - 1 ≠ 1 := (by omega)\n    have hp : ((n - 1).minFac).Prime := Nat.minFac_prime hr1\n    by_cases hpr : (n - 1).minFac = n - 1\n    · exact Or.inl (hpr ▸ hp)\n    · right\n      refine ⟨(n - 1).minFac, hp, ?_⟩\n      have hpd : (n - 1).minFac ∣ (n - 1) := Nat.minFac_dvd (n - 1)\n      have hp2 : 2 ≤ (n - 1).minFac := hp.two_le\n      have hplt : (n - 1).minFac < n - 1 := lt_of_le_of_ne (Nat.le_of_dvd (by omega) hpd) hpr\n      have hsub2 : ({1, (n - 1).minFac, n - 1} : Finset ℕ) ⊆ (n - 1).divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rw [Nat.mem_divisors]\n        rcases hx with rfl | rfl | rfl\n        · exact ⟨one_dvd _, hr0⟩\n        · exact ⟨hpd, hr0⟩\n        · exact ⟨dvd_rfl, hr0⟩\n      have hcard3 : ({1, (n - 1).minFac, n - 1} : Finset ℕ).card = 3 := by\n        rw [Finset.card_insert_of_notMem (by simp; omega), Finset.card_insert_of_notMem (by simp; omega), Finset.card_singleton]\n      have heq : (n - 1).divisors = {1, (n - 1).minFac, n - 1} :=\n        (Finset.eq_of_subset_of_card_le hsub2 (by rw [hcard3]; exact hcard)).symm\n      have hmul : (n - 1).minFac * ((n - 1) / (n - 1).minFac) = n - 1 := Nat.mul_div_cancel' hpd\n      have hqd : (n - 1) / (n - 1).minFac ∣ (n - 1) := ⟨(n - 1).minFac, by rw [Nat.mul_comm]; exact hmul.symm⟩\n      have hqmem : (n - 1) / (n - 1).minFac ∈ (n - 1).divisors := Nat.mem_divisors.mpr ⟨hqd, hr0⟩\n      rw [heq] at hqmem\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hqmem\n      rcases hqmem with h1 | h2 | h3\n      · rw [h1, mul_one] at hmul\n        exact absurd hmul (Nat.ne_of_lt hplt)\n      · rw [h2] at hmul\n        rw [pow_two]\n        exact hmul.symm\n      · rw [h3] at hmul\n        exfalso\n        nlinarith [hp2, hn1, hmul]\n  have hn_mod : n % ℓ = 1 := by rw [hnN]; exact hmod\n  have hdivmod := Nat.div_add_mod n ℓ\n  have hdvd : ℓ ∣ (n - 1) := ⟨n / ℓ, by omega⟩\n  have hN1 : 1 ≤ N := by\n    by_contra h\n    push_neg at h\n    interval_cases N\n    simp at hmod\n  have hnbig : 2519 ≤ n - 1 := (by omega)\n  rcases hchar with hp | ⟨p, hp, heq⟩\n  · have hor := Nat.Prime.eq_one_or_self_of_dvd hp ℓ hdvd\n    omega\n  · rw [heq] at hdvd\n    have hℓp : ℓ ∣ p := hℓ.dvd_of_dvd_pow hdvd\n    have heqlp : ℓ = p := (Nat.prime_dvd_prime_iff_eq hℓ hp).mp hℓp\n    have hℓ2 : ℓ ^ 2 ≤ 841 := (by nlinarith [h29])\n    rw [← heqlp] at heq\n    omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro n N ℓ hn H hnN hℓ h11 h29 hmod\n  have shift : ArithmeticFunction.sigma 0 (n - 1) ≤ 3 := by\n    have hsub : n - 1 < n := (by omega)\n    let f : Fin n → ℕ := fun x => (x : ℕ) + ArithmeticFunction.sigma 0 x\n    have hbdd : BddAbove (Set.range f) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨x, rfl⟩\n      dsimp [f]\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (x : ℕ)\n      have hx : (x : ℕ) < n := x.isLt\n      omega\n    let mm : Fin n := ⟨n - 1, hsub⟩\n    have hm : f mm ≤ n + 2 := le_trans (le_ciSup hbdd mm) H\n    dsimp [f, mm] at hm\n    omega\n  have hn1 : 2 ≤ n - 1 := (by omega)\n  have hchar : Nat.Prime (n - 1) ∨ ∃ p : ℕ, Nat.Prime p ∧ n - 1 = p ^ 2 := by\n    have hcard := shift\n    rw [ArithmeticFunction.sigma_zero_apply] at hcard\n    have hr0 : n - 1 ≠ 0 := (by omega)\n    have hr1 : n - 1 ≠ 1 := (by omega)\n    have hp : ((n - 1).minFac).Prime := Nat.minFac_prime hr1\n    by_cases hpr : (n - 1).minFac = n - 1\n    · exact Or.inl (hpr ▸ hp)\n    · right\n      refine ⟨(n - 1).minFac, hp, ?_⟩\n      have hpd : (n - 1).minFac ∣ (n - 1) := Nat.minFac_dvd (n - 1)\n      have hp2 : 2 ≤ (n - 1).minFac := hp.two_le\n      have hplt : (n - 1).minFac < n - 1 := lt_of_le_of_ne (Nat.le_of_dvd (by omega) hpd) hpr\n      have hsub2 : ({1, (n - 1).minFac, n - 1} : Finset ℕ) ⊆ (n - 1).divisors := by\n        intro x hx\n        simp only [Finset.mem_insert, Finset.mem_singleton] at hx\n        rw [Nat.mem_divisors]\n        rcases hx with rfl | rfl | rfl\n        · exact ⟨one_dvd _, hr0⟩\n        · exact ⟨hpd, hr0⟩\n        · exact ⟨dvd_rfl, hr0⟩\n      have hcard3 : ({1, (n - 1).minFac, n - 1} : Finset ℕ).card = 3 := by\n        rw [Finset.card_insert_of_notMem (by simp; omega), Finset.card_insert_of_notMem (by simp; omega), Finset.card_singleton]\n      have heq : (n - 1).divisors = {1, (n - 1).minFac, n - 1} :=\n        (Finset.eq_of_subset_of_card_le hsub2 (by rw [hcard3]; exact hcard)).symm\n      have hmul : (n - 1).minFac * ((n - 1) / (n - 1).minFac) = n - 1 := Nat.mul_div_cancel' hpd\n      have hqd : (n - 1) / (n - 1).minFac ∣ (n - 1) := ⟨(n - 1).minFac, by rw [Nat.mul_comm]; exact hmul.symm⟩\n      have hqmem : (n - 1) / (n - 1).minFac ∈ (n - 1).divisors := Nat.mem_divisors.mpr ⟨hqd, hr0⟩\n      rw [heq] at hqmem\n      simp only [Finset.mem_insert, Finset.mem_singleton] at hqmem\n      rcases hqmem with h1 | h2 | h3\n      · rw [h1, mul_one] at hmul\n        exact absurd hmul (Nat.ne_of_lt hplt)\n      · rw [h2] at hmul\n        rw [pow_two]\n        exact hmul.symm\n      · rw [h3] at hmul\n        exfalso\n        nlinarith [hp2, hn1, hmul]\n  have hn_mod : n % ℓ = 1 := by rw [hnN]; exact hmod\n  have hdivmod := Nat.div_add_mod n ℓ\n  have hdvd : ℓ ∣ (n - 1) := ⟨n / ℓ, by omega⟩\n  have hN1 : 1 ≤ N := by\n    by_contra h\n    push_neg at h\n    interval_cases N\n    simp at hmod\n  have hnbig : 2519 ≤ n - 1 := (by omega)\n  rcases hchar with hp | ⟨p, hp, heq⟩\n  · have hor := Nat.Prime.eq_one_or_self_of_dvd hp ℓ hdvd\n    omega\n  · rw [heq] at hdvd\n    have hℓp : ℓ ∣ p := hℓ.dvd_of_dvd_pow hdvd\n    have heqlp : ℓ = p := (Nat.prime_dvd_prime_iff_eq hℓ hp).mp hℓp\n    have hℓ2 : ℓ ^ 2 ≤ 841 := (by nlinarith [h29])\n    rw [← heqlp] at heq\n    omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n N ℓ : ℕ, 84 < n → (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 → n = 2520 * N → Nat.Prime ℓ → 11 ≤ ℓ → ℓ ≤ 29 → 2520 * N % ℓ ≠ 1",
+        "module_source_hash": null,
+        "obligation_id": "80e282fe-3429-4c62-9873-e82a7f99e7fa",
+        "outcome": "kernel_pass",
+        "problem_version_id": "90c306f4-71f4-4dc9-9b24-df69a206ec57",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "ea2c60d0719108f7258a2f657af16e474f92661e84671bc6c7f3eac5cdb94912"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "0d12ba26723f5f5b2d664cda0b1ed3401268a54406bda2a0156a60d763b88a68"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}
