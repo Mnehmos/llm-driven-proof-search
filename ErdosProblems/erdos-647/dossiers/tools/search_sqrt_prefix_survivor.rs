@@ -1,18 +1,18 @@
-//! Full square-root-prefix candidate search for Erdős #647.
+//! Full hybrid-power-prefix candidate search for Erdős #647.
 //!
-//! The kernel-verified reduction (Erdos647_DivisorSqrtDepthReduction.lean)
-//! proves that verifying every shift budget for n = 2520*N reduces to the
-//! prefix k < 2*sqrt(n): every later shift is automatically safe. So a
-//! genuine candidate is EXACTLY an N whose value survives its entire
-//! square-root prefix — and one computationally discovered survivor becomes
-//! a short formal proof via the prefix theorem plus native_decide.
+//! Kernel-verified cube-, fourth-, and fifth-power divisor bounds each give
+//! an exact finite prefix after which every later shift is automatically
+//! safe. The checker stops when the first of those three certificates fires.
+//! A genuine candidate is therefore exactly an `N` whose value survives this
+//! hybrid prefix, and a computational survivor can be replayed using the
+//! factorization-certificate interface in Lean.
 //!
 //! Search structure (all filters are kernel-verified necessary conditions):
 //!   - n = 2520*N, N in one of the 45 open residue classes mod 46189
 //!     (the kernel-verified mod-46189 frontier; a superset of Hughes's 41);
 //!   - the seven density forms (2520/k)*N - 1 for k in {1,2,3,4,6,8,12}
 //!     must all be prime (checked by deterministic Miller-Rabin);
-//!   - survivors get the full incremental prefix check: for k = 1 .. 2*sqrt(n),
+//!   - survivors get the full incremental hybrid-prefix check,
 //!     tau(n-k) <= k+2, rejecting at the first failure (tau via Pollard rho).
 //!
 //! This program is computational steering, not proof. Primality uses the
@@ -156,44 +156,35 @@ fn fact_string(f: &[(u64, u32)]) -> String {
         .join("*")
 }
 
-/// Divisor count via factorization.
-fn tau(n: u64) -> u64 {
-    if n <= 1 {
-        return 1;
-    }
-    factorize(n).iter().map(|(_, e)| (*e as u64) + 1).product()
-}
-
-fn isqrt(n: u64) -> u64 {
-    let mut r = (n as f64).sqrt() as u64;
-    while r * r > n {
-        r -= 1;
-    }
-    while (r + 1) * (r + 1) <= n {
-        r += 1;
-    }
-    r
-}
-
 /// Full prefix check: returns (first failing shift, tau, factorization),
-/// or None if N is a genuine cube-prefix survivor (a candidate!).
+/// or None if N survives the hybrid power prefix (and is a candidate!).
 ///
-/// Stop rule = EXACTLY the kernel-verified theorem's condition
-/// (erdos647_candidate_of_cube_prefix): a shift k needs checking only
-/// while 35*(k+2)^3 < 1536*(n-k); once 35*(k+2)^3 >= 1536*(n-k), every
-/// later shift is automatically safe by the sharp divisor bound
-/// 35*tau(m)^3 <= 1536*m (equality at m = 2520). Evaluated in u128 --
-/// no floating-point cube roots, so the search target matches the
-/// formal certificate exactly.
+/// Each of the three stop rules is independently kernel-verified:
+///
+/// * 35*(k+2)^3 >= 1536*(n-k),
+/// * (k+2)^4 >= 19680*(n-k),
+/// * (k+2)^5 >= 147700800*(n-k).
+///
+/// As soon as any rule fires, that same inequality remains true at every
+/// later shift (left side increases, right side decreases), so all later
+/// budgets are safe. Everything is evaluated exactly in `u128`; there are
+/// no floating-point roots or rounding gaps between search and certificate.
 fn prefix_check(n_val: u64) -> Option<(u64, u64, Vec<(u64, u32)>)> {
     let nu = n_val as u128;
     let mut k: u64 = 1;
     while k < n_val {
         let ku = k as u128;
-        let lhs = 35u128 * (ku + 2) * (ku + 2) * (ku + 2);
-        let rhs = 1536u128 * (nu - ku);
-        if lhs >= rhs {
-            return None; // cube prefix complete: all later shifts safe
+        let b = ku + 2;
+        let m = nu - ku;
+        let b2 = b * b;
+        let b3 = b2 * b;
+        let b4 = b3 * b;
+        let b5 = b4 * b;
+        let cube_safe = 35u128 * b3 >= 1536u128 * m;
+        let fourth_safe = b4 >= 19680u128 * m;
+        let fifth_safe = b5 >= 147700800u128 * m;
+        if cube_safe || fourth_safe || fifth_safe {
+            return None; // hybrid prefix complete: all later shifts safe
         }
         let f = factorize(n_val - k);
         let t: u64 = f.iter().map(|(_, e)| (*e as u64) + 1).product();
