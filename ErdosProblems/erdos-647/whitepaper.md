@@ -265,10 +265,10 @@ repaired squarefree remainder was also submitted to the independent exact
 proof-search verifier and returned `kernel_pass`; identifiers and hashes are
 recorded in [evidence.md](evidence.md).
 
-For provenance beyond the source replay, all 328 related campaign
+For provenance beyond the source replay, all 331 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
-training JSON formats. Of these, 321 report `KERNEL_VERIFIED` in the pinned
+training JSON formats. Of these, 324 report `KERNEL_VERIFIED` in the pinned
 environment; seven non-success histories are retained for audit completeness.
 
 This proves a density-zero result with the claimed seventh logarithmic power.
@@ -534,6 +534,14 @@ The two 5-adic depth variables are now determined exactly by the parameter:
 `N≡3 (mod 5)`. This fifth tracked result removes two existential choices from
 the state space and makes the mutually exclusive 5-adic branches explicit.
 
+The two remaining bounded depths are now residue data as well: `a7` is
+determined by `N` modulo `7` and `49`, while `a9` is determined modulo
+`3` and `9`. On the positive 7-adic branch the coupled shift-7 budget
+forces `q7` prime. In the composite branches, the affine equation modulo
+three forces a prime cube base to be `2 mod 3`, and a distinct-semiprime
+pair to have residues `1,2` in some order. These are three separately
+tracked, replayed kernel-verified refinements of the finite survivor state.
+
 The remaining barrier is now precise. One must either force a re-entry subset
 whose remainder violates `2^|I|≤h+2`, or prove that the large family of
 smooth, size-controlled second-layer cofactors cannot coexist for a candidate.
@@ -546,10 +554,10 @@ Formal Conjectures declarations.
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **464 actual theorem
-  declarations and five top-level helper lemmas across 176 Lean files** under
+- Portable proof source currently contains **467 actual theorem
+  declarations and five top-level helper lemmas across 178 Lean files** under
   `proof/`. Including 47 definitions (45 public and two private helpers) gives
-  516 declarations. These counts include helper and assembly declarations;
+  519 declarations. These counts include helper and assembly declarations;
   they are not presented as 516 independent mathematical discoveries or 516
   standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base

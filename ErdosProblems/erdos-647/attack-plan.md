@@ -77,6 +77,12 @@ The two 5-adic depths are now eliminated as independent variables:
 `a5=1 ↔ N≡4 (mod 5)` and `a10=1 ↔ N≡3 (mod 5)`, tracked and replayed as
 episode `dce030c5-2b7c-4e69-99fc-f4596b52f736`. The next assembly can branch
 directly on `N mod 5` rather than carrying existential 5-adic depths.
+The same elimination is now complete for the bounded 7-adic and 3-adic
+depths: `a7` is read from `N mod 7,49`, and `a9` from `N mod 3,9`.
+Moreover the positive-depth shift-7 branch forces `q7` prime; its remaining
+cube and distinct-semiprime branches have exact factor residues modulo three.
+These three roots are tracked, kernel-verified, and replayed. The next proof
+target is the finite-state-to-growing-shift accumulation step.
 
 One analytic correction is now part of the proof record. The earlier
 Chebyshev/Mertens lower bound is valid, but its leading coefficient is

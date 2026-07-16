@@ -152,8 +152,11 @@ The first concrete cross-rung non-reuse pair is independently tracked:
 | `q7` is prime, prime-cube, or distinct-semiprime | `3269049f-3285-419e-9d3c-9f011eec124d` | `426f582b-bd4c-44b1-a964-9ac85b1e7987` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `a1f75504-8760-44a1-88e0-1f479d3f9504` **kernel_pass** |
 | composite `q7` forces 7-adic depth zero | `4152887d-8d9d-4ee7-8a93-a5c13de5ced0` | `003bb946-196b-40ba-9175-06d63d00f36f` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `a1d70b3f-3e08-4fed-83c9-bcc79c4089dc` **kernel_pass** |
 | exact 5-adic depth residues `a5=1↔N%5=4`, `a10=1↔N%5=3` | `eebc0500-b83d-48ee-b488-ab270994c41b` | `dce030c5-2b7c-4e69-99fc-f4596b52f736` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `a3ea80e7-012f-4ae6-ad2c-22f850b923bc` **kernel_pass** |
+| exact bounded 7-adic/3-adic depth residues | `b6e53c77-9e5d-47f7-8a27-10dc5f5ed6ef` | `f9641fd5-9ce1-47ff-84d4-edc0a2083f42` | **kernel_verified**, `root_proved`; replay matched 1/1; precheck `0d94fc60-8bd9-424a-8366-96ebff6ae4fe` **kernel_pass** |
+| positive-depth `q7` branch forces primality | `0a0758e6-5534-4b69-9326-a490e2721f1e` | `df6ab19d-4ade-4719-a408-02fa6b70c1db` | **kernel_verified**, `root_proved`; replay matched 1/1; precheck `b940d5e8-47bc-411e-935f-2a33677beda0` **kernel_pass** |
+| composite `q7` factor residues modulo three | `c4a2bf8f-2742-4d17-b6d9-2903f7067ebe` | `98b5e0d7-2952-4507-b2b4-75530f770ea6` | **kernel_verified**, `root_proved`; replay matched 1/1; precheck `65a13e0d-44e5-431c-ae58-b68043b40781` **kernel_pass** |
 
-All three sources also compile directly in the pinned `lean-checker`. The
+All six sources also compile directly in the pinned `lean-checker`. The
 strongest source additionally proves that selected prime factors are pairwise
 distinct and that the four shifted values always supply four distinct primes.
 The second tracked root removes the simultaneous positive-depth 5-adic branch
@@ -338,16 +341,16 @@ compatibility check rather than a forced mixed-version import.
 
 ## Complete proof-search export archive
 
-The repository now includes exports for all 328 related episodes identified by
+The repository now includes exports for all 331 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
-index, and a read-only database closure audit. Of these, 321 report
+index, and a read-only database closure audit. Of these, 324 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.
-Portable source currently contains 464 actual theorem declarations and five
-top-level lemma declarations across 176 Lean files; including 47 definitions
-(45 public and two private helpers) gives 516 declarations. Those source counts
-and the 328 episode count measure different things.
+Portable source currently contains 467 actual theorem declarations and five
+top-level lemma declarations across 178 Lean files; including 47 definitions
+gives 519 declarations. Those source counts and the 331 episode count measure
+different things.
 
 - [export manifest](dossiers/exports/manifest.tsv)
 - [public summaries](dossiers/exports/public_summary/)

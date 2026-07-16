@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro N a7 q7 a9 q9 hN h7eq hq7 h7depth h9eq hq9 h9depth\nhave hmod7 := Nat.mod_add_div N 7\nhave hmod49 := Nat.mod_add_div N 49\nhave hmod3 := Nat.mod_add_div N 3\nhave hmod9 := Nat.mod_add_div N 9\nhave h7zero : a7 = 0 → N % 7 ≠ 5 := by\n  intro ha hres\n  subst a7\n  have hNform : N = 7 * (N / 7) + 5 := by omega\n  have hqeq : q7 = 7 * (360 * (N / 7) + 257) := by\n    norm_num at h7eq\n    rw [hNform] at h7eq\n    omega\n  exact hq7 ⟨360 * (N / 7) + 257, hqeq⟩\nhave h7one : a7 = 1 → N % 7 = 5 ∧ N % 49 ≠ 26 := by\n  intro ha\n  subst a7\n  constructor\n  · have hlt : N % 7 < 7 := Nat.mod_lt N (by norm_num)\n    interval_cases hres : N % 7 <;> omega\n  · intro hres\n    have hNform : N = 49 * (N / 49) + 26 := by omega\n    have hqeq : q7 = 7 * (360 * (N / 49) + 191) := by\n      norm_num at h7eq\n      rw [hNform] at h7eq\n      omega\n    exact hq7 ⟨360 * (N / 49) + 191, hqeq⟩\nhave h7two : a7 = 2 → N % 49 = 26 := by\n  intro ha\n  subst a7\n  have hlt : N % 49 < 49 := Nat.mod_lt N (by norm_num)\n  interval_cases hres : N % 49 <;> omega\nhave h9zero : a9 = 0 → N % 3 ≠ 1 := by\n  intro ha hres\n  subst a9\n  have hNform : N = 3 * (N / 3) + 1 := by omega\n  have hqeq : q9 = 3 * (280 * (N / 3) + 93) := by\n    norm_num at h9eq\n    rw [hNform] at h9eq\n    omega\n  exact hq9 ⟨280 * (N / 3) + 93, hqeq⟩\nhave h9one : a9 = 1 → N % 3 = 1 ∧ N % 9 ≠ 1 := by\n  intro ha\n  subst a9\n  constructor\n  · have hlt : N % 3 < 3 := Nat.mod_lt N (by norm_num)\n    interval_cases hres : N % 3 <;> omega\n  · intro hres\n    have hNform : N = 9 * (N / 9) + 1 := by omega\n    have hqeq : q9 = 3 * (280 * (N / 9) + 31) := by\n      norm_num at h9eq\n      rw [hNform] at h9eq\n      omega\n    exact hq9 ⟨280 * (N / 9) + 31, hqeq⟩\nhave h9two : a9 = 2 → N % 9 = 1 := by\n  intro ha\n  subst a9\n  have hlt : N % 9 < 9 := Nat.mod_lt N (by norm_num)\n  interval_cases hres : N % 9 <;> omega\nhave h49to7 : N % 49 = 26 → N % 7 = 5 := by\n  intro hres\n  have hNform : N = 49 * (N / 49) + 26 := by omega\n  have hlt : N % 7 < 7 := Nat.mod_lt N (by norm_num)\n  interval_cases h : N % 7 <;> omega\nhave h9to3 : N % 9 = 1 → N % 3 = 1 := by\n  intro hres\n  have hNform : N = 9 * (N / 9) + 1 := by omega\n  have hlt : N % 3 < 3 := Nat.mod_lt N (by norm_num)\n  interval_cases h : N % 3 <;> omega\nrefine ⟨⟨h7zero, ?_⟩, ⟨h7one, ?_⟩, ⟨h7two, ?_⟩,\n  ⟨h9zero, ?_⟩, ⟨h9one, ?_⟩, ⟨h9two, ?_⟩⟩\n· intro hres\n  interval_cases ha : a7\n  · rfl\n  · exact absurd (h7one rfl).1 hres\n  · exact absurd (h49to7 (h7two rfl)) hres\n· rintro ⟨hres7, hres49⟩\n  interval_cases ha : a7\n  · exact False.elim ((h7zero rfl) hres7)\n  · rfl\n  · exact absurd (h7two rfl) hres49\n· intro hres49\n  interval_cases ha : a7\n  · exact False.elim ((h7zero rfl) (h49to7 hres49))\n  · exact absurd hres49 (h7one rfl).2\n  · rfl\n· intro hres\n  interval_cases ha : a9\n  · rfl\n  · exact absurd (h9one rfl).1 hres\n  · exact absurd (h9to3 (h9two rfl)) hres\n· rintro ⟨hres3, hres9⟩\n  interval_cases ha : a9\n  · exact False.elim ((h9zero rfl) hres3)\n  · rfl\n  · exact absurd (h9two rfl) hres9\n· intro hres9\n  interval_cases ha : a9\n  · exact False.elim ((h9zero rfl) (h9to3 hres9))\n  · exact absurd hres9 (h9one rfl).2\n  · rfl",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro N a7 q7 a9 q9 hN h7eq hq7 h7depth h9eq hq9 h9depth\nhave hmod7 := Nat.mod_add_div N 7\nhave hmod49 := Nat.mod_add_div N 49\nhave hmod3 := Nat.mod_add_div N 3\nhave hmod9 := Nat.mod_add_div N 9\nhave h7zero : a7 = 0 → N % 7 ≠ 5 := by\n  intro ha hres\n  subst a7\n  have hNform : N = 7 * (N / 7) + 5 := by omega\n  have hqeq : q7 = 7 * (360 * (N / 7) + 257) := by\n    norm_num at h7eq\n    rw [hNform] at h7eq\n    omega\n  exact hq7 ⟨360 * (N / 7) + 257, hqeq⟩\nhave h7one : a7 = 1 → N % 7 = 5 ∧ N % 49 ≠ 26 := by\n  intro ha\n  subst a7\n  constructor\n  · have hlt : N % 7 < 7 := Nat.mod_lt N (by norm_num)\n    interval_cases hres : N % 7 <;> omega\n  · intro hres\n    have hNform : N = 49 * (N / 49) + 26 := by omega\n    have hqeq : q7 = 7 * (360 * (N / 49) + 191) := by\n      norm_num at h7eq\n      rw [hNform] at h7eq\n      omega\n    exact hq7 ⟨360 * (N / 49) + 191, hqeq⟩\nhave h7two : a7 = 2 → N % 49 = 26 := by\n  intro ha\n  subst a7\n  have hlt : N % 49 < 49 := Nat.mod_lt N (by norm_num)\n  interval_cases hres : N % 49 <;> omega\nhave h9zero : a9 = 0 → N % 3 ≠ 1 := by\n  intro ha hres\n  subst a9\n  have hNform : N = 3 * (N / 3) + 1 := by omega\n  have hqeq : q9 = 3 * (280 * (N / 3) + 93) := by\n    norm_num at h9eq\n    rw [hNform] at h9eq\n    omega\n  exact hq9 ⟨280 * (N / 3) + 93, hqeq⟩\nhave h9one : a9 = 1 → N % 3 = 1 ∧ N % 9 ≠ 1 := by\n  intro ha\n  subst a9\n  constructor\n  · have hlt : N % 3 < 3 := Nat.mod_lt N (by norm_num)\n    interval_cases hres : N % 3 <;> omega\n  · intro hres\n    have hNform : N = 9 * (N / 9) + 1 := by omega\n    have hqeq : q9 = 3 * (280 * (N / 9) + 31) := by\n      norm_num at h9eq\n      rw [hNform] at h9eq\n      omega\n    exact hq9 ⟨280 * (N / 9) + 31, hqeq⟩\nhave h9two : a9 = 2 → N % 9 = 1 := by\n  intro ha\n  subst a9\n  have hlt : N % 9 < 9 := Nat.mod_lt N (by norm_num)\n  interval_cases hres : N % 9 <;> omega\nhave h49to7 : N % 49 = 26 → N % 7 = 5 := by\n  intro hres\n  have hNform : N = 49 * (N / 49) + 26 := by omega\n  have hlt : N % 7 < 7 := Nat.mod_lt N (by norm_num)\n  interval_cases h : N % 7 <;> omega\nhave h9to3 : N % 9 = 1 → N % 3 = 1 := by\n  intro hres\n  have hNform : N = 9 * (N / 9) + 1 := by omega\n  have hlt : N % 3 < 3 := Nat.mod_lt N (by norm_num)\n  interval_cases h : N % 3 <;> omega\nrefine ⟨⟨h7zero, ?_⟩, ⟨h7one, ?_⟩, ⟨h7two, ?_⟩,\n  ⟨h9zero, ?_⟩, ⟨h9one, ?_⟩, ⟨h9two, ?_⟩⟩\n· intro hres\n  interval_cases ha : a7\n  · rfl\n  · exact absurd (h7one rfl).1 hres\n  · exact absurd (h49to7 (h7two rfl)) hres\n· rintro ⟨hres7, hres49⟩\n  interval_cases ha : a7\n  · exact False.elim ((h7zero rfl) hres7)\n  · rfl\n  · exact absurd (h7two rfl) hres49\n· intro hres49\n  interval_cases ha : a7\n  · exact False.elim ((h7zero rfl) (h49to7 hres49))\n  · exact absurd hres49 (h7one rfl).2\n  · rfl\n· intro hres\n  interval_cases ha : a9\n  · rfl\n  · exact absurd (h9one rfl).1 hres\n  · exact absurd (h9to3 (h9two rfl)) hres\n· rintro ⟨hres3, hres9⟩\n  interval_cases ha : a9\n  · exact False.elim ((h9zero rfl) hres3)\n  · rfl\n  · exact absurd (h9two rfl) hres9\n· intro hres9\n  interval_cases ha : a9\n  · exact False.elim ((h9zero rfl) (h9to3 hres9))\n  · exact absurd hres9 (h9one rfl).2\n  · rfl",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ N a7 q7 a9 q9 : ℕ,\n      1 ≤ N →\n      360 * N - 1 = 7 ^ a7 * q7 →\n      ¬ 7 ∣ q7 →\n      a7 ≤ 2 →\n      280 * N - 1 = 3 ^ a9 * q9 →\n      ¬ 3 ∣ q9 →\n      a9 ≤ 2 →\n      (a7 = 0 ↔ N % 7 ≠ 5) ∧\n      (a7 = 1 ↔ N % 7 = 5 ∧ N % 49 ≠ 26) ∧\n      (a7 = 2 ↔ N % 49 = 26) ∧\n      (a9 = 0 ↔ N % 3 ≠ 1) ∧\n      (a9 = 1 ↔ N % 3 = 1 ∧ N % 9 ≠ 1) ∧\n      (a9 = 2 ↔ N % 9 = 1)",
+        "module_source_hash": null,
+        "obligation_id": "fd777ffd-a84a-42dc-b097-30260f922995",
+        "outcome": "kernel_pass",
+        "problem_version_id": "b6e53c77-9e5d-47f7-8a27-10dc5f5ed6ef",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "424d86d4216fd65b510715045d39c7e0ac7724da641800e6e1e1f9e2a641fe60"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "ad73ffabe9aa0b88965dc98f1f12a5e1e40d26c41a722a55b263f2eef7dded7a"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}
