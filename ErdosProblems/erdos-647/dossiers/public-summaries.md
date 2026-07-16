@@ -5,9 +5,9 @@
 > the kernel-verification status, root statement, environment/import-manifest
 > hashes, and trajectory integrity hashes, but **never** the proof body.
 > This file preserves the original eight-headline bundle generated
-> 2026-07-13. The complete 210-episode archive generated 2026-07-15 is in
+> 2026-07-13. The complete 211-episode archive updated 2026-07-15 is in
 > [exports/](exports/README.md), with one public summary, full Markdown
-> dossier, and structured training export per episode. It contains 203
+> dossier, and structured training export per episode. It contains 204
 > kernel-verified successes and seven retained non-success histories. Each is
 > independently reproducible: given the
 > `episode_id`, re-run `proof_export{episode_id, format: "public_summary"}`

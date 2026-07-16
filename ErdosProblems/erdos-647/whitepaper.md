@@ -265,10 +265,10 @@ repaired squarefree remainder was also submitted to the independent exact
 proof-search verifier and returned `kernel_pass`; identifiers and hashes are
 recorded in [evidence.md](evidence.md).
 
-For provenance beyond the source replay, all 210 related campaign
+For provenance beyond the source replay, all 211 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
-training JSON formats. Of these, 203 report `KERNEL_VERIFIED` in the pinned
+training JSON formats. Of these, 204 report `KERNEL_VERIFIED` in the pinned
 environment; seven non-success histories are retained for audit completeness.
 
 This proves a density-zero result with the claimed seventh logarithmic power.
@@ -281,10 +281,10 @@ exclusion.
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **216 top-level theorem
-  declarations across 100 Lean files** under `proof/`. This count includes
-  helper and assembly theorems; it is not presented as 216 independent
-  mathematical discoveries or 216 standalone tracked episodes.
+- Portable proof source currently contains **223 top-level theorem
+  declarations across 102 Lean files** under `proof/`. This count includes
+  helper and assembly theorems; it is not presented as 223 independent
+  mathematical discoveries or 223 standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base
   sieve, the bridging-closure layer, the Theorem-2 formalization, the
   extended negative result, the Mertens infrastructure, the explicit
@@ -309,7 +309,21 @@ is.
 ## 6. Open invitations
 
 This folder is a living workspace, not a museum. The density program is no
-longer an open invitation; it has landed. Useful next directions are:
+longer an open invitation; it has landed. The original existence campaign is
+active again. Its first new formal interface is
+[`Erdos647_ShiftDepthInterface.lean`](proof/Erdos647_ShiftDepthInterface.lean):
+the global maximum condition implies every budget
+`σ₀(n-k)≤k+2`, and therefore a single failed budget excludes an individual
+candidate. This makes the next proof target precise: produce such a failure
+at a depth that may grow with `n`, or force it from the verified prime-chain
+classifications. Useful next directions are:
+
+Predicate compatibility with the upstream-style open formalization is also
+mechanically recorded in
+[`Erdos647_FormalConjecturesCompatibility.lean`](proof/Erdos647_FormalConjecturesCompatibility.lean).
+The density theorem counts exactly the same candidate property, but it is not
+the same proposition as the existential question and cannot replace its
+`sorry`.
 
 1. **Independent replay and proof review** — check the committed source in a
    fresh pinned environment, audit the candidate-to-sieve bridge, and seek
@@ -317,8 +331,9 @@ longer an open invitation; it has landed. Useful next directions are:
 2. **Upstream the reusable sieve lemmas** — the level-truncated optimal
    weight, coefficient/support bounds, finite Euler-product comparison, and
    generic two-parameter assembly are Mathlib-shaped contributions.
-3. **Attack the original existence question with a genuinely new method** —
-   density zero is not emptiness, and bounded congruence trees cannot close
+3. **Close the shift-depth obstruction** — prove that every `n>24` fails a
+   budget at some `k<n`, ideally with an explicit growing bound `k≤D(n)`.
+   Density zero is not emptiness, and bounded congruence trees cannot close
    the remaining classes.
 4. **A better wall theorem** — the all-avoid obstruction rules out bounded
    congruence trees; what is the *strongest* class of arguments it rules

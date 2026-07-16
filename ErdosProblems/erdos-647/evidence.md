@@ -40,11 +40,39 @@ MCP kernel check: verification job
 This evidence establishes the density theorem, not a resolution of whether a
 larger Erdős-647 candidate exists.
 
+## Existence-continuation checkpoint
+
+The first post-density interface is independently tracked and replayed:
+
+| field | value |
+|---|---|
+| statement | the global maximum condition implies `σ₀(n-k)≤k+2` for every `0<k<n` |
+| problem_version_id | `11379956-bdc3-4ed9-bef3-3e373c8e85c2` |
+| episode_id | `3061458d-df2c-4e48-b05d-76b48209a2f6` |
+| root_statement_hash | `df1b2ec8493146e374e83d3c293fd3a25f7c6d4f4c4d48f1049a9050c3a6faa9` |
+| outcome | **kernel_verified**, `root_proved` |
+| snapshot | [proof/Erdos647_ShiftDepthInterface.lean](proof/Erdos647_ShiftDepthInterface.lean) |
+
+The source module also defines `SurvivesThrough n D` and proves that any one
+failed budget excludes the global condition. This is infrastructure for the
+still-open existence problem, not evidence that the problem has been solved.
+
+The source-level compatibility replay additionally compiled
+[`proof/Erdos647_FormalConjecturesCompatibility.lean`](proof/Erdos647_FormalConjecturesCompatibility.lean)
+from a clean staged copy of the complete density dependency graph. It proves
+`CandidateBound` iff the exact Formal Conjectures maximum expression by
+`Iff.rfl`, proves equality of the two bounded candidate Finsets by extensional
+simplification, and restates `boundedCandidates_density_global` for that exact
+set. The counterpart API in `FormalConjectures/ErdosProblems/647.lean` was
+compiled independently under Formal Conjectures' pinned Lean/Mathlib version.
+The repositories pin different versions, so this is an honest dual-toolchain
+compatibility check rather than a forced mixed-version import.
+
 ## Complete proof-search export archive
 
-The repository now includes exports for all 210 related episodes identified by
+The repository now includes exports for all 211 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
-index, and a read-only database closure audit. Of these, 203 report
+index, and a read-only database closure audit. Of these, 204 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.

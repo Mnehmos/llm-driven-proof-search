@@ -3,7 +3,7 @@
 Generated 2026-07-15 from the campaign source, explicit Lean provenance,
 the evidence ledger, and a read-only transitive database closure audit.
 
-Episode count: 210 (203 kernel-verified; seven non-success histories retained
+Episode count: 211 (204 kernel-verified; seven non-success histories retained
 for audit completeness).
 
 - `040cf08c-4190-45d7-8dc0-4f5f8b8697c6` — `KERNEL_VERIFIED`
@@ -41,6 +41,7 @@ for audit completeness).
 - `2ca20745-2ed1-4e95-84bd-9b6410bea785` — `KERNEL_VERIFIED`
 - `2cba9c6e-019b-4f0b-aa64-6b608f5b7eb8` — `GAVE_UP`
 - `2e9066f2-b66a-4bb1-a3ba-a821a7826448` — `KERNEL_VERIFIED`
+- `3061458d-df2c-4e48-b05d-76b48209a2f6` — `KERNEL_VERIFIED`
 - `312120f0-82e4-49d8-a0a5-022822683064` — `KERNEL_VERIFIED`
 - `31c65d98-8423-4151-88dc-a9be7f79e51c` — `KERNEL_VERIFIED`
 - `32342386-093b-47a0-a143-c6931331d8c8` — `KERNEL_VERIFIED`

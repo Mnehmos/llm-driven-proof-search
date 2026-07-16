@@ -45,7 +45,7 @@
   finite-range closure.
 - The global theorem `|C(X)|≤K·X/(log X)^7` for every natural `X`, with
   explicit effective `K`.
-- A complete public export archive for all 210 related episodes: 203
+- A complete public export archive for all 211 related episodes: 204
   kernel-verified successes and seven retained non-success histories.
 
 ## Tools and authorship
@@ -68,9 +68,9 @@
 - Theorem 2's mathematics and the density target are Hughes–Kitamura
   mathematics. Our contribution is the independent Lean reconstruction,
   truncation-gap diagnosis and repair, explicit constants, and final assembly.
-- The 210 proof-search episodes have `fidelity_status = attested`: Lean checks
+- The 211 proof-search episodes have `fidelity_status = attested`: Lean checks
   project-authored formal statements, but this is not neutral-corpus
-  certification. Kernel verification applies to 203 of those episodes; the
+  certification. Kernel verification applies to 204 of those episodes; the
   other seven are retained as explicit negative or unfinished trajectories.
 - The terminal density theorem is supported by a clean transitive source
   replay. It is not misrepresented as an additional standalone tracked

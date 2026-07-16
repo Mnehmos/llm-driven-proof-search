@@ -16,6 +16,14 @@ modules plus `family2-classifications.lean` in the pinned environment.
 The Erdős problem itself remains open: this density theorem neither produces
 nor excludes a larger candidate.
 
+**The campaign is active again on the original existence question.** The new
+target is individual/eventual impossibility, not another fixed-dimensional
+density estimate: prove that every `n > 24` has some positive shift `k < n`
+with `σ₀(n-k) > k+2`.  The first interface for this phase is now
+kernel-verified: the global maximum condition implies every pointwise shift
+budget `σ₀(n-k)≤k+2`, so a growing-depth obstruction or a direct prime-chain
+contradiction can close the original problem by producing one failed budget.
+
 One analytic correction is now part of the proof record. The earlier
 Chebyshev/Mertens lower bound is valid, but its leading coefficient is
 `log 2`; after multiplying by seven it is too weak to yield a seventh power
@@ -717,7 +725,38 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
   fewer forms) is still a first-of-its-kind artifact; take the partial win
   and iterate.
 
-## Track 2 — harden the record
+## Track 2 — existence closure (ACTIVE)
+
+Target: prove `∀ n, 24 < n → ¬Candidate n`, equivalently show that every such
+`n` has a failed shift budget.
+
+- ✅ **Shift-depth interface DONE (2026-07-15):**
+  `full_max_implies_shift_budgets` converts the global `ciSup` condition into
+  `σ₀(n-k)≤k+2` for every `0<k<n`. `SurvivesThrough n D` packages the first
+  `D` budgets, and `not_full_max_of_depth_failure` makes any explicit failure
+  a direct contradiction. The main bridge is tracked as problem
+  `11379956-bdc3-4ed9-bef3-3e373c8e85c2`, episode
+  `3061458d-df2c-4e48-b05d-76b48209a2f6`, outcome `kernel_verified`.
+  Snapshot `proof/Erdos647_ShiftDepthInterface.lean`.
+- ✅ **Formal Conjectures predicate compatibility DONE (2026-07-15):**
+  `CandidateBound` is definitionally the same maximum expression; the bounded
+  candidate Finsets are extensionally equal, and the global density theorem is
+  restated over the exact Formal Conjectures set. Both sides compile in their
+  independently pinned toolchains. This fills none of the research-open
+  `sorry`s. Snapshot `proof/Erdos647_FormalConjecturesCompatibility.lean`.
+- **Growing-depth objective:** seek a function `D(n)→∞` and prove that every
+  sufficiently large `n` fails one budget with `k≤D(n)`. A fixed finite list
+  of congruences cannot suffice because of the all-avoid obstruction.
+- **Direct chain objective:** extend the verified shift classifications beyond
+  `1,2,3,4,6,8,12` and force an incompatible factorization. The first bounded
+  census target is shift `9`: among `n=2520N` for `N≤100000`, only three
+  values survive shifts `1..8`, and all three fail at `9`. This is search
+  guidance only, not proof; any theorem must handle the all-avoid families.
+- **Witness lane:** use computation only to identify structural patterns or a
+  genuine counterexample above the established frontier. Finite absence is
+  never presented as eventual nonexistence.
+
+## Track 3 — harden the record
 
 - Stand up a local `LeanChecker`-style replay of the [proof/](proof/)
   snapshots (as erdos-291/-1052 have), removing the "environment is the
@@ -727,7 +766,7 @@ via Mathlib's Selberg sieve (`Mathlib.NumberTheory.SelbergSieve`).
   result machine-checked too, and sharpen exactly which argument classes
   it excludes.
 
-## Track 3 — upstream
+## Track 4 — upstream
 
 - The Mertens work (Layer A) and the Selberg optimization step (Layer B)
   are Mathlib-shaped, problem-independent lemmas. Once stable, prepare
