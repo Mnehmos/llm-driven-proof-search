@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  constructor\n  · intro hlim B\n    obtain ⟨N, hN⟩ := Filter.tendsto_atTop_atTop.mp hlim (B + 1)\n    refine ⟨max N 2, ?_⟩\n    intro n hn\n    have hnN : N ≤ n := le_trans (Nat.le_max_left _ _) hn\n    have hn2 : 2 ≤ n := le_trans (Nat.le_max_right _ _) hn\n    have hB : B + 1 ≤\n        ⨆ m : Fin n, ArithmeticFunction.sigma 0 m + m - n := hN n hnN\n    letI : Nonempty (Fin n) := Fin.pos_iff_nonempty.mp (by omega)\n    obtain ⟨m, hm⟩ :\n        ∃ m : Fin n,\n          ArithmeticFunction.sigma 0 m + m - n =\n            ⨆ i : Fin n, ArithmeticFunction.sigma 0 i + i - n :=\n      exists_eq_ciSup_of_finite\n    have hBm : B + 1 ≤\n        ArithmeticFunction.sigma 0 m + (m : ℕ) - n := by\n      rw [hm]\n      exact hB\n    have hm0 : (m : ℕ) ≠ 0 := by\n      intro hmzero\n      have hs0 : ArithmeticFunction.sigma 0 (0 : ℕ) = 0 := by native_decide\n      rw [hmzero, hs0] at hBm\n      omega\n    let k := n - (m : ℕ)\n    refine ⟨k, ?_, ?_, ?_⟩\n    · dsimp [k]\n      omega\n    · dsimp [k]\n      omega\n    · dsimp [k]\n      have hm_lt : (m : ℕ) < n := m.isLt\n      have hnkm : n - (n - (m : ℕ)) = (m : ℕ) := by omega\n      rw [hnkm]\n      omega\n  · intro hshift\n    rw [Filter.tendsto_atTop_atTop]\n    intro B\n    obtain ⟨N, hN⟩ := hshift B\n    refine ⟨max N 1, ?_⟩\n    intro n hn\n    have hnN : N ≤ n := le_trans (Nat.le_max_left _ _) hn\n    obtain ⟨k, hk0, hkn, hkfail⟩ := hN n hnN\n    let m : Fin n := ⟨n - k, by omega⟩\n    have hterm : B ≤\n        ArithmeticFunction.sigma 0 m + (m : ℕ) - n := by\n      dsimp [m]\n      omega\n    have hbdd : BddAbove\n        (Set.range fun i : Fin n ↦\n          ArithmeticFunction.sigma 0 i + (i : ℕ) - n) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨i, rfl⟩\n      dsimp\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (i : ℕ)\n      have hi : (i : ℕ) < n := i.isLt\n      omega\n    exact hterm.trans (le_ciSup hbdd m)",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  constructor\n  · intro hlim B\n    obtain ⟨N, hN⟩ := Filter.tendsto_atTop_atTop.mp hlim (B + 1)\n    refine ⟨max N 2, ?_⟩\n    intro n hn\n    have hnN : N ≤ n := le_trans (Nat.le_max_left _ _) hn\n    have hn2 : 2 ≤ n := le_trans (Nat.le_max_right _ _) hn\n    have hB : B + 1 ≤\n        ⨆ m : Fin n, ArithmeticFunction.sigma 0 m + m - n := hN n hnN\n    letI : Nonempty (Fin n) := Fin.pos_iff_nonempty.mp (by omega)\n    obtain ⟨m, hm⟩ :\n        ∃ m : Fin n,\n          ArithmeticFunction.sigma 0 m + m - n =\n            ⨆ i : Fin n, ArithmeticFunction.sigma 0 i + i - n :=\n      exists_eq_ciSup_of_finite\n    have hBm : B + 1 ≤\n        ArithmeticFunction.sigma 0 m + (m : ℕ) - n := by\n      rw [hm]\n      exact hB\n    have hm0 : (m : ℕ) ≠ 0 := by\n      intro hmzero\n      have hs0 : ArithmeticFunction.sigma 0 (0 : ℕ) = 0 := by native_decide\n      rw [hmzero, hs0] at hBm\n      omega\n    let k := n - (m : ℕ)\n    refine ⟨k, ?_, ?_, ?_⟩\n    · dsimp [k]\n      omega\n    · dsimp [k]\n      omega\n    · dsimp [k]\n      have hm_lt : (m : ℕ) < n := m.isLt\n      have hnkm : n - (n - (m : ℕ)) = (m : ℕ) := by omega\n      rw [hnkm]\n      omega\n  · intro hshift\n    rw [Filter.tendsto_atTop_atTop]\n    intro B\n    obtain ⟨N, hN⟩ := hshift B\n    refine ⟨max N 1, ?_⟩\n    intro n hn\n    have hnN : N ≤ n := le_trans (Nat.le_max_left _ _) hn\n    obtain ⟨k, hk0, hkn, hkfail⟩ := hN n hnN\n    let m : Fin n := ⟨n - k, by omega⟩\n    have hterm : B ≤\n        ArithmeticFunction.sigma 0 m + (m : ℕ) - n := by\n      dsimp [m]\n      omega\n    have hbdd : BddAbove\n        (Set.range fun i : Fin n ↦\n          ArithmeticFunction.sigma 0 i + (i : ℕ) - n) := by\n      refine ⟨2 * n, ?_⟩\n      rintro y ⟨i, rfl⟩\n      dsimp\n      rw [ArithmeticFunction.sigma_zero_apply]\n      have hc := Nat.card_divisors_le_self (i : ℕ)\n      have hi : (i : ℕ) < n := i.isLt\n      omega\n    exact hterm.trans (le_ciSup hbdd m)",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "Filter.Tendsto\n      (fun n ↦ ⨆ m : Fin n, ArithmeticFunction.sigma 0 m + m - n)\n      Filter.atTop Filter.atTop ↔\n      ∀ B : ℕ, ∃ N : ℕ, ∀ n : ℕ, N ≤ n →\n        ∃ k : ℕ, 0 < k ∧ k < n ∧ B + k <\n          ArithmeticFunction.sigma 0 (n - k)",
+        "module_source_hash": null,
+        "obligation_id": "5157893c-94f6-4380-b7c9-792d8102ff90",
+        "outcome": "kernel_pass",
+        "problem_version_id": "7f51a2e4-b598-4a05-88ff-a0068f7e8a30",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "b541421b831a1799b3249fb335170a570719ae24abb78df2f130bcfa1d1ab0d2"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "d049ede3f50d6a9d09c3d5e7ca003b9f7ad2ad14c30930bdb6b66e060c630e76"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

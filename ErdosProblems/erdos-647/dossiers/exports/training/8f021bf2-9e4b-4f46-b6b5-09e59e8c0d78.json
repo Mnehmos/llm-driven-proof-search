@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "flat_tactic_sequence",
+        "proof_term": "native_decide",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "flat_tactic_sequence",
+          "proof_term": "native_decide",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "let N : ℕ := 244692464302; Nat.Prime (210 * N - 1) ∧ Nat.Prime (315 * N - 1) ∧ Nat.Prime (420 * N - 1) ∧ Nat.Prime (630 * N - 1) ∧ Nat.Prime (840 * N - 1) ∧ Nat.Prime (1260 * N - 1) ∧ Nat.Prime (2520 * N - 1)",
+        "module_source_hash": null,
+        "obligation_id": "4bc8adfc-bfe9-40c2-8f8a-bc3957c56b4f",
+        "outcome": "kernel_pass",
+        "problem_version_id": "942cd91e-ae66-46da-97f5-2cf2a39b89da",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "4efdd929cb3ef6e75d1a3eb3b7715677f46f613fe4633cfa74cbfc3d438cf089"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "dd6f8a170bf76082902b66963dcd7f123e39034d9253183e005d4b38ece94e94"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

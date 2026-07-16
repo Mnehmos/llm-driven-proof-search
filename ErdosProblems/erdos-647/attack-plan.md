@@ -1,9 +1,9 @@
 # Attack plan — Erdős #647 (living)
 
-> Last updated 2026-07-16. This is the working plan of record; it changes as
+> Last updated 2026-07-15. This is the working plan of record; it changes as
 > results land. Completed milestones move to the whitepaper's campaign log.
 
-## HEADLINE STATUS (2026-07-16)
+## HEADLINE STATUS (2026-07-15)
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,
@@ -25,6 +25,14 @@ with `σ₀(n-k) > k+2`. The global maximum is now kernel-verified to be
 candidate is formally above `84`, divisible by `2520`, and in one of the two
 four-prime families. The short-window variant has likewise been reduced
 exactly to fixed-depth survivor infinitude.
+
+**The primary continuation is now a generic shift-factor/adic induction, not
+an open-ended shift list.** A seven-theorem framework formalizes coprime and
+prime-power budget peeling, cofactor prime-factor control, and the exact next
+`p`-adic exceptional lift. Shifts 14–16 serve as 7-adic, 5-adic, and
+family-sensitive 2-adic stress tests of that abstraction. The missing theorem
+is global: prove that repeated exceptional lifts cannot persist indefinitely,
+or otherwise force a failed shift at depth growing with `n`.
 
 One analytic correction is now part of the proof record. The earlier
 Chebyshev/Mertens lower bound is valid, but its leading coefficient is
@@ -740,7 +748,7 @@ Target: prove `∀ n, 24 < n → ¬Candidate n`, equivalently show that every su
   `11379956-bdc3-4ed9-bef3-3e373c8e85c2`, episode
   `3061458d-df2c-4e48-b05d-76b48209a2f6`, outcome `kernel_verified`.
   Snapshot `proof/Erdos647_ShiftDepthInterface.lean`.
-- ✅ **Exact converse and finite band DONE (2026-07-16):**
+- ✅ **Exact converse and finite band DONE (2026-07-15):**
   `full_max_iff_shift_budgets` identifies the global maximum with all positive
   budgets (episode `8bc57f29-adcc-467d-b986-3e060b2d2e3c`). A second tracked
   theorem gives an explicit failed shift for every `25 ≤ n ≤ 84` (episode
@@ -749,7 +757,7 @@ Target: prove `∀ n, 24 < n → ¬Candidate n`, equivalently show that every su
   results proves `2520 ∣ n` and membership in one of the two exact four-prime
   families. Snapshots `proof/Erdos647_FiniteBandClosure.lean` and
   `proof/Erdos647_CandidateStructuralReduction.lean`.
-- ✅ **Short-window adapter DONE (2026-07-16):**
+- ✅ **Short-window adapter DONE (2026-07-15):**
   `window_iff_shift_budgets` converts each short-window maximum into the
   finite budgets through depth `k-1` (episode
   `74fbfc4b-da2f-467c-9d44-d02b6eeb28f4`). Thus the third Formal Conjectures
@@ -762,16 +770,95 @@ Target: prove `∀ n, 24 < n → ¬Candidate n`, equivalently show that every su
   restated over the exact Formal Conjectures set. Both sides compile in their
   independently pinned toolchains. This fills none of the research-open
   `sorry`s. Snapshot `proof/Erdos647_FormalConjecturesCompatibility.lean`.
-- **Growing-depth objective:** seek a function `D(n)→∞` and prove that every
-  sufficiently large `n` fails one budget with `k≤D(n)`. A fixed finite list
-  of congruences cannot suffice because of the all-avoid obstruction.
-- **Direct chain objective:** extend the verified shift classifications beyond
-  `1,2,3,4,6,8,12` and force an incompatible factorization. Shift `9` is now
-  sharpened: its square branch is impossible; its prime, `3·prime`, and
-  `9·prime` branches force exact residue classes modulo `3`, `9`, and `27`.
-  This is not a closure: explicit parameters survive shifts `1..9` through the
-  `3·prime` branch and first fail at shift `10`. The next useful target is a
-  uniform interaction between shifts `9` and `10`, not more bounded census.
+- **Growing-depth objective:** iterate the generic factor/adic transition,
+  rather than hand-proving an unrelated theorem at every shift, to seek a
+  function `D(n)→∞` for which every sufficiently large `n` fails one budget
+  with `k≤D(n)`. A fixed finite list of congruences cannot suffice because of
+  the all-avoid obstruction.
+- ✅ **Shift 9/10 interaction audited (2026-07-15):** shift `10` is now
+  sharpened too. Its square branch is impossible; the prime branch forces
+  `N mod 5 ∈ {0,1,2,4}`, while the `5·prime` branch forces
+  `N mod 25 ∈ {3,8,18,23}`. Family A forces `N` even and family B forces `N`
+  odd, yielding an exact `2 × 3 × 2` family/shift-9/shift-10 frontier in
+  `proof/Erdos647_Shift910Frontier.lean`.
+- ✅ **The fixed shift-10 closure route is disproved exactly (2026-07-15):**
+  `N=6,970,590`, `n=17,565,886,800` satisfies every divisor budget through
+  shift `10`, and all seven forms `aN-1` for
+  `a∈{210,315,420,630,840,1260,2520}` are prime. It first fails at shift `11`,
+  where `σ₀(n-11)=24>13`. This is tracked `kernel_verified` as episode
+  `1dbde32d-4fb7-4377-931d-df32607e5a6a`; snapshot
+  `proof/Erdos647_Shift10FrontierWitness.lean`. It proves that the shift-9/10
+  seam alone is insufficient.
+- ✅ **Even all budgets through shift 12 remain consistent (2026-07-15):**
+  `N=244,692,464,302`, `n=616,625,010,041,040` satisfies every budget
+  `1≤k≤12` and all seven prime forms, then first fails at shift `13` with
+  `σ₀(n-13)=16>15`. The complete explicit-factorization proof is tracked
+  `kernel_verified` as episode `3eb4731d-d0c9-4b7d-9e06-d44934b19c30`;
+  snapshot `proof/Erdos647_Shift12FrontierWitness.lean`. Thus the entire
+  currently classified fixed-depth package is consistent. A closure now
+  genuinely needs shift `13` or beyond, and the all-avoid obstruction still
+  points toward depth growing with `n` rather than a short fixed list.
+- ✅ **Shift 13 now has a reusable arithmetic frontier (2026-07-15):** for
+  every hypothetical candidate, `2520N-13` has divisor count at most `15`,
+  at most three distinct prime factors, and no prime factor in
+  `{2,3,5,7}`; moreover `13 ∣ (2520N-13)` exactly when `13 ∣ N`. In the
+  latter branch write `N=13M`. Either `M≡6 (mod 13)`, the exceptional
+  13-adic lift, or the cofactor `2520M-1` has divisor count at most `7` and
+  at most two distinct prime factors. The generic prime-factor bound and final
+  frontier are tracked `kernel_verified` as episodes
+  `9499a13b-25db-45f6-a492-8b357900aade` and
+  `1e79ece8-14f0-43d2-b24a-f5cb43152f38`; snapshot
+  `proof/Erdos647_Shift13Refined.lean`.
+- ✅ **Generic shift-factor / adic induction framework DONE (2026-07-15):**
+  `proof/Erdos647_ShiftFactorFramework.lean` extracts the recurring argument
+  from the shift-specific proofs. A known coprime factor divides the available
+  divisor budget; a prime-power factor `p^e` divides it by exactly `e+1`; the
+  resulting bound controls the cofactor's distinct prime factors; and failure
+  of coprimality at the next stage is exactly one further `p`-adic divisibility
+  layer, equivalently an exceptional modular class for a linear cofactor. The
+  prime-power peel and modular-lift cores are tracked `kernel_verified` as
+  episodes `3e3ee8d9-a23b-4997-bb26-345cfe672337` and
+  `5ec047ae-3659-449e-8546-26ea9c941be0`. This is now the primary existence
+  architecture: each concrete shift should contribute only a factorization,
+  parity/family data, and a finite exceptional-digit calculation.
+- ✅ **Shifts 14–16 validate the abstraction (2026-07-15):** these are stress
+  tests, not a plan to accumulate isolated shifts indefinitely. Shift 14 gives
+  an exact two-layer 7-adic frontier: away from `N≡3 (mod 7)` the cofactor
+  `180N-1` has at most four divisors and two distinct prime factors; the next
+  layer is either `N≡3 (mod 49)` or one of six lifts carrying a prime
+  `180M+77`. Episode `0ccca717-0a99-42b3-82cb-7011619cfb73` is
+  `kernel_verified`. Shift 15 gives an exact two-layer 5-adic frontier with
+  prime cofactors outside the sole residual class `N≡32 (mod 125)`; episodes
+  `4a1060e5-3f9e-4a72-8ccf-ed7ae231d3be` and
+  `718d1350-8ff2-4069-8527-5474a1dddd16` are `kernel_verified`. Shift 16
+  combines the same API with family parity: the odd branch has a cofactor with
+  at most four divisors/two prime factors, while the even branch reduces
+  through explicit 2-adic cases to one residual class `M≡3 (mod 8)`. Its
+  source chain compiles; the strong even-parameter core independently returned
+  `kernel_pass` in job `9d45701f-7e1e-45bc-8cd2-6c5b4be6906f`, with no
+  tracked episode claimed. Snapshots:
+  `proof/Erdos647_Shift14Refined.lean`,
+  `proof/Erdos647_Shift15Refined.lean`, and
+  `proof/Erdos647_Shift16Refined.lean`.
+- ✅ **Limit variant interface sharpened (2026-07-15):** convergence of the
+  excess maximum to `atTop` is equivalent to: for every `B`, all sufficiently
+  large `n` admit `0<k<n` with `B+k<σ₀(n-k)`. This is tracked
+  `kernel_verified` as episode `3baedfa9-85ed-48b0-b477-18faa0d9e47f`.
+  Prime powers prove the excess sequence is unbounded along
+  `n=2^B+1`, but not the required uniform convergence. Snapshot
+  `proof/Erdos647_LimitShiftInterface.lean`.
+- ✅ **Infinite-window frontier identified (2026-07-15):** window sizes
+  `k≤2` are unconditional. For `k=3` (shift depth two), the survivor set is
+  infinite **if and only if** there are infinitely many Sophie Germain primes
+  `q` with `2q+1` prime. The easy direction and the unconditional low-window
+  theorem are tracked `kernel_verified` as episodes
+  `7cf0660b-3dac-48f3-8294-7b22d8e9f593` and
+  `e7b81c9f-8b1e-41c5-a760-d9aba712bb16`; the converse is source-checked in
+  `proof/Erdos647_InfiniteWindowFrontier.lean`, and the exact iff is also
+  stated directly over the Formal Conjectures window expression. Thus the
+  third Formal Conjectures `sorry` already contains the classical Sophie
+  Germain infinitude
+  problem at its first open window size.
 - **Witness lane:** use computation only to identify structural patterns or a
   genuine counterexample above the established frontier. Finite absence is
   never presented as eventual nonexistence.

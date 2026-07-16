@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro x r hx hsigma\nrw [ArithmeticFunction.sigma_zero_apply, Nat.card_divisors hx] at hsigma\nhave hpow : 2 ^ x.primeFactors.card ≤\n    ∏ p ∈ x.primeFactors, (x.factorization p + 1) := by\n  apply Finset.pow_card_le_prod\n  intro p hp\n  have hp' : p ∈ x.factorization.support := by\n    simpa using hp\n  have hfac : x.factorization p ≠ 0 := Finsupp.mem_support_iff.mp hp'\n  omega\nby_contra hcard\nhave hsucc : r + 1 ≤ x.primeFactors.card := by omega\nhave hmono : 2 ^ (r + 1) ≤ 2 ^ x.primeFactors.card :=\n  pow_le_pow_right' (by norm_num) hsucc\nomega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro x r hx hsigma\nrw [ArithmeticFunction.sigma_zero_apply, Nat.card_divisors hx] at hsigma\nhave hpow : 2 ^ x.primeFactors.card ≤\n    ∏ p ∈ x.primeFactors, (x.factorization p + 1) := by\n  apply Finset.pow_card_le_prod\n  intro p hp\n  have hp' : p ∈ x.factorization.support := by\n    simpa using hp\n  have hfac : x.factorization p ≠ 0 := Finsupp.mem_support_iff.mp hp'\n  omega\nby_contra hcard\nhave hsucc : r + 1 ≤ x.primeFactors.card := by omega\nhave hmono : 2 ^ (r + 1) ≤ 2 ^ x.primeFactors.card :=\n  pow_le_pow_right' (by norm_num) hsucc\nomega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ x r : ℕ, x ≠ 0 → ArithmeticFunction.sigma 0 x < 2 ^ (r + 1) → x.primeFactors.card ≤ r",
+        "module_source_hash": null,
+        "obligation_id": "e9b9eca0-ea18-44d3-bf7e-48b04338f41b",
+        "outcome": "kernel_pass",
+        "problem_version_id": "0da6c01d-4e97-4b86-96f8-52e95b3b70db",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "c7cf88b388291afc0de2936409b27cedacb876c73aad33cb7573209f48547629"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "124b52384a1b8f493d5a8395dbf01c841d15f359281f13d4296ccf670b94cdbc"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro n N hn H hnN\nhave hcardgen : ∀ x r : ℕ, x ≠ 0 →\n    ArithmeticFunction.sigma 0 x < 2 ^ (r + 1) →\n    x.primeFactors.card ≤ r := by\n  intro x r hx hsigma\n  rw [ArithmeticFunction.sigma_zero_apply, Nat.card_divisors hx] at hsigma\n  have hpow : 2 ^ x.primeFactors.card ≤\n      ∏ p ∈ x.primeFactors, (x.factorization p + 1) := by\n    apply Finset.pow_card_le_prod\n    intro p hp\n    have hp' : p ∈ x.factorization.support := by\n      simpa using hp\n    have hfac : x.factorization p ≠ 0 := Finsupp.mem_support_iff.mp hp'\n    omega\n  by_contra hcard\n  have hsucc : r + 1 ≤ x.primeFactors.card := by omega\n  have hmono : 2 ^ (r + 1) ≤ 2 ^ x.primeFactors.card :=\n    pow_le_pow_right' (by norm_num) hsucc\n  omega\nhave hbudget_n : ArithmeticFunction.sigma 0 (n - 13) ≤ 15 := by\n  let f : Fin n → ℕ := fun x =>\n    (x : ℕ) + ArithmeticFunction.sigma 0 x\n  have hbdd : BddAbove (Set.range f) := by\n    refine ⟨2 * n, ?_⟩\n    rintro y ⟨x, rfl⟩\n    dsimp [f]\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hc := Nat.card_divisors_le_self (x : ℕ)\n    have hx : (x : ℕ) < n := x.isLt\n    omega\n  let m : Fin n := ⟨n - 13, by omega⟩\n  have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n  dsimp [f, m] at hm\n  omega\nhave hvalue : n - 13 = 2520 * N - 13 := by omega\nrw [hvalue] at hbudget_n\nby_cases h13N : 13 ∣ N\n· right\n  obtain ⟨M, hNM⟩ := h13N\n  refine ⟨M, hNM, ?_⟩\n  by_cases hMres : M % 13 = 6\n  · exact Or.inl hMres\n  right\n  have hN : 1 ≤ N := by omega\n  have hM : 1 ≤ M := by omega\n  have hx : 2520 * N - 13 = 13 * (2520 * M - 1) := by\n    rw [hNM]\n    omega\n  have hr0 : 2520 * M - 1 ≠ 0 := by omega\n  have hnot13 : ¬ 13 ∣ 2520 * M - 1 := by\n    rintro ⟨a, ha⟩\n    have hmodlt : M % 13 < 13 := Nat.mod_lt M (by norm_num)\n    have hdecomp := Nat.mod_add_div M 13\n    apply hMres\n    omega\n  have h13prime : Nat.Prime 13 := by norm_num\n  have hcop : Nat.Coprime 13 (2520 * M - 1) :=\n    (h13prime.coprime_iff_not_dvd).mpr hnot13\n  have hsigma : ArithmeticFunction.sigma 0 (2520 * N - 13) =\n      2 * ArithmeticFunction.sigma 0 (2520 * M - 1) := by\n    rw [hx, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop]\n    have hs13 : ArithmeticFunction.sigma 0 13 = 2 := by native_decide\n    rw [hs13]\n  rw [hsigma] at hbudget_n\n  have hcofactor : ArithmeticFunction.sigma 0 (2520 * M - 1) ≤ 7 := by\n    omega\n  exact ⟨hcofactor, hcardgen _ 2 hr0 (by norm_num; omega)⟩\n· exact Or.inl h13N",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro n N hn H hnN\nhave hcardgen : ∀ x r : ℕ, x ≠ 0 →\n    ArithmeticFunction.sigma 0 x < 2 ^ (r + 1) →\n    x.primeFactors.card ≤ r := by\n  intro x r hx hsigma\n  rw [ArithmeticFunction.sigma_zero_apply, Nat.card_divisors hx] at hsigma\n  have hpow : 2 ^ x.primeFactors.card ≤\n      ∏ p ∈ x.primeFactors, (x.factorization p + 1) := by\n    apply Finset.pow_card_le_prod\n    intro p hp\n    have hp' : p ∈ x.factorization.support := by\n      simpa using hp\n    have hfac : x.factorization p ≠ 0 := Finsupp.mem_support_iff.mp hp'\n    omega\n  by_contra hcard\n  have hsucc : r + 1 ≤ x.primeFactors.card := by omega\n  have hmono : 2 ^ (r + 1) ≤ 2 ^ x.primeFactors.card :=\n    pow_le_pow_right' (by norm_num) hsucc\n  omega\nhave hbudget_n : ArithmeticFunction.sigma 0 (n - 13) ≤ 15 := by\n  let f : Fin n → ℕ := fun x =>\n    (x : ℕ) + ArithmeticFunction.sigma 0 x\n  have hbdd : BddAbove (Set.range f) := by\n    refine ⟨2 * n, ?_⟩\n    rintro y ⟨x, rfl⟩\n    dsimp [f]\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hc := Nat.card_divisors_le_self (x : ℕ)\n    have hx : (x : ℕ) < n := x.isLt\n    omega\n  let m : Fin n := ⟨n - 13, by omega⟩\n  have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) H\n  dsimp [f, m] at hm\n  omega\nhave hvalue : n - 13 = 2520 * N - 13 := by omega\nrw [hvalue] at hbudget_n\nby_cases h13N : 13 ∣ N\n· right\n  obtain ⟨M, hNM⟩ := h13N\n  refine ⟨M, hNM, ?_⟩\n  by_cases hMres : M % 13 = 6\n  · exact Or.inl hMres\n  right\n  have hN : 1 ≤ N := by omega\n  have hM : 1 ≤ M := by omega\n  have hx : 2520 * N - 13 = 13 * (2520 * M - 1) := by\n    rw [hNM]\n    omega\n  have hr0 : 2520 * M - 1 ≠ 0 := by omega\n  have hnot13 : ¬ 13 ∣ 2520 * M - 1 := by\n    rintro ⟨a, ha⟩\n    have hmodlt : M % 13 < 13 := Nat.mod_lt M (by norm_num)\n    have hdecomp := Nat.mod_add_div M 13\n    apply hMres\n    omega\n  have h13prime : Nat.Prime 13 := by norm_num\n  have hcop : Nat.Coprime 13 (2520 * M - 1) :=\n    (h13prime.coprime_iff_not_dvd).mpr hnot13\n  have hsigma : ArithmeticFunction.sigma 0 (2520 * N - 13) =\n      2 * ArithmeticFunction.sigma 0 (2520 * M - 1) := by\n    rw [hx, ArithmeticFunction.isMultiplicative_sigma.map_mul_of_coprime hcop]\n    have hs13 : ArithmeticFunction.sigma 0 13 = 2 := by native_decide\n    rw [hs13]\n  rw [hsigma] at hbudget_n\n  have hcofactor : ArithmeticFunction.sigma 0 (2520 * M - 1) ≤ 7 := by\n    omega\n  exact ⟨hcofactor, hcardgen _ 2 hr0 (by norm_num; omega)⟩\n· exact Or.inl h13N",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ n N : ℕ, 84 < n →\n  (⨆ m : Fin n, (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 →\n  n = 2520 * N →\n  (¬ 13 ∣ N) ∨\n  ∃ M : ℕ, N = 13 * M ∧\n    (M % 13 = 6 ∨\n      (ArithmeticFunction.sigma 0 (2520 * M - 1) ≤ 7 ∧\n        (2520 * M - 1).primeFactors.card ≤ 2))",
+        "module_source_hash": null,
+        "obligation_id": "bf8ba713-0691-4dd5-b10b-1881c358b06f",
+        "outcome": "kernel_pass",
+        "problem_version_id": "284723a7-d5b3-4417-b8d2-84dca18bf894",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "fb1badc92acf684f888427a5e6c5f2651179e945053e58497dd67aaceb83e304"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "261e84b2a7406929641b71f1f4deac8391c27e0b4ae438631fc02e6b1b25b7a9"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

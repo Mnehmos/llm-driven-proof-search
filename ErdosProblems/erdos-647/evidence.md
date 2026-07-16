@@ -1,6 +1,6 @@
 # Machine evidence — Erdős #647 campaign
 
-> Living document; last updated 2026-07-16. Tracked episode records below use
+> Living document; last updated 2026-07-15. Tracked episode records below use
 > the MCP proof-search pipeline (dev-attested fidelity basis →
 > `kernel_verified`, the honest ceiling for a dev attestation). The final
 > repository-level composition is recorded separately and is not represented
@@ -94,8 +94,111 @@ is divisible by `2520`, and lies in one of the two verified four-prime
 families; see
 [proof/Erdos647_CandidateStructuralReduction.lean](proof/Erdos647_CandidateStructuralReduction.lean).
 The refined shift-9 source removes the square branch and adds exact residue
-restrictions. These are strict reductions of the still-open existence problem,
-not evidence that it has been solved.
+restrictions. The new
+[`proof/Erdos647_Shift910Frontier.lean`](proof/Erdos647_Shift910Frontier.lean)
+also removes the shift-10 square branch, gives exact residue restrictions for
+both surviving shift-10 branches, separates the two prime-chain families by
+the parity of `N`, and assembles the resulting twelve-branch frontier. Its four
+new generic lemmas separately returned `kernel_pass` in jobs
+`7b41ecb5-e33d-41a5-a65d-3b82228c58cf`,
+`21486d9c-5362-42c3-9874-de7ff8c5f14e`,
+`f139e7c5-1c06-408a-8f42-478e4028333c`, and
+`7cd52d14-886a-4923-a76d-8e6062aab8e1`; the assembled module source-compiled
+against the campaign dependencies.
+
+### Generic shift-factor / next-adic induction framework
+
+The continuation is now organized around
+[`proof/Erdos647_ShiftFactorFramework.lean`](proof/Erdos647_ShiftFactorFramework.lean),
+not an indefinitely growing list of unrelated shift lemmas. It proves seven
+generic theorems: coprime-factor budget peeling, prime-power specialization,
+candidate-facing wrappers, cofactor prime-factor-cardinality control, and the
+equivalence between one further `p`-adic layer and one exceptional congruence
+class for a linear cofactor.
+
+| result | problem_version_id | episode_id | outcome |
+|---|---|---|---|
+| prime-power cofactor peel | `4aaaaeea-dd00-46fe-9a78-1fcebad0d236` | `3e3ee8d9-a23b-4997-bb26-345cfe672337` | **kernel_verified**, `root_proved`; precheck job `94f97429-5c14-428b-befd-cb119da1b79b` `kernel_pass` |
+| next-adic lift iff modular exceptional class | `8f86185e-db7a-45af-8ffa-74d933439eb6` | `5ec047ae-3659-449e-8546-26ea9c941be0` | **kernel_verified**, `root_proved`; precheck job `d2260d3c-2e67-4a3e-ac55-13782f89237f` `kernel_pass` |
+
+Shifts 14–16 were then used as stress tests for that API:
+
+| source/result | problem_version_id | episode_id | outcome |
+|---|---|---|---|
+| [shift-14 two-layer 7-adic frontier](proof/Erdos647_Shift14Refined.lean) | `0524467f-fcdf-45ea-a439-7c0709a50d95` | `0ccca717-0a99-42b3-82cb-7011619cfb73` | **kernel_verified**, `root_proved` |
+| [shift-15 two-layer 5-adic frontier](proof/Erdos647_Shift15Refined.lean) | `9bee03bb-dbb7-43e3-91d7-eebc2b32c0d5` | `4a1060e5-3f9e-4a72-8ccf-ed7ae231d3be` | **kernel_verified**, `root_proved` |
+| shift-15 generic peel core | `e12fd70e-31e9-48c6-8be8-4cd02ad2d949` | `718d1350-8ff2-4069-8527-5474a1dddd16` | **kernel_verified**, `root_proved` |
+| [shift-16 family-sensitive 2-adic frontier](proof/Erdos647_Shift16Refined.lean) | — | — | source chain replay passed; strong even-parameter core job `9d45701f-7e1e-45bc-8cd2-6c5b4be6906f` **kernel_pass**; no tracked episode |
+
+The full source chain—framework, shift 14, shift 15, and shift 16—compiled
+cleanly in dependency order. The three examples show that the abstraction
+handles 7-adic, 5-adic, and family-sensitive 2-adic refinements. The remaining
+shift-specific work is the exact affine factorization, parity/family input,
+and finite exceptional-digit enumeration. No theorem yet proves that the
+generic transition terminates for every candidate.
+
+Shift 13 now has its own exact refinement:
+
+| result | problem_version_id | episode_id | outcome |
+|---|---|---|---|
+| `σ₀(x)<2^(r+1)` bounds `x.primeFactors.card` by `r` | `0da6c01d-4e97-4b86-96f8-52e95b3b70db` | `9499a13b-25db-45f6-a492-8b357900aade` | **kernel_verified**, `root_proved` |
+| exact first 13-adic split for a candidate's shift-13 value | `284723a7-d5b3-4417-b8d2-84dca18bf894` | `1e79ece8-14f0-43d2-b24a-f5cb43152f38` | **kernel_verified**, `root_proved` |
+
+The source-checked middle theorem in
+[`proof/Erdos647_Shift13Refined.lean`](proof/Erdos647_Shift13Refined.lean)
+shows that `2520N−13` has at most three distinct prime factors, has no prime
+factor among `2,3,5,7`, and is divisible by 13 exactly when `N` is. The tracked
+13-adic theorem then proves that on `N=13M`, either the unique exceptional
+first lift `M≡6 (mod 13)` occurs or the remaining cofactor has at most seven
+divisors and at most two distinct prime factors.
+
+Two exact consistency witnesses show why this fixed-depth frontier is not yet
+a contradiction:
+
+| result | problem_version_id | episode_id | outcome |
+|---|---|---|---|
+| [`N=6,970,590`: seven prime forms, all budgets through shift 10, failure at shift 11](proof/Erdos647_Shift10FrontierWitness.lean) | `b9a96621-fc15-42af-bf3d-8b330a1cc0f0` | `1dbde32d-4fb7-4377-931d-df32607e5a6a` | **kernel_verified**, `root_proved` |
+| [`N=244,692,464,302`: seven prime forms, all budgets through shift 12, failure at shift 13](proof/Erdos647_Shift12FrontierWitness.lean) | `3bf407ed-5a59-49d8-9791-9cf6f73b81d8` | `3eb4731d-d0c9-4b7d-9e06-d44934b19c30` | **kernel_verified**, `root_proved` |
+| independently tracked seven-prime sub-conjunction for the depth-12 witness | `942cd91e-ae66-46da-97f5-2cf2a39b89da` | `8f021bf2-9e4b-4f46-b6b5-09e59e8c0d78` | **kernel_verified**, `root_proved` |
+
+The witness proofs use explicit prime factorizations and multiplicativity of
+`sigma`; they are kernel certificates, not trust in an external factorization
+program. These are strict reductions and obstruction certificates for the
+still-open existence problem, not evidence that it has been solved.
+
+### Limit and infinite-window hard cores
+
+The limit module isolates the exact missing uniform statement:
+
+| result | problem_version_id | episode_id | outcome |
+|---|---|---|---|
+| convergence to `atTop` iff every excess threshold is eventually exceeded by some shift | `7f51a2e4-b598-4a05-88ff-a0068f7e8a30` | `3baedfa9-85ed-48b0-b477-18faa0d9e47f` | **kernel_verified**, `root_proved` |
+
+[`proof/Erdos647_LimitShiftInterface.lean`](proof/Erdos647_LimitShiftInterface.lean)
+also proves an explicit prime-power subsequence is unbounded and that the
+whole range is not `BddAbove`. The prime-power lower bound separately returned
+`kernel_pass` in job `23015b9f-023c-44e7-a025-a6fdd9e1b417`. Sparse
+unboundedness is deliberately not reported as convergence.
+
+For the infinite-window variant, the first nontrivial fixed depth already
+meets a classical open problem:
+
+| result | problem_version_id | episode_id | outcome |
+|---|---|---|---|
+| window sizes at most two are unconditional | `f1717863-2574-48c0-a9d1-ae3a7b223fb9` | `e7b81c9f-8b1e-41c5-a760-d9aba712bb16` | **kernel_verified**, `root_proved` |
+| infinitely many safe-prime parameters give infinitely many depth-two survivors | `62b31233-1d14-44f2-84f0-f1af49d33e0a` | `7cf0660b-3dac-48f3-8294-7b22d8e9f593` | **kernel_verified**, `root_proved` |
+
+The source-compiled converse in
+[`proof/Erdos647_InfiniteWindowFrontier.lean`](proof/Erdos647_InfiniteWindowFrontier.lean)
+proves that, for `n>10`, surviving shifts 1 and 2 is equivalent to
+`n=2q+2` with both `q` and `2q+1` prime. Consequently, infinitude at window
+size three is exactly equivalent to infinitude of Sophie Germain primes. This
+identifies the hard core of that case; it does not settle it. The exact same
+iff is now also stated directly over the upstream window expression as
+`infinite_window_three_iff_infinite_sophie_germain` in the Formal
+Conjectures module. Its abstract finite-exception/image seam returned
+`kernel_pass` in proof-search job
+`d14bee02-f06e-4e06-a528-597a73f0bc38`.
 
 The source-level compatibility replay additionally compiled
 [`proof/Erdos647_FormalConjecturesCompatibility.lean`](proof/Erdos647_FormalConjecturesCompatibility.lean)
@@ -104,15 +207,17 @@ from a clean staged copy of the complete density dependency graph. It proves
 `Iff.rfl`, proves equality of the two bounded candidate Finsets by extensional
 simplification, and restates `boundedCandidates_density_global` for that exact
 set. The counterpart API in `FormalConjectures/ErdosProblems/647.lean` was
-compiled independently under Formal Conjectures' pinned Lean/Mathlib version.
+compiled independently under Formal Conjectures' pinned Lean/Mathlib version;
+the complete warning-as-failure build passed all 8,869 jobs with only the
+three intentionally open research statements remaining as source `sorry`s.
 The repositories pin different versions, so this is an honest dual-toolchain
 compatibility check rather than a forced mixed-version import.
 
 ## Complete proof-search export archive
 
-The repository now includes exports for all 214 related episodes identified by
+The repository now includes exports for all 227 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
-index, and a read-only database closure audit. Of these, 207 report
+index, and a read-only database closure audit. Of these, 220 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.
@@ -312,16 +417,17 @@ the environment's problem ledger by statement pattern
 
 ## Reproduction notes
 
-- The `.lean` files in [proof/](proof/) are byte-faithful snapshots of the
-  exact statement + proof term the kernel accepted through the tracked
-  pipeline (statement hashes above). They are written as standalone files
-  under `import Mathlib` with the same manifest the environment pinned.
+- Tracked `.lean` snapshots in [proof/](proof/) preserve the exact statement
+  and proof term accepted by the kernel (statement hashes above). A small
+  number of final composition modules instead import those snapshots and are
+  identified explicitly as source-replayed rather than assigned fabricated
+  episode records.
 - The tracked pipeline's episode ledgers (hash-chained, append-only) live in
   the proof-search environment's database; the IDs above are the lookup
   keys. This folder deliberately records *pointers + snapshots*, not the
   database itself.
-- Honest caveat: these snapshots have not been re-executed by a second,
-  independent local `lake` build in this repository yet (the environment's
-  pinned toolchain is the verifying authority). Standing this folder up
-  with a local `LeanChecker` harness replay, as done for erdos-291/-1052,
-  is an open task in [attack-plan.md](attack-plan.md).
+- The final density dependency graph and the new post-density modules were
+  source-replayed in the pinned environment. Formal Conjectures compatibility
+  was additionally checked in that repository's separately pinned toolchain.
+  These replays complement, but do not upgrade, the dev-attested fidelity of
+  the tracked proof-search episodes.
