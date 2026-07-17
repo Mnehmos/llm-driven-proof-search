@@ -107,4 +107,45 @@ theorem erdos647_arbitrary_shift_crt_reentry_bound :
     omega
   exact htau.trans hbudget
 
+/-- Four-rung specialization at the exact shifts produced by the normalized
+base state. -/
+theorem erdos647_base_four_prime_crt_reentry_bound :
+    ∀ n p5 p7 p9 p10 : ℕ,
+      p5.Prime → 10 < p5 → p5 ∣ n - 5 →
+      p7.Prime → 10 < p7 → p7 ∣ n - 7 →
+      p9.Prime → 10 < p9 → p9 ∣ n - 9 →
+      p10.Prime → 10 < p10 → p10 ∣ n - 10 →
+      p5 ≠ p7 → p5 ≠ p9 → p5 ≠ p10 →
+      p7 ≠ p9 → p7 ≠ p10 → p9 ≠ p10 →
+      p5 * p7 * p9 * p10 < n →
+      (⨆ m : Fin n,
+        (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 →
+      16 ≤ n % (p5 * p7 * p9 * p10) + 2 := by
+  intro n p5 p7 p9 p10
+    hp5 hp5large hp5dvd hp7 hp7large hp7dvd
+    hp9 hp9large hp9dvd hp10 hp10large hp10dvd
+    h57 h59 h510 h79 h710 h910 hprod hcand
+  let shift : Fin 4 → ℕ := ![5, 7, 9, 10]
+  let P : Fin 4 → ℕ := ![p5, p7, p9, p10]
+  have hinj : Function.Injective P := by
+    intro i j hij
+    fin_cases i <;> fin_cases j <;> simp_all [P]
+  have hP : ∀ i : Fin 4,
+      (P i).Prime ∧ 0 < shift i ∧ shift i < P i ∧
+        shift i < n ∧ P i ∣ n - shift i := by
+    intro i
+    have hp5le : p5 ≤ p5 * p7 * p9 * p10 := by
+      apply Nat.le_of_dvd (by positivity)
+      exact ⟨p7 * p9 * p10, by ring⟩
+    have hn : 10 < n := lt_of_lt_of_le hp5large (hp5le.trans hprod.le)
+    fin_cases i <;> simp [P, shift, hp5, hp5dvd,
+      hp7, hp7dvd, hp9, hp9dvd, hp10, hp10dvd] <;> omega
+  have hcore := erdos647_arbitrary_shift_crt_reentry_bound
+    n 4 shift P (by norm_num) hinj hP
+  have hprod_eq : (∏ i : Fin 4, P i) = p5 * p7 * p9 * p10 := by
+    rw [Fin.prod_univ_four]
+    rfl
+  rw [hprod_eq] at hcore
+  simpa using hcore hprod hcand
+
 end Erdos647
