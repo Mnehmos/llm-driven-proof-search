@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro a b c d R h\nrcases h with habc | habd | hacd | hbcd\n· exact Or.inl (Nat.mul_le_mul_right d habc)\n· right\n  left\n  simpa [mul_assoc, mul_left_comm, mul_comm] using\n    (Nat.mul_le_mul_right c habd)\n· right\n  right\n  left\n  simpa [mul_assoc, mul_left_comm, mul_comm] using\n    (Nat.mul_le_mul_right b hacd)\n· right\n  right\n  right\n  simpa [mul_assoc, mul_left_comm, mul_comm] using\n    (Nat.mul_le_mul_right a hbcd)",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro a b c d R h\nrcases h with habc | habd | hacd | hbcd\n· exact Or.inl (Nat.mul_le_mul_right d habc)\n· right\n  left\n  simpa [mul_assoc, mul_left_comm, mul_comm] using\n    (Nat.mul_le_mul_right c habd)\n· right\n  right\n  left\n  simpa [mul_assoc, mul_left_comm, mul_comm] using\n    (Nat.mul_le_mul_right b hacd)\n· right\n  right\n  right\n  simpa [mul_assoc, mul_left_comm, mul_comm] using\n    (Nat.mul_le_mul_right a hbcd)",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ a b c d R : ℕ,\n  (a * b * c ≤ R ^ 3 ∨ a * b * d ≤ R ^ 3 ∨\n    a * c * d ≤ R ^ 3 ∨ b * c * d ≤ R ^ 3) →\n  a * b * c * d ≤ R ^ 3 * d ∨\n    a * b * c * d ≤ R ^ 3 * c ∨\n    a * b * c * d ≤ R ^ 3 * b ∨\n    a * b * c * d ≤ R ^ 3 * a",
+        "module_source_hash": null,
+        "obligation_id": "f7b58544-4358-4218-addd-af9e75734f83",
+        "outcome": "kernel_pass",
+        "problem_version_id": "f43aba47-2cf0-4b34-8aeb-422ddd77998d",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "7d9e58b16d9d3a7aeb9c8d90d3e1f4e28ff4095fc4331c5d7e77fe4387e722f7"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "dc5dba28e2a76a9454e91a95ae6196b67a44434f8ae9869e27b7e1cb78785b67"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

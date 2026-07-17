@@ -1704,4 +1704,164 @@ theorem candidate_base_prime_product_or_large_remainder :
   · left
     simpa [Q] using Nat.le_of_not_gt hQn
 
+/-- Self-contained four-rung residue accumulation: exact shift residues force
+some three-prime subproduct below the cube of the CRT remainder. -/
+theorem base_four_prime_remainder_triple_bound :
+    ∀ n p5 p7 p9 p10 : ℕ,
+      10 < n →
+      p5.Prime → 10 < p5 → p5 ∣ n - 5 →
+      p7.Prime → 10 < p7 → p7 ∣ n - 7 →
+      p9.Prime → 10 < p9 → p9 ∣ n - 9 →
+      p10.Prime → 10 < p10 → p10 ∣ n - 10 →
+      let R := n % (p5 * p7 * p9 * p10)
+      p5 * p7 * p9 ≤ R ^ 3 ∨ p5 * p7 * p10 ≤ R ^ 3 ∨
+        p5 * p9 * p10 ≤ R ^ 3 ∨ p7 * p9 * p10 ≤ R ^ 3 := by
+  classical
+  intro n p5 p7 p9 p10 hn
+    hp5 hp5large hp5dvd hp7 hp7large hp7dvd
+    hp9 hp9large hp9dvd hp10 hp10large hp10dvd
+  let Q := p5 * p7 * p9 * p10
+  let R := n % Q
+  have hQpos : 0 < Q := by dsimp [Q]; positivity
+  have hp5Q : p5 ∣ Q := by dsimp [Q]; exact ⟨p7 * p9 * p10, by ring⟩
+  have hp7Q : p7 ∣ Q := by dsimp [Q]; exact ⟨p5 * p9 * p10, by ring⟩
+  have hp9Q : p9 ∣ Q := by dsimp [Q]; exact ⟨p5 * p7 * p10, by ring⟩
+  have hp10Q : p10 ∣ Q := by dsimp [Q]; exact ⟨p5 * p7 * p9, by ring⟩
+  have residue : ∀ p s : ℕ, p ∣ Q → s < p → s < n →
+      p ∣ n - s → R % p = s := by
+    intro p s hpQ hsp hsn hpdvd
+    have hsplit : n = s + (n - s) := by
+      simpa [Nat.add_comm] using (Nat.sub_add_cancel hsn.le).symm
+    have hzero : (n - s) % p = 0 := Nat.dvd_iff_mod_eq_zero.mp hpdvd
+    calc
+      R % p = n % p := Nat.mod_mod_of_dvd n hpQ
+      _ = (s + (n - s)) % p := by rw [← hsplit]
+      _ = s := by
+        simpa [Nat.add_mod, hzero] using Nat.mod_eq_of_lt hsp
+  have pair_bound : ∀ p s q t : ℕ,
+      p ∣ Q → q ∣ Q → s < p → t < q → s < n → t < n →
+      p ∣ n - s → q ∣ n - t → s ≠ t → p ≤ R ∨ q ≤ R := by
+    intro p s q t hpQ hqQ hsp htq hsn htn hpd hqd hst
+    by_cases hpR : p ≤ R
+    · exact Or.inl hpR
+    right
+    by_contra hqR
+    have hRp : R < p := Nat.lt_of_not_ge hpR
+    have hRq : R < q := Nat.lt_of_not_ge hqR
+    have hrs : R = s := by
+      have h := residue p s hpQ hsp hsn hpd
+      rwa [Nat.mod_eq_of_lt hRp] at h
+    have hrt : R = t := by
+      have h := residue q t hqQ htq htn hqd
+      rwa [Nat.mod_eq_of_lt hRq] at h
+    exact hst (hrs.symm.trans hrt)
+  have h57 : p5 ≤ R ∨ p7 ≤ R :=
+    pair_bound p5 5 p7 7 hp5Q hp7Q (by omega) (by omega)
+      (by omega) (by omega) hp5dvd hp7dvd (by norm_num)
+  have h59 : p5 ≤ R ∨ p9 ≤ R :=
+    pair_bound p5 5 p9 9 hp5Q hp9Q (by omega) (by omega)
+      (by omega) (by omega) hp5dvd hp9dvd (by norm_num)
+  have h510 : p5 ≤ R ∨ p10 ≤ R :=
+    pair_bound p5 5 p10 10 hp5Q hp10Q (by omega) (by omega)
+      (by omega) (by omega) hp5dvd hp10dvd (by norm_num)
+  have h79 : p7 ≤ R ∨ p9 ≤ R :=
+    pair_bound p7 7 p9 9 hp7Q hp9Q (by omega) (by omega)
+      (by omega) (by omega) hp7dvd hp9dvd (by norm_num)
+  have h710 : p7 ≤ R ∨ p10 ≤ R :=
+    pair_bound p7 7 p10 10 hp7Q hp10Q (by omega) (by omega)
+      (by omega) (by omega) hp7dvd hp10dvd (by norm_num)
+  have h910 : p9 ≤ R ∨ p10 ≤ R :=
+    pair_bound p9 9 p10 10 hp9Q hp10Q (by omega) (by omega)
+      (by omega) (by omega) hp9dvd hp10dvd (by norm_num)
+  have triple_le : ∀ {x y z : ℕ}, x ≤ R → y ≤ R → z ≤ R →
+      x * y * z ≤ R ^ 3 := by
+    intro x y z hx hy hz
+    calc
+      x * y * z ≤ R * R * R := Nat.mul_le_mul (Nat.mul_le_mul hx hy) hz
+      _ = R ^ 3 := by ring
+  dsimp
+  change p5 * p7 * p9 ≤ R ^ 3 ∨ p5 * p7 * p10 ≤ R ^ 3 ∨
+    p5 * p9 * p10 ≤ R ^ 3 ∨ p7 * p9 * p10 ≤ R ^ 3
+  by_cases h5 : p5 ≤ R
+  · by_cases h7 : p7 ≤ R
+    · by_cases h9 : p9 ≤ R
+      · exact Or.inl (triple_le h5 h7 h9)
+      · exact Or.inr (Or.inl (triple_le h5 h7 (h910.resolve_left h9)))
+    · exact Or.inr (Or.inr (Or.inl
+        (triple_le h5 (h79.resolve_left h7) (h710.resolve_left h7))))
+  · exact Or.inr (Or.inr (Or.inr
+      (triple_le (h57.resolve_left h5) (h59.resolve_left h5)
+        (h510.resolve_left h5))))
+
+/-- A genuine candidate carries the exact four-prime product/remainder alternative
+together with the cubic restriction forced by its four distinct shift residues. -/
+theorem candidate_base_prime_product_or_cubic_remainder :
+    ∀ n N : ℕ, 84 < n → n = 2520 * N →
+      (⨆ m : Fin n,
+        (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 →
+      ∃ p5 p7 p9 p10 : ℕ,
+        Nat.Prime p5 ∧ 10 < p5 ∧ p5 ∣ n - 5 ∧
+        Nat.Prime p7 ∧ 10 < p7 ∧ p7 ∣ n - 7 ∧
+        Nat.Prime p9 ∧ 10 < p9 ∧ p9 ∣ n - 9 ∧
+        Nat.Prime p10 ∧ 10 < p10 ∧ p10 ∣ n - 10 ∧
+        p5 ≠ p7 ∧ p5 ≠ p9 ∧ p5 ≠ p10 ∧
+        p7 ≠ p9 ∧ p7 ≠ p10 ∧ p9 ≠ p10 ∧
+        (n ≤ p5 * p7 * p9 * p10 ∨
+          (p5 * p7 * p9 * p10 < n ∧
+            14 ≤ n % (p5 * p7 * p9 * p10) ∧
+            n % (p5 * p7 * p9 * p10) < p5 * p7 * p9 * p10 ∧
+            (p5 * p7 * p9 ≤ (n % (p5 * p7 * p9 * p10)) ^ 3 ∨
+             p5 * p7 * p10 ≤ (n % (p5 * p7 * p9 * p10)) ^ 3 ∨
+             p5 * p9 * p10 ≤ (n % (p5 * p7 * p9 * p10)) ^ 3 ∨
+             p7 * p9 * p10 ≤ (n % (p5 * p7 * p9 * p10)) ^ 3))) := by
+  intro n N hn84 hnN hcand
+  obtain ⟨p5, p7, p9, p10,
+      hp5, hp5large, hp5dvd,
+      hp7, hp7large, hp7dvd,
+      hp9, hp9large, hp9dvd,
+      hp10, hp10large, hp10dvd,
+      h57, h59, h510, h79, h710, h910, hbranch⟩ :=
+    candidate_base_prime_product_or_large_remainder n N hn84 hnN hcand
+  have htriple := base_four_prime_remainder_triple_bound n p5 p7 p9 p10
+    (by omega) hp5 hp5large hp5dvd hp7 hp7large hp7dvd
+    hp9 hp9large hp9dvd hp10 hp10large hp10dvd
+  refine ⟨p5, p7, p9, p10,
+    hp5, hp5large, hp5dvd,
+    hp7, hp7large, hp7dvd,
+    hp9, hp9large, hp9dvd,
+    hp10, hp10large, hp10dvd,
+    h57, h59, h510, h79, h710, h910, ?_⟩
+  rcases hbranch with hsmall | ⟨hlarge, hR14, hRlt⟩
+  · exact Or.inl hsmall
+  · exact Or.inr ⟨hlarge, hR14, hRlt, htriple⟩
+
+/-- If one of the four three-factor subproducts is controlled by `R^3`, then
+the whole product is controlled by `R^3` times the one omitted factor.  This
+isolates the sole prime that can remain exceptional after CRT reentry. -/
+theorem four_factor_one_exception_envelope :
+    ∀ a b c d R : ℕ,
+      (a * b * c ≤ R ^ 3 ∨ a * b * d ≤ R ^ 3 ∨
+        a * c * d ≤ R ^ 3 ∨ b * c * d ≤ R ^ 3) →
+      a * b * c * d ≤ R ^ 3 * d ∨
+        a * b * c * d ≤ R ^ 3 * c ∨
+        a * b * c * d ≤ R ^ 3 * b ∨
+        a * b * c * d ≤ R ^ 3 * a := by
+  intro a b c d R h
+  rcases h with habc | habd | hacd | hbcd
+  · exact Or.inl (Nat.mul_le_mul_right d habc)
+  · right
+    left
+    simpa [mul_assoc, mul_left_comm, mul_comm] using
+      (Nat.mul_le_mul_right c habd)
+  · right
+    right
+    left
+    simpa [mul_assoc, mul_left_comm, mul_comm] using
+      (Nat.mul_le_mul_right b hacd)
+  · right
+    right
+    right
+    simpa [mul_assoc, mul_left_comm, mul_comm] using
+      (Nat.mul_le_mul_right a hbcd)
+
 end Erdos647.ExactBaseState

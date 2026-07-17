@@ -34,7 +34,9 @@ inequality is a complete exclusion certificate. In the no-cross-product
 branch, prime peeling and two one-element exception bounds leave at least
 `W-2` smooth, explicitly bounded second-layer cofactors. The remaining seam is
 to force a violating re-entry remainder or contradict that smooth cofactor
-population uniformly.
+population uniformly. For the concrete base shifts `5,7,9,10`, exact residue
+dominance now forces some three-prime subproduct below the cube of the CRT
+remainder, so at most one of the four base primes remains exceptional.
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,
