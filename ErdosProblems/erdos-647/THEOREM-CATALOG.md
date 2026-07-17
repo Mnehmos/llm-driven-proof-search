@@ -4,8 +4,8 @@
 > updated 2026-07-16.
 >
 > This catalogs the kernel-checked and source-replayed theorem families produced by the Erdős
-> #647 campaign. The portable source currently has 467 actual theorem
-> declarations and five top-level helper lemmas across 178 Lean files (472
+> #647 campaign. The portable source currently has 473 actual theorem
+> declarations and five top-level helper lemmas across 179 Lean files (478
 > theorem/lemma declarations total). Each tracked row carries the
 > `problem_version_id` — the authoritative lookup key in the
 > tracked pipeline — plus the exact root statement and, where recorded, the
@@ -16,7 +16,7 @@
 > **What is portable vs. internal.** The committed `.lean` files are the
 > simplest portable formal artifact: they check against Mathlib without this
 > project's database. The repository now also publishes the complete exports
-> for all 331 related episodes—redacted public summaries, full
+> for all 332 related episodes—redacted public summaries, full
 > Markdown proof dossiers, and structured training JSON—under
 > [dossiers/exports/](dossiers/exports/README.md). The IDs alone still are not
 > an external database API; the committed exports are what makes the audit
@@ -116,7 +116,7 @@ no access to this project's database required.
 
 Committed Lean source:
 
-- 178 `.lean` files under [proof/](proof/), containing 467 actual theorem
+- 179 `.lean` files under [proof/](proof/), containing 473 actual theorem
   declarations and five top-level helper lemmas (472 declarations total).
 - Five consolidated modular families under
   [proof/campaign/](proof/campaign/), plus individual analytic, truncation,
@@ -124,7 +124,7 @@ Committed Lean source:
 
 Export and reproduction material:
 
-- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 331 related
+- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 332 related
   problem/episode pairs.
 - [dossiers/exports/manifest.tsv](dossiers/exports/manifest.tsv) records the
   outcome, fidelity, environment, statement hash, timestamps, and step count.
@@ -146,7 +146,7 @@ Export and reproduction material:
 | 9 | Post-density existence and variant frontier | 49 | generic shift-factor/adic induction, shifts 9–16 as concrete frontiers and stress tests, exact depth witnesses, the eventual-excess limit interface, and the depth-two/Sophie-Germain equivalence |
 | 10 | Power-prefix, block, and certificate architecture | 31 | arbitrary-power local-factor products, exact block reindexing, executable factorization batches, fourth-root compression, and the conditional novelty/shared-host seam |
 | 11 | Large-factor novelty, CRT re-entry, and second-layer catalogs | 69 | fifth/hybrid prefix compression, finite-catalog escape, `t`-subset product alternatives, CRT exclusion, the conditional smooth-cofactor catalog, and the four-rung clique with a sharp depth-five candidate boundary |
-| | **Selected-family subtotal** | **not additive** | The exact repository-wide count is 472 theorem/lemma declarations; family rows are publication groupings and may overlap. |
+| | **Selected-family subtotal** | **not additive** | The exact repository-wide count is 478 theorem/lemma declarations; family rows are publication groupings and may overlap. |
 
 ---
 
@@ -558,9 +558,9 @@ Formal Conjectures closure remains `0/3`.**
 
 ---
 
-*Counts are explicit: 467 actual theorem declarations plus five top-level
-helper lemmas in 178 Lean files, and 331 related proof-search episodes in the
-export archive (324 kernel-verified,
+*Counts are explicit: 473 actual theorem declarations plus five top-level
+helper lemmas in 179 Lean files, and 332 related proof-search episodes in the
+export archive (325 kernel-verified,
 seven retained non-success histories). These are different metrics—one episode
 can assemble several helper declarations, while some final repository
 compositions are not standalone episodes. The global density theorem is

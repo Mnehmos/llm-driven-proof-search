@@ -265,10 +265,10 @@ repaired squarefree remainder was also submitted to the independent exact
 proof-search verifier and returned `kernel_pass`; identifiers and hashes are
 recorded in [evidence.md](evidence.md).
 
-For provenance beyond the source replay, all 331 related campaign
+For provenance beyond the source replay, all 332 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
-training JSON formats. Of these, 324 report `KERNEL_VERIFIED` in the pinned
+training JSON formats. Of these, 325 report `KERNEL_VERIFIED` in the pinned
 environment; seven non-success histories are retained for audit completeness.
 
 This proves a density-zero result with the claimed seventh logarithmic power.
@@ -554,10 +554,10 @@ Formal Conjectures declarations.
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **467 actual theorem
-  declarations and five top-level helper lemmas across 178 Lean files** under
+- Portable proof source currently contains **473 actual theorem
+  declarations and five top-level helper lemmas across 179 Lean files** under
   `proof/`. Including 47 definitions (45 public and two private helpers) gives
-  519 declarations. These counts include helper and assembly declarations;
+  529 declarations. These counts include helper and assembly declarations;
   they are not presented as 516 independent mathematical discoveries or 516
   standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base

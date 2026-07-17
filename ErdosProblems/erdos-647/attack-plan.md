@@ -84,6 +84,16 @@ cube and distinct-semiprime branches have exact factor residues modulo three.
 These three roots are tracked, kernel-verified, and replayed. The next proof
 target is the finite-state-to-growing-shift accumulation step.
 
+The candidate-facing assembly now removes the remaining bookkeeping layer.
+`candidate_exact_base_survivor_state` is tracked `kernel_verified` as episode
+`6e56eb5a-3a06-4e0d-9009-e7801b16e59c`; its stronger source theorem retains
+all four depth bounds, and `candidate_normalized_base_survivor_state` replaces
+the depth witnesses by explicit residue-controlled functions. Thus later-shift
+work may branch only on the finite residue state and four cofactors. The source
+compiles in the pinned environment. Replay of the tracked root found a
+historical durability mismatch—an earlier missing-object event now succeeds—
+not a mathematical or kernel-verification failure.
+
 One analytic correction is now part of the proof record. The earlier
 Chebyshev/Mertens lower bound is valid, but its leading coefficient is
 `log 2`; after multiplying by seven it is too weak to yield a seventh power
