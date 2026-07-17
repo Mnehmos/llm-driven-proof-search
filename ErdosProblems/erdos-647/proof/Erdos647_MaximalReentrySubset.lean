@@ -356,4 +356,168 @@ theorem erdos647_candidate_balanced_reentry_or_cofactor_block :
   · right
     omega
 
+/-- Peeling a coprime prime factor from one shifted value halves its exact
+candidate divisor budget. -/
+theorem erdos647_candidate_coprime_prime_factor_budget :
+    forall (n shift p q : Nat),
+      0 < shift ->
+      shift < n ->
+      p.Prime ->
+      Nat.Coprime p q ->
+      n - shift = p * q ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      2 * ArithmeticFunction.sigma 0 q <= shift + 2 := by
+  intro n shift p q hshift hshiftn hp hcop hfactor hcand
+  letI : Nonempty (Fin n) :=
+    Fin.pos_iff_nonempty.mp (lt_trans hshift hshiftn)
+  let f : Fin n -> Nat := fun x =>
+    (x : Nat) + ArithmeticFunction.sigma 0 x
+  have hbdd : BddAbove (Set.range f) := by
+    refine ⟨2 * n, ?_⟩
+    rintro y ⟨x, rfl⟩
+    dsimp [f]
+    rw [ArithmeticFunction.sigma_zero_apply]
+    have hc := Nat.card_divisors_le_self (x : Nat)
+    have hx : (x : Nat) < n := x.isLt
+    omega
+  let m : Fin n := ⟨n - shift, by omega⟩
+  have hm : f m <= n + 2 := le_trans (le_ciSup hbdd m) hcand
+  dsimp [f, m] at hm
+  have hbudget :
+      ArithmeticFunction.sigma 0 (n - shift) <= shift + 2 := by
+    omega
+  have hmul :=
+    (ArithmeticFunction.isMultiplicative_sigma (k := 0)).map_mul_of_coprime
+      hcop
+  have hpTau : ArithmeticFunction.sigma 0 p = 2 := by
+    simpa using
+      (ArithmeticFunction.sigma_zero_apply_prime_pow (i := 1) hp)
+  rw [hfactor, hmul, hpTau] at hbudget
+  exact hbudget
+
+/-- Recursive form of the balanced split.  In the cofactor-heavy branch every
+omitted coordinate carries a positive cofactor below the re-entry modulus and
+the exact halved divisor budget needed for another descent layer. -/
+theorem erdos647_candidate_balanced_reentry_or_budgeted_cofactor_block :
+    forall (n W : Nat) (shift P q : Fin W -> Nat),
+      1 < n ->
+      0 < W ->
+      Function.Injective P ->
+      (forall i : Fin W,
+        (P i).Prime /\
+        0 < shift i /\ shift i < P i /\ shift i < n /\
+        n - shift i = P i * q i /\
+        Nat.Coprime (P i) (q i)) ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      exists I : Finset (Fin W),
+        I.Nonempty /\
+        I ⊆ Finset.univ /\
+        (∏ i ∈ I, P i) < n /\
+        0 < n % (∏ i ∈ I, P i) /\
+        (forall j : Fin W, j ∉ I ->
+          0 < q j /\
+          q j < (∏ i ∈ I, P i) /\
+          2 * ArithmeticFunction.sigma 0 (q j) <= shift j + 2) /\
+        (2 ^ ((W + 1) / 2) <=
+            n % (∏ i ∈ I, P i) + 2 \/
+          W / 2 + 1 <= (Finset.univ \ I).card) := by
+  intro n W shift P q hn hW hinj hdata hcand
+  have hbase : forall i : Fin W,
+      (P i).Prime /\
+      0 < shift i /\ shift i < P i /\ shift i < n /\
+      n - shift i = P i * q i :=
+    fun i => ⟨(hdata i).1, (hdata i).2.1, (hdata i).2.2.1,
+      (hdata i).2.2.2.1, (hdata i).2.2.2.2.1⟩
+  obtain ⟨I, hIne, hIsub, hQn, hqbound, hR, halt⟩ :=
+    erdos647_candidate_balanced_reentry_or_cofactor_block
+      n W shift P q hn hW hinj hbase hcand
+  refine ⟨I, hIne, hIsub, hQn, hR, ?_, halt⟩
+  intro j hj
+  have hqpos : 0 < q j := by
+    have hhost : 0 < n - shift j :=
+      Nat.sub_pos_of_lt (hdata j).2.2.2.1
+    rw [(hdata j).2.2.2.2.1] at hhost
+    by_contra hq
+    have hq0 : q j = 0 := Nat.eq_zero_of_not_pos hq
+    rw [hq0, Nat.mul_zero] at hhost
+    omega
+  have hbudget :=
+    erdos647_candidate_coprime_prime_factor_budget
+      n (shift j) (P j) (q j)
+        (hdata j).2.1 (hdata j).2.2.2.1
+        (hdata j).1 (hdata j).2.2.2.2.2
+        (hdata j).2.2.2.2.1 hcand
+  exact ⟨hqpos, hqbound j hj, hbudget⟩
+
+/-- A positive `B`-smooth cofactor with the halved divisor budget has the
+explicit power bound required for recursive descent. -/
+theorem erdos647_budgeted_smooth_cofactor_bound :
+    forall (shift B q : Nat),
+      1 <= B ->
+      0 < q ->
+      (forall p : Nat, p.Prime -> p ∣ q -> p <= B) ->
+      2 * ArithmeticFunction.sigma 0 q <= shift + 2 ->
+      q <= B ^ (shift / 2) := by
+  intro shift B q hB hq hsmooth hbudget
+  have hone_add_sum_le_prod_succ : forall (s : Finset Nat) (a : Nat -> Nat),
+      1 + s.sum a <= s.prod (fun x => a x + 1) := by
+    intro s a
+    induction s using Finset.induction_on with
+    | empty => simp
+    | @insert x s hx ih =>
+        rw [Finset.sum_insert hx, Finset.prod_insert hx]
+        have hprod : 1 <= s.prod (fun y => a y + 1) := by
+          exact Finset.one_le_prod (fun y _ => by omega)
+        have hmul : a x <= s.prod (fun y => a y + 1) * a x := by
+          simpa [one_mul] using Nat.mul_le_mul_right (a x) hprod
+        calc
+          1 + (a x + s.sum a) = a x + (1 + s.sum a) := by omega
+          _ <= a x + s.prod (fun y => a y + 1) :=
+            Nat.add_le_add_left ih _
+          _ <= s.prod (fun y => a y + 1) * a x +
+                s.prod (fun y => a y + 1) :=
+            Nat.add_le_add_right hmul _
+          _ = (a x + 1) * s.prod (fun y => a y + 1) := by ring
+  by_cases hq1 : q = 1
+  · subst q
+    simpa using Nat.pow_le_pow_left hB (shift / 2)
+  have hq0 : q ≠ 0 := by omega
+  obtain ⟨p, hpprime, hpdvd⟩ := Nat.exists_prime_and_dvd hq1
+  have hBpos : 1 <= B :=
+    le_trans hpprime.one_lt.le (hsmooth p hpprime hpdvd)
+  have hsigma : ArithmeticFunction.sigma 0 q =
+      q.primeFactors.prod (fun p => q.factorization p + 1) := by
+    rw [ArithmeticFunction.sigma_eq_prod_primeFactors_sum_range_factorization_pow_mul hq0]
+    simp
+  have hqprod : q.primeFactors.prod (fun p =>
+      p ^ q.factorization p) = q := by
+    rw [← Nat.prod_factorization_eq_prod_primeFactors]
+    exact Nat.prod_factorization_pow_eq_self hq0
+  have hsum : q.primeFactors.sum q.factorization <=
+      ArithmeticFunction.sigma 0 q - 1 := by
+    have h := hone_add_sum_le_prod_succ q.primeFactors q.factorization
+    rw [← hsigma] at h
+    omega
+  have hsmoothBound :
+      q <= B ^ (ArithmeticFunction.sigma 0 q - 1) := by
+    calc
+      q = q.primeFactors.prod (fun p =>
+          p ^ q.factorization p) := hqprod.symm
+      _ <= q.primeFactors.prod (fun p =>
+          B ^ q.factorization p) := by
+        apply Finset.prod_le_prod'
+        intro p hp
+        exact Nat.pow_le_pow_left
+          (hsmooth p (Nat.prime_of_mem_primeFactors hp)
+            (Nat.dvd_of_mem_primeFactors hp)) _
+      _ = B ^ q.primeFactors.sum q.factorization := by
+        exact Finset.prod_pow_eq_pow_sum _ _ _
+      _ <= B ^ (ArithmeticFunction.sigma 0 q - 1) :=
+        pow_le_pow_right' hBpos hsum
+  have hexp : ArithmeticFunction.sigma 0 q - 1 <= shift / 2 := by
+    omega
+  exact hsmoothBound.trans (pow_le_pow_right' hB hexp)
+
 end Erdos647
