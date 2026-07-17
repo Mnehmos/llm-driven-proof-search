@@ -107,6 +107,55 @@ theorem erdos647_arbitrary_shift_crt_reentry_bound :
     omega
   exact htau.trans hbudget
 
+/-- Distinct shift residues cannot both be represented by a remainder smaller
+than their associated primes.  Thus every pair of different coordinates has
+at least one selected prime bounded by the CRT remainder. -/
+theorem erdos647_arbitrary_shift_remainder_dominates_pair :
+    ∀ (n r : ℕ) (shift P : Fin r → ℕ),
+      0 < r →
+      (∀ i : Fin r,
+        (P i).Prime ∧ 0 < shift i ∧ shift i < P i ∧
+          shift i < n ∧ P i ∣ n - shift i) →
+      ∀ i j : Fin r, shift i ≠ shift j →
+        P i ≤ n % (∏ k : Fin r, P k) ∨
+          P j ≤ n % (∏ k : Fin r, P k) := by
+  classical
+  intro n r shift P hr hP i j hshift
+  let Q : ℕ := ∏ k : Fin r, P k
+  have hQpos : 0 < Q := by
+    dsimp [Q]
+    exact Finset.prod_pos fun k _ => (hP k).1.pos
+  have hPkQ : ∀ k : Fin r, P k ∣ Q := by
+    intro k
+    dsimp [Q]
+    exact Finset.dvd_prod_of_mem P (Finset.mem_univ k)
+  have hresidue : ∀ k : Fin r, (n % Q) % P k = shift k := by
+    intro k
+    have hsplit : n = shift k + (n - shift k) := by
+      simpa [Nat.add_comm] using
+        (Nat.sub_add_cancel (hP k).2.2.2.1.le).symm
+    have hmodzero : (n - shift k) % P k = 0 :=
+      Nat.dvd_iff_mod_eq_zero.mp (hP k).2.2.2.2
+    calc
+      (n % Q) % P k = n % P k := Nat.mod_mod_of_dvd n (hPkQ k)
+      _ = (shift k + (n - shift k)) % P k := by rw [← hsplit]
+      _ = shift k := by
+        simpa [Nat.add_mod, hmodzero] using
+          (Nat.mod_eq_of_lt (hP k).2.2.1)
+  by_cases hiBound : P i ≤ n % Q
+  · exact Or.inl hiBound
+  right
+  by_contra hjBound
+  have hiLt : n % Q < P i := Nat.lt_of_not_ge hiBound
+  have hjLt : n % Q < P j := Nat.lt_of_not_ge hjBound
+  have hi : n % Q = shift i := by
+    have := hresidue i
+    rwa [Nat.mod_eq_of_lt hiLt] at this
+  have hj : n % Q = shift j := by
+    have := hresidue j
+    rwa [Nat.mod_eq_of_lt hjLt] at this
+  exact hshift (hi.symm.trans hj)
+
 /-- Four-rung specialization at the exact shifts produced by the normalized
 base state. -/
 theorem erdos647_base_four_prime_crt_reentry_bound :
@@ -147,5 +196,98 @@ theorem erdos647_base_four_prime_crt_reentry_bound :
     rfl
   rw [hprod_eq] at hcore
   simpa using hcore hprod hcand
+
+/-- For the four exact base shifts, every pair has at least one prime bounded
+by the common CRT remainder.  Equivalently, at most one of the four primes can
+lie strictly above that remainder. -/
+theorem erdos647_base_four_prime_remainder_pair_bounds :
+    ∀ n p5 p7 p9 p10 : ℕ,
+      10 < n →
+      p5.Prime → 10 < p5 → p5 ∣ n - 5 →
+      p7.Prime → 10 < p7 → p7 ∣ n - 7 →
+      p9.Prime → 10 < p9 → p9 ∣ n - 9 →
+      p10.Prime → 10 < p10 → p10 ∣ n - 10 →
+      let R := n % (p5 * p7 * p9 * p10)
+      (p5 ≤ R ∨ p7 ≤ R) ∧ (p5 ≤ R ∨ p9 ≤ R) ∧
+      (p5 ≤ R ∨ p10 ≤ R) ∧ (p7 ≤ R ∨ p9 ≤ R) ∧
+      (p7 ≤ R ∨ p10 ≤ R) ∧ (p9 ≤ R ∨ p10 ≤ R) := by
+  intro n p5 p7 p9 p10 hn
+    hp5 hp5large hp5dvd hp7 hp7large hp7dvd
+    hp9 hp9large hp9dvd hp10 hp10large hp10dvd
+  let shift : Fin 4 → ℕ := ![5, 7, 9, 10]
+  let P : Fin 4 → ℕ := ![p5, p7, p9, p10]
+  have hP : ∀ i : Fin 4,
+      (P i).Prime ∧ 0 < shift i ∧ shift i < P i ∧
+        shift i < n ∧ P i ∣ n - shift i := by
+    intro i
+    fin_cases i <;> simp [P, shift, hp5, hp5dvd,
+      hp7, hp7dvd, hp9, hp9dvd, hp10, hp10dvd] <;> omega
+  have hpair := erdos647_arbitrary_shift_remainder_dominates_pair
+    n 4 shift P (by norm_num) hP
+  have hprod : (∏ i : Fin 4, P i) = p5 * p7 * p9 * p10 := by
+    rw [Fin.prod_univ_four]
+    rfl
+  dsimp
+  rw [← hprod]
+  exact ⟨
+    hpair 0 1 (by native_decide),
+    hpair 0 2 (by native_decide),
+    hpair 0 3 (by native_decide),
+    hpair 1 2 (by native_decide),
+    hpair 1 3 (by native_decide),
+    hpair 2 3 (by native_decide)⟩
+
+/-- Six pairwise remainder bounds force some three of the four factors below
+the cubic remainder scale. -/
+theorem erdos647_four_pair_bounds_force_triple_product :
+    ∀ R a b c d : ℕ,
+      (a ≤ R ∨ b ≤ R) → (a ≤ R ∨ c ≤ R) →
+      (a ≤ R ∨ d ≤ R) → (b ≤ R ∨ c ≤ R) →
+      (b ≤ R ∨ d ≤ R) → (c ≤ R ∨ d ≤ R) →
+      a * b * c ≤ R ^ 3 ∨ a * b * d ≤ R ^ 3 ∨
+        a * c * d ≤ R ^ 3 ∨ b * c * d ≤ R ^ 3 := by
+  intro R a b c d hab hac had hbc hbd hcd
+  have triple_le : ∀ {x y z : ℕ}, x ≤ R → y ≤ R → z ≤ R →
+      x * y * z ≤ R ^ 3 := by
+    intro x y z hx hy hz
+    calc
+      x * y * z ≤ R * R * R := Nat.mul_le_mul (Nat.mul_le_mul hx hy) hz
+      _ = R ^ 3 := by ring
+  by_cases ha : a ≤ R
+  · by_cases hb : b ≤ R
+    · by_cases hc : c ≤ R
+      · exact Or.inl (triple_le ha hb hc)
+      · have hd : d ≤ R := hcd.resolve_left hc
+        exact Or.inr (Or.inl (triple_le ha hb hd))
+    · have hc : c ≤ R := hbc.resolve_left hb
+      have hd : d ≤ R := hbd.resolve_left hb
+      exact Or.inr (Or.inr (Or.inl (triple_le ha hc hd)))
+  · have hb : b ≤ R := hab.resolve_left ha
+    have hc : c ≤ R := hac.resolve_left ha
+    have hd : d ≤ R := had.resolve_left ha
+    exact Or.inr (Or.inr (Or.inr (triple_le hb hc hd)))
+
+/-- Base-rung corollary: at least one triple of selected primes is bounded by
+the cube of their common CRT remainder. -/
+theorem erdos647_base_four_prime_remainder_triple_bound :
+    ∀ n p5 p7 p9 p10 : ℕ,
+      10 < n →
+      p5.Prime → 10 < p5 → p5 ∣ n - 5 →
+      p7.Prime → 10 < p7 → p7 ∣ n - 7 →
+      p9.Prime → 10 < p9 → p9 ∣ n - 9 →
+      p10.Prime → 10 < p10 → p10 ∣ n - 10 →
+      let R := n % (p5 * p7 * p9 * p10)
+      p5 * p7 * p9 ≤ R ^ 3 ∨ p5 * p7 * p10 ≤ R ^ 3 ∨
+        p5 * p9 * p10 ≤ R ^ 3 ∨ p7 * p9 * p10 ≤ R ^ 3 := by
+  intro n p5 p7 p9 p10 hn
+    hp5 hp5large hp5dvd hp7 hp7large hp7dvd
+    hp9 hp9large hp9dvd hp10 hp10large hp10dvd
+  obtain ⟨h57, h59, h510, h79, h710, h910⟩ :=
+    erdos647_base_four_prime_remainder_pair_bounds
+      n p5 p7 p9 p10 hn
+      hp5 hp5large hp5dvd hp7 hp7large hp7dvd
+      hp9 hp9large hp9dvd hp10 hp10large hp10dvd
+  exact erdos647_four_pair_bounds_force_triple_product
+    _ p5 p7 p9 p10 h57 h59 h510 h79 h710 h910
 
 end Erdos647

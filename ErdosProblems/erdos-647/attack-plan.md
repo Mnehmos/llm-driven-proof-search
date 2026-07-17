@@ -108,6 +108,8 @@ accepts exactly this nonconsecutive interface and forces
 The direct candidate assembly is now sharper: for
 `Q=p5·p7·p9·p10`, every candidate satisfies either `n≤Q` or
 `Q<n` together with the explicit remainder interval `14≤n mod Q<Q`.
+Exact residue preservation now adds that at most one selected prime exceeds
+`n mod Q`; hence one of the four triple products is at most `(n mod Q)^3`.
 
 One analytic correction is now part of the proof record. The earlier
 Chebyshev/Mertens lower bound is valid, but its leading coefficient is

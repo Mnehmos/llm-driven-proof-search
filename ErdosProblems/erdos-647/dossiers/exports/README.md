@@ -2,7 +2,7 @@
 
 Generated 2026-07-16 from the tracked proof-search environment.
 
-This directory is the complete export archive for all 333 related episodes
+This directory is the complete export archive for all 334 related episodes
 identified by campaign source, explicit Lean provenance, the evidence ledger,
 and a read-only transitive closure over matching problem and statement hashes.
 
@@ -28,7 +28,7 @@ trajectories.
 - `training/`: structured JSON trajectory exports, including accepted proof
   actions, negative histories, and verifier metadata.
 
-All 333 exports report `fidelity_status = attested` and environment
+All 334 exports report `fidelity_status = attested` and environment
 `9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d`.
 
 The fidelity label matters: these are project-authored formal statements checked
