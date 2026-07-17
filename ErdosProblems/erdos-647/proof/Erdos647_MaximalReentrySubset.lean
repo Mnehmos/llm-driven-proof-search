@@ -520,4 +520,65 @@ theorem erdos647_budgeted_smooth_cofactor_bound :
     omega
   exact hsmoothBound.trans (pow_le_pow_right' hB hexp)
 
+/-- Every positive cofactor with the halved divisor budget is either bounded
+at the chosen smoothness scale or exposes a genuinely new large prime. -/
+theorem erdos647_budgeted_cofactor_smooth_or_large_prime :
+    forall (shift B q : Nat),
+      1 <= B ->
+      0 < q ->
+      2 * ArithmeticFunction.sigma 0 q <= shift + 2 ->
+      q <= B ^ (shift / 2) \/
+        exists p : Nat, p.Prime /\ p ∣ q /\ B < p := by
+  intro shift B q hB hq hbudget
+  by_cases hsmooth :
+      forall p : Nat, p.Prime -> p ∣ q -> p <= B
+  · left
+    exact erdos647_budgeted_smooth_cofactor_bound
+      shift B q hB hq hsmooth hbudget
+  · right
+    push Not at hsmooth
+    obtain ⟨p, hp, hpdvd, hpB⟩ := hsmooth
+    exact ⟨p, hp, hpdvd, hpB⟩
+
+/-- The balanced maximal-subset split with its recursive second-layer
+classification exposed pointwise: every omitted cofactor is either explicitly
+small at scale `B`, or carries a prime factor above `B`. -/
+theorem erdos647_candidate_balanced_reentry_or_smooth_large_prime_block :
+    forall (n W B : Nat) (shift P q : Fin W -> Nat),
+      1 < n ->
+      0 < W ->
+      1 <= B ->
+      Function.Injective P ->
+      (forall i : Fin W,
+        (P i).Prime /\
+        0 < shift i /\ shift i < P i /\ shift i < n /\
+        n - shift i = P i * q i /\
+        Nat.Coprime (P i) (q i)) ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      exists I : Finset (Fin W),
+        I.Nonempty /\
+        I ⊆ Finset.univ /\
+        (∏ i ∈ I, P i) < n /\
+        0 < n % (∏ i ∈ I, P i) /\
+        (forall j : Fin W, j ∉ I ->
+          0 < q j /\
+          q j < (∏ i ∈ I, P i) /\
+          2 * ArithmeticFunction.sigma 0 (q j) <= shift j + 2 /\
+          (q j <= B ^ (shift j / 2) \/
+            exists p : Nat, p.Prime /\ p ∣ q j /\ B < p)) /\
+        (2 ^ ((W + 1) / 2) <=
+            n % (∏ i ∈ I, P i) + 2 \/
+          W / 2 + 1 <= (Finset.univ \ I).card) := by
+  intro n W B shift P q hn hW hB hinj hdata hcand
+  obtain ⟨I, hIne, hIsub, hQn, hR, hcof, halt⟩ :=
+    erdos647_candidate_balanced_reentry_or_budgeted_cofactor_block
+      n W shift P q hn hW hinj hdata hcand
+  refine ⟨I, hIne, hIsub, hQn, hR, ?_, halt⟩
+  intro j hj
+  obtain ⟨hqpos, hqQ, hbudget⟩ := hcof j hj
+  exact ⟨hqpos, hqQ, hbudget,
+    erdos647_budgeted_cofactor_smooth_or_large_prime
+      (shift j) B (q j) hB hqpos hbudget⟩
+
 end Erdos647
