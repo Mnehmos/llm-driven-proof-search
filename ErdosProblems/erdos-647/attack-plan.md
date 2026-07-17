@@ -48,6 +48,11 @@ this product-away-from-one-exception envelope in one kernel-verified theorem.
 It also forces the common remainder above `W` and gives the exact alternative:
 either the full selected product crosses `n`, or the remainder pays
 `2^W <= r+2`; violating both sides is now a direct candidate exclusion engine.
+A new maximal-subset feedback theorem avoids choosing between those branches
+too early: it selects a nonempty subproduct `Q<n`, obtains
+`2^|I|<=n%Q+2`, and simultaneously proves every omitted complementary
+cofactor is below `Q`. This is the reusable first-layer-to-second-layer
+induction interface now targeted for the uniform contradiction.
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,
