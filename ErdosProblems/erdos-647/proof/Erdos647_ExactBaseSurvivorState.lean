@@ -1542,4 +1542,166 @@ theorem candidate_base_rungs_indexed_large_primes :
   · intro i j hij
     fin_cases i <;> fin_cases j <;> simp_all [P]
 
+/-- Exact candidate-facing base-prime dichotomy.  Either the product of the
+four distinct primes already reaches `n`, or their CRT re-entry remainder must
+pay the four-prime divisor budget `16`. -/
+theorem candidate_base_prime_product_or_reentry :
+    ∀ n N : ℕ, 84 < n → n = 2520 * N →
+      (⨆ m : Fin n,
+        (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 →
+      ∃ p5 p7 p9 p10 : ℕ,
+        Nat.Prime p5 ∧ 10 < p5 ∧ p5 ∣ n - 5 ∧
+        Nat.Prime p7 ∧ 10 < p7 ∧ p7 ∣ n - 7 ∧
+        Nat.Prime p9 ∧ 10 < p9 ∧ p9 ∣ n - 9 ∧
+        Nat.Prime p10 ∧ 10 < p10 ∧ p10 ∣ n - 10 ∧
+        p5 ≠ p7 ∧ p5 ≠ p9 ∧ p5 ≠ p10 ∧
+        p7 ≠ p9 ∧ p7 ≠ p10 ∧ p9 ≠ p10 ∧
+        (n ≤ p5 * p7 * p9 * p10 ∨
+          16 ≤ n % (p5 * p7 * p9 * p10) + 2) := by
+  classical
+  intro n N hn84 hnN hcand
+  obtain ⟨p5, p7, p9, p10,
+      hp5, hp5large, hp5dvd,
+      hp7, hp7large, hp7dvd,
+      hp9, hp9large, hp9dvd,
+      hp10, hp10large, hp10dvd,
+      h57, h59, h510, h79, h710, h910⟩ :=
+    candidate_base_rungs_supply_large_distinct_primes n N hn84 hnN hcand
+  refine ⟨p5, p7, p9, p10,
+    hp5, hp5large, hp5dvd,
+    hp7, hp7large, hp7dvd,
+    hp9, hp9large, hp9dvd,
+    hp10, hp10large, hp10dvd,
+    h57, h59, h510, h79, h710, h910, ?_⟩
+  let Q := p5 * p7 * p9 * p10
+  by_cases hQn : Q < n
+  · right
+    have hQpos : 0 < Q := by
+      dsimp [Q]
+      positivity
+    have hp5Q : p5 ∣ Q := by
+      dsimp [Q]
+      exact ⟨p7 * p9 * p10, by ring⟩
+    have hp7Q : p7 ∣ Q := by
+      dsimp [Q]
+      exact ⟨p5 * p9 * p10, by ring⟩
+    have hp9Q : p9 ∣ Q := by
+      dsimp [Q]
+      exact ⟨p5 * p7 * p10, by ring⟩
+    have hp10Q : p10 ∣ Q := by
+      dsimp [Q]
+      exact ⟨p5 * p7 * p9, by ring⟩
+    have hQnotdvd : ¬ Q ∣ n := by
+      intro hQdvd
+      have hp5n : p5 ∣ n := hp5Q.trans hQdvd
+      have h := Nat.dvd_sub hp5n hp5dvd
+      have heq : n - (n - 5) = 5 := by omega
+      have hp5five : p5 ∣ 5 := by rwa [heq] at h
+      have hp5le : p5 ≤ 5 := Nat.le_of_dvd (by norm_num) hp5five
+      omega
+    have hrne : n % Q ≠ 0 := by
+      intro hz
+      exact hQnotdvd (Nat.dvd_iff_mod_eq_zero.mpr hz)
+    have hrpos : 0 < n % Q := Nat.pos_of_ne_zero hrne
+    have hrltQ : n % Q < Q := Nat.mod_lt n hQpos
+    have hrltN : n % Q < n := lt_trans hrltQ hQn
+    have hQhost : Q ∣ n - n % Q := by
+      refine ⟨n / Q, ?_⟩
+      have hdecomp := Nat.mod_add_div n Q
+      omega
+    have hhostpos : 0 < n - n % Q := by omega
+    let S : Finset ℕ := {p5, p7, p9, p10}
+    have hScard : S.card = 4 := by
+      dsimp [S]
+      simp [h57, h59, h510, h79, h710, h910]
+    have hS : ∀ p ∈ S, p.Prime ∧ p ∣ n - n % Q := by
+      intro p hp
+      simp only [S, Finset.mem_insert, Finset.mem_singleton] at hp
+      rcases hp with rfl | rfl | rfl | rfl
+      · exact ⟨hp5, hp5Q.trans hQhost⟩
+      · exact ⟨hp7, hp7Q.trans hQhost⟩
+      · exact ⟨hp9, hp9Q.trans hQhost⟩
+      · exact ⟨hp10, hp10Q.trans hQhost⟩
+    have htau : 16 ≤ ArithmeticFunction.sigma 0 (n - n % Q) := by
+      rw [ArithmeticFunction.sigma_zero_apply, Nat.card_divisors hhostpos.ne']
+      have hsubset : S ⊆ (n - n % Q).primeFactors := by
+        intro p hp
+        exact Nat.mem_primeFactors.mpr
+          ⟨(hS p hp).1, (hS p hp).2, hhostpos.ne'⟩
+      have hcard : 4 ≤ (n - n % Q).primeFactors.card := by
+        rw [← hScard]
+        exact Finset.card_le_card hsubset
+      have hpow : 2 ^ (n - n % Q).primeFactors.card ≤
+          ∏ p ∈ (n - n % Q).primeFactors,
+            ((n - n % Q).factorization p + 1) := by
+        apply Finset.pow_card_le_prod
+        intro p hp
+        have hp' : p ∈ (n - n % Q).factorization.support := by simpa using hp
+        have hfac : (n - n % Q).factorization p ≠ 0 :=
+          Finsupp.mem_support_iff.mp hp'
+        omega
+      exact (pow_le_pow_right' (by norm_num) hcard).trans hpow
+    let f : Fin n → ℕ := fun x =>
+      (x : ℕ) + ArithmeticFunction.sigma 0 x
+    have hbdd : BddAbove (Set.range f) := by
+      refine ⟨2 * n, ?_⟩
+      rintro y ⟨x, rfl⟩
+      dsimp [f]
+      rw [ArithmeticFunction.sigma_zero_apply]
+      have hcard := Nat.card_divisors_le_self (x : ℕ)
+      have hx : (x : ℕ) < n := x.isLt
+      omega
+    let m : Fin n := ⟨n - n % Q, by omega⟩
+    have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) hcand
+    dsimp [f, m] at hm
+    have hbudget : ArithmeticFunction.sigma 0 (n - n % Q) ≤ n % Q + 2 := by
+      omega
+    simpa [Q] using htau.trans hbudget
+  · left
+    simpa [Q] using Nat.le_of_not_gt hQn
+
+/-- Sharpened numerical form: in the proper-product branch the CRT remainder
+lies in the explicit interval `[14,Q)`. -/
+theorem candidate_base_prime_product_or_large_remainder :
+    ∀ n N : ℕ, 84 < n → n = 2520 * N →
+      (⨆ m : Fin n,
+        (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 →
+      ∃ p5 p7 p9 p10 : ℕ,
+        Nat.Prime p5 ∧ 10 < p5 ∧ p5 ∣ n - 5 ∧
+        Nat.Prime p7 ∧ 10 < p7 ∧ p7 ∣ n - 7 ∧
+        Nat.Prime p9 ∧ 10 < p9 ∧ p9 ∣ n - 9 ∧
+        Nat.Prime p10 ∧ 10 < p10 ∧ p10 ∣ n - 10 ∧
+        p5 ≠ p7 ∧ p5 ≠ p9 ∧ p5 ≠ p10 ∧
+        p7 ≠ p9 ∧ p7 ≠ p10 ∧ p9 ≠ p10 ∧
+        (n ≤ p5 * p7 * p9 * p10 ∨
+          (p5 * p7 * p9 * p10 < n ∧
+            14 ≤ n % (p5 * p7 * p9 * p10) ∧
+            n % (p5 * p7 * p9 * p10) < p5 * p7 * p9 * p10)) := by
+  intro n N hn84 hnN hcand
+  obtain ⟨p5, p7, p9, p10,
+      hp5, hp5large, hp5dvd,
+      hp7, hp7large, hp7dvd,
+      hp9, hp9large, hp9dvd,
+      hp10, hp10large, hp10dvd,
+      h57, h59, h510, h79, h710, h910, halt⟩ :=
+    candidate_base_prime_product_or_reentry n N hn84 hnN hcand
+  refine ⟨p5, p7, p9, p10,
+    hp5, hp5large, hp5dvd,
+    hp7, hp7large, hp7dvd,
+    hp9, hp9large, hp9dvd,
+    hp10, hp10large, hp10dvd,
+    h57, h59, h510, h79, h710, h910, ?_⟩
+  let Q := p5 * p7 * p9 * p10
+  by_cases hQn : Q < n
+  · right
+    have hQpos : 0 < Q := by dsimp [Q]; positivity
+    have hbound : 16 ≤ n % Q + 2 := by
+      rcases halt with hlarge | hbound
+      · exfalso
+        exact (not_lt_of_ge (by simpa [Q] using hlarge)) hQn
+      · simpa [Q] using hbound
+    exact ⟨hQn, by omega, Nat.mod_lt n hQpos⟩
+  · left
+    simpa [Q] using Nat.le_of_not_gt hQn
+
 end Erdos647.ExactBaseState

@@ -99,7 +99,8 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
    extracts the resulting four-or-five distinct prime-atom trichotomy.
    It further selects four distinct primes larger than ten at the exact shifts
    `5,7,9,10`; `Erdos647_ArbitraryShiftCRTReentry.lean` supplies the matching
-   nonconsecutive CRT re-entry bound.
+   nonconsecutive CRT re-entry bound. Their direct composition yields the exact
+   alternative `n≤Q` or `Q<n ∧ 14≤n%Q<Q` for their product `Q`.
    This compatibility result fills none of its three research-open `sorry`s.
 
 9. **The open variants now have exact interfaces.** The global maximum is

@@ -105,6 +105,9 @@ four injectively indexed primes `>10` at shifts `5,7,9,10`, including a selected
 prime atom from either composite `q7` branch. A new arbitrary-shift CRT theorem
 accepts exactly this nonconsecutive interface and forces
 `2^r ≤ n mod (∏Pᵢ) + 2` whenever the selected product is below `n`.
+The direct candidate assembly is now sharper: for
+`Q=p5·p7·p9·p10`, every candidate satisfies either `n≤Q` or
+`Q<n` together with the explicit remainder interval `14≤n mod Q<Q`.
 
 One analytic correction is now part of the proof record. The earlier
 Chebyshev/Mertens lower bound is valid, but its leading coefficient is
