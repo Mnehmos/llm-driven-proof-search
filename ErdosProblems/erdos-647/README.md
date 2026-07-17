@@ -95,6 +95,8 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
    of `N mod 5`, `N mod 7,49`, and `N mod 3,9`. The remaining data are four
    cofactors, three forced prime and the fourth prime/cube/semiprime with exact
    factor residues. This is a finite structural reduction, not an emptiness proof.
+   The same module now proves that these four cofactors are pairwise coprime and
+   extracts the resulting four-or-five distinct prime-atom trichotomy.
    This compatibility result fills none of its three research-open `sorry`s.
 
 9. **The open variants now have exact interfaces.** The global maximum is

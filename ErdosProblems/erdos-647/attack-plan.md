@@ -94,6 +94,12 @@ compiles in the pinned environment. Replay of the tracked root found a
 historical durability mismatch—an earlier missing-object event now succeeds—
 not a mathematical or kernel-verification failure.
 
+The normalized four cofactors now inherit the full six-edge pairwise-coprime
+clique from their ambient rung cofactors. Combining this clique with the exact
+`q7` classification exposes four distinct prime atoms in the prime/cube cases
+and five in the distinct-semiprime case. The next proof target is to make these
+nonreusable atoms accumulate across later shifts until a budget fails.
+
 One analytic correction is now part of the proof record. The earlier
 Chebyshev/Mertens lower bound is valid, but its leading coefficient is
 `log 2`; after multiplying by seven it is too weak to yield a seventh power

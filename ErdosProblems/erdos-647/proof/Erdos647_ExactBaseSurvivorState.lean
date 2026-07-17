@@ -1213,4 +1213,174 @@ theorem candidate_normalized_base_survivor_state :
     h9eq, hq9ndvd, hq9gt, h10eq, hq10ndvd, hq10gt,
     hq5prime, hq9prime, hq10prime, hsplit, hsum, hq7normalized⟩
 
+/-- The normalized cofactors inherit the complete six-edge coprimality clique
+from their four ambient rung cofactors. -/
+theorem normalized_cofactors_pairwise_coprime :
+    ∀ N q5 q7 q9 q10 : ℕ, 1 ≤ N →
+      504 * N - 1 = 5 ^ depth5 N * q5 →
+      360 * N - 1 = 7 ^ depth7 N * q7 →
+      280 * N - 1 = 3 ^ depth9 N * q9 →
+      252 * N - 1 = 5 ^ depth10 N * q10 →
+      Nat.Coprime q5 q7 ∧ Nat.Coprime q5 q9 ∧
+      Nat.Coprime q5 q10 ∧ Nat.Coprime q7 q9 ∧
+      Nat.Coprime q7 q10 ∧ Nat.Coprime q9 q10 := by
+  intro N q5 q7 q9 q10 hN h5 h7 h9 h10
+  have hq5dvd : q5 ∣ 504 * N - 1 := by
+    rw [h5]
+    exact dvd_mul_left q5 _
+  have hq7dvd : q7 ∣ 360 * N - 1 := by
+    rw [h7]
+    exact dvd_mul_left q7 _
+  have hq9dvd : q9 ∣ 280 * N - 1 := by
+    rw [h9]
+    exact dvd_mul_left q9 _
+  have hq10dvd : q10 ∣ 252 * N - 1 := by
+    rw [h10]
+    exact dvd_mul_left q10 _
+  let M := N - 1
+  have hNM : N = M + 1 := by dsimp [M]; omega
+  have h504 : 504 * N - 1 = 504 * M + 503 := by dsimp [M]; omega
+  have h360 : 360 * N - 1 = 360 * M + 359 := by dsimp [M]; omega
+  have h280 : 280 * N - 1 = 280 * M + 279 := by dsimp [M]; omega
+  have h252 : 252 * N - 1 = 252 * M + 251 := by dsimp [M]; omega
+  have coprime_of_relation : ∀ A C u v : ℕ,
+      u * A = v * C + 1 → Nat.Coprime A C := by
+    intro A C u v hrel
+    apply Nat.coprime_of_dvd'
+    intro p hp hpA hpC
+    have hpUA : p ∣ u * A := Dvd.dvd.mul_left hpA u
+    have hpVC : p ∣ v * C := Dvd.dvd.mul_left hpC v
+    have hpVC1 : p ∣ v * C + 1 := hrel ▸ hpUA
+    exact (Nat.dvd_add_right hpVC).mp hpVC1
+  have h57 : Nat.Coprime (504 * N - 1) (360 * N - 1) := by
+    apply coprime_of_relation _ _ (900 * N) (1260 * N + 1)
+    rw [h504, h360, hNM]
+    ring
+  have h59 : Nat.Coprime (504 * N - 1) (280 * N - 1) := by
+    apply coprime_of_relation _ _ (350 * N) (630 * N + 1)
+    rw [h504, h280, hNM]
+    ring
+  have h510 : Nat.Coprime (504 * N - 1) (252 * N - 1) := by
+    apply coprime_of_relation _ _ 1 2
+    omega
+  have h79 : Nat.Coprime (360 * N - 1) (280 * N - 1) := by
+    apply coprime_of_relation _ _ (980 * N) (1260 * N + 1)
+    rw [h360, h280, hNM]
+    ring
+  have h710 : Nat.Coprime (360 * N - 1) (252 * N - 1) := by
+    apply coprime_of_relation _ _ (588 * N) (840 * N + 1)
+    rw [h360, h252, hNM]
+    ring
+  have h910 : Nat.Coprime (280 * N - 1) (252 * N - 1) := by
+    apply coprime_of_relation _ _ 9 10
+    omega
+  exact ⟨
+    Nat.Coprime.of_dvd hq5dvd hq7dvd h57,
+    Nat.Coprime.of_dvd hq5dvd hq9dvd h59,
+    Nat.Coprime.of_dvd hq5dvd hq10dvd h510,
+    Nat.Coprime.of_dvd hq7dvd hq9dvd h79,
+    Nat.Coprime.of_dvd hq7dvd hq10dvd h710,
+    Nat.Coprime.of_dvd hq9dvd hq10dvd h910⟩
+
+/-- Candidate-facing assembly of the normalized local classifications with
+the global coprimality clique between their four cofactors. -/
+theorem candidate_normalized_coprime_cofactor_clique :
+    ∀ n N : ℕ, 84 < n → n = 2520 * N →
+      (⨆ m : Fin n,
+        (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 →
+      ∃ q5 q7 q9 q10 : ℕ,
+        504 * N - 1 = 5 ^ depth5 N * q5 ∧ ¬ 5 ∣ q5 ∧ 1 < q5 ∧
+        360 * N - 1 = 7 ^ depth7 N * q7 ∧ ¬ 7 ∣ q7 ∧ 1 < q7 ∧
+        280 * N - 1 = 3 ^ depth9 N * q9 ∧ ¬ 3 ∣ q9 ∧ 1 < q9 ∧
+        252 * N - 1 = 5 ^ depth10 N * q10 ∧ ¬ 5 ∣ q10 ∧ 1 < q10 ∧
+        Nat.Prime q5 ∧ Nat.Prime q9 ∧ Nat.Prime q10 ∧
+        (depth5 N = 0 ∨ depth10 N = 0) ∧
+        depth5 N + depth7 N + depth9 N + depth10 N ≤ 5 ∧
+        (Nat.Prime q7 ∨
+          (depth7 N = 0 ∧
+            ((∃ p : ℕ, Nat.Prime p ∧ q7 = p ^ 3 ∧ p % 3 = 2) ∨
+              ∃ p q : ℕ, Nat.Prime p ∧ Nat.Prime q ∧ p ≠ q ∧
+                q7 = p * q ∧
+                ((p % 3 = 1 ∧ q % 3 = 2) ∨
+                  (p % 3 = 2 ∧ q % 3 = 1))))) ∧
+        Nat.Coprime q5 q7 ∧ Nat.Coprime q5 q9 ∧
+        Nat.Coprime q5 q10 ∧ Nat.Coprime q7 q9 ∧
+        Nat.Coprime q7 q10 ∧ Nat.Coprime q9 q10 := by
+  intro n N hn84 hnN H
+  obtain ⟨q5, q7, q9, q10,
+      h5, h5ndvd, h5gt, h7, h7ndvd, h7gt,
+      h9, h9ndvd, h9gt, h10, h10ndvd, h10gt,
+      hp5, hp9, hp10, hsplit, hsum, hq7⟩ :=
+    candidate_normalized_base_survivor_state n N hn84 hnN H
+  have hN : 1 ≤ N := by omega
+  obtain ⟨h57, h59, h510, h79, h710, h910⟩ :=
+    normalized_cofactors_pairwise_coprime
+      N q5 q7 q9 q10 hN h5 h7 h9 h10
+  exact ⟨q5, q7, q9, q10,
+    h5, h5ndvd, h5gt, h7, h7ndvd, h7gt,
+    h9, h9ndvd, h9gt, h10, h10ndvd, h10gt,
+    hp5, hp9, hp10, hsplit, hsum, hq7,
+    h57, h59, h510, h79, h710, h910⟩
+
+/-- The q7 classification and the coprimality clique expose either four or
+five genuinely distinct prime atoms across the four normalized cofactors. -/
+theorem four_cofactor_prime_atom_trichotomy :
+    ∀ q5 q7 q9 q10 : ℕ,
+      Nat.Prime q5 → Nat.Prime q9 → Nat.Prime q10 →
+      Nat.Coprime q5 q7 → Nat.Coprime q5 q9 →
+      Nat.Coprime q5 q10 → Nat.Coprime q7 q9 →
+      Nat.Coprime q7 q10 → Nat.Coprime q9 q10 →
+      (Nat.Prime q7 ∨
+        ((∃ p : ℕ, Nat.Prime p ∧ q7 = p ^ 3) ∨
+          ∃ p q : ℕ, Nat.Prime p ∧ Nat.Prime q ∧ p ≠ q ∧ q7 = p * q)) →
+      (Nat.Prime q7 ∧
+          q5 ≠ q7 ∧ q5 ≠ q9 ∧ q5 ≠ q10 ∧
+          q7 ≠ q9 ∧ q7 ≠ q10 ∧ q9 ≠ q10) ∨
+        (∃ p : ℕ, Nat.Prime p ∧ q7 = p ^ 3 ∧
+          q5 ≠ p ∧ q9 ≠ p ∧ q10 ≠ p ∧
+          q5 ≠ q9 ∧ q5 ≠ q10 ∧ q9 ≠ q10) ∨
+        (∃ p q : ℕ, Nat.Prime p ∧ Nat.Prime q ∧ p ≠ q ∧ q7 = p * q ∧
+          q5 ≠ p ∧ q5 ≠ q ∧ q9 ≠ p ∧ q9 ≠ q ∧
+          q10 ≠ p ∧ q10 ≠ q ∧
+          q5 ≠ q9 ∧ q5 ≠ q10 ∧ q9 ≠ q10) := by
+  intro q5 q7 q9 q10 hp5 hp9 hp10 h57 h59 h510 h79 h710 h910 hq7
+  have distinct_of_coprime : ∀ {a b : ℕ},
+      Nat.Prime a → Nat.Prime b → Nat.Coprime a b → a ≠ b := by
+    intro a b ha hb hab
+    exact (Nat.coprime_primes ha hb).mp hab
+  have left_ne_factor : ∀ {a b p : ℕ},
+      Nat.Prime a → Nat.Coprime a b → Nat.Prime p → p ∣ b → a ≠ p := by
+    intro a b p ha hab hp hpdiv hap
+    subst p
+    exact ha.ne_one (Nat.eq_one_of_dvd_coprimes hab (dvd_refl a) hpdiv)
+  have h59ne : q5 ≠ q9 := distinct_of_coprime hp5 hp9 h59
+  have h510ne : q5 ≠ q10 := distinct_of_coprime hp5 hp10 h510
+  have h910ne : q9 ≠ q10 := distinct_of_coprime hp9 hp10 h910
+  rcases hq7 with hp7 | hcomp
+  · exact Or.inl ⟨hp7,
+      distinct_of_coprime hp5 hp7 h57,
+      h59ne, h510ne,
+      distinct_of_coprime hp7 hp9 h79,
+      distinct_of_coprime hp7 hp10 h710,
+      h910ne⟩
+  · rcases hcomp with ⟨p, hp, hq7cube⟩ | ⟨p, q, hp, hq, hpq, hq7prod⟩
+    · have hpdvd : p ∣ q7 := by
+        rw [hq7cube]
+        exact dvd_pow_self p (by omega)
+      exact Or.inr (Or.inl ⟨p, hp, hq7cube,
+        left_ne_factor hp5 h57 hp hpdvd,
+        left_ne_factor hp9 h79.symm hp hpdvd,
+        left_ne_factor hp10 h710.symm hp hpdvd,
+        h59ne, h510ne, h910ne⟩)
+    · have hpdvd : p ∣ q7 := by rw [hq7prod]; exact dvd_mul_right p q
+      have hqdvd : q ∣ q7 := by rw [hq7prod]; exact dvd_mul_left q p
+      exact Or.inr (Or.inr ⟨p, q, hp, hq, hpq, hq7prod,
+        left_ne_factor hp5 h57 hp hpdvd,
+        left_ne_factor hp5 h57 hq hqdvd,
+        left_ne_factor hp9 h79.symm hp hpdvd,
+        left_ne_factor hp9 h79.symm hq hqdvd,
+        left_ne_factor hp10 h710.symm hp hpdvd,
+        left_ne_factor hp10 h710.symm hq hqdvd,
+        h59ne, h510ne, h910ne⟩)
+
 end Erdos647.ExactBaseState
