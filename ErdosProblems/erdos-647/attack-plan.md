@@ -42,6 +42,9 @@ whose selected prime exceeds the common remainder have cardinality at most
 one, and a single exceptional index can be named uniformly. After deleting
 that index, the product of every remaining selected prime is bounded by the
 `(r-1)`st power of the same remainder.
+For an actual candidate prefix, the single scalar gap
+`W^(W+1) < n-W` now constructs the injective large-prime family and yields
+this product-away-from-one-exception envelope in one kernel-verified theorem.
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,

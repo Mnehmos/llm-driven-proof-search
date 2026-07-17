@@ -298,3 +298,134 @@ theorem erdos647_injective_large_primes_shared_host_bound :
         exact (hP i).2.1
       omega
     _ <= H := Nat.le_of_dvd hH hprodDvd
+
+/-- A candidate prefix satisfying the scalar smoothness-escape condition
+produces an injective prime family with pairwise CRT-remainder dominance. -/
+theorem erdos647_candidate_scalar_gap_crt_pair_dominance :
+    forall (n W : Nat),
+      1 <= W ->
+      W + 1 <= n ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      W ^ (W + 1) < n - W ->
+      exists P : Fin W -> Nat,
+        ((forall i : Fin W,
+          (P i).Prime /\ W < P i /\ P i ∣ n - (1 + (i : Nat))) /\
+        Function.Injective P) /\
+        (forall i j : Fin W, i ≠ j ->
+          P i <= n % (∏ k : Fin W, P k) \/
+          P j <= n % (∏ k : Fin W, P k)) := by
+  classical
+  intro n W hW hWn hcand hscalar
+  obtain ⟨P, hP, hinj⟩ :=
+    erdos647_candidate_scalar_gap_produces_distinct_large_primes
+      n W hW hWn hcand hscalar
+  refine ⟨P, ⟨hP, hinj⟩, ?_⟩
+  intro i j hij
+  let Q : Nat := ∏ k : Fin W, P k
+  let R : Nat := n % Q
+  have hPkQ : forall k : Fin W, P k ∣ Q := by
+    intro k
+    dsimp [Q]
+    exact Finset.dvd_prod_of_mem P (Finset.mem_univ k)
+  have hresidue : forall k : Fin W, R % P k = 1 + (k : Nat) := by
+    intro k
+    have hshiftP : 1 + (k : Nat) < P k := by
+      have hshiftW : 1 + (k : Nat) <= W := by omega
+      exact lt_of_le_of_lt hshiftW (hP k).2.1
+    have hshiftn : 1 + (k : Nat) < n := by omega
+    have hsplit : n = (1 + (k : Nat)) + (n - (1 + (k : Nat))) := by
+      simpa [Nat.add_comm] using (Nat.sub_add_cancel hshiftn.le).symm
+    have hzero : (n - (1 + (k : Nat))) % P k = 0 :=
+      Nat.dvd_iff_mod_eq_zero.mp (hP k).2.2
+    calc
+      R % P k = n % P k := Nat.mod_mod_of_dvd n (hPkQ k)
+      _ = ((1 + (k : Nat)) + (n - (1 + (k : Nat)))) % P k := by
+        rw [← hsplit]
+      _ = 1 + (k : Nat) := by
+        simpa [Nat.add_mod, hzero] using Nat.mod_eq_of_lt hshiftP
+  have hpair : P i <= R \/ P j <= R := by
+    by_cases hi : P i <= R
+    · exact Or.inl hi
+    right
+    by_contra hj
+    have hRi : R < P i := Nat.lt_of_not_ge hi
+    have hRj : R < P j := Nat.lt_of_not_ge hj
+    have hei : R = 1 + (i : Nat) := by
+      have h := hresidue i
+      rwa [Nat.mod_eq_of_lt hRi] at h
+    have hej : R = 1 + (j : Nat) := by
+      have h := hresidue j
+      rwa [Nat.mod_eq_of_lt hRj] at h
+    apply hij
+    apply Fin.ext
+    omega
+  simpa [R, Q] using hpair
+
+/-- Exceptional-index form of the candidate-prefix CRT accumulation theorem. -/
+theorem erdos647_candidate_scalar_gap_crt_exceptional_index :
+    forall (n W : Nat),
+      1 <= W ->
+      W + 1 <= n ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      W ^ (W + 1) < n - W ->
+      exists (P : Fin W -> Nat) (e : Fin W),
+        (forall i : Fin W,
+          (P i).Prime /\ W < P i /\ P i ∣ n - (1 + (i : Nat))) /\
+        Function.Injective P /\
+        (forall i : Fin W, i ≠ e ->
+          P i <= n % (∏ k : Fin W, P k)) := by
+  intro n W hW hWn hcand hscalar
+  obtain ⟨P, ⟨hP, hinj⟩, hpair⟩ :=
+    erdos647_candidate_scalar_gap_crt_pair_dominance
+      n W hW hWn hcand hscalar
+  let R := n % (∏ k : Fin W, P k)
+  have hex : exists e : Fin W, forall i : Fin W, i ≠ e -> P i <= R := by
+    by_cases hlarge : exists e : Fin W, R < P e
+    · obtain ⟨e, he⟩ := hlarge
+      refine ⟨e, ?_⟩
+      intro i hie
+      rcases hpair i e hie with hi | he'
+      · exact hi
+      · omega
+    · let e : Fin W := ⟨0, by omega⟩
+      refine ⟨e, ?_⟩
+      intro i _
+      exact le_of_not_gt (fun hi => hlarge ⟨i, hi⟩)
+  obtain ⟨e, he⟩ := hex
+  exact ⟨P, e, hP, hinj, by simpa [R] using he⟩
+
+/-- Candidate-facing arbitrary-prefix product envelope: after deleting one
+selected prime, every other selected prime accumulates below the corresponding
+power of the common CRT remainder. -/
+theorem erdos647_candidate_scalar_gap_crt_product_envelope :
+    forall (n W : Nat),
+      1 <= W ->
+      W + 1 <= n ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      W ^ (W + 1) < n - W ->
+      exists (P : Fin W -> Nat) (e : Fin W),
+        (forall i : Fin W,
+          (P i).Prime /\ W < P i /\ P i ∣ n - (1 + (i : Nat))) /\
+        Function.Injective P /\
+        (∏ i ∈ Finset.univ.erase e, P i) <=
+          (n % (∏ k : Fin W, P k)) ^ (W - 1) := by
+  intro n W hW hWn hcand hscalar
+  obtain ⟨P, e, hP, hinj, he⟩ :=
+    erdos647_candidate_scalar_gap_crt_exceptional_index
+      n W hW hWn hcand hscalar
+  refine ⟨P, e, hP, hinj, ?_⟩
+  calc
+    (∏ i ∈ Finset.univ.erase e, P i) <=
+        ∏ _i ∈ Finset.univ.erase e,
+          (n % (∏ k : Fin W, P k)) := by
+      apply Finset.prod_le_prod'
+      intro i hi
+      exact he i (Finset.ne_of_mem_erase hi)
+    _ = (n % (∏ k : Fin W, P k)) ^
+        (Finset.univ.erase e).card := by simp
+    _ = (n % (∏ k : Fin W, P k)) ^ (W - 1) := by
+      rw [Finset.card_erase_of_mem (Finset.mem_univ e)]
+      simp
