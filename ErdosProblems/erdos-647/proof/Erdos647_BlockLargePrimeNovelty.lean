@@ -429,3 +429,234 @@ theorem erdos647_candidate_scalar_gap_crt_product_envelope :
     _ = (n % (∏ k : Fin W, P k)) ^ (W - 1) := by
       rw [Finset.card_erase_of_mem (Finset.mem_univ e)]
       simp
+
+/-- If all but one of `W` factors exceed `W`, a product envelope at
+exponent `W - 1` forces the envelope base itself to exceed `W`. -/
+theorem erdos647_product_envelope_forces_remainder_large :
+    forall (W R : Nat) (P : Fin W -> Nat) (e : Fin W),
+      2 <= W ->
+      (forall i : Fin W, W < P i) ->
+      (∏ i ∈ Finset.univ.erase e, P i) <= R ^ (W - 1) ->
+      W < R := by
+  classical
+  intro W R P e hW hP henv
+  have hcard : (Finset.univ.erase e).card = W - 1 := by
+    rw [Finset.card_erase_of_mem (Finset.mem_univ e)]
+    simp
+  have hlower :
+      (W + 1) ^ (W - 1) <=
+        (∏ i ∈ Finset.univ.erase e, P i) := by
+    calc
+      (W + 1) ^ (W - 1) =
+          ∏ _i ∈ Finset.univ.erase e, (W + 1) := by
+        simp [hcard]
+      _ <= ∏ i ∈ Finset.univ.erase e, P i := by
+        apply Finset.prod_le_prod'
+        intro i _
+        exact hP i
+  have hpowers : (W + 1) ^ (W - 1) <= R ^ (W - 1) :=
+    hlower.trans henv
+  have hexp : W - 1 ≠ 0 := by omega
+  have hbase : W + 1 <= R :=
+    (Nat.pow_le_pow_iff_left hexp).mp hpowers
+  omega
+
+/-- Candidate-facing remainder growth: under the scalar prefix gap, the
+common CRT remainder is already larger than the entire prefix width. -/
+theorem erdos647_candidate_scalar_gap_crt_remainder_large :
+    forall (n W : Nat),
+      2 <= W ->
+      W + 1 <= n ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      W ^ (W + 1) < n - W ->
+      exists (P : Fin W -> Nat) (e : Fin W),
+        (forall i : Fin W,
+          (P i).Prime /\ W < P i /\ P i ∣ n - (1 + (i : Nat))) /\
+        Function.Injective P /\
+        W < n % (∏ k : Fin W, P k) /\
+        (∏ i ∈ Finset.univ.erase e, P i) <=
+          (n % (∏ k : Fin W, P k)) ^ (W - 1) := by
+  intro n W hW hWn hcand hscalar
+  obtain ⟨P, e, hP, hinj, henv⟩ :=
+    erdos647_candidate_scalar_gap_crt_product_envelope
+      n W (by omega) hWn hcand hscalar
+  have hR :=
+    erdos647_product_envelope_forces_remainder_large
+      W (n % (∏ k : Fin W, P k)) P e hW
+        (fun i => (hP i).2.1) henv
+  exact ⟨P, e, hP, hinj, hR, henv⟩
+
+/-- A full injective family of prime factors re-enters the candidate budget at
+the remainder modulo its product.  The positive-remainder hypothesis is kept
+explicit so this lemma can be reused independently of how the residues arose. -/
+theorem erdos647_full_prime_product_reentry_bound :
+    forall (n W : Nat) (P : Fin W -> Nat),
+      0 < W ->
+      Function.Injective P ->
+      (forall i : Fin W, (P i).Prime) ->
+      0 < n % (∏ i : Fin W, P i) ->
+      (∏ i : Fin W, P i) < n ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      2 ^ W <= n % (∏ i : Fin W, P i) + 2 := by
+  classical
+  intro n W P hW hinj hprime hRpos hQn hcand
+  let Q : Nat := ∏ i : Fin W, P i
+  let R : Nat := n % Q
+  have hRpos' : 0 < R := by
+    simpa [R, Q] using hRpos
+  have hQpos : 0 < Q := by
+    dsimp [Q]
+    exact Finset.prod_pos (fun i _ => (hprime i).pos)
+  have hRltQ : R < Q := by
+    dsimp [R]
+    exact Nat.mod_lt n hQpos
+  have hRltN : R < n := lt_trans hRltQ hQn
+  have hQhost : Q ∣ n - R := by
+    refine ⟨n / Q, ?_⟩
+    have hdecomp := Nat.mod_add_div n Q
+    dsimp [R]
+    omega
+  have hhostpos : 0 < n - R := by
+    exact Nat.sub_pos_of_lt hRltN
+  let S : Finset Nat := Finset.univ.image P
+  have hScard : S.card = W := by
+    dsimp [S]
+    rw [Finset.card_image_iff.mpr hinj.injOn]
+    simp
+  have hPiQ : forall i : Fin W, P i ∣ Q := by
+    intro i
+    dsimp [Q]
+    exact Finset.dvd_prod_of_mem P (Finset.mem_univ i)
+  have hS : forall p, p ∈ S -> p.Prime /\ p ∣ n - R := by
+    intro p hp
+    dsimp [S] at hp
+    simp only [Finset.mem_image] at hp
+    obtain ⟨i, _, rfl⟩ := hp
+    exact ⟨hprime i, (hPiQ i).trans hQhost⟩
+  have htau : 2 ^ W <= ArithmeticFunction.sigma 0 (n - R) := by
+    rw [ArithmeticFunction.sigma_zero_apply, Nat.card_divisors hhostpos.ne']
+    have hsubset : S ⊆ (n - R).primeFactors := by
+      intro p hp
+      exact Nat.mem_primeFactors.mpr
+        ⟨(hS p hp).1, (hS p hp).2, hhostpos.ne'⟩
+    have hcard : S.card <= (n - R).primeFactors.card :=
+      Finset.card_le_card hsubset
+    have hpow : 2 ^ (n - R).primeFactors.card <=
+        ∏ p ∈ (n - R).primeFactors,
+          ((n - R).factorization p + 1) := by
+      apply Finset.pow_card_le_prod
+      intro p hp
+      have hp' : p ∈ (n - R).factorization.support := by simpa using hp
+      have hfac : (n - R).factorization p ≠ 0 :=
+        Finsupp.mem_support_iff.mp hp'
+      omega
+    rw [← hScard]
+    exact (pow_le_pow_right' (by norm_num) hcard).trans hpow
+  let f : Fin n -> Nat := fun x =>
+    (x : Nat) + ArithmeticFunction.sigma 0 x
+  have hbdd : BddAbove (Set.range f) := by
+    refine ⟨2 * n, ?_⟩
+    rintro y ⟨x, rfl⟩
+    dsimp [f]
+    rw [ArithmeticFunction.sigma_zero_apply]
+    have hc := Nat.card_divisors_le_self (x : Nat)
+    have hx : (x : Nat) < n := x.isLt
+    omega
+  let m : Fin n :=
+    ⟨n - R, Nat.sub_lt (lt_trans hQpos hQn) hRpos'⟩
+  have hm : f m <= n + 2 := le_trans (le_ciSup hbdd m) hcand
+  dsimp [f, m] at hm
+  have hbudget : ArithmeticFunction.sigma 0 (n - R) <= R + 2 := by
+    omega
+  simpa [R, Q] using htau.trans hbudget
+
+/-- The scalar-gap construction now carries both quantitative consequences:
+its CRT remainder exceeds the prefix width, and if the complete selected
+product lies below `n`, candidatehood forces the exponential re-entry
+budget. -/
+theorem erdos647_candidate_scalar_gap_crt_accumulation :
+    forall (n W : Nat),
+      2 <= W ->
+      W + 1 <= n ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      W ^ (W + 1) < n - W ->
+      exists (P : Fin W -> Nat) (e : Fin W),
+        (forall i : Fin W,
+          (P i).Prime /\ W < P i /\ P i ∣ n - (1 + (i : Nat))) /\
+        Function.Injective P /\
+        W < n % (∏ k : Fin W, P k) /\
+        (∏ i ∈ Finset.univ.erase e, P i) <=
+          (n % (∏ k : Fin W, P k)) ^ (W - 1) /\
+        ((∏ k : Fin W, P k) < n ->
+          2 ^ W <= n % (∏ k : Fin W, P k) + 2) := by
+  intro n W hW hWn hcand hscalar
+  obtain ⟨P, e, hP, hinj, hR, henv⟩ :=
+    erdos647_candidate_scalar_gap_crt_remainder_large
+      n W hW hWn hcand hscalar
+  refine ⟨P, e, hP, hinj, hR, henv, ?_⟩
+  intro hQn
+  exact erdos647_full_prime_product_reentry_bound
+    n W P (by omega) hinj (fun i => (hP i).1)
+      (by omega) hQn hcand
+
+/-- Clean global alternative for a scalar-gap candidate prefix: either the
+selected prime product has crossed `n`, or its CRT remainder must pay the
+full exponential divisor budget. -/
+theorem erdos647_candidate_scalar_gap_product_or_reentry :
+    forall (n W : Nat),
+      2 <= W ->
+      W + 1 <= n ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      W ^ (W + 1) < n - W ->
+      exists (P : Fin W -> Nat) (e : Fin W),
+        (forall i : Fin W,
+          (P i).Prime /\ W < P i /\ P i ∣ n - (1 + (i : Nat))) /\
+        Function.Injective P /\
+        W < n % (∏ k : Fin W, P k) /\
+        (∏ i ∈ Finset.univ.erase e, P i) <=
+          (n % (∏ k : Fin W, P k)) ^ (W - 1) /\
+        (n < (∏ k : Fin W, P k) \/
+          2 ^ W <= n % (∏ k : Fin W, P k) + 2) := by
+  intro n W hW hWn hcand hscalar
+  obtain ⟨P, e, hP, hinj, hR, henv, hreentry⟩ :=
+    erdos647_candidate_scalar_gap_crt_accumulation
+      n W hW hWn hcand hscalar
+  refine ⟨P, e, hP, hinj, hR, henv, ?_⟩
+  by_cases hcross : n < (∏ k : Fin W, P k)
+  · exact Or.inl hcross
+  right
+  apply hreentry
+  have hne : (∏ k : Fin W, P k) ≠ n := by
+    intro heq
+    rw [heq, Nat.mod_self] at hR
+    omega
+  omega
+
+/-- Scalar-gap exclusion engine.  To rule out candidatehood it now suffices
+to show that every admissible selected prime family both fails to cross `n`
+and has a CRT remainder too small to pay the exponential re-entry budget. -/
+theorem erdos647_not_candidate_of_scalar_gap_crt_obstruction :
+    forall (n W : Nat),
+      2 <= W ->
+      W + 1 <= n ->
+      W ^ (W + 1) < n - W ->
+      (forall P : Fin W -> Nat,
+        (forall i : Fin W,
+          (P i).Prime /\ W < P i /\ P i ∣ n - (1 + (i : Nat))) ->
+        Function.Injective P ->
+        (∏ k : Fin W, P k) <= n /\
+        n % (∏ k : Fin W, P k) + 2 < 2 ^ W) ->
+      ¬((⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2) := by
+  intro n W hW hWn hscalar hobstruct hcand
+  obtain ⟨P, _e, hP, hinj, _hR, _henv, halt⟩ :=
+    erdos647_candidate_scalar_gap_product_or_reentry
+      n W hW hWn hcand hscalar
+  obtain ⟨hQle, hsmall⟩ := hobstruct P hP hinj
+  rcases halt with hcross | hreentry
+  · omega
+  · omega

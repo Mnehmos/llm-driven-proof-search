@@ -45,6 +45,9 @@ that index, the product of every remaining selected prime is bounded by the
 For an actual candidate prefix, the single scalar gap
 `W^(W+1) < n-W` now constructs the injective large-prime family and yields
 this product-away-from-one-exception envelope in one kernel-verified theorem.
+It also forces the common remainder above `W` and gives the exact alternative:
+either the full selected product crosses `n`, or the remainder pays
+`2^W <= r+2`; violating both sides is now a direct candidate exclusion engine.
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,
