@@ -97,6 +97,9 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
    factor residues. This is a finite structural reduction, not an emptiness proof.
    The same module now proves that these four cofactors are pairwise coprime and
    extracts the resulting four-or-five distinct prime-atom trichotomy.
+   It further selects four distinct primes larger than ten at the exact shifts
+   `5,7,9,10`; `Erdos647_ArbitraryShiftCRTReentry.lean` supplies the matching
+   nonconsecutive CRT re-entry bound.
    This compatibility result fills none of its three research-open `sorry`s.
 
 9. **The open variants now have exact interfaces.** The global maximum is

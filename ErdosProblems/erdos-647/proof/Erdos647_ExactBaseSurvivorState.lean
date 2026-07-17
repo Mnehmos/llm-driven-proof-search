@@ -1383,4 +1383,163 @@ theorem four_cofactor_prime_atom_trichotomy :
         left_ne_factor hp10 h710.symm hq hqdvd,
         h59ne, h510ne, h910ne⟩)
 
+/-- Every remaining candidate supplies four pairwise-distinct primes larger
+than ten at the exact base shifts `5,7,9,10`.  In the composite q7 branches
+we select one of its certified prime atoms. -/
+theorem candidate_base_rungs_supply_large_distinct_primes :
+    ∀ n N : ℕ, 84 < n → n = 2520 * N →
+      (⨆ m : Fin n,
+        (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 →
+      ∃ p5 p7 p9 p10 : ℕ,
+        Nat.Prime p5 ∧ 10 < p5 ∧ p5 ∣ n - 5 ∧
+        Nat.Prime p7 ∧ 10 < p7 ∧ p7 ∣ n - 7 ∧
+        Nat.Prime p9 ∧ 10 < p9 ∧ p9 ∣ n - 9 ∧
+        Nat.Prime p10 ∧ 10 < p10 ∧ p10 ∣ n - 10 ∧
+        p5 ≠ p7 ∧ p5 ≠ p9 ∧ p5 ≠ p10 ∧
+        p7 ≠ p9 ∧ p7 ≠ p10 ∧ p9 ≠ p10 := by
+  intro n N hn84 hnN H
+  obtain ⟨q5, q7, q9, q10,
+      h5, h5ndvd, h5gt, h7, h7ndvd, h7gt,
+      h9, h9ndvd, h9gt, h10, h10ndvd, h10gt,
+      hp5, hp9, hp10, hsplit, hsum, hq7,
+      h57, h59, h510, h79, h710, h910⟩ :=
+    candidate_normalized_coprime_cofactor_clique n N hn84 hnN H
+  have hN : 1 ≤ N := by omega
+  have hq5host : q5 ∣ 504 * N - 1 := by rw [h5]; exact dvd_mul_left q5 _
+  have hq7host : q7 ∣ 360 * N - 1 := by rw [h7]; exact dvd_mul_left q7 _
+  have hq9host : q9 ∣ 280 * N - 1 := by rw [h9]; exact dvd_mul_left q9 _
+  have hq10host : q10 ∣ 252 * N - 1 := by rw [h10]; exact dvd_mul_left q10 _
+  obtain ⟨p7, hp7, hp7q7⟩ : ∃ p : ℕ, Nat.Prime p ∧ p ∣ q7 := by
+    rcases hq7 with hp7 | ⟨hdepth, hcube | hsemi⟩
+    · exact ⟨q7, hp7, dvd_refl q7⟩
+    · obtain ⟨p, hp, hq7cube, hpmod⟩ := hcube
+      refine ⟨p, hp, ?_⟩
+      rw [hq7cube]
+      exact dvd_pow_self p (by omega)
+    · obtain ⟨p, q, hp, hq, hpq, hq7prod, hmods⟩ := hsemi
+      refine ⟨p, hp, ?_⟩
+      rw [hq7prod]
+      exact dvd_mul_right p q
+  have hp7host : p7 ∣ 360 * N - 1 := hp7q7.trans hq7host
+  have hNpos : 0 < N := by omega
+  have not_small_dvd_host : ∀ p A : ℕ, 1 < p → 0 < A →
+      p ∣ A → p ∣ A * N - 1 → False := by
+    intro p A hpgt hA hpA hpHost
+    have hpAN : p ∣ A * N := Dvd.dvd.mul_right hpA N
+    have hpOne : p ∣ 1 := by
+      have hpSum : p ∣ (A * N - 1) + 1 := by
+        rw [Nat.sub_add_cancel (Nat.mul_pos hA hNpos)]
+        exact hpAN
+      exact (Nat.dvd_add_right hpHost).mp hpSum
+    have hpEq : p = 1 := Nat.dvd_one.mp hpOne
+    omega
+  have prime_gt_ten : ∀ p : ℕ, Nat.Prime p →
+      ¬ 2 ∣ p → ¬ 3 ∣ p → ¬ 5 ∣ p → ¬ 7 ∣ p → 10 < p := by
+    intro p hp h2 h3 h5 h7
+    by_contra hle
+    have hp2 := hp.two_le
+    have hcases : p = 2 ∨ p = 3 ∨ p = 4 ∨ p = 5 ∨ p = 6 ∨
+        p = 7 ∨ p = 8 ∨ p = 9 ∨ p = 10 := by omega
+    rcases hcases with h | h | h | h | h | h | h | h | h
+    · subst p; exact h2 (by norm_num)
+    · subst p; exact h3 (by norm_num)
+    · subst p; norm_num at hp
+    · subst p; exact h5 (by norm_num)
+    · subst p; norm_num at hp
+    · subst p; exact h7 (by norm_num)
+    · subst p; norm_num at hp
+    · subst p; norm_num at hp
+    · subst p; norm_num at hp
+  have hq5large : 10 < q5 := by
+    apply prime_gt_ten q5 hp5
+    · intro h; exact not_small_dvd_host 2 504 (by norm_num) (by norm_num) (by norm_num) (h.trans hq5host)
+    · intro h; exact not_small_dvd_host 3 504 (by norm_num) (by norm_num) (by norm_num) (h.trans hq5host)
+    · exact h5ndvd
+    · intro h; exact not_small_dvd_host 7 504 (by norm_num) (by norm_num) (by norm_num) (h.trans hq5host)
+  have hp7large : 10 < p7 := by
+    apply prime_gt_ten p7 hp7
+    · intro h; exact not_small_dvd_host 2 360 (by norm_num) (by norm_num) (by norm_num) (h.trans hp7host)
+    · intro h; exact not_small_dvd_host 3 360 (by norm_num) (by norm_num) (by norm_num) (h.trans hp7host)
+    · intro h; exact not_small_dvd_host 5 360 (by norm_num) (by norm_num) (by norm_num) (h.trans hp7host)
+    · intro h; exact h7ndvd ((h.trans hp7q7))
+  have hq9large : 10 < q9 := by
+    apply prime_gt_ten q9 hp9
+    · intro h; exact not_small_dvd_host 2 280 (by norm_num) (by norm_num) (by norm_num) (h.trans hq9host)
+    · exact h9ndvd
+    · intro h; exact not_small_dvd_host 5 280 (by norm_num) (by norm_num) (by norm_num) (h.trans hq9host)
+    · intro h; exact not_small_dvd_host 7 280 (by norm_num) (by norm_num) (by norm_num) (h.trans hq9host)
+  have hq10large : 10 < q10 := by
+    apply prime_gt_ten q10 hp10
+    · intro h; exact not_small_dvd_host 2 252 (by norm_num) (by norm_num) (by norm_num) (h.trans hq10host)
+    · intro h; exact not_small_dvd_host 3 252 (by norm_num) (by norm_num) (by norm_num) (h.trans hq10host)
+    · exact h10ndvd
+    · intro h; exact not_small_dvd_host 7 252 (by norm_num) (by norm_num) (by norm_num) (h.trans hq10host)
+  have h5dvd : q5 ∣ n - 5 := by
+    rw [hnN]
+    have heq : 2520 * N - 5 = 5 * (504 * N - 1) := by omega
+    rw [heq]
+    exact Dvd.dvd.mul_left hq5host 5
+  have h7dvd : p7 ∣ n - 7 := by
+    rw [hnN]
+    have heq : 2520 * N - 7 = 7 * (360 * N - 1) := by omega
+    rw [heq]
+    exact Dvd.dvd.mul_left hp7host 7
+  have h9dvd : q9 ∣ n - 9 := by
+    rw [hnN]
+    have heq : 2520 * N - 9 = 9 * (280 * N - 1) := by omega
+    rw [heq]
+    exact Dvd.dvd.mul_left hq9host 9
+  have h10dvd : q10 ∣ n - 10 := by
+    rw [hnN]
+    have heq : 2520 * N - 10 = 10 * (252 * N - 1) := by omega
+    rw [heq]
+    exact Dvd.dvd.mul_left hq10host 10
+  have left_ne_factor : ∀ {a b p : ℕ},
+      Nat.Prime a → Nat.Coprime a b → Nat.Prime p → p ∣ b → a ≠ p := by
+    intro a b p ha hab hp hpdiv hap
+    subst p
+    exact ha.ne_one (Nat.eq_one_of_dvd_coprimes hab (dvd_refl a) hpdiv)
+  have h5ne7 : q5 ≠ p7 := left_ne_factor hp5 h57 hp7 hp7q7
+  have h7ne9 : p7 ≠ q9 :=
+    (left_ne_factor hp9 h79.symm hp7 hp7q7).symm
+  have h7ne10 : p7 ≠ q10 :=
+    (left_ne_factor hp10 h710.symm hp7 hp7q7).symm
+  exact ⟨q5, p7, q9, q10,
+    hp5, hq5large, h5dvd,
+    hp7, hp7large, h7dvd,
+    hp9, hq9large, h9dvd,
+    hp10, hq10large, h10dvd,
+    h5ne7, (Nat.coprime_primes hp5 hp9).mp h59,
+    (Nat.coprime_primes hp5 hp10).mp h510,
+    h7ne9, h7ne10, (Nat.coprime_primes hp9 hp10).mp h910⟩
+
+/-- Indexed form of the four large base-rung primes.  This removes the last
+tuple-level impedance mismatch before an arbitrary-shift CRT re-entry step. -/
+theorem candidate_base_rungs_indexed_large_primes :
+    ∀ n N : ℕ, 84 < n → n = 2520 * N →
+      (⨆ m : Fin n,
+        (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 →
+      ∃ (shift P : Fin 4 → ℕ),
+        shift 0 = 5 ∧ shift 1 = 7 ∧ shift 2 = 9 ∧ shift 3 = 10 ∧
+        (∀ i : Fin 4,
+          Nat.Prime (P i) ∧ 10 < P i ∧ P i ∣ n - shift i) ∧
+        Function.Injective P := by
+  intro n N hn84 hnN H
+  obtain ⟨p5, p7, p9, p10,
+      hp5, hp5large, hp5dvd,
+      hp7, hp7large, hp7dvd,
+      hp9, hp9large, hp9dvd,
+      hp10, hp10large, hp10dvd,
+      h57, h59, h510, h79, h710, h910⟩ :=
+    candidate_base_rungs_supply_large_distinct_primes n N hn84 hnN H
+  let shift : Fin 4 → ℕ := ![5, 7, 9, 10]
+  let P : Fin 4 → ℕ := ![p5, p7, p9, p10]
+  refine ⟨shift, P, by rfl, by rfl, by rfl, by rfl, ?_, ?_⟩
+  · intro i
+    fin_cases i <;> simp [P, shift, hp5, hp5large, hp5dvd,
+      hp7, hp7large, hp7dvd, hp9, hp9large, hp9dvd,
+      hp10, hp10large, hp10dvd]
+  · intro i j hij
+    fin_cases i <;> fin_cases j <;> simp_all [P]
+
 end Erdos647.ExactBaseState

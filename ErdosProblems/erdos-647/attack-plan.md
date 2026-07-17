@@ -100,6 +100,12 @@ clique from their ambient rung cofactors. Combining this clique with the exact
 and five in the distinct-semiprime case. The next proof target is to make these
 nonreusable atoms accumulate across later shifts until a budget fails.
 
+The first accumulation bridge is now source-verified: every candidate supplies
+four injectively indexed primes `>10` at shifts `5,7,9,10`, including a selected
+prime atom from either composite `q7` branch. A new arbitrary-shift CRT theorem
+accepts exactly this nonconsecutive interface and forces
+`2^r ≤ n mod (∏Pᵢ) + 2` whenever the selected product is below `n`.
+
 One analytic correction is now part of the proof record. The earlier
 Chebyshev/Mertens lower bound is valid, but its leading coefficient is
 `log 2`; after multiplying by seven it is too weak to yield a seventh power
