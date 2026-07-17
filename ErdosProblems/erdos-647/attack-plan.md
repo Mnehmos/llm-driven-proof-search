@@ -59,8 +59,8 @@ remain as cofactors uniformly below `Q`; this replaces indefinite
 shift-by-shift extension with a repeatable quantitative split.
 The cofactor branch now also carries the exact halved divisor budget, and every
 `B`-smooth cofactor in it satisfies the kernel-verified bound
-`q ≤ B^(shift/2)`; the next proof target is the complementary large-prime
-selection/re-entry layer.
+`q ≤ B^(shift/2)`. Large-prime witnesses above the shift range can now be
+chosen injectively; the next proof target is their second CRT re-entry layer.
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,
