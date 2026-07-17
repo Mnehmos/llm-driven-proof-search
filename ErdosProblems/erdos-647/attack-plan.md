@@ -53,6 +53,10 @@ too early: it selects a nonempty subproduct `Q<n`, obtains
 `2^|I|<=n%Q+2`, and simultaneously proves every omitted complementary
 cofactor is below `Q`. This is the reusable first-layer-to-second-layer
 induction interface now targeted for the uniform contradiction.
+Its balanced specialization proves that either roughly half the prime family
+forces an exponential re-entry budget, or more than half the coordinates
+remain as cofactors uniformly below `Q`; this replaces indefinite
+shift-by-shift extension with a repeatable quantitative split.
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,

@@ -249,4 +249,111 @@ theorem erdos647_candidate_maximal_reentry_subset :
       (fun i _ => (hdata i).1) hRpos hQn hcand
   exact ⟨I, hIne, hIsub, hQn, hqbound, hRpos, hreentry⟩
 
+/-- Cardinal bookkeeping for the maximal feedback subset: selected and
+omitted coordinates partition the whole width. -/
+theorem erdos647_candidate_maximal_reentry_card_split :
+    forall (n W : Nat) (shift P q : Fin W -> Nat),
+      1 < n ->
+      0 < W ->
+      Function.Injective P ->
+      (forall i : Fin W,
+        (P i).Prime /\
+        0 < shift i /\ shift i < P i /\ shift i < n /\
+        n - shift i = P i * q i) ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      exists I : Finset (Fin W),
+        I.Nonempty /\
+        I ⊆ Finset.univ /\
+        (∏ i ∈ I, P i) < n /\
+        (forall j : Fin W, j ∉ I ->
+          q j < (∏ i ∈ I, P i)) /\
+        0 < n % (∏ i ∈ I, P i) /\
+        2 ^ I.card <= n % (∏ i ∈ I, P i) + 2 /\
+        I.card + (Finset.univ \ I).card = W := by
+  intro n W shift P q hn hW hinj hdata hcand
+  obtain ⟨I, hIne, hIsub, hQn, hq, hR, hreentry⟩ :=
+    erdos647_candidate_maximal_reentry_subset
+      n W shift P q hn hW hinj hdata hcand
+  have hpartition :
+      (Finset.univ \ I).card + I.card = W := by
+    simpa using Finset.card_sdiff_add_card_eq_card hIsub
+  exact ⟨I, hIne, hIsub, hQn, hq, hR, hreentry, by omega⟩
+
+/-- Threshold form of the induction interface.  Either the maximal re-entry
+subset has at least `T` coordinates and pays a `2^T` budget, or its omitted
+cofactor block has the complementary quantitative size. -/
+theorem erdos647_candidate_maximal_reentry_threshold :
+    forall (n W T : Nat) (shift P q : Fin W -> Nat),
+      1 < n ->
+      0 < W ->
+      0 < T ->
+      Function.Injective P ->
+      (forall i : Fin W,
+        (P i).Prime /\
+        0 < shift i /\ shift i < P i /\ shift i < n /\
+        n - shift i = P i * q i) ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      exists I : Finset (Fin W),
+        I.Nonempty /\
+        I ⊆ Finset.univ /\
+        (∏ i ∈ I, P i) < n /\
+        (forall j : Fin W, j ∉ I ->
+          q j < (∏ i ∈ I, P i)) /\
+        0 < n % (∏ i ∈ I, P i) /\
+        ((T <= I.card /\
+            2 ^ T <= n % (∏ i ∈ I, P i) + 2) \/
+          (I.card < T /\
+            W <= (Finset.univ \ I).card + (T - 1))) := by
+  intro n W T shift P q hn hW hT hinj hdata hcand
+  obtain ⟨I, hIne, hIsub, hQn, hq, hR, hreentry, hcard⟩ :=
+    erdos647_candidate_maximal_reentry_card_split
+      n W shift P q hn hW hinj hdata hcand
+  refine ⟨I, hIne, hIsub, hQn, hq, hR, ?_⟩
+  by_cases hlarge : T <= I.card
+  · left
+    refine ⟨hlarge, ?_⟩
+    exact (pow_le_pow_right' (by norm_num) hlarge).trans hreentry
+  · right
+    constructor
+    · omega
+    · omega
+
+/-- Balanced specialization: either roughly half the selected primes re-enter
+at exponential strength, or more than half the coordinates survive as
+uniformly bounded second-layer cofactors. -/
+theorem erdos647_candidate_balanced_reentry_or_cofactor_block :
+    forall (n W : Nat) (shift P q : Fin W -> Nat),
+      1 < n ->
+      0 < W ->
+      Function.Injective P ->
+      (forall i : Fin W,
+        (P i).Prime /\
+        0 < shift i /\ shift i < P i /\ shift i < n /\
+        n - shift i = P i * q i) ->
+      (⨆ m : Fin n,
+        (m : Nat) + ArithmeticFunction.sigma 0 m) <= n + 2 ->
+      exists I : Finset (Fin W),
+        I.Nonempty /\
+        I ⊆ Finset.univ /\
+        (∏ i ∈ I, P i) < n /\
+        (forall j : Fin W, j ∉ I ->
+          q j < (∏ i ∈ I, P i)) /\
+        0 < n % (∏ i ∈ I, P i) /\
+        (2 ^ ((W + 1) / 2) <=
+            n % (∏ i ∈ I, P i) + 2 \/
+          W / 2 + 1 <= (Finset.univ \ I).card) := by
+  intro n W shift P q hn hW hinj hdata hcand
+  have hT : 0 < (W + 1) / 2 := by omega
+  obtain ⟨I, hIne, hIsub, hQn, hq, hR, halt⟩ :=
+    erdos647_candidate_maximal_reentry_threshold
+      n W ((W + 1) / 2) shift P q
+        hn hW hT hinj hdata hcand
+  refine ⟨I, hIne, hIsub, hQn, hq, hR, ?_⟩
+  rcases halt with hmany | hcof
+  · exact Or.inl hmany.2
+  · right
+    omega
+
 end Erdos647
