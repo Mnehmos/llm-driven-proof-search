@@ -39,7 +39,9 @@ dominance now forces some three-prime subproduct below the cube of the CRT
 remainder, so at most one of the four base primes remains exceptional. This
 is now promoted to arbitrary finite injective shift families: the coordinates
 whose selected prime exceeds the common remainder have cardinality at most
-one, and a single exceptional index can be named uniformly.
+one, and a single exceptional index can be named uniformly. After deleting
+that index, the product of every remaining selected prime is bounded by the
+`(r-1)`st power of the same remainder.
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,

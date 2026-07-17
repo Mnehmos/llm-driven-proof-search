@@ -311,6 +311,37 @@ theorem erdos647_pair_dominance_exists_exceptional_index :
     intro i _
     exact le_of_not_gt (fun hi => hlarge ⟨i, hi⟩)
 
+/-- Once an exceptional coordinate is named, the product over all remaining
+coordinates is bounded by the corresponding power of R. -/
+theorem erdos647_product_away_from_exception_le :
+    ∀ (r R : ℕ) (P : Fin r → ℕ) (e : Fin r),
+      (∀ i : Fin r, i ≠ e → P i ≤ R) →
+      (∏ i ∈ Finset.univ.erase e, P i) ≤ R ^ (r - 1) := by
+  intro r R P e hbound
+  calc
+    (∏ i ∈ Finset.univ.erase e, P i) ≤
+        ∏ _i ∈ Finset.univ.erase e, R := by
+      apply Finset.prod_le_prod'
+      intro i hi
+      exact hbound i (Finset.ne_of_mem_erase hi)
+    _ = R ^ (Finset.univ.erase e).card := by simp
+    _ = R ^ (r - 1) := by
+      rw [Finset.card_erase_of_mem (Finset.mem_univ e)]
+      simp
+
+/-- Product form of pair dominance: after deleting one coordinate, the entire
+remaining product is bounded by R^(r-1). -/
+theorem erdos647_pair_dominance_product_away_from_exception_le :
+    ∀ (r R : ℕ) (P : Fin r → ℕ),
+      0 < r →
+      (∀ i j : Fin r, i ≠ j → P i ≤ R ∨ P j ≤ R) →
+      ∃ e : Fin r,
+        (∏ i ∈ Finset.univ.erase e, P i) ≤ R ^ (r - 1) := by
+  intro r R P hr hpair
+  obtain ⟨e, he⟩ :=
+    erdos647_pair_dominance_exists_exceptional_index r R P hr hpair
+  exact ⟨e, erdos647_product_away_from_exception_le r R P e he⟩
+
 /-- In an arbitrary injective shift family, two selected primes cannot both
 exceed the common CRT remainder. -/
 theorem erdos647_arbitrary_shift_unique_prime_above_remainder :
@@ -369,6 +400,29 @@ theorem erdos647_arbitrary_shift_exists_exceptional_index :
   intro n r shift P hr hshift hP
   dsimp
   apply erdos647_pair_dominance_exists_exceptional_index r _ P hr
+  intro i j hij
+  have hshift_ne : shift i ≠ shift j := by
+    intro h
+    exact hij (hshift h)
+  exact erdos647_arbitrary_shift_remainder_dominates_pair
+    n r shift P hr hP i j hshift_ne
+
+/-- Scalable product envelope for an arbitrary injective shift family: after
+deleting one selected prime, the product of all remaining selected primes is
+bounded by the (r-1)st power of the common CRT remainder. -/
+theorem erdos647_arbitrary_shift_product_away_from_exception_le :
+    ∀ (n r : ℕ) (shift P : Fin r → ℕ),
+      0 < r →
+      Function.Injective shift →
+      (∀ i : Fin r,
+        (P i).Prime ∧ 0 < shift i ∧ shift i < P i ∧
+          shift i < n ∧ P i ∣ n - shift i) →
+      let R := n % (∏ k : Fin r, P k)
+      ∃ e : Fin r,
+        (∏ i ∈ Finset.univ.erase e, P i) ≤ R ^ (r - 1) := by
+  intro n r shift P hr hshift hP
+  dsimp
+  apply erdos647_pair_dominance_product_away_from_exception_le r _ P hr
   intro i j hij
   have hshift_ne : shift i ≠ shift j := by
     intro h
