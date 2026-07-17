@@ -290,4 +290,90 @@ theorem erdos647_base_four_prime_remainder_triple_bound :
   exact erdos647_four_pair_bounds_force_triple_product
     _ p5 p7 p9 p10 h57 h59 h510 h79 h710 h910
 
+/-- Pure finite engine behind the remainder argument: if every distinct pair
+has a coordinate bounded by `R`, then one exceptional coordinate can be
+removed so that all remaining values are bounded by `R`. -/
+theorem erdos647_pair_dominance_exists_exceptional_index :
+    ∀ (r R : ℕ) (P : Fin r → ℕ),
+      0 < r →
+      (∀ i j : Fin r, i ≠ j → P i ≤ R ∨ P j ≤ R) →
+      ∃ e : Fin r, ∀ i : Fin r, i ≠ e → P i ≤ R := by
+  intro r R P hr hpair
+  by_cases hlarge : ∃ e : Fin r, R < P e
+  · obtain ⟨e, he⟩ := hlarge
+    refine ⟨e, ?_⟩
+    intro i hie
+    rcases hpair i e hie with hi | he'
+    · exact hi
+    · omega
+  · let e : Fin r := ⟨0, hr⟩
+    refine ⟨e, ?_⟩
+    intro i _
+    exact le_of_not_gt (fun hi => hlarge ⟨i, hi⟩)
+
+/-- In an arbitrary injective shift family, two selected primes cannot both
+exceed the common CRT remainder. -/
+theorem erdos647_arbitrary_shift_unique_prime_above_remainder :
+    ∀ (n r : ℕ) (shift P : Fin r → ℕ),
+      0 < r →
+      Function.Injective shift →
+      (∀ i : Fin r,
+        (P i).Prime ∧ 0 < shift i ∧ shift i < P i ∧
+          shift i < n ∧ P i ∣ n - shift i) →
+      let R := n % (∏ k : Fin r, P k)
+      ∀ i j : Fin r, R < P i → R < P j → i = j := by
+  intro n r shift P hr hshift hP
+  dsimp
+  intro i j hi hj
+  by_contra hij
+  have hshift_ne : shift i ≠ shift j := by
+    intro h
+    exact hij (hshift h)
+  have hpair := erdos647_arbitrary_shift_remainder_dominates_pair
+    n r shift P hr hP i j hshift_ne
+  omega
+
+/-- Cardinal form of the arbitrary-shift exceptional-prime theorem: the set
+of coordinates whose selected prime exceeds the CRT remainder has size at
+most one. -/
+theorem erdos647_arbitrary_shift_large_prime_card_le_one :
+    ∀ (n r : ℕ) (shift P : Fin r → ℕ),
+      0 < r →
+      Function.Injective shift →
+      (∀ i : Fin r,
+        (P i).Prime ∧ 0 < shift i ∧ shift i < P i ∧
+          shift i < n ∧ P i ∣ n - shift i) →
+      let R := n % (∏ k : Fin r, P k)
+      (Finset.univ.filter (fun i : Fin r => R < P i)).card ≤ 1 := by
+  intro n r shift P hr hshift hP
+  let R := n % (∏ k : Fin r, P k)
+  have hunique := erdos647_arbitrary_shift_unique_prime_above_remainder
+    n r shift P hr hshift hP
+  dsimp at hunique ⊢
+  rw [Finset.card_le_one_iff]
+  intro i j hi hj
+  simp only [Finset.mem_filter, Finset.mem_univ, true_and] at hi hj
+  exact hunique i j hi hj
+
+/-- Exceptional-index form: one coordinate can be named so that every other
+selected prime is bounded by the common CRT remainder. -/
+theorem erdos647_arbitrary_shift_exists_exceptional_index :
+    ∀ (n r : ℕ) (shift P : Fin r → ℕ),
+      0 < r →
+      Function.Injective shift →
+      (∀ i : Fin r,
+        (P i).Prime ∧ 0 < shift i ∧ shift i < P i ∧
+          shift i < n ∧ P i ∣ n - shift i) →
+      let R := n % (∏ k : Fin r, P k)
+      ∃ e : Fin r, ∀ i : Fin r, i ≠ e → P i ≤ R := by
+  intro n r shift P hr hshift hP
+  dsimp
+  apply erdos647_pair_dominance_exists_exceptional_index r _ P hr
+  intro i j hij
+  have hshift_ne : shift i ≠ shift j := by
+    intro h
+    exact hij (hshift h)
+  exact erdos647_arbitrary_shift_remainder_dominates_pair
+    n r shift P hr hP i j hshift_ne
+
 end Erdos647

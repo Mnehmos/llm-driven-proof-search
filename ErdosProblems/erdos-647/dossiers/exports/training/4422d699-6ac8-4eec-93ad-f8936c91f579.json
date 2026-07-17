@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro r R P hr hpair\nby_cases hlarge : ∃ e : Fin r, R < P e\n· obtain ⟨e, he⟩ := hlarge\n  refine ⟨e, ?_⟩\n  intro i hie\n  rcases hpair i e hie with hi | he'\n  · exact hi\n  · omega\n· let e : Fin r := ⟨0, hr⟩\n  refine ⟨e, ?_⟩\n  intro i _\n  exact le_of_not_gt (fun hi => hlarge ⟨i, hi⟩)",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro r R P hr hpair\nby_cases hlarge : ∃ e : Fin r, R < P e\n· obtain ⟨e, he⟩ := hlarge\n  refine ⟨e, ?_⟩\n  intro i hie\n  rcases hpair i e hie with hi | he'\n  · exact hi\n  · omega\n· let e : Fin r := ⟨0, hr⟩\n  refine ⟨e, ?_⟩\n  intro i _\n  exact le_of_not_gt (fun hi => hlarge ⟨i, hi⟩)",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (r R : ℕ) (P : Fin r → ℕ),\n  0 < r →\n  (∀ i j : Fin r, i ≠ j → P i ≤ R ∨ P j ≤ R) →\n  ∃ e : Fin r, ∀ i : Fin r, i ≠ e → P i ≤ R",
+        "module_source_hash": null,
+        "obligation_id": "63ee2487-9026-4e38-bcdb-d1a70c0be063",
+        "outcome": "kernel_pass",
+        "problem_version_id": "7156df6b-81cf-4dc9-b554-5a2d1eb6b8d1",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "fadb7777c8e8d66a71d11b0d3ca40f905659aa39fdb099e64b5d9216d78c35ab"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "ed82d1ea01f86b4dd9a3fb5bd03b4466e44350617e324f8a6274c629dce43cba"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}
