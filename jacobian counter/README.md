@@ -5,6 +5,12 @@ Conjecture** (L. Alpöge; question credited to Akhil Mathew, construction credit
 AI model Fable), verified through the LLM-Driven Proof Search Environment's pinned
 Lean 4 + Mathlib kernel on July 20, 2026.
 
+The algebraic verification and global geometry of the map are developed in
+P. Chojecki, *A Counterexample to the Jacobian Conjecture* (ulam.ai research write-up,
+July 20, 2026, announced at [@prz_chojecki](https://x.com/prz_chojecki); families
+generalization credited therein to GPT-5.6 Pro). The formal theorems below certify that
+paper's Theorem 3.1 computations and their consequence for the conjecture.
+
 ## The counterexample
 
 ```
@@ -28,7 +34,7 @@ conjecture (Keller 1939) in dimension 3 — and by stabilization in every dimens
 | `Challenge.lean` | The four theorem statements with `sorry` — solve them yourself | compiles (with `sorry` warnings) |
 | `ChallengeSolved.lean` | Verbatim kernel-accepted proofs of all four | **compiles clean** against Mathlib `v4.32.0-rc1` |
 | `CollateralDamage.lean` | Dixmier / Zhao / cubic-reduction statements; certified core + sorry-free conditional refutations + cited open bridges | see file header labels |
-| `jacobian.pdf` | Source paper: *A Counterexample to the Jacobian Conjecture* | external |
+| `jacobian.pdf` | Source paper: P. Chojecki, *A Counterexample to the Jacobian Conjecture* (ulam.ai) | external, not committed |
 
 ## The four verified theorems
 

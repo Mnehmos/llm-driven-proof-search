@@ -36,8 +36,9 @@ References:
          Algèbre non commutative, groupes quantiques et invariants (1995).
   [Zhao] W. Zhao, "Hessian nilpotent polynomials and the Jacobian conjecture",
          Trans. AMS 359 (2007) 249–274 (vanishing conjecture ⟺ JC).
-  [Alp]  L. Alpöge, X post, July 19 2026; and "A Counterexample to the Jacobian
-         Conjecture" (jacobian.pdf in this release).
+  [Alp]  L. Alpöge, X post, July 19 2026 (the counterexample map).
+  [Cho]  P. Chojecki, "A Counterexample to the Jacobian Conjecture", ulam.ai research
+         write-up, July 20 2026 (jacobian.pdf: algebraic verification, fibers, families).
 -/
 import Mathlib
 

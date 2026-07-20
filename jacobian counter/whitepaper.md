@@ -2,7 +2,7 @@
 
 **Release date:** July 20, 2026
 **Verification environment:** LLM-Driven Proof Search Environment (pinned Lean 4 + Mathlib kernel, environment hash `9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d`)
-**Status of the mathematics:** the counterexample was announced by Levent Alpöge on July 19, 2026 and is developed in the accompanying paper *A Counterexample to the Jacobian Conjecture* (`jacobian.pdf`); community peer review is ongoing. Every formal claim in this release is machine-checked; the *informal* claims of the paper beyond them are not.
+**Status of the mathematics:** the counterexample was announced by Levent Alpöge on July 19, 2026; its algebraic verification, global geometry, and families are developed in P. Chojecki, *A Counterexample to the Jacobian Conjecture* (ulam.ai research write-up, July 20, 2026; `jacobian.pdf`), with the families generalization credited therein to GPT-5.6 Pro. Community peer review is ongoing. Every formal claim in this release is machine-checked; the *informal* claims of the paper beyond them are not.
 
 ---
 

@@ -2,7 +2,8 @@
 Challenge.lean — The Jacobian Conjecture is false: four formal challenges.
 
 Source: L. Alpöge, X post, July 19 2026 (https://x.com/__alpoge__/status/2079028340955197566),
-and the accompanying paper "A Counterexample to the Jacobian Conjecture" (jacobian.pdf).
+and P. Chojecki, "A Counterexample to the Jacobian Conjecture" (ulam.ai research
+write-up, July 20 2026; jacobian.pdf).
 The counterexample map is
 
   F(x, y, z) = ( (1+xy)³z + y²(1+xy)(4+3xy),
