@@ -20,7 +20,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for f in .github/spec_payload/chunk-00 .github/spec_payload/chunk-01 .github/spec_payload/chunk-02; do
+          for i in $(seq -w 0 7); do
+            f=".github/spec_payload/chunk-$i"
             if [[ ! -f "$f" ]]; then
               echo "Waiting for all payload chunks"
               exit 0
