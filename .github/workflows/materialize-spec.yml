@@ -1,0 +1,36 @@
+name: Materialize MathOS specification
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - '.github/spec_payload/**'
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+      - name: Materialize SPEC.md when all chunks exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in .github/spec_payload/chunk-00 .github/spec_payload/chunk-01 .github/spec_payload/chunk-02; do
+            if [[ ! -f "$f" ]]; then
+              echo "Waiting for all payload chunks"
+              exit 0
+            fi
+          done
+          cat .github/spec_payload/chunk-* | base64 --decode | gzip --decompress > SPEC.md
+          rm -rf .github/spec_payload
+          rm .github/workflows/materialize-spec.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "docs: add binding Mathematical Claim Engine specification"
+          git push origin HEAD:develop
