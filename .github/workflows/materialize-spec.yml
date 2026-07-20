@@ -18,18 +18,29 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: develop
-      - name: Materialize SPEC.md when all chunks exist
+      - name: Materialize SPEC.md
         shell: bash
         run: |
           set -euo pipefail
-          for i in $(seq -f '%02g' 0 7); do
-            f=".github/spec_payload/chunk-$i"
-            if [[ ! -f "$f" ]]; then
-              echo "Waiting for all payload chunks"
-              exit 1
-            fi
+          files=(
+            .github/spec_payload/chunk-00
+            .github/spec_payload/chunk-01a
+            .github/spec_payload/chunk-01b
+            .github/spec_payload/chunk-01c
+            .github/spec_payload/chunk-01d
+            .github/spec_payload/chunk-02
+            .github/spec_payload/chunk-03
+            .github/spec_payload/chunk-04
+            .github/spec_payload/chunk-05
+            .github/spec_payload/chunk-06
+            .github/spec_payload/chunk-07
+          )
+          for f in "${files[@]}"; do
+            test -f "$f"
           done
-          cat .github/spec_payload/chunk-* | base64 --decode | gzip --decompress > SPEC.md
+          cat "${files[@]}" | base64 --decode | gzip --decompress > SPEC.md
+          grep -q '^# Mathematical Claim Engine' SPEC.md
+          grep -q '^# Constructiveness Profile (Normative)' SPEC.md
           rm -rf .github/spec_payload
           rm .github/workflows/materialize-spec.yml
           git config user.name "github-actions[bot]"
