@@ -5,6 +5,8 @@ on:
     branches: [develop]
     paths:
       - '.github/spec_payload/**'
+  pull_request:
+    branches: [develop]
 
 permissions:
   contents: write
