@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  classical\n  intro n r shift P hr hP i j hshift\n  let Q : ℕ := ∏ k : Fin r, P k\n  have hQpos : 0 < Q := by\n    dsimp [Q]\n    exact Finset.prod_pos fun k _ => (hP k).1.pos\n  have hPkQ : ∀ k : Fin r, P k ∣ Q := by\n    intro k\n    dsimp [Q]\n    exact Finset.dvd_prod_of_mem P (Finset.mem_univ k)\n  have hresidue : ∀ k : Fin r, (n % Q) % P k = shift k := by\n    intro k\n    have hsplit : n = shift k + (n - shift k) := by\n      simpa [Nat.add_comm] using\n        (Nat.sub_add_cancel (hP k).2.2.2.1.le).symm\n    have hmodzero : (n - shift k) % P k = 0 :=\n      Nat.dvd_iff_mod_eq_zero.mp (hP k).2.2.2.2\n    calc\n      (n % Q) % P k = n % P k := Nat.mod_mod_of_dvd n (hPkQ k)\n      _ = (shift k + (n - shift k)) % P k := by rw [← hsplit]\n      _ = shift k := by\n        simpa [Nat.add_mod, hmodzero] using\n          (Nat.mod_eq_of_lt (hP k).2.2.1)\n  by_cases hiBound : P i ≤ n % Q\n  · exact Or.inl hiBound\n  right\n  by_contra hjBound\n  have hiLt : n % Q < P i := Nat.lt_of_not_ge hiBound\n  have hjLt : n % Q < P j := Nat.lt_of_not_ge hjBound\n  have hi : n % Q = shift i := by\n    have := hresidue i\n    rwa [Nat.mod_eq_of_lt hiLt] at this\n  have hj : n % Q = shift j := by\n    have := hresidue j\n    rwa [Nat.mod_eq_of_lt hjLt] at this\n  exact hshift (hi.symm.trans hj)",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  classical\n  intro n r shift P hr hP i j hshift\n  let Q : ℕ := ∏ k : Fin r, P k\n  have hQpos : 0 < Q := by\n    dsimp [Q]\n    exact Finset.prod_pos fun k _ => (hP k).1.pos\n  have hPkQ : ∀ k : Fin r, P k ∣ Q := by\n    intro k\n    dsimp [Q]\n    exact Finset.dvd_prod_of_mem P (Finset.mem_univ k)\n  have hresidue : ∀ k : Fin r, (n % Q) % P k = shift k := by\n    intro k\n    have hsplit : n = shift k + (n - shift k) := by\n      simpa [Nat.add_comm] using\n        (Nat.sub_add_cancel (hP k).2.2.2.1.le).symm\n    have hmodzero : (n - shift k) % P k = 0 :=\n      Nat.dvd_iff_mod_eq_zero.mp (hP k).2.2.2.2\n    calc\n      (n % Q) % P k = n % P k := Nat.mod_mod_of_dvd n (hPkQ k)\n      _ = (shift k + (n - shift k)) % P k := by rw [← hsplit]\n      _ = shift k := by\n        simpa [Nat.add_mod, hmodzero] using\n          (Nat.mod_eq_of_lt (hP k).2.2.1)\n  by_cases hiBound : P i ≤ n % Q\n  · exact Or.inl hiBound\n  right\n  by_contra hjBound\n  have hiLt : n % Q < P i := Nat.lt_of_not_ge hiBound\n  have hjLt : n % Q < P j := Nat.lt_of_not_ge hjBound\n  have hi : n % Q = shift i := by\n    have := hresidue i\n    rwa [Nat.mod_eq_of_lt hiLt] at this\n  have hj : n % Q = shift j := by\n    have := hresidue j\n    rwa [Nat.mod_eq_of_lt hjLt] at this\n  exact hshift (hi.symm.trans hj)",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (n r : ℕ) (shift P : Fin r → ℕ),\n      0 < r →\n      (∀ i : Fin r,\n        (P i).Prime ∧ 0 < shift i ∧ shift i < P i ∧\n          shift i < n ∧ P i ∣ n - shift i) →\n      ∀ i j : Fin r, shift i ≠ shift j →\n        P i ≤ n % (∏ k : Fin r, P k) ∨\n          P j ≤ n % (∏ k : Fin r, P k)",
+        "module_source_hash": null,
+        "obligation_id": "9426cce9-8ef1-4f92-ab0c-00b33ffda9cc",
+        "outcome": "kernel_pass",
+        "problem_version_id": "ceafbd18-18ad-4be1-9e17-da32210e8a0e",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "0f65182a92aac7babd1331a7df1444eee58074797135f9fed72dcd77e8bb48da"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "e87ca639e5aa1f5a4498e360fed2195d956686d1e351d7efd3a65bbcaf808bcf"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro N a5 a10 hN hpow5 hpow10\n  by_contra hboth\n  push Not at hboth\n  have h5pow5 : 5 ∣ 5 ^ a5 := dvd_pow_self 5 hboth.1\n  have h5pow10 : 5 ∣ 5 ^ a10 := dvd_pow_self 5 hboth.2\n  have h5A : 5 ∣ 504 * N - 1 := h5pow5.trans hpow5\n  have h5C : 5 ∣ 252 * N - 1 := h5pow10.trans hpow10\n  have hrel : 504 * N - 1 = 2 * (252 * N - 1) + 1 := by omega\n  have h5twice : 5 ∣ 2 * (252 * N - 1) := Dvd.dvd.mul_left h5C 2\n  have h5plus : 5 ∣ 2 * (252 * N - 1) + 1 := hrel ▸ h5A\n  have h51 : 5 ∣ 1 := (Nat.dvd_add_right h5twice).mp h5plus\n  norm_num at h51",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro N a5 a10 hN hpow5 hpow10\n  by_contra hboth\n  push Not at hboth\n  have h5pow5 : 5 ∣ 5 ^ a5 := dvd_pow_self 5 hboth.1\n  have h5pow10 : 5 ∣ 5 ^ a10 := dvd_pow_self 5 hboth.2\n  have h5A : 5 ∣ 504 * N - 1 := h5pow5.trans hpow5\n  have h5C : 5 ∣ 252 * N - 1 := h5pow10.trans hpow10\n  have hrel : 504 * N - 1 = 2 * (252 * N - 1) + 1 := by omega\n  have h5twice : 5 ∣ 2 * (252 * N - 1) := Dvd.dvd.mul_left h5C 2\n  have h5plus : 5 ∣ 2 * (252 * N - 1) + 1 := hrel ▸ h5A\n  have h51 : 5 ∣ 1 := (Nat.dvd_add_right h5twice).mp h5plus\n  norm_num at h51",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ N a5 a10 : ℕ, 1 ≤ N →\n      5 ^ a5 ∣ 504 * N - 1 →\n      5 ^ a10 ∣ 252 * N - 1 →\n      a5 = 0 ∨ a10 = 0",
+        "module_source_hash": null,
+        "obligation_id": "aa58ea22-7b44-40f5-8a0b-86269159b2bd",
+        "outcome": "kernel_pass",
+        "problem_version_id": "c6a98f6f-e2f7-4762-9b45-936f168135ea",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "006c85849b78a3d5ede09612336d7907a94d5a0d0422926a93f7a22f55410050"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "87dce9453e4ad522cef0ff3fd940bbb16fa9403353c865c010f7e759ddf1ef9e"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro W n B shift P hshift hdata i j hij\napply hshift\nby_contra hne\nrcases lt_or_gt_of_ne hne with hlt | hgt\n· have hdvd_i : P i ∣ n - shift i := (hdata i).2.2.2.2\n  have hdvd_j : P i ∣ n - shift j := by\n    simpa [hij] using (hdata j).2.2.2.2\n  have hdvd_z :\n      (P i : Int) ∣ (shift j : Int) - (shift i : Int) := by\n    have hi_le : shift i <= n := (hdata i).1.le\n    have hj_le : shift j <= n := (hdata j).1.le\n    have hdvd_i_z : (P i : Int) ∣ (n - shift i : Nat) := by\n      exact_mod_cast hdvd_i\n    have hdvd_j_z : (P i : Int) ∣ (n - shift j : Nat) := by\n      exact_mod_cast hdvd_j\n    have hsub := dvd_sub hdvd_i_z hdvd_j_z\n    simpa [Nat.cast_sub hi_le, Nat.cast_sub hj_le] using hsub\n  have hdvd_cast :\n      (P i : Int) ∣ ((shift j - shift i : Nat) : Int) := by\n    simpa [Nat.cast_sub hlt.le] using hdvd_z\n  have hdvd_nat : P i ∣ shift j - shift i := by\n    exact_mod_cast hdvd_cast\n  have hP_le : P i <= shift j - shift i :=\n    Nat.le_of_dvd (Nat.sub_pos_of_lt hlt) hdvd_nat\n  have hdiff_le : shift j - shift i <= B := by\n    exact (Nat.sub_le (shift j) (shift i)).trans (hdata j).2.1\n  exact (not_lt_of_ge (hP_le.trans hdiff_le)) (hdata i).2.2.2.1\n· have hdvd_j : P j ∣ n - shift j := (hdata j).2.2.2.2\n  have hdvd_i : P j ∣ n - shift i := by\n    simpa [hij] using (hdata i).2.2.2.2\n  have hdvd_z :\n      (P j : Int) ∣ (shift i : Int) - (shift j : Int) := by\n    have hi_le : shift i <= n := (hdata i).1.le\n    have hj_le : shift j <= n := (hdata j).1.le\n    have hdvd_j_z : (P j : Int) ∣ (n - shift j : Nat) := by\n      exact_mod_cast hdvd_j\n    have hdvd_i_z : (P j : Int) ∣ (n - shift i : Nat) := by\n      exact_mod_cast hdvd_i\n    have hsub := dvd_sub hdvd_j_z hdvd_i_z\n    simpa [Nat.cast_sub hi_le, Nat.cast_sub hj_le] using hsub\n  have hdvd_cast :\n      (P j : Int) ∣ ((shift i - shift j : Nat) : Int) := by\n    simpa [Nat.cast_sub hgt.le] using hdvd_z\n  have hdvd_nat : P j ∣ shift i - shift j := by\n    exact_mod_cast hdvd_cast\n  have hP_le : P j <= shift i - shift j :=\n    Nat.le_of_dvd (Nat.sub_pos_of_lt hgt) hdvd_nat\n  have hdiff_le : shift i - shift j <= B := by\n    exact (Nat.sub_le (shift i) (shift j)).trans (hdata i).2.1\n  exact (not_lt_of_ge (hP_le.trans hdiff_le)) (hdata j).2.2.2.1",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro W n B shift P hshift hdata i j hij\napply hshift\nby_contra hne\nrcases lt_or_gt_of_ne hne with hlt | hgt\n· have hdvd_i : P i ∣ n - shift i := (hdata i).2.2.2.2\n  have hdvd_j : P i ∣ n - shift j := by\n    simpa [hij] using (hdata j).2.2.2.2\n  have hdvd_z :\n      (P i : Int) ∣ (shift j : Int) - (shift i : Int) := by\n    have hi_le : shift i <= n := (hdata i).1.le\n    have hj_le : shift j <= n := (hdata j).1.le\n    have hdvd_i_z : (P i : Int) ∣ (n - shift i : Nat) := by\n      exact_mod_cast hdvd_i\n    have hdvd_j_z : (P i : Int) ∣ (n - shift j : Nat) := by\n      exact_mod_cast hdvd_j\n    have hsub := dvd_sub hdvd_i_z hdvd_j_z\n    simpa [Nat.cast_sub hi_le, Nat.cast_sub hj_le] using hsub\n  have hdvd_cast :\n      (P i : Int) ∣ ((shift j - shift i : Nat) : Int) := by\n    simpa [Nat.cast_sub hlt.le] using hdvd_z\n  have hdvd_nat : P i ∣ shift j - shift i := by\n    exact_mod_cast hdvd_cast\n  have hP_le : P i <= shift j - shift i :=\n    Nat.le_of_dvd (Nat.sub_pos_of_lt hlt) hdvd_nat\n  have hdiff_le : shift j - shift i <= B := by\n    exact (Nat.sub_le (shift j) (shift i)).trans (hdata j).2.1\n  exact (not_lt_of_ge (hP_le.trans hdiff_le)) (hdata i).2.2.2.1\n· have hdvd_j : P j ∣ n - shift j := (hdata j).2.2.2.2\n  have hdvd_i : P j ∣ n - shift i := by\n    simpa [hij] using (hdata i).2.2.2.2\n  have hdvd_z :\n      (P j : Int) ∣ (shift i : Int) - (shift j : Int) := by\n    have hi_le : shift i <= n := (hdata i).1.le\n    have hj_le : shift j <= n := (hdata j).1.le\n    have hdvd_j_z : (P j : Int) ∣ (n - shift j : Nat) := by\n      exact_mod_cast hdvd_j\n    have hdvd_i_z : (P j : Int) ∣ (n - shift i : Nat) := by\n      exact_mod_cast hdvd_i\n    have hsub := dvd_sub hdvd_j_z hdvd_i_z\n    simpa [Nat.cast_sub hi_le, Nat.cast_sub hj_le] using hsub\n  have hdvd_cast :\n      (P j : Int) ∣ ((shift i - shift j : Nat) : Int) := by\n    simpa [Nat.cast_sub hgt.le] using hdvd_z\n  have hdvd_nat : P j ∣ shift i - shift j := by\n    exact_mod_cast hdvd_cast\n  have hP_le : P j <= shift i - shift j :=\n    Nat.le_of_dvd (Nat.sub_pos_of_lt hgt) hdvd_nat\n  have hdiff_le : shift i - shift j <= B := by\n    exact (Nat.sub_le (shift i) (shift j)).trans (hdata i).2.1\n  exact (not_lt_of_ge (hP_le.trans hdiff_le)) (hdata j).2.2.2.1",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "forall (W n B : Nat) (shift P : Fin W -> Nat),\n  Function.Injective shift ->\n  (forall i : Fin W,\n    shift i < n /\\\n    shift i <= B /\\\n    (P i).Prime /\\\n    B < P i /\\\n    P i ∣ n - shift i) ->\n  Function.Injective P",
+        "module_source_hash": null,
+        "obligation_id": "356f675a-afb2-4584-af40-457bc77ee38e",
+        "outcome": "kernel_pass",
+        "problem_version_id": "f42870f6-74b9-460b-8730-fc91348fc062",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "63d2de9c8e0bad9e0f4a61345d5065f7c50609bfb5bf4c7b97548fa90a5b4f09"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "41fd3ad65673ccdd7a74cf590437ab493d1291fba6ebba5fb09a55a54358ee92"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

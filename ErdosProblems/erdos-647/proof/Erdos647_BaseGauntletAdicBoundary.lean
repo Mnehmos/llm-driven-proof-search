@@ -149,7 +149,7 @@ theorem erdos647_base_gauntlet_adic_boundary :
     have hcop5 : Nat.Coprime (5 ^ (a + 1)) q :=
       Nat.Coprime.pow_left _ (((by norm_num : Nat.Prime 5).coprime_iff_not_dvd).mpr hq5)
     have hcop2 : Nat.Coprime 2 q := ((by norm_num : Nat.Prime 2).coprime_iff_not_dvd).mpr hqodd
-    have hcop : Nat.Coprime (2 * 5 ^ (a + 1)) q := Nat.Coprime.mul hcop2 hcop5
+    have hcop : Nat.Coprime (2 * 5 ^ (a + 1)) q := hcop2.mul_left hcop5
     have hcop25 : Nat.Coprime 2 (5 ^ (a + 1)) := Nat.Coprime.pow_right _ (by norm_num)
     have hs5 : ArithmeticFunction.sigma 0 (5 ^ (a + 1)) = a + 2 := by
       rw [ArithmeticFunction.sigma_zero_apply,
@@ -171,3 +171,42 @@ theorem erdos647_base_gauntlet_adic_boundary :
   obtain ⟨a9, hd9, hb9⟩ := hr9
   obtain ⟨a10, hd10, hb10⟩ := hr10
   exact ⟨a5, a7, a9, a10, hd5, hd7, hd9, hd10, hb5, hb7, hb9, hb10, by omega⟩
+
+/-- Candidate-budget-facing form of the sharpened base-gauntlet boundary.
+
+The earlier theorem bounded the total depth by `4B+20`.  The rung-5 and
+rung-10 cofactors satisfy `504N-1 = 2(252N-1)+1`, so their 5-adic depths
+cannot both be positive.  This improves the returned total to `3B+14`.
+-/
+theorem erdos647_base_gauntlet_adic_boundary_sharpened :
+    ∀ (N B : ℕ), 1 ≤ N →
+      ArithmeticFunction.sigma 0 (2520 * N - 5) ≤ B + 5 →
+      ArithmeticFunction.sigma 0 (2520 * N - 7) ≤ B + 7 →
+      ArithmeticFunction.sigma 0 (2520 * N - 9) ≤ B + 9 →
+      ArithmeticFunction.sigma 0 (2520 * N - 10) ≤ B + 10 →
+      ∃ a5 a7 a9 a10 : ℕ,
+        5 ^ a5 ∣ 504 * N - 1 ∧ 7 ^ a7 ∣ 360 * N - 1 ∧
+        3 ^ a9 ∣ 280 * N - 1 ∧ 5 ^ a10 ∣ 252 * N - 1 ∧
+        a5 ≤ B + 3 ∧ a7 ≤ B + 5 ∧ a9 ≤ B + 6 ∧ 2 * a10 ≤ B + 6 ∧
+        a5 + a7 + a9 + a10 ≤ 3 * B + 14 := by
+  intro N B hN h5 h7 h9 h10
+  obtain ⟨a5, a7, a9, a10, hd5, hd7, hd9, hd10,
+      hb5, hb7, hb9, hb10, _⟩ :=
+    erdos647_base_gauntlet_adic_boundary N B hN h5 h7 h9 h10
+  have hsplit : a5 = 0 ∨ a10 = 0 := by
+    by_contra hboth
+    push Not at hboth
+    have h5pow5 : 5 ∣ 5 ^ a5 := dvd_pow_self 5 hboth.1
+    have h5pow10 : 5 ∣ 5 ^ a10 := dvd_pow_self 5 hboth.2
+    have h5A : 5 ∣ 504 * N - 1 := h5pow5.trans hd5
+    have h5C : 5 ∣ 252 * N - 1 := h5pow10.trans hd10
+    have hrel : 504 * N - 1 = 2 * (252 * N - 1) + 1 := by omega
+    have h5twice : 5 ∣ 2 * (252 * N - 1) := Dvd.dvd.mul_left h5C 2
+    have h5plus : 5 ∣ 2 * (252 * N - 1) + 1 := hrel ▸ h5A
+    have h51 : 5 ∣ 1 := (Nat.dvd_add_right h5twice).mp h5plus
+    norm_num at h51
+  refine ⟨a5, a7, a9, a10, hd5, hd7, hd9, hd10,
+    hb5, hb7, hb9, hb10, ?_⟩
+  rcases hsplit with h5zero | h10zero
+  · omega
+  · omega

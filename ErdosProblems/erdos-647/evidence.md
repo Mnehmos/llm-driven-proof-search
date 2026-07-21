@@ -137,6 +137,55 @@ shift-specific work is the exact affine factorization, parity/family input,
 and finite exceptional-digit enumeration. No theorem yet proves that the
 generic transition terminates for every candidate.
 
+The first concrete cross-rung non-reuse pair is independently tracked:
+
+| result | problem_version_id | episode_id | outcome |
+|---|---|---|---|
+| exact rung-5/rung-7 Bézout relation | `94bf7925-d131-45bf-a92c-980ae335dd12` | `ee02d203-8df1-4e28-9ec6-9d870909f52b` | **kernel_verified**, `root_proved`; replay matched 1/1 events |
+| coprimality of `504N-1` and `360N-1` | `70b88b83-6ac4-480f-b906-2b31c0befe47` | `227e1560-c30a-41f3-904e-91716252a014` | **kernel_verified**, `root_proved`; replay matched 6/6 events |
+| pairwise coprimality of all four reduced rung cofactors | `6d108ae2-23ca-4766-9122-665a27ba65a3` | `4a5b8d82-e89c-4893-8599-b6279c502a96` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `0b42b302-cda4-4746-bbb9-ecadba82dd56` **kernel_pass** |
+| rung-5/rung-10 5-adic depths cannot both be positive | `c6a98f6f-e2f7-4762-9b45-936f168135ea` | `48d2efa3-0198-4efd-927d-15a870c55cdf` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `65bf0b73-dcb8-497d-8c52-56cfb8189c56` **kernel_pass** |
+| sharpened total adic depth `a₅+a₇+a₉+a₁₀≤3B+14` | `4b6aadf9-6e12-4a29-aaaa-b40519d23d3b` | `9d536e7d-f76b-4d89-9763-7b63728a8c2c` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `13852c52-b188-4ec7-bb42-1f917230b8b3` **kernel_pass** |
+| actual-budget pure-power exclusion and total depth `≤5` | `3339c761-f0de-494b-ae80-6e680f91d72d` | `d1a3a3ae-24ba-4ece-ae85-5df82815be36` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `2a575de0-d8ec-4010-83ab-48e2fc6d08c3` **kernel_pass** |
+| `q5`, `q9`, and `q10` residuals are prime | `66d61f93-6140-4b9d-8bfd-775dda411fdd` | `4faf6a2e-8528-4abd-a17d-9b30fc0ab98a` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `a4acfaa9-626a-4213-8282-1ff012083562` **kernel_pass** |
+| exact `σ₀≤4` classification | `4fabc6e0-d523-45f2-a242-9294366aab5c` | `f5375b3b-e1b3-4440-80ae-9b1fba14dc80` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `034e3e62-7755-4fc4-aae9-6901386a2835` **kernel_pass** |
+| `q7` is prime, prime-cube, or distinct-semiprime | `3269049f-3285-419e-9d3c-9f011eec124d` | `426f582b-bd4c-44b1-a964-9ac85b1e7987` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `a1f75504-8760-44a1-88e0-1f479d3f9504` **kernel_pass** |
+| composite `q7` forces 7-adic depth zero | `4152887d-8d9d-4ee7-8a93-a5c13de5ced0` | `003bb946-196b-40ba-9175-06d63d00f36f` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `a1d70b3f-3e08-4fed-83c9-bcc79c4089dc` **kernel_pass** |
+| exact 5-adic depth residues `a5=1↔N%5=4`, `a10=1↔N%5=3` | `eebc0500-b83d-48ee-b488-ab270994c41b` | `dce030c5-2b7c-4e69-99fc-f4596b52f736` | **kernel_verified**, `root_proved`; replay matched 1/1 events; precheck `a3ea80e7-012f-4ae6-ad2c-22f850b923bc` **kernel_pass** |
+| exact bounded 7-adic/3-adic depth residues | `b6e53c77-9e5d-47f7-8a27-10dc5f5ed6ef` | `f9641fd5-9ce1-47ff-84d4-edc0a2083f42` | **kernel_verified**, `root_proved`; replay matched 1/1; precheck `0d94fc60-8bd9-424a-8366-96ebff6ae4fe` **kernel_pass** |
+| positive-depth `q7` branch forces primality | `0a0758e6-5534-4b69-9326-a490e2721f1e` | `df6ab19d-4ade-4719-a408-02fa6b70c1db` | **kernel_verified**, `root_proved`; replay matched 1/1; precheck `b940d5e8-47bc-411e-935f-2a33677beda0` **kernel_pass** |
+| composite `q7` factor residues modulo three | `c4a2bf8f-2742-4d17-b6d9-2903f7067ebe` | `98b5e0d7-2952-4507-b2b4-75530f770ea6` | **kernel_verified**, `root_proved`; replay matched 1/1; precheck `65a13e0d-44e5-431c-ae58-b68043b40781` **kernel_pass** |
+
+All six sources also compile directly in the pinned `lean-checker`. The
+strongest source additionally proves that selected prime factors are pairwise
+distinct and that the four shifted values always supply four distinct primes.
+The second tracked root removes the simultaneous positive-depth 5-adic branch
+at rungs 5 and 10; the third lowers the corresponding total depth bound from
+`4B+20` to `3B+14`. The candidate-facing corollary
+`erdos647_base_gauntlet_adic_boundary_sharpened` composes those results with
+the four shift budgets and compiles in the pinned project. It is recorded as
+a source-checked assembly theorem, not as an additional tracked episode. No global failed-shift conclusion is being inferred from
+this local clique.
+
+The next tracked root removes the hidden `q=1` slack from all four
+decompositions. Small-modulus power cycles force every residual cofactor to
+be nontrivial, yielding divisor-count bounds `3,4,3,3`, depth bounds
+`1,2,2,1`, and—after the shared 5-adic incompatibility—a total depth at most
+`5`. The result is stronger than the source-checked `3B+14` assembly at the
+main problem's actual budget, while remaining a structural reduction rather
+than a failed-shift conclusion.
+
+The residual divisor-count bounds are now converted into exact arithmetic
+shapes. The three `σ₀≤3` cofactors are forced prime after square branches are
+excluded by their fixed residues. The `σ₀≤4` cofactor `q7` is prime, a prime
+cube, or a product of two distinct primes; its square branch is impossible
+modulo `3`. Restoring the coupled shift-7 budget shows that either `q7` is
+prime with depth at most two, or its adic depth is zero. Thus every remaining
+base-gauntlet survivor lies in a finite shallow prime/semiprime state. This
+state is sharper still because the two 5-adic depths are exactly encoded by
+`N mod 5`, removing them as independent branch variables. This does not yet
+prove that no such state extends through all shifts.
+
 Shift 13 now has its own exact refinement:
 
 | result | problem_version_id | episode_id | outcome |
@@ -292,16 +341,16 @@ compatibility check rather than a forced mixed-version import.
 
 ## Complete proof-search export archive
 
-The repository now includes exports for all 317 related episodes identified by
+The repository now includes exports for all 331 related episodes identified by
 source provenance, the evidence ledger, the reconstructed modular campaign
-index, and a read-only database closure audit. Of these, 310 report
+index, and a read-only database closure audit. Of these, 324 report
 `KERNEL_VERIFIED` and `kernel_verified = true`; three are unfinished, three
 report `GAVE_UP`, and one reports `budget_exhausted`. Every entry reports
 `fidelity_status = attested` and the pinned environment hash above.
-Portable source currently contains 449 actual theorem declarations and five
-top-level lemma declarations across 169 Lean files; including 47 definitions
-(45 public and two private helpers) gives 501 declarations. Those source counts
-and the 317 episode count measure different things.
+Portable source currently contains 467 actual theorem declarations and five
+top-level lemma declarations across 178 Lean files; including 47 definitions
+gives 519 declarations. Those source counts and the 331 episode count measure
+different things.
 
 - [export manifest](dossiers/exports/manifest.tsv)
 - [public summaries](dossiers/exports/public_summary/)

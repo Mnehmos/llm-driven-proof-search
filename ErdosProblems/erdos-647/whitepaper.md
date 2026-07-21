@@ -265,10 +265,10 @@ repaired squarefree remainder was also submitted to the independent exact
 proof-search verifier and returned `kernel_pass`; identifiers and hashes are
 recorded in [evidence.md](evidence.md).
 
-For provenance beyond the source replay, all 317 related campaign
+For provenance beyond the source replay, all 332 related campaign
 episodes are published under [dossiers/exports/](dossiers/exports/README.md)
 in redacted public-summary JSON, full Markdown dossier, and structured
-training JSON formats. Of these, 310 report `KERNEL_VERIFIED` in the pinned
+training JSON formats. Of these, 325 report `KERNEL_VERIFIED` in the pinned
 environment; seven non-success histories are retained for audit completeness.
 
 This proves a density-zero result with the claimed seventh logarithmic power.
@@ -477,6 +477,71 @@ theorems show that common cofactor divisors divide the coordinate gap; equal
 cofactors with odd prime complements force twice the cofactor to divide that
 gap.
 
+A first concrete cross-rung incompatibility is also now verified. The rung-5
+and rung-7 values satisfy
+
+```text
+5(504N-1) - 7(360N-1) = 2.
+```
+
+Every common divisor therefore divides `2`; both values are odd, so they are
+coprime. The relation and coprimality conclusions are separately tracked in
+`Erdos647_Rung5Rung7Relation.lean` and
+`Erdos647_Rung5Rung7Coprime.lean`. The full calculation extends farther:
+`Erdos647_RungCofactorsPairwiseCoprime.lean` gives six explicit positive
+Bézout identities proving that the reduced cofactors at shifts `5,7,9,10`,
+namely `504N-1`, `360N-1`, `280N-1`, and `252N-1`, are pairwise coprime.
+Every positive parameter therefore supplies four pairwise distinct primes,
+one dividing each shifted value. This blocks factor reuse across the entire
+four-rung subsystem. Moreover, if `5^a₅` divides `504N-1` and `5^a₁₀`
+divides `252N-1`, then `a₅=0` or `a₁₀=0`: the 5-adic escape branches at
+rungs 5 and 10 cannot occur simultaneously. Combining this with the existing
+individual bounds sharpens the base-gauntlet total from `4B+20` to `3B+14`;
+at the main problem's `B=2`, the maximum falls from `28` to `20`.
+`Erdos647_BaseGauntletAdicBoundary.lean` now exposes this sharpened total
+directly from the four candidate shift budgets. The integrated corollary is
+source-checked in the pinned Lean project; the incompatibility and arithmetic
+bound it assembles are independently tracked kernel-verified roots. It is a structural increment,
+not a global
+contradiction.
+
+The remaining slack in that `20` bound came from allowing a residual
+cofactor to equal one. The tracked theorem
+`Erdos647_BaseGauntletSharpDepth.lean` removes all four pure-power branches:
+the required powers of `5`, `7`, `3`, and `5` have incompatible residues
+modulo `4`, `3`, `8`, and `4`. Every residual cofactor is therefore
+nontrivial and has at least two divisors. At `B=2`, their divisor counts are
+at most `3,4,3,3`, their adic depths are at most `1,2,2,1`, and the two
+5-adic depths cannot both be positive. The total depth is consequently at
+most `5`, not `20`. This is a substantial finite-state compression, but the
+surviving near-prime and semiprime branches still require a global
+accumulation contradiction.
+
+That residual state is now classified exactly. The three cofactors with
+divisor budget at most three (`q5`, `q9`, and `q10`) are prime: the only
+composite alternative is a square, and the affine decompositions exclude it
+modulo `8`, `8`, and `4`. A general verified four-divisor classification
+shows that `q7` is prime, a prime cube, or a product of two distinct primes
+after its square branch is excluded modulo `3`. Finally, the original coupled
+shift-7 budget shows that either `q7` is prime with 7-adic depth at most two,
+or `q7` is composite and that depth is exactly zero. Thus the four-rung base
+gauntlet has become an explicit shallow prime/semiprime state space rather
+than an opaque low-divisor condition. Four new tracked episodes verify and
+replay these statements independently.
+
+The two 5-adic depth variables are now determined exactly by the parameter:
+`a5=1` if and only if `N≡4 (mod 5)`, while `a10=1` if and only if
+`N≡3 (mod 5)`. This fifth tracked result removes two existential choices from
+the state space and makes the mutually exclusive 5-adic branches explicit.
+
+The two remaining bounded depths are now residue data as well: `a7` is
+determined by `N` modulo `7` and `49`, while `a9` is determined modulo
+`3` and `9`. On the positive 7-adic branch the coupled shift-7 budget
+forces `q7` prime. In the composite branches, the affine equation modulo
+three forces a prime cube base to be `2 mod 3`, and a distinct-semiprime
+pair to have residues `1,2` in some order. These are three separately
+tracked, replayed kernel-verified refinements of the finite survivor state.
+
 The remaining barrier is now precise. One must either force a re-entry subset
 whose remainder violates `2^|I|≤h+2`, or prove that the large family of
 smooth, size-controlled second-layer cofactors cannot coexist for a candidate.
@@ -489,11 +554,11 @@ Formal Conjectures declarations.
 - Problem status: **OPEN**. No new witness and no complete exclusion.
 - Density status: **COMPLETE AND KERNEL-VERIFIED** with an explicit global
   constant and exponent seven.
-- Portable proof source currently contains **449 actual theorem
-  declarations and five top-level helper lemmas across 169 Lean files** under
+- Portable proof source currently contains **473 actual theorem
+  declarations and five top-level helper lemmas across 179 Lean files** under
   `proof/`. Including 47 definitions (45 public and two private helpers) gives
-  501 declarations. These counts include helper and assembly declarations;
-  they are not presented as 501 independent mathematical discoveries or 501
+  529 declarations. These counts include helper and assembly declarations;
+  they are not presented as 516 independent mathematical discoveries or 516
   standalone tracked episodes.
 - Novel vs. replication: the sub-AP closures, the tighter 48-survivor base
   sieve, the bridging-closure layer, the Theorem-2 formalization, the

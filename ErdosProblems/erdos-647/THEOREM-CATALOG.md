@@ -4,8 +4,8 @@
 > updated 2026-07-16.
 >
 > This catalogs the kernel-checked and source-replayed theorem families produced by the Erdős
-> #647 campaign. The portable source currently has 449 actual theorem
-> declarations and five top-level helper lemmas across 169 Lean files (454
+> #647 campaign. The portable source currently has 473 actual theorem
+> declarations and five top-level helper lemmas across 179 Lean files (478
 > theorem/lemma declarations total). Each tracked row carries the
 > `problem_version_id` — the authoritative lookup key in the
 > tracked pipeline — plus the exact root statement and, where recorded, the
@@ -16,7 +16,7 @@
 > **What is portable vs. internal.** The committed `.lean` files are the
 > simplest portable formal artifact: they check against Mathlib without this
 > project's database. The repository now also publishes the complete exports
-> for all 317 related episodes—redacted public summaries, full
+> for all 332 related episodes—redacted public summaries, full
 > Markdown proof dossiers, and structured training JSON—under
 > [dossiers/exports/](dossiers/exports/README.md). The IDs alone still are not
 > an external database API; the committed exports are what makes the audit
@@ -116,15 +116,15 @@ no access to this project's database required.
 
 Committed Lean source:
 
-- 169 `.lean` files under [proof/](proof/), containing 449 actual theorem
-  declarations and five top-level helper lemmas (454 declarations total).
+- 179 `.lean` files under [proof/](proof/), containing 473 actual theorem
+  declarations and five top-level helper lemmas (472 declarations total).
 - Five consolidated modular families under
   [proof/campaign/](proof/campaign/), plus individual analytic, truncation,
   candidate-transport, and final-assembly modules in the parent directory.
 
 Export and reproduction material:
 
-- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 317 related
+- [dossiers/episode-index.tsv](dossiers/episode-index.tsv) maps all 332 related
   problem/episode pairs.
 - [dossiers/exports/manifest.tsv](dossiers/exports/manifest.tsv) records the
   outcome, fidelity, environment, statement hash, timestamps, and step count.
@@ -145,8 +145,8 @@ Export and reproduction material:
 | 8 | Level-truncated Selberg repair and assembly | 36 | hard support, polynomial error, denominator preservation, parameter certification, and concrete candidate transport |
 | 9 | Post-density existence and variant frontier | 49 | generic shift-factor/adic induction, shifts 9–16 as concrete frontiers and stress tests, exact depth witnesses, the eventual-excess limit interface, and the depth-two/Sophie-Germain equivalence |
 | 10 | Power-prefix, block, and certificate architecture | 31 | arbitrary-power local-factor products, exact block reindexing, executable factorization batches, fourth-root compression, and the conditional novelty/shared-host seam |
-| 11 | Large-factor novelty, CRT re-entry, and second-layer catalogs | 59 | fifth/hybrid prefix compression, finite-catalog escape, `t`-subset product alternatives, CRT exclusion, and the conditional smooth-cofactor catalog after two exceptions |
-| | **Selected-family subtotal** | **not additive** | The exact repository-wide count is 454 theorem/lemma declarations; family rows are publication groupings and may overlap. |
+| 11 | Large-factor novelty, CRT re-entry, and second-layer catalogs | 69 | fifth/hybrid prefix compression, finite-catalog escape, `t`-subset product alternatives, CRT exclusion, the conditional smooth-cofactor catalog, and the four-rung clique with a sharp depth-five candidate boundary |
+| | **Selected-family subtotal** | **not additive** | The exact repository-wide count is 478 theorem/lemma declarations; family rows are publication groupings and may overlap. |
 
 ---
 
@@ -544,13 +544,23 @@ Formal Conjectures closure remains `0/3`.**
 | [`proof/Erdos647_NonsmoothCofactorException.lean`](proof/Erdos647_NonsmoothCofactorException.lean) | 3 theorems | 1 | distinct block coordinates have distinct large cofactor primes; under the no-cross-pair hypothesis, at most one square-small cofactor is nonsmooth; **kernel_verified**. |
 | [`proof/Erdos647_TwoExceptionalIndices.lean`](proof/Erdos647_TwoExceptionalIndices.lean) | 1 theorem | 1 | deleting two exceptional subsets of cardinality at most one leaves at least `W−2` block coordinates; **kernel_verified**. |
 | [`proof/Erdos647_SecondLayerCatalogAssembly.lean`](proof/Erdos647_SecondLayerCatalogAssembly.lean) | 1 theorem | 1 | conditionally assembles at least `W−2` coordinates with prime/cofactor factorization, coprimality, square-smallness, smoothness, and explicit cofactor size; **kernel_verified**. |
-| **Continuation total** | **58 theorems + 1 lemma** | **30** | The 30 new exports are all **kernel_verified**; this table adds the exact 17-module continuation beyond the previous catalog checkpoint. |
+| [`proof/Erdos647_Rung5Rung7Relation.lean`](proof/Erdos647_Rung5Rung7Relation.lean) | 1 theorem | 1 | proves the exact Bézout relation `5(504N−1)−7(360N−1)=2`; **kernel_verified**. |
+| [`proof/Erdos647_Rung5Rung7Coprime.lean`](proof/Erdos647_Rung5Rung7Coprime.lean) | 1 theorem | 1 | combines that relation with parity to prove `Coprime (504N−1) (360N−1)`, the first concrete cross-rung factor non-reuse result; **kernel_verified**. |
+| [`proof/Erdos647_RungCofactorsPairwiseCoprime.lean`](proof/Erdos647_RungCofactorsPairwiseCoprime.lean) | 6 theorems | 3 | six explicit positive Bézout identities prove pairwise coprimality of the reduced cofactors at rungs `5,7,9,10`; selected prime factors are pairwise distinct, every positive parameter supplies four such primes, the rung-5/rung-10 5-adic depths cannot both be positive, and the total base-block depth bound improves from `4B+20` to `3B+14`. All three tracked roots are **kernel_verified** and replayed. |
+| [`proof/Erdos647_BaseGauntletAdicBoundary.lean`](proof/Erdos647_BaseGauntletAdicBoundary.lean) | +1 theorem | 0 new | `erdos647_base_gauntlet_adic_boundary_sharpened` returns the `3B+14` total directly from the four candidate shift budgets. The integrated corollary is source-checked in the pinned project; its two mathematical ingredients are the tracked roots above, so no additional tracked episode is claimed. |
+| [`proof/Erdos647_BaseGauntletSharpDepth.lean`](proof/Erdos647_BaseGauntletSharpDepth.lean) | 1 theorem | 1 | excludes all four pure-power residual branches modulo `4,3,8,4`; returns residual divisor-count bounds `3,4,3,3`, depth bounds `1,2,2,1`, and total depth at most `5`. Episode `d1a3a3ae-24ba-4ece-ae85-5df82815be36` is **kernel_verified** and replayed. |
+| [`proof/Erdos647_BaseGauntletResidualPrimes.lean`](proof/Erdos647_BaseGauntletResidualPrimes.lean) | 1 theorem | 1 | the `q5`, `q9`, and `q10` residuals cannot be squares modulo `8,8,4`; their `σ₀≤3` bounds therefore force all three to be prime. Episode `4faf6a2e-8528-4abd-a17d-9b30fc0ab98a` is **kernel_verified** and replayed. |
+| [`proof/Erdos647_SigmaFourClassification.lean`](proof/Erdos647_SigmaFourClassification.lean) | 3 theorems | 3 | classifies every `σ₀≤4` integer as prime, prime square, prime cube, or distinct semiprime; removes the square branch for `q7`; and proves that a composite `q7` forces 7-adic depth zero. All three roots are **kernel_verified** and replayed. |
+| [`proof/Erdos647_BaseGauntletDepthResidues.lean`](proof/Erdos647_BaseGauntletDepthResidues.lean) | 1 theorem | 1 | identifies the depth-one branches exactly as `a5=1↔N%5=4` and `a10=1↔N%5=3`; episode `dce030c5-2b7c-4e69-99fc-f4596b52f736` is **kernel_verified** and replayed. |
+| [`proof/Erdos647_BaseGauntletHigherDepthResidues.lean`](proof/Erdos647_BaseGauntletHigherDepthResidues.lean) | 1 theorem | 1 | identifies all bounded 7-adic and 3-adic depth values exactly from `N mod 7,49,3,9`; episode `f9641fd5-9ce1-47ff-84d4-edc0a2083f42` is **kernel_verified** and replayed. |
+| [`proof/Erdos647_Q7ResidueShapeRefinement.lean`](proof/Erdos647_Q7ResidueShapeRefinement.lean) | 2 theorems | 2 | positive 7-adic depth forces `q7` prime, while cube and distinct-semiprime branches acquire exact mod-3 factor residues; episodes `df6ab19d-4ade-4719-a408-02fa6b70c1db` and `98b5e0d7-2952-4507-b2b4-75530f770ea6` are **kernel_verified** and replayed. |
+| **Continuation total** | **76 theorems + 1 lemma** | **44** | The 44 new exports are all **kernel_verified**; this table adds the exact 26-module continuation beyond the previous catalog checkpoint. |
 
 ---
 
-*Counts are explicit: 449 actual theorem declarations plus five top-level
-helper lemmas in 169 Lean files, and 317 related proof-search episodes in the
-export archive (310 kernel-verified,
+*Counts are explicit: 473 actual theorem declarations plus five top-level
+helper lemmas in 179 Lean files, and 332 related proof-search episodes in the
+export archive (325 kernel-verified,
 seven retained non-success histories). These are different metrics—one episode
 can assemble several helper declarations, while some final repository
 compositions are not standalone episodes. The global density theorem is

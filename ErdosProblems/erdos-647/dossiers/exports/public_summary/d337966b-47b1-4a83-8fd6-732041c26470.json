@@ -1,0 +1,31 @@
+{
+  "benchmark_suite": null,
+  "benchmark_upstream_problem_id": null,
+  "certified": false,
+  "completed_at": "2026-07-17T01:19:25.516701+00:00",
+  "created_at": "2026-07-17T01:18:51.611702300+00:00",
+  "environment_hash": "9e26d28efe88484c36562da27aa22a2cc73a0638d11532cbbc9071a60609025d",
+  "episode_id": "d337966b-47b1-4a83-8fd6-732041c26470",
+  "fidelity_basis": null,
+  "fidelity_status": "attested",
+  "formal_target_matched": false,
+  "import_manifest_hash": "aaf21893d520a78dee0787a1bcaf939ee6b922265ff670c272e2e1d450dd29a7",
+  "interactive_sessions": {
+    "note": "counts and structural failure categories/progress-label counts only — never tactic text, goal text, diagnostics, or a reconstructed proof body. kernel_verified is true only when a session's reconstructed script has a linked verified_attempt_id whose verification_outcome is \"committed\" — never inferred from is_solved/reports_complete/progress_label_counts.",
+    "proof_body_redacted": true,
+    "session_count": 0,
+    "sessions": []
+  },
+  "kernel_verified": true,
+  "mode": "public_summary",
+  "obligation_counts_by_status": {
+    "proved": 1
+  },
+  "outcome": "KERNEL_VERIFIED",
+  "proof_body_redacted": true,
+  "root_formal_statement": "∀ (r R : ℕ) (P : Fin r → ℕ),\n  0 < r →\n  (∀ i j : Fin r, i ≠ j → P i ≤ R ∨ P j ≤ R) →\n  ∃ e : Fin r,\n    (∏ i ∈ Finset.univ.erase e, P i) ≤ R ^ (r - 1)",
+  "step_count": 1,
+  "trajectory_event_count": 3,
+  "trajectory_first_hash": "1468501783181748e82a38d50157a3872ebf5c4073712c604704aa89598a07f1",
+  "trajectory_last_hash": "e3c30eb5f9bad2abd2a633fa2c5db3f29a4a93960c5915f947573ee98d45da69"
+}

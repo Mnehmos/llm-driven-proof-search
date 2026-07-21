@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "  intro N B a5 a7 a9 a10 hN hpow5 hpow10 hb5 hb7 hb9 hb10\n  have hsplit : a5 = 0 ∨ a10 = 0 := by\n    by_contra hboth\n    push Not at hboth\n    have h5pow5 : 5 ∣ 5 ^ a5 := dvd_pow_self 5 hboth.1\n    have h5pow10 : 5 ∣ 5 ^ a10 := dvd_pow_self 5 hboth.2\n    have h5A : 5 ∣ 504 * N - 1 := h5pow5.trans hpow5\n    have h5C : 5 ∣ 252 * N - 1 := h5pow10.trans hpow10\n    have hrel : 504 * N - 1 = 2 * (252 * N - 1) + 1 := by omega\n    have h5twice : 5 ∣ 2 * (252 * N - 1) := Dvd.dvd.mul_left h5C 2\n    have h5plus : 5 ∣ 2 * (252 * N - 1) + 1 := hrel ▸ h5A\n    have h51 : 5 ∣ 1 := (Nat.dvd_add_right h5twice).mp h5plus\n    norm_num at h51\n  rcases hsplit with h5zero | h10zero\n  · omega\n  · omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "  intro N B a5 a7 a9 a10 hN hpow5 hpow10 hb5 hb7 hb9 hb10\n  have hsplit : a5 = 0 ∨ a10 = 0 := by\n    by_contra hboth\n    push Not at hboth\n    have h5pow5 : 5 ∣ 5 ^ a5 := dvd_pow_self 5 hboth.1\n    have h5pow10 : 5 ∣ 5 ^ a10 := dvd_pow_self 5 hboth.2\n    have h5A : 5 ∣ 504 * N - 1 := h5pow5.trans hpow5\n    have h5C : 5 ∣ 252 * N - 1 := h5pow10.trans hpow10\n    have hrel : 504 * N - 1 = 2 * (252 * N - 1) + 1 := by omega\n    have h5twice : 5 ∣ 2 * (252 * N - 1) := Dvd.dvd.mul_left h5C 2\n    have h5plus : 5 ∣ 2 * (252 * N - 1) + 1 := hrel ▸ h5A\n    have h51 : 5 ∣ 1 := (Nat.dvd_add_right h5twice).mp h5plus\n    norm_num at h51\n  rcases hsplit with h5zero | h10zero\n  · omega\n  · omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ N B a5 a7 a9 a10 : ℕ, 1 ≤ N →\n      5 ^ a5 ∣ 504 * N - 1 →\n      5 ^ a10 ∣ 252 * N - 1 →\n      a5 ≤ B + 3 → a7 ≤ B + 5 → a9 ≤ B + 6 →\n      2 * a10 ≤ B + 6 →\n      a5 + a7 + a9 + a10 ≤ 3 * B + 14",
+        "module_source_hash": null,
+        "obligation_id": "b2c1715f-cddf-480a-82f3-9bc7935aa93b",
+        "outcome": "kernel_pass",
+        "problem_version_id": "4b6aadf9-6e12-4a29-aaaa-b40519d23d3b",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "ddd9db6cf221e46d7fcf25c1ec65bb5110a1cca23915e930e66a9c080eefb8cd"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "599a28b101e1ed028d7ddcd2efdf2a35b98bb6ac9c5075c4566b26955291ffb5"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

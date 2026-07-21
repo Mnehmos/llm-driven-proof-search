@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "flat_tactic_sequence",
+        "proof_term": "  intro N hN\n  omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "flat_tactic_sequence",
+          "proof_term": "  intro N hN\n  omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ N : ℕ, 1 ≤ N → 5 * (504 * N - 1) - 7 * (360 * N - 1) = 2",
+        "module_source_hash": null,
+        "obligation_id": "b566fa2a-71c6-4db3-b89e-11319061e993",
+        "outcome": "kernel_pass",
+        "problem_version_id": "94bf7925-d131-45bf-a92c-980ae335dd12",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "ffe276de3241179624284ae23e8acdcb7fef2ad62ba8edd30f91d509db5052ad"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "1e1aed43f3793a8ab899690b023d4522a113cc90e28f2ee59ffc61a4c520071b"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}
