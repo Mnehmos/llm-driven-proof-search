@@ -4,6 +4,7 @@ pub mod models;
 pub mod orchestrator;
 pub mod hashing;
 pub mod analyzer;
+pub mod diagnostics;
 pub mod policy;
 pub mod dependency_manifest;
 pub mod mutations;
