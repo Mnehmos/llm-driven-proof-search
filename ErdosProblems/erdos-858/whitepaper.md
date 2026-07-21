@@ -295,8 +295,12 @@ frontier combinatorics are machine-checked through the Corollary 3.5 capstone
 `M(N) = S_N(K)`; the Theorem 2.4 recursion's combinatorial content is verified;
 and the §5 analytic wall has been breached at its base — the two-sided
 quantitative-Mertens bracket, the Prop 5.6 core, and the KP threshold are now
-kernel-verified (102 results total; incl. the reusable **left-endpoint Riemann-sum →
-interval-integral theorem for continuous f, built from scratch** as the §5.4 engine; α₂ now numerically bracketed to (0.26, 0.30),
+kernel-verified (164 results total, now including the **Theorem 1.2 assembly** — the conditional capstone `M(N)/log N → c₂ = 1/2 + ∫_{α₂}^{1/2}(1−Φ)` (A7) built on the verified **Prop 5.1 exact frontier identity** (A2) and the harmonic main term (A1); the full **K\* localization** branch (`K*=N^{α₂+o(1)}`); and the **complete interval log-harmonic transfer** `(1/log N)Σ_{N^s<a≤N^t} f(log a/log N)/a → ∫_s^t f` (Lemma 5.4 general `[s,t]`, capstone + hW + hR + herr discharges, the transport engine for the tail Riemann sum) — leaving only the uniform Lemma 5.5 (uniform interval Mertens) and the combinatorial frontier facts as conditional inputs, and confirming the asymptotic law routes through interval Mertens (#129) + the transfers (#111, #141), **not** the sharp-constant Mertens; incl. the reusable **left-endpoint Riemann-sum →
+interval-integral theorem for continuous f, built from scratch** as the §5.4 engine, and the **complete §5.3
+prime-harmonic transfer** — Lemma 5.3 (capstone #141) `Σ_{a∈(⌊N^s⌋,⌊N^t⌋]} G(log a/log N)·[a prime]/a → ∫_s^t G(v)/v dv`
+on a fully kernel-verified discharge tree #142–#146 with **zero external hypotheses** (the G-modulus discharged by the
+[s,t] clamp-modulus #149), the Meissel–Mertens constant cancelling in interval form, and closed in
+the paper's exact `∫_s^t G(v)/v dv` notation by the geometric change of variables #147–#148; α₂ now numerically bracketed to (0.26, 0.30),
 and — via EXACT FTC evaluation of the density integral, no PNT — c₂ bracketed
 two-sided to **[0.610, 0.633]** around the true 0.6187712…; and the §5.4 log-harmonic
 transfer for Theorem 1.2 now has its five abstract rungs verified — the log-scale block mass
@@ -304,8 +308,11 @@ transfer for Theorem 1.2 now has its five abstract rungs verified — the log-sc
 `(harmonic(⌊N^t⌋)−harmonic(⌊N^s⌋))/log N → t−s` (#99), the fixed-K weighted step-sum →
 Riemann step-sum `R_K(f)` (#100), the aggregation error bound
 `|Σ S_j − Σ w_j·m_j| ≤ ε·Σ m_j` (#101), and the diagonal two-limit squeeze that assembles
-them into `(1/log N)Σ f(u_a)/a → ∫₀¹f` (#102) — leaving only the concrete block partition
-identity), and the concrete
+them into `(1/log N)Σ f(u_a)/a → ∫₀¹f` (#102) — **plus all three concrete assembly atoms**:
+the generic discrete block-partition sum identity (#103), the exact non-asymptotic
+block-membership bound `j/K < u_a ≤ (j+1)/K` (#104), and the generic weighted
+pointwise-to-sum error bound (#105) — together the pieces needed to instantiate the
+full concrete log-harmonic Riemann theorem), and the concrete
 building blocks of Mertens'
 first theorem are now verified (double-count identity, `log(N!)` bridge, `ψ=O(x)`).
 Toward the two headline theorems the dependency chains have tightened further: the
