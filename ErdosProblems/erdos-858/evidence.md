@@ -1289,6 +1289,673 @@ block-sum limit (`Σ_j c_j·g_N,j → Σ_j c_j·L_j`, giving the Riemann step-su
 diagonal two-limit squeeze + the partition identity (actual sum = weighted block sum + error over blocks of (1,N]).
 All elementary, no PNT.*
 
+### 103. Discrete block-partition sum identity (Ioc telescoping)  (paper §5.4)
+
+- **Statement (root_statement_hash `77de62f60b93c43128769c28b39de102eaff115feed664ff16fff299d9cf145d`):**
+  for a monotone `e : ℕ→ℕ` and `h : ℕ→ℝ`, `Σ_{j<K} Σ_{a∈Ioc(e j)(e(j+1))} h a = Σ_{a∈Ioc(e 0)(e K)} h a`.
+- problem_version_id: `4cd2fc14-97d7-4e87-abef-581c706cff6f` · episode_id: `71b9c23b-beb2-4727-a4c8-3759baa21963`
+- outcome: `kernel_verified` (**first try**) · snapshot: [proof/Erdos858_BlockPartitionSum.lean](proof/Erdos858_BlockPartitionSum.lean)
+- **Why it matters:** the discrete analogue of #93, generic in the endpoint sequence — deliberately reusable for the
+  future §5.3 prime-harmonic transfer (same engine, different mass). Proof: induction + `Finset.sum_Ioc_consecutive`.
+
+### 104. Block membership implies u_a bound (exact, non-asymptotic)  (paper §5.4)
+
+- **Statement (root_statement_hash `2ca89561fc22a13cda3fc34d720345f992676324636ad1c744a03d58f1e4d85e`):**
+  for `a ∈ Ioc(⌊N^(j/K)⌋₊)(⌊N^((j+1)/K)⌋₊)`, `j/K < log a/log N ≤ (j+1)/K` exactly, for every `N,K`.
+- problem_version_id: `23909c74-b4e4-436b-a394-c799d9bc057d` · episode_id: `2fd1a6f4-89bb-4de1-9513-a0ea6b773744`
+- outcome: `kernel_verified` (2nd submission) · snapshot: [proof/Erdos858_BlockMembershipBound.lean](proof/Erdos858_BlockMembershipBound.lean)
+- **Why it matters:** the block-membership bound driving the per-block uniform-continuity oscillation control — no
+  asymptotics needed, sidesteps ever needing a fiber-index-equality lemma. **Lean lesson (campaign-wide):** a nested
+  `have h := by\n  tac1\n  tac2` block silently mis-scoped in this pipeline; fix is single-line `have h := by tac1; tac2`.
+
+### 105. Weighted pointwise-to-sum error bound (generic)  (paper §5.4)
+
+- **Statement (root_statement_hash `09fafcb67867358619e6cb70fa0f6309498243d4ebeaa21a5f5090e5ea6abf0c`):**
+  if `g` is pointwise within `ε` of `c` on `s` and `h≥0` on `s`, `|Σ g·h − c·Σh| ≤ ε·Σh`.
+- problem_version_id: `9a92bf72-7902-4220-b1f4-c82e5e98edbe` · episode_id: `94e47a9e-b985-4ef5-ade3-d4ea33179aaa`
+- outcome: `kernel_verified` (2nd submission) · snapshot: [proof/Erdos858_WeightedPointwiseSumBound.lean](proof/Erdos858_WeightedPointwiseSumBound.lean)
+- **Why it matters:** turns the block-membership oscillation bound (#104 + uniform continuity) into the per-block
+  sum bound `|S j − w j·m j| ≤ ε·m j` feeding #101's aggregation. **Refined Lean lesson:** `have X := by tacSeq`
+  swallows the WHOLE subsequent semicolon-chain into X's own block — use an inline `show T from by tac` term
+  (not a nested `have`) for a small algebraic side-fact needed mid-chain.
+
+### 106. Block oscillation bound from modulus of continuity  (paper §5.4)
+
+- **Statement (root_statement_hash `c1686399b3239894091e36f9d02b4d7ed10684862bd0cd794cfbcb694247bc67`):**
+  given a δ-ε modulus of continuity for `f` at scale `δ≥1/K`, and `j/K<u≤(j+1)/K` (from #104), `|f u − f(j/K)|≤ε`.
+- problem_version_id: `de46c8a7-d7c5-4043-9270-9b45e38716bd` · episode_id: `3f5c7af8-f568-44f3-bd7c-f72779b94f13`
+- outcome: `kernel_verified` (2nd submission) · snapshot: [proof/Erdos858_BlockOscillationBound.lean](proof/Erdos858_BlockOscillationBound.lean)
+- **Why it matters:** combines #104's exact bound with a modulus of continuity to produce the per-element
+  oscillation bound `|f(u_a)−f(j/K)|≤ε` that #105 needs as its hypothesis. **Lean lesson:** `linarith` treats
+  `j/K` and `(j+1)/K` as opaque atoms unless connected by an explicit `add_div` identity first.
+
+### 107. Harmonic difference equals Ioc sum  (paper §5.4)
+
+- **Statement (root_statement_hash `71637c00539c31fa2489b0cf892e1c5b261e74371ab0966a2a0fba72c7be984f`):**
+  for `m≤n`, `harmonic n − harmonic m = Σ_{a∈Ioc m n} 1/a`.
+- problem_version_id: `689aa9d6-6fd6-4cd0-bf05-aae97f189186` · episode_id: `fb52afe8-9bdc-45f3-9bc4-bcadbc99f40e`
+- outcome: `kernel_verified` (3rd submission) · snapshot: [proof/Erdos858_HarmonicDiffEqSumIoc.lean](proof/Erdos858_HarmonicDiffEqSumIoc.lean)
+- **Why it matters:** connector lemma identifying the abstract block mass (#99/#101/#102) with the exact finite
+  sum needed by the concrete instantiation. **Lean cast lesson:** `(n:ℝ)+1` and `((n+1:ℕ):ℝ)` print identically
+  but aren't syntactically equal — state a trivial cast-wrap matching the source lemma's native shape first,
+  then `push_cast` to normalize.
+
+### 108. Concrete per-block sum bound  (paper §5.4)
+
+- **Statement (root_statement_hash `b458b72369c0103666495e73bf8415f24d2d353ae1dd37b6103d79909999fd3b`):**
+  assembling #104+#105+#106+#107 (as hypotheses), the true block-j sum is within `ε·mass` of `f(j/K)·mass`.
+- problem_version_id: `f3c9521f-0275-4cec-8164-7805d1061456` · episode_id: `f7d4edf1-411d-487e-91ea-412567ba8d2f`
+- outcome: `kernel_verified` (2nd submission) · snapshot: [proof/Erdos858_ConcretePerBlockBound.lean](proof/Erdos858_ConcretePerBlockBound.lean)
+- **Why it matters:** the exact per-block hypothesis format the aggregation theorem (#101) needs — a major
+  concrete milestone. **Lean lesson (recurred a 3rd time):** the have-block scoping bug strikes on fresh
+  theorems too; default to pure term-mode `have`s, factor multi-tactic sub-facts into their own top-level haves.
+
+### 109. Fixed-K,N log-harmonic error bound (the big assembly)  (paper §5.4)
+
+- **Statement (root_statement_hash `715a983d8f001505ad9f0e07f969469d43b0185ae423184d84a44cae1e77ab3e`):**
+  assembling #108+#101+#103(×2)+#107 (as hypotheses): for `f` with a δ-ε modulus at scale `1/K≤δ`, `N>1`, `K>0`,
+  `|Σ_{1<a≤N} f(u_a)/a − Σ_{j<K} f(j/K)·m_j| ≤ ε·(harmonic N − harmonic 1)`.
+- problem_version_id: `f83ccfe0-216d-4f17-a124-65fe9b28ad3b` · episode_id: `2ce4f3d4-789f-4e42-abc3-ef154ddb0d60`
+- outcome: `kernel_verified` (2nd submission) · snapshot: [proof/Erdos858_FixedKNTransferBound.lean](proof/Erdos858_FixedKNTransferBound.lean)
+- **Why it matters:** the entire fixed-parameter error structure of the transfer in one theorem. **Two new Lean
+  lessons:** `set` introduces an OPAQUE cdecl (unusable for function abbreviations in term-mode assemblies);
+  `push_cast at` on an instantiated ∀-fact both normalizes casts (`↑(j+1)→↑j+1`) AND beta-reduces instantiation redexes.
+
+### 110. Eventual transfer error (herr)  (paper §5.4)
+
+- **Statement (root_statement_hash `5ffdc6ffadf5248b2108e2a67ebea6037ebb9bca5431aa3b37987180e0a75822`):**
+  from #109 + a uniform-continuity family + `harmonic N − harmonic 1 ≤ 2·log N` (eventually): for every `ε>0`,
+  eventually in `K`, eventually in `N`, `|A N − W K N| ≤ ε` (the `log N`-normalized forms).
+- problem_version_id: `f051245e-a3d1-4073-906b-032fc5698452` · episode_id: `c4f306f3-ae6b-4e4e-a290-ba3fa592cda9`
+- outcome: `kernel_verified` (**first try**) · snapshot: [proof/Erdos858_EventualTransferError.lean](proof/Erdos858_EventualTransferError.lean)
+- **Why it matters:** exactly the `herr` hypothesis shape of the diagonal squeeze (#102). The #97 K-selection
+  pattern + the `div_sub_div_same`/`abs_div`/`div_le_iff₀` normalization chain.
+
+### 111. ★ CAPSTONE — the concrete log-harmonic Riemann theorem  (paper §5.4, Lemma 5.4)
+
+- **Statement (root_statement_hash `6bf04a07524df30ae82e4311c20e2f29374b8f13dbe249f286830d1c8beca48a`):**
+  given the diagonal squeeze (#102), the fixed-K weighted-block-sum limit family hW, the durable Riemann-sum
+  limit (#97), and the eventual transfer error (#110): `(Σ_{1<a≤N} f(log a/log N)/a)/log N → L`.
+  With `L = ∫₀¹ f`, this is the paper's Lemma 5.4 (fixed-endpoint form).
+- problem_version_id: `161b53de-c21d-4e45-be2c-82673e20a15e` · episode_id: `754b73e8-1cba-4477-9a61-f8d28904e090`
+- outcome: `kernel_verified` (**first try**) · snapshot: [proof/Erdos858_ConcreteLogHarmonicRiemann.lean](proof/Erdos858_ConcreteLogHarmonicRiemann.lean)
+- **Why it matters:** **the log-harmonic transport engine for Theorem 1.2 is assembled.** The full kernel-verified
+  ladder: pure Riemann #92–#97 → abstract engine #98–#102 → concrete assembly #103–#110 → this. Remaining
+  discharge atoms: hW from block-mass limits, mass limits from #98's endpoint chain, `hharm2` from #87, and
+  uniform continuity per concrete `f`.
+
+### 112. Discharge — hW-bridge  (paper §5.4)
+
+- **Statement (root_statement_hash `0ae56f5ffc49d3737417621f9bd854d86272c8b08d14256d5a648fbaf6a4f6b2`):**
+  from #100's fixed-K engine + per-block mass limits: `(Σ_{j<K} f(j/K)·m_j(N))/log N → Σ_{j<K} f(j/K)·(1/K)`.
+- problem `cfb1d302-a670-45bc-a8e8-0735b4782760` · episode `7b7fa818-ee8f-4c50-bcc3-860b968dffde` · `kernel_verified` (**first try**)
+- snapshot: [proof/Erdos858_HWBridge.lean](proof/Erdos858_HWBridge.lean) — `Finset.sum_div` + `mul_div_assoc` bridge.
+
+### 113. Discharge — block-mass limit family  (paper §5.4)
+
+- **Statement (root_statement_hash `96a544e633985a380db6c3d2c5cb15ec7508ade5cfdb83cc0f9e1b756ff8c798`):**
+  from the `j ≤ K` endpoint family: each block's normalized mass `→ 1/K` (every `j < K`).
+- problem `79bcd11f-5774-437c-9f14-759aa694074b` · episode `8e322dc5-b0d5-4d02-b605-0904d178630f` · `kernel_verified` (**first try**)
+- snapshot: [proof/Erdos858_BlockMassLimits.lean](proof/Erdos858_BlockMassLimits.lean) — endpoint subtraction + `div_sub_div_same`;
+  the hypothesis family deliberately includes `j = 0` so no case split is needed here.
+
+### 114. Discharge — eventual harmonic-vs-2log bound (hharm2)  (paper §5.4)
+
+- **Statement (root_statement_hash `92455c2d2b82a39ed4b4ff7ae4b4859e9a15ea42b3ae60deb10e85e10bf30356`):**
+  from `harmonic N/log N → 1` (#87): eventually `harmonic N − harmonic 1 ≤ 2·log N`.
+- problem `48b1ec48-654d-4b26-8aac-620aa213d8aa` · episode `447541f5-2ff5-4bc6-aa18-4d50ca4db891` · `kernel_verified` (**first try**)
+- snapshot: [proof/Erdos858_HarmonicVsTwoLog.lean](proof/Erdos858_HarmonicVsTwoLog.lean) — ε=1/2 ratio bound; **Lean lesson:**
+  `harmonic 1 = 1` needs `rw [show (1:ℕ) = 0+1 from rfl]` before `harmonic_succ` fires (OfNat literal vs `(n+1)` pattern).
+
+### 115. Discharge — endpoint-limit family (all j ≤ K, incl. j = 0)  (paper §5.4)
+
+- **Statement (root_statement_hash `7d0fb866bff46016fd1e0a61c5a2edb49f8d575157c5d91a83b21eaba86d6afb`):**
+  from the #98∘#91 chain (x>0) + the trivial j=0 instance: `harmonic⌊N^{j/K}⌋/log N → j/K` for every `j ≤ K`.
+- problem `d7f007ab-2082-416d-911a-605a87cb71e0` · episode `b8ae101c-2669-4f65-a95c-ee2eb9a8b405` · `kernel_verified` (2nd submission)
+- snapshot: [proof/Erdos858_EndpointFamily.lean](proof/Erdos858_EndpointFamily.lean) — **Lean lesson (3rd pipeline scoping
+  variant):** multi-line `·`-bullet bodies mis-scope like nested-have bodies; every nested scope must be single-line,
+  with pre-proven instances `▸`-transported into branch goals.
+
+### 116. Discharge — clamp modulus family (hUC, FINAL external hypothesis)  (paper §5.4)
+
+- **Statement (root_statement_hash `40947ecbbd72303c809125c4a359d1ea637c9f42fdebc32469f0264ae58533ea`):**
+  for `f` continuous on `[0,1]`, the clamped `g x = f(max (min 1 x) 0)` has a global δ-ε modulus for every ε>0 —
+  exactly the `hUC` shape of #110.
+- problem `5dbc51cc-ea15-40bd-897c-92c292ee5225` · episode `5ba2df9c-192d-41f7-adf2-67e467e913a2` · `kernel_verified` (**first try**)
+- snapshot: [proof/Erdos858_ClampModulusFamily.lean](proof/Erdos858_ClampModulusFamily.lean) — Heine–Cantor +
+  the clamp's 2-Lipschitz bound (`min_add_max` + `abs_max_sub_max_le_abs`). **With this, the §5.4 transfer chain
+  has NO external hypotheses left for any `f ∈ C[0,1]`** (clamp = id on `[0,1]`, where all transfer arguments live).
+
+### 117. o(1)-Mertens arc atom 1 — generic Abel identity for log-inverse weights  (paper §5.2/§5.3)
+
+- **Statement (root_statement_hash `0408de12bfd240a778b2619b0f45c9ca21ce9a6c05ba7d686af8796fc14df3bc`):**
+  for any weight `c : ℕ→ℝ` and `x ≥ 2`: `Σ_{2<k≤⌊x⌋} c(k)/log k = C(x)/log x − C(2)/log 2 − ∫_{(2,x]}(−t⁻¹/log²t)·C(t) dt`.
+- problem `3374318c-aedc-4ae0-b1ac-88f57982a006` · episode `f31ed437-964c-4689-81e5-d99d8135b206` · `kernel_verified` (**first try**)
+- snapshot: [proof/Erdos858_AbelLogInverseIdentity.lean](proof/Erdos858_AbelLogInverseIdentity.lean)
+- **Why it matters:** the Abel-summation split identity with `f = (log·)⁻¹`, GENERIC in the weight — specialized at
+  `c = [prime]·log k/k` it becomes `Σ_{2<p≤x} 1/p = A(x)/log x − A(2)/log 2 + ∫ A/(t log²t)`, the driver of the
+  o(1)-Mertens second theorem (whose interval form, with the constant cancelling, gives §5.3's prime block masses).
+  Built on Mathlib's `sum_mul_eq_sub_sub_integral_mul` (pin availability confirmed), adapting the kernel-verified
+  erdos-647 `PrimeLogDivIdentity` template to the single-line pipeline discipline. This crossed off one of the two
+  "genuine remaining gaps" in the Mertens 1&2 catalog row (the Abel split identity); the prime-power tail constant
+  remains the other.
+
+### 118. o(1)-Mertens arc atom 2 — Mertens-2 split identity  (paper §5.2)
+
+- **Statement (root_statement_hash `ff208875cbd2ef97037f2af51c9d19844b17c374b77ee6d3d8635687b47004c7`):**
+  from #117 (hypothesis) at `c = [prime]·log k/k`: for `x ≥ 2`,
+  `Σ_{p≤x} 1/p = A(x)/log x + ∫_{(2,x]} A(t)/(t·log²t) dt`, `A(y) = Σ_{p≤y} log p/p` (1/2-boundary terms cancel).
+- problem `c655b1bd-5041-4370-933e-35f500b9a00f` · episode `6def15d2-59fd-4c18-b14b-cb64cbfa9b19` · `kernel_verified` (2nd submission)
+- snapshot: [proof/Erdos858_Mertens2SplitIdentity.lean](proof/Erdos858_Mertens2SplitIdentity.lean)
+- **Why it matters:** the classical partial-summation form of Mertens' second theorem, machine-checked. With the
+  Mertens-1 stack (#47/#48) and the verified integrals #56/#57, the o(1)-form `Σ1/p = loglog x + M + o(1)` follows,
+  whose M-cancelling interval form gives §5.3's prime block masses. **Lean lesson (4th pipeline pitfall):**
+  bare-literal `Finset.Icc/Ioc 0 2` in a have-type elaborates at ℝ unless an endpoint is pinned `(0:ℕ)`.
+
+### 119. o(1)-Mertens arc atom 3 — FTC for the Mertens tail integral  (paper §5.2)
+
+- **Statement (root_statement_hash `ca79be06688a72cea6ea4b1a485e90d73404baa72aafa08842f064b8ebdbd18c`):**
+  for `2 ≤ a ≤ b`: `∫_{a..b} t⁻¹/log²t dt = 1/log a − 1/log b`.
+- problem `d077d552-4112-4cd2-90ed-0b0a6f09c2b8` · episode `d770e27b-7f86-41c8-ab6e-c671c1068e5e` · `kernel_verified` (2nd submission)
+- snapshot: [proof/Erdos858_MertensTailFTC.lean](proof/Erdos858_MertensTailFTC.lean)
+- **Why it matters:** the exact tail control behind the o(1): with `A = log + R`, `|R|≤C`, the remainder integral over
+  `(N^s, N^t]` is `≤ C/log(N^s) → 0`. Antiderivative `−1/log t` (the #117 derivative negated). **Lean lesson:**
+  `HasDerivAt.neg` output needs `neg_div` before `neg_neg` (the neg wraps the whole division).
+
+### 120. o(1)-Mertens arc atom 4 — FTC for the Mertens main integral  (paper §5.2/§5.3)
+
+- **Statement (hash `a1daa06c518a87810b518e4846a196b559d6038195e176cfe4c48e4ca7dcee82`):** for `2 ≤ a ≤ b`,
+  `∫_{a..b} (log t)⁻¹·t⁻¹ = loglog b − loglog a` (antiderivative `log∘log`).
+- problem `06f172f1-9f56-45d0-b85c-646c47289ba6` · episode `24bdcc62-e2a4-4966-a788-58e5d9a9ff87` · **first try** ·
+  snapshot: [proof/Erdos858_MertensMainFTC.lean](proof/Erdos858_MertensMainFTC.lean)
+- On `(N^s, N^t]` this is `log(t·logN) − log(s·logN) = log t − log s` EXACTLY for every `N` — the §5.3 block-mass value.
+
+### 121. o(1)-Mertens arc atom 5 — interval prime-sum split (Finset)  (paper §5.3)
+
+- **Statement (hash `b310064cbc1c3000d65610856d88444edbaeeba20474b456721f5859ca628244`):** for `m ≤ n`,
+  `Σ_{p≤n} 1/p − Σ_{p≤m} 1/p = Σ_{m<p≤n} 1/p`.
+- problem `e3581189-3086-4f1e-aada-b433baacbc48` · episode `7806870c-0cb5-453a-ba37-f4c87efd9c32` · **first try** ·
+  snapshot: [proof/Erdos858_IntervalPrimeSumSplit.lean](proof/Erdos858_IntervalPrimeSumSplit.lean)
+
+### 122. o(1)-Mertens arc atom 6 — Ioc set-integral additivity (generic)  (paper §5.2)
+
+- **Statement (hash `7908d194d0c2f9ed5819a196f3c282e556aadb6585d710abc6f279fcc8743526`):** `f` integrable on `(2,b]`,
+  `2 ≤ a ≤ b` ⟹ `∫_{(2,b]} f = ∫_{(2,a]} f + ∫_{(a,b]} f`.
+- problem `1b6a4e05-9d0b-41d3-a33a-8b864323fb49` · episode `b1d800f4-2da0-4086-97a5-686027b61407` · 2nd submission
+  (`Set.Ioc_disjoint_Ioc_same` absent — direct `disjoint_left` term) ·
+  snapshot: [proof/Erdos858_IocIntegralAdditivity.lean](proof/Erdos858_IocIntegralAdditivity.lean)
+
+### 123. o(1)-Mertens arc atom 7 — dominated tail bound  (paper §5.2)
+
+- **Statement (hash `96cbd6f711244856bf59380291403f73f9bdac5fce404b81d61c5a650feb4f8e`):** from #119 (hyp):
+  `|g| ≤ C·t⁻¹/log²t` on `(a,b]` (integrable, `C≥0`, `2≤a≤b`) ⟹ `|∫_{(a,b]} g| ≤ C·(1/log a − 1/log b)`.
+- problem `e78c91da-6a79-4a3f-8891-28dd379671c0` · episode `7d647fdf-e095-4598-bf7c-c8c6c24d1f48` · **first try** ·
+  snapshot: [proof/Erdos858_DominatedTailBound.lean](proof/Erdos858_DominatedTailBound.lean)
+- The ENTIRE o(1) of Mertens-2 in one bound: the R-contribution over `(N^s,N^t]` is `≤ C/(s·log N) → 0`.
+
+### 124. o(1)-Mertens arc atom 8 — Abel-integrand integrability (generic c ≥ 0)  (paper §5.2)
+
+- **Statement (hash `7f6f322b93568ac3fb92946fe5f757f36ba0ddf350f4b97ef7651fc4cd6e7799`):** for `c ≥ 0`, `2 ≤ a ≤ b`,
+  `C(t)/(t·log²t)` (`C(t)=Σ_{k≤⌊t⌋}c(k)`) is integrable on `(a,b]`.
+- problem `97b368d7-4768-4020-8d57-45b2edd24dfd` · episode `d54c5874-3eaf-4251-862b-bf6d09fad7ac` · 3rd submission ·
+  snapshot: [proof/Erdos858_AbelIntegrandIntegrable.lean](proof/Erdos858_AbelIntegrandIntegrable.lean)
+- **Two new Lean lessons:** `Measurable.comp` with a `Finset.sum` outer function needs explicit `(g:=)(f:=)` args;
+  mid-chain inline tactic proofs must be parenthesized `(by tac)` — bare `:= by tac;` swallows the rest of the chain.
+
+### 125. o(1)-Mertens arc atom 9 — interval Abel identity for prime reciprocals  (paper §5.2/§5.3)
+
+- **Statement (hash `44c6274452db92af16842b91aa5bf8730b6e412286adb763403e119e4dc8d269`):** from #118+#121+#122+#124
+  (hypotheses): for `2 ≤ m ≤ n`, `Σ_{m<p≤n} 1/p = [A(n)/log n − A(m)/log m] + ∫_{(m,n]} A(t)/(t·log²t) dt`.
+- problem `2557cc1c-15bf-4ab5-9622-496100d0a50a` · episode `2fe5b33e-fa3e-4bdd-934e-9ab0a099c7b3` · 2nd submission ·
+  snapshot: [proof/Erdos858_IntervalAbelIdentity.lean](proof/Erdos858_IntervalAbelIdentity.lean)
+- **Why it matters:** the deterministic core of interval-Mertens — the exact identity whose `N→∞` limit at
+  `m=⌊N^s⌋, n=⌊N^t⌋` gives §5.3's prime block masses. **Lean lesson:** `Set.EqOn` per-point goals are
+  un-beta-reduced — use `simp only [eq]` (not `rw`) inside EqOn lambdas.
+
+### 126. o(1)-Mertens arc atom 10 — main-term extraction (generic A)  (paper §5.2)
+
+- **Statement (hash `fda61230088df0e69eeddfe7b26f5d4783239893559ee5f7b848246882666134`):** from #120 (hyp): for any `A`
+  with integrable Abel quotient on `(a,b]` (`2≤a≤b`), `∫ A/(t·log²t) = (loglog b − loglog a) + ∫ (A−log)/(t·log²t)`.
+- problem `c71a944b-f0b9-4bbb-8f41-d295d379aa3c` · episode `00622a74-82d6-46b9-b098-d02b0e30b2d5` · 2nd submission ·
+  snapshot: [proof/Erdos858_MainTermExtraction.lean](proof/Erdos858_MainTermExtraction.lean)
+- **Why it matters:** with #125 + #123, the DETERMINISTIC core of interval-Mertens is complete:
+  `Σ_{m<p≤n} 1/p = [A(n)/log n − A(m)/log m] + (loglog n − loglog m) + E`, `|E| ≤ C(1/log m − 1/log n)`.
+  Only the N→∞ endpoint limits remain for §5.3's masses.
+
+### 127. o(1)-Mertens arc atom 11 — loglog floor-endpoint limit  (paper §5.3)
+
+- **Statement (hash `87d2c0ed091965b05fbe9552e52ffd4a62c11731169994157b2a5e897901e24f`):** for `x > 0`, given
+  `log⌊N^x⌋/log N → x` (#91): `loglog⌊N^x⌋ − loglog N → log x`.
+- problem `571894c7-877c-42e5-a5ed-aa894a0de0b2` · episode `ec737afb-5236-4f9e-9b80-2bca2d64d519` · **first try** ·
+  snapshot: [proof/Erdos858_LogLogFloorLimit.lean](proof/Erdos858_LogLogFloorLimit.lean)
+- **Why it matters:** two instances subtracted cancel `loglog N`, giving `loglog⌊N^t⌋ − loglog⌊N^s⌋ → log t − log s`
+  — the main-term limit of interval Mertens = the value of §5.3's prime block masses. `Filter.Tendsto.log`
+  + `Real.log_div` under `Tendsto.congr'`.
+
+### 128. o(1)-Mertens arc atom 12 — A-ratio floor-endpoint limit  (paper §5.2/§5.3)
+
+- **Statement (hash `f071aaba2f7632f310612b07553a7d45f16c8d96f1e41cf73ef7bdc3bd7f1da6`):** `|A(k) − log k| ≤ C` for
+  `k ≥ 2` implies `A(⌊N^x⌋)/log⌊N^x⌋ − 1 → 0` for `x > 0` (`squeeze_zero_norm'` vs `C/log⌊N^x⌋ → 0`).
+- problem `7eda46c2-9ca1-427e-9631-1637cc6d3d7c` · episode `41ccb206-dcfd-46aa-aa6c-cc3775c09fa4` · **first try** ·
+  snapshot: [proof/Erdos858_ARatioFloorLimit.lean](proof/Erdos858_ARatioFloorLimit.lean)
+- **Why it matters:** the boundary terms of the interval Abel identity vanish in the limit. With #125/#126/#123
+  (identity+tail) and #127 (loglog main term), ALL ingredients of the §5.3 prime-block-mass limit
+  `Σ_{N^s<p≤N^t} 1/p → log(t/s)` are now kernel-verified — only the final Tendsto assembly remains.
+
+### 129. ★ §5.3 CAPSTONE — the prime block-mass limit (final Tendsto assembly)  (paper §5.3)
+
+- **Statement (hash `7701d9f574f4f5bf7b8d6c086412672da5d5ce0d828d7c9c401d1a0b1981dd42`):** generic in `(S, A, E, D)`:
+  the interval-Mertens identity (#125+#126) + tail bound (#123) + endpoint limits (#91/#127/#128) imply
+  `S(⌊N^s⌋, ⌊N^t⌋) → log t − log s` for `0 < s ≤ t`.
+- problem `4a79f436-20d6-4b63-9c59-ee791ec946b5` · episode `cd23cc70-8052-4251-a16a-faa9d1ac3db7` · **first try** ·
+  snapshot: [proof/Erdos858_PrimeBlockMassLimit.lean](proof/Erdos858_PrimeBlockMassLimit.lean)
+- **Why it matters:** at the prime instantiation this is **`Σ_{N^s<p≤N^t} 1/p → log(t/s)` — the §5.3 prime block
+  masses**: the prime-harmonic sums converge to the `dv/v`-measure of geometric blocks, exactly the mass input the
+  §5.4 transfer engine needs for the prime-harmonic Riemann-sum argument of Lemma 5.3. Full verified chain:
+  #117→#118→#125(←#121/#122/#124)→#126(←#120)→#123(←#119)→#127/#128(←#91)→#129.
+
+### 130. o(1)-Mertens discharge — floor remainder pointwise bound  (paper §5.2)
+
+- **Statement (hash `7a6baa38a663ebf3708849ac22d50a4983446fd5b367e743d4215efe23a81b6b`):** `|A(k) − log k| ≤ C` on
+  naturals `k ≥ 2` implies `|A(⌊u⌋) − log u| ≤ C + log 2` for reals `u ≥ 2` (floor sandwich costs one `log 2`).
+- problem `b8ad9433-b24f-4372-94d2-013c19b5fba1` · episode `e8b9bd84-a384-42d6-a8f6-8f4bacb8c832` · **first try** ·
+  snapshot: [proof/Erdos858_FloorRemainderBound.lean](proof/Erdos858_FloorRemainderBound.lean)
+- **Why it matters:** the last discharge link — converts Mertens-1's integer-argument bound into #123's pointwise
+  hypothesis at the Abel remainder integrand, producing #129's `hE` with `D = C + log 2`. **Every hypothesis of
+  the §5.3 capstone (#129) is now dischargeable end-to-end from kernel-verified atoms.**
+
+### 131. §5.3 transfer atom 1 — general-exponent block-membership bound  (paper §5.3)
+
+- **Statement (hash `446d31a3e26eac709a4c5ca918fa1ee2572dc1c722f8ff872027bf29d382cdbc`):** for `1 < N` and ANY reals
+  `v, w`: `a ∈ (⌊N^v⌋, ⌊N^w⌋]` forces `v < log a/log N ≤ w` exactly (subsumes #104).
+- problem `0f4a7fe1-2f86-49c4-b880-38ad3abe8b4c` · episode `395263b1-79e9-41b9-87d5-d6cab1677f29` · **first try** ·
+  snapshot: [proof/Erdos858_GeneralBlockMembershipBound.lean](proof/Erdos858_GeneralBlockMembershipBound.lean)
+- **Why it matters:** the membership⟹coordinate bound at the §5.3 geometric blocks `v_j = s·(t/s)^{j/K}` (equispaced
+  in `log v`, constant prime mass `log(t/s)/K` by #129) — the oscillation-control input of Lemma 5.3's transfer.
+
+### 132. §5.3 transfer atom 2 — general oscillation bound  (paper §5.3)
+
+- **Statement (hash `4aa23a7251ade81953267ebd75db715f5e0aad3db771ccd57ed1dc0134c1df78`):** δ-ε modulus for `G`, `v ≤ w`,
+  `w − v ≤ δ`, `v < u ≤ w` give `|G u − G v| ≤ ε` (subsumes #106 for arbitrary endpoints).
+- problem `d51e176c-c7b8-46e2-a139-3fd3e8ae7955` · episode `328f8af5-a97a-41eb-b3a6-f693cc639a5b` · **first try** ·
+  snapshot: [proof/Erdos858_GeneralOscillationBound.lean](proof/Erdos858_GeneralOscillationBound.lean)
+
+### 133. §5.3 transfer atom 3 — general-block weighted per-block bound (generic weight)  (paper §5.3)
+
+- **Statement (hash `f27ae804fd03ecf437ca478a4ffe2cd2e8da6e1e0889c6781fda4792767323ba`):** from #131+#132+#105 (hyps),
+  for any `h ≥ 0`: `|Σ_{a∈(⌊N^v⌋,⌊N^w⌋]} G(log a/log N)·h(a) − G(v)·Σh| ≤ ε·Σh`.
+- problem `61c9a343-8d1b-4718-88da-af05b978c837` · episode `4ac828f5-e46d-4ed5-ad5e-071a2dc791d1` · **first try** ·
+  snapshot: [proof/Erdos858_GeneralBlockPerBlockBound.lean](proof/Erdos858_GeneralBlockPerBlockBound.lean)
+- **Why it matters:** the §5.3 analogue of #108 — the membership bound (#131) is primality-agnostic, so
+  `h = [prime]·1/a` needs no special handling. The remaining §5.3 capstone atoms (#134→#138) parallel #109→#111
+  with prime masses (from #129) and no `1/log N` normalization.
+
+### 134. §5.3 transfer atom 4 — geometric mesh limit  (paper §5.3)
+
+- **Statement (hash `d7937841a95db4a173777a661405343b9a96a14d55cd32be55ef6191717ee0f8`):** for `r > 0`, `r^(1/K) → 1` as `K→∞`.
+- problem `a13fc978-a4be-4b74-ad54-a7d6c072dff8` · episode `a66e1427-a85f-4e4a-bee2-dd91328e96ea` · 2nd submission
+  (`Function.comp_def` bridge) · snapshot: [proof/Erdos858_GeometricMeshLimit.lean](proof/Erdos858_GeometricMeshLimit.lean)
+
+### 135. §5.3 transfer atom 5 — geometric block width bound  (paper §5.3)
+
+- **Statement (hash `955508d2b8524fe87036bac6cf8945c5d3092a627636fbf3b55164177e074bff`):** for `0 < s ≤ t`, `K > 0`, `j < K`,
+  `s·(t/s)^((j+1)/K) − s·(t/s)^(j/K) ≤ t·((t/s)^(1/K) − 1)`.
+- problem `7c1728a3-181d-4a4a-a19b-28ce746df2ef` · episode `bae83197-5d10-4b41-8fe8-accccbbc26d3` · 3rd submission ·
+  snapshot: [proof/Erdos858_GeometricBlockWidthBound.lean](proof/Erdos858_GeometricBlockWidthBound.lean)
+- **Why it matters:** with #134 (mesh→1), eventually in `K` every geometric block width is `≤ δ` — the refinement
+  input of the §5.3 `herr`. **Lean lessons:** `positivity` can't get `0 < t/s` from `0<s`,`s≤t`; `sub_nonneg.mpr`
+  beats `linarith` for a freshly-rewritten nonneg subterm.
+
+### 136. §5.3 transfer atom 6 — general-grid fixed-K,N aggregation bound  (paper §5.3)
+
+- **Statement (hash `7800d72285ebc31524d51990bebc7f0c2f38d3adb3a766f37e292d6a753ba319`):** from #133+#101+#103 (hyps),
+  for a monotone grid `v` with sub-`δ` widths: `|Σ_{(⌊N^{v0}⌋,⌊N^{vK}⌋]} G(u_a)·h − Σ_{j<K} G(v j)·(block mass)| ≤ ε·(total mass)`.
+- problem `c2cb2b59-e4d1-4a29-8fe5-a69f407c9dab` · episode `40eff857-4d24-4241-95cd-52c957509ff3` · **first try** ·
+  snapshot: [proof/Erdos858_GeneralGridAggregationBound.lean](proof/Erdos858_GeneralGridAggregationBound.lean)
+- **Why it matters:** the §5.3 analogue of #109, generic in the exponent grid — cleaner (endpoints stay symbolic,
+  no `1/log N`). `rw [hpartS, hpartM]` fired through the lambda-applied block sums directly.
+
+### 137. §5.3 transfer atom 7 — geometric grid properties bundle  (paper §5.3)
+
+- **Statement (hash `1e5075622909d6abfc1b1d9beec41150b7e9a7d29b7caeb54643e61fefd82f86`):** the grid `v_j = s·(t/s)^{j/K}` is
+  monotone, `v 0 = s`, `v K = t`, and floor-endpoint monotone.
+- problem `a6864070-34a7-444d-95ee-4475db94e6ad` · episode `06233ef3-7f56-4b74-848e-c11345a22e30` · 2nd submission ·
+  snapshot: [proof/Erdos858_GeometricGridProperties.lean](proof/Erdos858_GeometricGridProperties.lean)
+- **Why it matters:** discharges #136's grid hypotheses at the geometric instantiation. **Lean lesson:** `gcongr` on
+  `↑a/↑c ≤ ↑b/↑c` (Nat casts, `c>0`, `a≤b`) closes completely — don't append `exact_mod_cast`.
+
+### 138. §5.3 transfer atom 8 — hR bridge (geometric R_K → integral)  (paper §5.3)
+
+- **Statement (hash `7b1b977d41a60a84a9b2e7023e743fd668be1b12bda03e90bc56748bf2112863`):** from #97's limit at
+  `φ = log(t/s)·G(s·(t/s)^·)`, `Σ_{j<K} G(s·(t/s)^{j/K})·(log(t/s)/K) → L`.
+- problem `5c293a6b-168d-4475-840c-deed31c985ae` · episode `e12a9946-58d1-434b-8c56-c4545fed0912` · **first try** ·
+  snapshot: [proof/Erdos858_PrimeTransferHRBridge.lean](proof/Erdos858_PrimeTransferHRBridge.lean)
+- **Why it matters:** reduces the §5.3 `R_K → L` limit to the durable #97 equispaced Riemann theorem via the
+  geometric pullback (`Finset.mul_sum`+`ring`, same bridge as #111/#112).
+
+### 139. §5.3 transfer atom 9 — geometric per-block prime mass limit  (paper §5.3)
+
+- **Statement (hash `0b04f3c8f78548d76b2b3d7f52f630c6bec96c790b42613816ec533c60a26ec8`):** from the prime interval mass
+  limit (#129 at primes), each geometric block's prime mass `→ log(t/s)/K`.
+- problem `81f28c8c-504a-42de-b376-f0d57b278861` · episode `5154cb12-450f-4324-9ddf-5a6999c9593a` · **first try** ·
+  snapshot: [proof/Erdos858_GeometricBlockMassLimit.lean](proof/Erdos858_GeometricBlockMassLimit.lean)
+- **Why it matters:** the per-block mass-limit family feeding `hW` (via #100) — the log-equispacing
+  `log(v_{j+1}) − log(v_j) = log(t/s)/K` (`log_mul`+`log_rpow`+`ring`). Analogue of #113.
+
+### 140. §5.3 transfer atom 10 — mass-normalized diagonal error → herr  (paper §5.3)
+
+- **Statement (hash `b9391a8d8fb17f2a7a3aa38055e5be2d1bb60e4f64b4629cc3dfff6b55245e75`):** given `mass N → L ≥ 0` and the
+  fine-scale aggregation (`∀ η>0, ∀ᶠ K, ∀ N, |A N − W K N| ≤ η·mass N`), the herr shape `∀ ε>0, ∀ᶠ K, ∀ᶠ N,
+  |A N − W K N| ≤ ε` (the `ε/(L+1)` diagonal argument, `div_mul_cancel₀` + `eventually_le_const`).
+- problem `823c14ac-6c66-48c7-b1e6-b36415cb0967` · episode `83570b0d-3d27-4def-87b5-1bdad5d00770` · **first try** ·
+  snapshot: [proof/Erdos858_MassNormalizedHerr.lean](proof/Erdos858_MassNormalizedHerr.lean)
+- **Why it matters:** the abstract packaging of aggregation + mesh + total-mass into #102's exact `herr` shape.
+
+### 141. §5.3 prime-harmonic transfer CAPSTONE — Lemma 5.3  (paper §5.3)
+
+- **Statement (hash `8333c9c8e72f09575fa94044248f5eec5aaadce3b90bdffe99e277820291fcaa`):** from #102 (diagonal squeeze),
+  `hW`, `hR`, `herr`, the prime-harmonic sum `Σ_{a∈(⌊N^s⌋,⌊N^t⌋]} G(log a/log N)·[a prime]/a → L`.
+- problem `6da92549-46ff-438f-848e-964916a5f265` · episode `1cf150d2-95fe-4efd-8d6d-a7690e7ee5dd` · **first try (v2)** ·
+  snapshot: [proof/Erdos858_PrimeHarmonicTransferCapstone.lean](proof/Erdos858_PrimeHarmonicTransferCapstone.lean)
+- **Why it matters:** Lemma 5.3, the prime analogue of the §5.4 capstone #111. `L = ∫₀¹ log(t/s)·G(s·(t/s)^x)dx =
+  ∫_s^t G(v)/v dv`. **Lean lesson (v1 fail → v2):** a bare `(N:ℝ)` under `∀ᶠ N in atTop` in the `herr` hypothesis
+  lets Lean infer `N:ℝ`, mismatching the conclusion's `fun N:ℕ`; annotate `∀ᶠ (N:ℕ)`.
+
+### 142. §5.3 hW discharge — fixed-K block-sum limit at prime quantities  (paper §5.3)
+
+- **Statement (hash `37471b01d201000c696b67c317f702c07da2e09f13ae007445b3d8cdb22e1434`):** from #100 + #139 (pre-applied),
+  the `hW` input of #141: `∀ K, Σ_{j<K} G(v_j)·(prime block mass) → Σ_{j<K} G(v_j)·(log(t/s)/K)`.
+- problem `3fa3d0c4-88c5-4051-9496-5e9cb155de01` · episode `f40e2b16-a530-4132-b220-1188cee4cc69` · **first try** ·
+  snapshot: [proof/Erdos858_PrimeTransferHWDischarge.lean](proof/Erdos858_PrimeTransferHWDischarge.lean)
+- **Why it matters:** grounds #141's `hW`; `0<K` comes free from `j∈range K` (K=0 vacuous).
+
+### 143. §5.3 herr atom A — geometric mesh vanishing  (paper §5.3)
+
+- **Statement (hash `bf891e95fee98f7550f16c3b5628c3f900601c1445031e0b63b7d25fde876adc`):** from #134, for `0<s≤t` and any
+  `δ>0`, `∀ᶠ K, t·((t/s)^{1/K} − 1) ≤ δ`.
+- problem `19adbe92-d837-4b7b-a57b-76bd109172b0` · episode `5d2e5230-4c5b-4404-8a8b-421388d7a167` · **first try** ·
+  snapshot: [proof/Erdos858_GeometricMeshVanish.lean](proof/Erdos858_GeometricMeshVanish.lean)
+- **Why it matters:** with #135, eventually every block width `≤ δ` — the refinement of the herr. `sub_const` +
+  `const_mul` → 0, then `eventually_le_const`.
+
+### 144. §5.3 herr atom B — aggregation core (geometric #136 at primes)  (paper §5.3)
+
+- **Statement (hash `59085eeb581e52dce13d92a907541be90ac39d56f2502be5c0376d6508643310`):** #136 (pre-applied) at the
+  geometric grid + prime weight (grid props from #137), for `1<N`, `0<K`, a `δ`-`η` modulus, widths `≤δ`:
+  `|A_N − W_KN| ≤ η·mass_N`, matching #141's canonical `W_KN`.
+- problem `8c265281-85c8-4782-ba3e-28c7a6acada9` · episode `ef8c09fb-75ad-43e3-a261-5f277dbf4bee` · **first try** ·
+  snapshot: [proof/Erdos858_PrimeHerrAggregationCore.lean](proof/Erdos858_PrimeHerrAggregationCore.lean)
+- **Why it matters:** the fixed-`(K,N)` heart of the herr. **Lean lesson:** the `↑(j+1)` (generic `v (j+1)`) vs
+  `↑j+1` (concrete atoms) mismatch is bridged BOTH ways by `simp only [Nat.cast_add, Nat.cast_one]` — feeding #136
+  and normalizing its output to the canonical `W_KN`.
+
+### 145a. §5.3 herr atom C — small-N triviality  (paper §5.3)
+
+- **Statement (hash `5acbdff04b3674d2e37e552323f012b04a7de1479d5cf2f57a4cd12aa75d9182`):** for `(N:ℝ) ≤ 1`,
+  `|A_N − W_KN| ≤ η·mass_N` holds as `0 ≤ 0` (all prime ranges empty).
+- problem `fb8e65e4-5689-441b-8045-e667ea8d7c6a` · episode `01bfd98f-cb71-463c-ae03-3779c8f7529c` · 4th submission ·
+  snapshot: [proof/Erdos858_PrimeHerrSmallN.lean](proof/Erdos858_PrimeHerrSmallN.lean)
+- **Why it matters:** covers `N∈{0,1}` that #144 (`1<N`) excludes. **Lean lessons:** `Real.rpow_le_rpow_of_exponent_ge'`
+  takes `0≤x` (no base-0 case); pure term-mode nested haves avoid the multi-line-`by` and rcases-bullet mis-scope.
+
+### 145b. §5.3 herr atom D — aggregation wrapper (∀η∀ᶠK∀N bound)  (paper §5.3)
+
+- **Statement (hash `df8046f0017e2904fdd04f3aac8b2a63afb572c2ac1de8c32dc21000ebce66f1`):** from #144 + #145a + #135 +
+  #143 + G-modulus family, the eventual bound `∀ η>0, ∀ᶠ K, ∀ N, |A_N − W_KN| ≤ η·mass_N` (= #140's `hAgg`).
+- problem `e7b5ac8e-3787-4be3-808b-19dc1ce61083` · episode `48ead24d-6aab-4cdb-a373-771dd8fb6d65` · 2nd submission ·
+  snapshot: [proof/Erdos858_PrimeHerrWrapper.lean](proof/Erdos858_PrimeHerrWrapper.lean)
+- **Why it matters:** `filter_upwards` + `by_cases 1<N` (apply #144 or #145a). **Lean lesson:** `le_of_not_lt` absent —
+  use `not_lt.mp`.
+
+### 146. §5.3 herr discharge / FINAL — via #140 mass-normalization  (paper §5.3)
+
+- **Statement (hash `73d675c8ed316e61e80b4a03205eea5353e15d6aec01de1389a5ff14b0de8860`):** from #140 + #145b (`hAgg`) +
+  #129 (`mass_N → log t − log s ≥ 0`), the `herr` of #141: `∀ ε>0, ∀ᶠ K, ∀ᶠ N, |A_N − W_KN| ≤ ε`.
+- problem `f6536acd-1de7-4e46-990b-4fa0de2c241b` · episode `b2aca2d6-8ecd-44e0-b338-f255eb51b3e3` · **first try** ·
+  snapshot: [proof/Erdos858_PrimeHerrDischarge.lean](proof/Erdos858_PrimeHerrDischarge.lean)
+- **Why it matters:** closes the LAST of #141's three inputs — **§5.3 is now fully grounded to the §5.4 standard**.
+  `hL0` via `log_div`+`log_nonneg`; `exact #140` at the concrete lambdas (β-unifies the abstract `hAgg`).
+
+### 147. §5.3 dv/v bridge atom 1 — rpow exponent derivative  (paper §5.3)
+
+- **Statement (hash `1d2aa503dffe45fdd600eae22436c1d72dcdc2ec6f628112ca12d0edf22ec853`):** for `c > 0`,
+  `HasDerivAt (fun y => s·c^y) (s·(c^x·log c)) x`.
+- problem `893b7bcf-40cd-424a-a798-56b93705258b` · episode `d4e4bf1f-7154-4385-a6aa-24d19d0923e5` · **first try** ·
+  snapshot: [proof/Erdos858_RpowExponentDeriv.lean](proof/Erdos858_RpowExponentDeriv.lean)
+- **Why it matters:** the derivative of the geometric substitution `v = s·(t/s)^x`. `c^y = exp(log c·y)` +
+  `HasDerivAt.exp` + `const_mul`.
+
+### 148. §5.3 dv/v bridge atom 2 / FINAL — change of variables `L = ∫_s^t G/v`  (paper §5.3, Lemma 5.3)
+
+- **Statement (hash `972873f739ea6073c674554cb5147872009934f585f40b8fa263246b0622efeb`):** given #147 + routine
+  continuity (hyps), `∫₀¹ log(t/s)·G(s·(t/s)^x) dx = ∫_s^t G(v)/v dv`.
+- problem `418f42a6-7ee1-44b1-86cf-3f870389fd24` · episode `977c646d-00b9-4e2c-8181-2143dfefa4a7` · 3rd submission ·
+  snapshot: [proof/Erdos858_PrimeTransferDvBridge.lean](proof/Erdos858_PrimeTransferDvBridge.lean)
+- **Why it matters:** identifies the transfer limit `L` with the paper's exact Lemma 5.3 form — **§5.3 now
+  complete in the paper's notation**. **Lean lessons:** `integral_comp_mul_deriv''` wants
+  `HasDerivWithinAt … (Set.Ioi x)` (convert via `.hasDerivWithinAt`); `field_simp` is terminal for the
+  `(a/c)·(c·b)=b·a` cancellation (trailing `ring` → "No goals").
+
+### 149. §5.3 hmodfam discharge / FINAL — clamp modulus family on `[s,t]`  (paper §5.3)
+
+- **Statement (hash `34b0ff1fdbb4f2a48cb86595bbff447c00969fe7d8cd6c439e48249510b63676`):** for `G` continuous on
+  `[s,t]` (`s ≤ t`), the clamped `G(max (min t x) s)` has a global δ-ε modulus for every ε.
+- problem `77706fc6-3ce5-4e21-a4e6-a4643cfcfe39` · episode `1239cbef-a6a6-47a5-bcd6-773eddc2ce9f` · **first try** ·
+  snapshot: [proof/Erdos858_PrimeClampModulus.lean](proof/Erdos858_PrimeClampModulus.lean)
+- **Why it matters:** discharges the `hmodfam` input of #145b — **§5.3 now has ZERO external hypotheses** (only
+  `G` continuous on `[s,t]`, the natural Lemma 5.3 hypothesis), true parity with §5.4's #116. Verbatim transport
+  of #116 from `[0,1]` to `[s,t]` (`1→t`, `0→s`, `zero_le_one→hst`); the clamp is 2-Lipschitz.
+
+### 150. §5.3 dv/v bridge atom 3 — rpow exponent continuity  (paper §5.3)
+
+- **Statement (hash `964f883d5551e230ea445af9b981803576fdd6a9306a6b456cae4299872199e4`):** for `c > 0`,
+  `Continuous (fun x => s·c^x)`. Companion to #147 (the derivative).
+- problem `b5b348a7-cd90-47a0-8a4a-7570bcd69afd` · episode `ba4680ed-e0d1-4239-9a48-3344ec8bce66` · 2nd submission ·
+  snapshot: [proof/Erdos858_RpowExponentContinuous.lean](proof/Erdos858_RpowExponentContinuous.lean)
+- **Why it matters:** discharges the continuity conditions of the dv/v bridge. **Lean lesson:** `Continuous.exp`
+  is absent — use `Real.continuous_exp.comp`.
+
+### 151. §5.3 dv/v bridge, SELF-CONTAINED — only `G` continuous on `[s,t]`  (paper §5.3, Lemma 5.3)
+
+- **Statement (hash `63eb446d3f3a8cdcbb8d8678fec32f59eb0c0d76beaa731b87ae08f1153ddb49`):** for `G` continuous on
+  `[s,t]`, `∫₀¹ log(t/s)·G(s·(t/s)^x)dx = ∫_s^t G(v)/v dv`.
+- problem `d9d36c37-b931-462d-995a-c627052208aa` · episode `6f78a95d-8c28-402a-863f-066542f3f158` · 3rd submission ·
+  snapshot: [proof/Erdos858_PrimeTransferDvBridgeSelfContained.lean](proof/Erdos858_PrimeTransferDvBridgeSelfContained.lean)
+- **Why it matters:** supersedes the conditional #148 — the paper-notation Lemma 5.3 value now stands on the
+  natural hypothesis alone (`G` continuous on `[s,t]`), the three continuity side-conditions discharged internally
+  (#150 + the monotone image bound `s ≤ s·(t/s)^x ≤ t` + `ContinuousOn.div`). **Lean lessons:** `nlinarith` fails on
+  the image bound (beta redex, then won't multiply a derived combo) — use explicit `le_trans` +
+  `mul_le_mul_of_nonneg_left` term bounds; keep the `himg` `by` single-line with ascribed inner `by`s.
+
+### 153. Theorem 1.2 assembly A1 — harmonic main term  (paper Thm 5.8 / Prop 5.1)
+
+- **Statement (hash `32d333f53fa830ac5654461f3958a66e4da931242f1b5d53dfdb5fc050451348`):** conditional on the
+  Euler–Mascheroni limits + `log⌊√N⌋/log N → 1/2` + `log N → ∞`, `(H_N − H_{Nat.sqrt N})/log N → 1/2`.
+- problem `d093fc19-b495-4448-aebb-ff3c6abcf4cf` · episode `9b5aee6e-b05c-4a3d-9f7e-3e5469a64e28` · **first try** ·
+  snapshot: [proof/Erdos858_Thm12_A1_HarmonicAsymptotic.lean](proof/Erdos858_Thm12_A1_HarmonicAsymptotic.lean)
+- **Why it matters:** the `(1/2)log N` leading term of `M(N)` in the Prop 5.1 frontier identity. Three-term
+  split + `Tendsto.div_atTop` + `Tendsto.congr'`. First atom of the Theorem 1.2 assembly.
+
+### 154. Theorem 1.2 CAPSTONE (conditional) — `M(N)/log N → c₂`  (paper Theorem 5.8 / Theorem 1.2)
+
+- **Statement (hash `62e1b37347604f085adce9b7ff664ad013fd7d77b8e2cfdcf530d914deed6e88`):** from the frontier identity
+  `M = harm + tail` (Prop 5.1) and `harm/log N → 1/2` (A1) + `tail/log N → I`, `M(N)/log N → 1/2 + I = c₂`.
+- problem `b21ab91d-8c18-4d80-a297-18c25a951566` · episode `30d1989f-508d-4858-ae2d-57d6547bd1d2` · **first try** ·
+  snapshot: [proof/Erdos858_Thm12_A7_Capstone.lean](proof/Erdos858_Thm12_A7_Capstone.lean)
+- **Why it matters:** the STRUCTURAL closure of the asymptotic law (Theorem 1.2), harmonic half discharged (A1).
+  `Tendsto.add` over the `add_div` frontier identity. **Confirms the route is sharp-Mertens-FREE** — interval
+  Mertens (#129) + transfers (#111, #141) + Prop 5.1, exactly as Chojecki's §5.8 proof runs. Supersedes the thin #69.
+
+### 155. Theorem 1.2 assembly A5 — Lemma 5.7 prime-only ramp  (paper Lemma 5.7)
+
+- **Statement (hash `bd3c300524db57c07059d3df5f11e47f5a9d0becd42569fa24420793439b2a8e`):** from the Prop 3.2 increment
+  `S_N(a)−S_N(a−1)=C_N(a)−1/a`, `C_N(a)≥P_N(a)/a`, `P_N(a)≥1+δ`, the sweep strictly increases (`>0`).
+- problem `4b1dfd61-cd9d-4beb-94d2-daf29aa8eefb` · episode `d81b9cbf-b6b0-4709-90bc-7ed076c866b0` · **first try** ·
+  snapshot: [proof/Erdos858_Thm12_A5_Lemma57Ramp.lean](proof/Erdos858_Thm12_A5_Lemma57Ramp.lean)
+- **Why it matters:** the K*-lower-bound ramp (`K* ≥ N^{α−ε}`). `gcongr` div-monotone + `div_sub_div_same` + `linarith`.
+
+### 156. Theorem 1.2 assembly — K* localization (argmax pinned by monotonicity)  (paper Theorem 5.8)
+
+- **Statement (hash `476a9a960cc3adbe3154c40fb25bea57e0bb90a889418f5beed6c3980f34e92d`):** an increase-on-`[1,L1]`,
+  decrease-after-`L2` sweep has every maximizer in `[L1,L2]`.
+- problem `61f22a0b-fc62-4fb5-939c-0bcaa141d242` · episode `bf1b0918-0bbc-4a2f-97e7-9c50b2bdb395` · 2nd submission ·
+  snapshot: [proof/Erdos858_Thm12_KstarLocalization.lean](proof/Erdos858_Thm12_KstarLocalization.lean)
+- **Why it matters:** with `L1=N^{α₂−ε}`, `L2=N^{α₂+ε}`, gives `K*(N)=N^{α₂+o(1)}`. `by_contra`+monotone step+`linarith`
+  (single-line `·` bullets — multi-line mis-scopes).
+
+### 157. Theorem 1.2 assembly — frontier increment sign  (paper Prop 5.1 / Theorem 5.8)
+
+- **Statement (hash `7a3a40e531ca6cdfd8f16d285e7d2b647c0fcad517aa6374dde405d5e04c0281`):** from the increment
+  `S_N(a)−S_N(a−1)=(R_N(a)−1)/a` (`a>0`), `R_N(a)>1 ⟹` increasing, `R_N(a)<1 ⟹` decreasing.
+- problem `a1d93b05-57eb-41a2-94fc-9000f0da6ade` · episode `c1a6317c-dd7b-4dcc-ba1d-a7c8f0b514ce` · **first try** ·
+  snapshot: [proof/Erdos858_Thm12_IncrementSign.lean](proof/Erdos858_Thm12_IncrementSign.lean)
+- **Why it matters:** the glue from Lemma 5.5 (`R_N→Φ`) + Prop 5.6 (`Φ` vs 1 at `α₂`) to the K* localization's
+  monotonicity hypotheses. `div_pos`/`div_neg_of_neg_of_pos`+`linarith`.
+
+### 158. Theorem 1.2 assembly — Prop 5.1 telescoping core  (paper Prop 5.1 / 3.2)
+
+- **Statement (hash `c1909182c1523fc1a30aef4c288fb5ad2defaab3a8a7b170d83b2fce584fb615`):** for `m ≤ n`,
+  `S(n) − S(m) = Σ_{a∈Ioc m n}(S(a) − S(a−1))`.
+- problem `9f1d6a58-add9-4ad6-a1b1-189c5901b920` · episode `cbe5a4e4-a4ad-4069-ad78-fa02cc01fd34` · **first try** ·
+  snapshot: [proof/Erdos858_Thm12_Telescoping.lean](proof/Erdos858_Thm12_Telescoping.lean)
+- **Why it matters:** the frontier sweep telescopes its per-step increments — the mechanism of Prop 5.1.
+  `Nat.le_induction` + `Finset.sum_Ioc_succ_top`.
+
+### 159. Theorem 1.2 assembly A2 — Prop 5.1 exact frontier identity  (paper Proposition 5.1)
+
+- **Statement (hash `1d4d62a355c9ff8aae75a516f8b6ae219924fb30801ba23a7ee2ad979203c2fb`):** for `K≤√N≤N` and the four
+  frontier facts, `S_N(K) = (H_N−H_{√N}) + Σ_{K<a≤√N}(1−R_N(a))/a`.
+- problem `653466d4-40a8-4e84-b5d7-8f26c33b76db` · episode `02795a1c-2173-4388-a155-cf395f6bad33` · **first try** ·
+  snapshot: [proof/Erdos858_Thm12_A2_Prop51Identity.lean](proof/Erdos858_Thm12_A2_Prop51Identity.lean)
+- **Why it matters:** the `M = harm + tail` frontier identity — the direct feeder of the Theorem 1.2 capstone (A7).
+  Split at `√N` (`sum_Ioc_consecutive`, `a>√N` vanishes) + harmonic difference + `sum_sub_distrib`/`sub_div`.
+  **A7 now has 2 of 3 inputs verified (this + A1); only the tail Riemann sum (A6) remains.**
+
+### 160–163. Theorem 1.2 assembly — interval log-harmonic transfer (Lemma 5.4 on `[s,t]`)  (paper Lemma 5.4)
+
+- **#160 A6 capstone** (`c6955bc901e1cb75e1775695793ef81f1c72ddd7b25f550de9402e7669b1ed9f`): from #102 + hW + hR + herr,
+  `(Σ_{a∈(⌊N^s⌋,⌊N^t⌋]} f(log a/log N)/a)/log N → L`. Direct #102 application (interval analogue of #111). problem
+  `cedc4a2e-33a2-476e-b824-887988396dbc` · ep `8b473e95-b22c-4714-95d9-c799b4369ad4` · **first try** ·
+  [proof/Erdos858_Thm12_A6_IntervalTransfer.lean](proof/Erdos858_Thm12_A6_IntervalTransfer.lean)
+- **#161 A6-hR** (`dee0f4d49d571e0a801c91b0a92f19bcca18e162ad637cf4e22db9543424a398`): interval Riemann step-sum → L, from
+  #97 at the pullback `g(x)=f(s+x(t−s))(t−s)` (`Finset.mul_sum`+`Tendsto.congr'`). ep `25310c3e` · **first try** ·
+  [proof/Erdos858_Thm12_A6hR_RiemannStep.lean](proof/Erdos858_Thm12_A6hR_RiemannStep.lean)
+- **#162 A6-hW** (`6711aec59a67fab579d51691f3fb4a520442075760ebbd4268e90bae1d4a3e9a`): fixed-K harmonic-weighted block sum
+  → step-sum, from #100 + #99 arithmetic-block masses (`simp only [Finset.sum_div, mul_div_assoc]` bridge). ep
+  `26f6a22d` · 2nd sub · [proof/Erdos858_Thm12_A6hW_BlockSum.lean](proof/Erdos858_Thm12_A6hW_BlockSum.lean)
+- **#163 A6-herr** (`7be377203f2efc75fff7cac3a23539631e7a3430b3c31fce34eb948c20b7c6a0`): the transfer error herr, from #140
+  (mass-normalized) + the total-mass limit (#99) + the aggregation. ep `7f227c5c` · v2 · **Lean lesson:** the `∀ᶠ N`
+  binder inferred `N:ℝ`; annotate `∀ᶠ (N:ℕ)` (as #141 v2). [proof/Erdos858_Thm12_A6herr_TransferError.lean](proof/Erdos858_Thm12_A6herr_TransferError.lean)
+
+*Results #160–#163 (2026-07-17, THEOREM 1.2 — INTERVAL LOG-HARMONIC TRANSFER COMPLETE): the [s,t] analogue of the
+full-range #111 (Chojecki's Lemma 5.4 on a general interval), built as a direct #102 application (#160) with all three
+discharges — hR (#161, via #97 + linear pullback), hW (#162, via #100 + #99 arithmetic-block masses), herr (#163, via
+#140). This is the transport engine for the tail Riemann sum `Σ_{K*<a≤√N}(1−Φ)/a/log N → ∫_{α₂}^{1/2}(1−Φ)` = the last
+analytic input of the Theorem 1.2 capstone A7. Theorem 1.2 is now assembled from a verified scaffold; remaining
+conditional inputs: the uniform Lemma 5.5 (uniform interval Mertens, the `R_N→Φ` swap) and the combinatorial frontier
+facts (parent-counting, `R_N=0` above `√N`).*
+
+*Results #158–#159 (2026-07-17, THEOREM 1.2 — Prop 5.1 frontier identity): the telescoping core (#158) and the full
+Prop 5.1 exact frontier identity (#159, `S_N(K) = (H_N−H_{⌊√N⌋}) + Σ_{K<a≤√N}(1−R_N(a))/a`, conditional on the
+Prop 3.2+parent-counting form, `C_N=R_N/a` above `N^{1/4}`, `R_N=0` above `√N`, and the harmonic difference). This is
+the `M = harm + tail` identity feeding the capstone A7 (#154), which now rests on this + the harmonic half (A1, #153) +
+the single remaining tail Riemann sum. Theorem 1.2's `M(N)/log N → c₂` is assembled down to the interval log-harmonic
+transfer + uniform Lemma 5.5.*
+
+*Results #155–#157 (2026-07-17, THEOREM 1.2 — K* localization branch): the Lemma 5.7 prime-only ramp (#155,
+increment `>0` when `P_N≥1+δ`), the argmax localization capstone (#156, an increase-then-decrease sweep pins its
+maximizer in `[L1,L2]`), and the increment-sign bridge (#157, `R_N` vs 1 ⟹ monotonicity). Together with Lemma 5.5
+(`R_N→Φ`) + Prop 5.6 (verified, `Φ` strictly decreasing through 1 at `α₂`), these give `K*(N)=N^{α₂+o(1)}` (Theorem 5.8's
+cutoff-localization half). Remaining for the value half: the Prop 5.1 frontier identity (`M=harm+tail`, combinatorial)
+and the tail Riemann sum (`Σ_{K*<a≤√N}(1−Φ)/a / log N → ∫_{α₂}^{1/2}(1−Φ)`, an interval log-harmonic transfer + uniform
+Lemma 5.5).*
+
+*Results #153–#154 (2026-07-17, THEOREM 1.2 ASSEMBLY STARTED — after the user supplied the paper pdf, correcting a
+misdiagnosis): the "sharp-constant Mertens wall" for the asymptotic law `M(N)=(c₂+o(1))log N` was a MISDIAGNOSIS. The
+paper's Theorem 5.8 proof routes through the exact frontier identity (Prop 5.1) + the INTERVAL Mertens (Lemma 5.2 =
+verified #129) + the two transfers (#111, #141) + Prop 5.6 (verified) — never the sharp global Mertens (that gates
+only Thm 1.1's Lemma 4.3). The harmonic main term `(H_N−H_{⌊√N⌋})/log N → 1/2` (#153, A1) and the conditional capstone
+`M(N)/log N → c₂ = 1/2 + ∫_{α₂}^{1/2}(1−Φ)` (#154, A7) are now verified. Remaining toward unconditional Theorem 1.2:
+the tail Riemann sum `Σ_{K*<a≤√N}(1−Φ(u))/a / log N → ∫_{α₂}^{1/2}(1−Φ)` (via #111), Lemma 5.5 (P_N+Q_N=Φ+o(1),
+uniform — from #129/#141), Lemma 5.7, and the frontier localization `K*=N^{α₂+o(1)}` (Prop 5.6 + Lemma 5.7). See
+catalog rows 5.5/5.7/5.8 (re-diagnosed 🔨 REACHABLE).*
+
+*Results #150–#151 (2026-07-17, §5.3 dv/v bridge made SELF-CONTAINED): rpow exponent continuity (#150, companion to
+#147) discharges the continuity side-conditions, so the paper-notation change-of-variables (#151) now stands on `G`
+continuous on `[s,t]` alone — superseding the conditional #148. Combined with #149, ALL of §5.3 (capstone + discharge
+tree + dv/v bridge) rests on `G` continuous on `[s,t]` alone, with no external analytic hypotheses.*
+
+*Results #147–#149 (2026-07-17, §5.3 dv/v change-of-variables bridge + hmodfam discharge — paper-notation closure +
+zero external hypotheses): the rpow exponent derivative (#147) and the geometric change of variables (#148, via
+`intervalIntegral.integral_comp_mul_deriv''`) identify the §5.3 transfer limit `L = ∫₀¹ log(t/s)·G(s·(t/s)^x)dx` with
+the paper's `∫_s^t G(v)/v dv`; the [s,t] clamp modulus (#149) discharges the last external hypothesis (the G-modulus),
+so §5.3 stands on `G` continuous on `[s,t]` alone. §5.3 is now complete end-to-end in the paper's exact Lemma 5.3
+statement, with the same zero-external-hypothesis standard as §5.4. All §5 transfer infrastructure (§5.3 + §5.4) done;
+remaining paper rows 5.5/5.7/5.8/6.2 are analytic-wall (🧱).*
+
+*Results #140–#146 (2026-07-17, §5.3 PRIME-HARMONIC TRANSFER COMPLETE + FULLY GROUNDED, main-loop direct under the
+continuous-work directive): the mass-normalized herr packaging (#140), the **CAPSTONE Lemma 5.3 (#141)** and its
+COMPLETE discharge tree — `hW` (#142 ← #100+#139), `hR` (#138∘#97), and `herr` (#146 ← #140 + #145b wrapper ← {#144
+aggregation core, #145a small-N, #143 mesh-vanish, #135 width, G-modulus}). The §5.3 prime-harmonic Riemann-sum
+theorem `Σ_{a∈(⌊N^s⌋,⌊N^t⌋]} G(log a/log N)·[a prime]/a → ∫_s^t G(v)/v dv` now rests on a fully kernel-verified tree,
+the same standard as §5.4's #111 — with NO sharp-constant Mertens (the Meissel–Mertens constant cancels in interval
+form, #129). Remaining §5.3 interpretation nicety: the `∫₀¹ log(t/s)·G(s·(t/s)^x)dx = ∫_s^t G(v)/v dv` change-of-variables
+identity (documentation-level; both are the verified `L`). Next paper rows: 5.5 (P_N+Q_N→Φ), 5.7, 5.8, 6.2 — all
+analytic-wall (🧱).*
+
+*Results #138–#139 (2026-07-17, §5.3 hR + block masses): the hR bridge (#138, geometric R_K → ∫₀¹φ via #97) and
+the per-block mass limits (#139, → log(t/s)/K via #129 + log-equispacing). Remaining §5.3 capstone: herr (via #136 +
+width→0 + mass bound), hW (#100 + #139), the #102 capstone, then #129→prime discharge and the dv/v bridge.*
+
+*Results #136–#137 (2026-07-17, §5.3 aggregation + grid bundle): the fixed-K,N aggregation (#136, analogue of #109,
+generic in the grid) and the geometric grid's structural properties (#137). Remaining §5.3 capstone: herr (instantiate
+#136 at the K-dependent geometric grid, width→0 via #134/#135, total mass bounded via #129), hW (#129 masses + #100),
+hR (#97 pullback), #102 capstone.*
+
+*Results #134–#135 (2026-07-17, §5.3 geometric-grid machinery): the mesh limit `(t/s)^(1/K)→1` (#134) and the
+per-block width bound (#135) — together giving eventual sub-δ refinement of the geometric grid `v_j = s·(t/s)^{j/K}`,
+the `herr` input. Remaining §5.3 capstone: herr assembly, hW (#129 masses + #100), hR (#97 pullback), #102 capstone.*
+
+*Results #131–#133 (2026-07-17, §5.3 prime-harmonic transfer STARTED, continuous-work directive): the general-exponent
+block-membership bound (#131, subsumes #104), general oscillation bound (#132, subsumes #106), and generic per-block
+bound (#133, analogue of #108) — the transfer machinery re-instantiated at geometric blocks `v_j = s·(t/s)^{j/K}`.
+The §5.4 generic engine atoms (#100/#102/#103/#105) apply unchanged; remaining: aggregate/herr/hW/hR/capstone
+(#134–#138) with the #129 prime masses.*
+
+*Results #125–#129 (2026-07-16/17, INTERVAL MERTENS + §5.3 MASSES COMPLETE, main-loop direct, continuous-work
+directive): the interval Abel identity (#125), main-term extraction (#126), loglog and A-ratio floor-endpoint
+limits (#127, #128), and the final generic Tendsto assembly (#129) — closing the interval form of Mertens' second
+theorem along geometric blocks. Remaining discharge bookkeeping: the E-tail pointwise bound (|A(⌊u⌋)−log u| ≤
+C+log 2) and the concrete instantiation chain; then the §5.3 prime-harmonic transfer = the §5.4 generic engine
+(#100/#102/#103/#105) run at prime masses.*
+
+*Results #117–#124 (2026-07-16, o(1)-MERTENS TOOLKIT COMPLETE, main-loop direct under the user's continuous-work
+directive): the full Abel-summation infrastructure for Mertens' second theorem — generic Abel identity (#117), the
+prime split identity Σ1/p = A(x)/log x + ∫A/(t log²t) (#118), both exact FTCs (#119 tail, #120 loglog main), the
+Finset interval split (#121), generic Ioc additivity (#122), the dominated tail bound (#123), and the step-integrand
+integrability (#124). Remaining: the grand interval-Mertens assembly (identity at fixed m,n; then the N→∞ limit
+Σ_{N^s<p≤N^t}1/p → log(t/s)) — the §5.3 prime block masses — after which the §5.4 engine (#100/#102/#103/#105)
+transfers verbatim to the prime-harmonic case.*
+
+*Results #109–#115 (2026-07-16, §5.4 COMPLETE at the atom level, main-loop direct): #109 the fixed-K,N error bound
+(the big assembly), #110 the eventual transfer error (herr), **#111 the CAPSTONE concrete log-harmonic Riemann
+theorem** (paper Lemma 5.4, fixed-endpoint form), and #112–#115 the full discharge chain (hW-bridge, block-mass
+limits, hharm2 from #87, endpoint family incl. j=0). The dependency tree is now closed end-to-end:
+#111 ← {#112 ← {#100, #113 ← #115 ← {#98, #91}}, #97 ← {#93, #96}, #110 ← {#109 ← {#108 ← {#104–#107}, #101, #103},
+hUC, #114 ← #87}} — only the uniform-continuity family hUC (per concrete f) remains an external hypothesis, to be
+supplied at instantiation (e.g. via clamping for f continuous on [0,1]). Next: §5.3 prime-harmonic transfer reusing
+the same engine (#100/#102/#103/#105 are generic), which requires the o(1)-Mertens scoped sub-goal.*
+
+*Results #103–#108 (2026-07-16, concrete assembly of the log-harmonic transfer, main-loop direct): the six
+concrete atoms needed on top of the abstract engine (#98–#102) — #103 the generic discrete partition identity,
+#104 the exact (non-asymptotic) block-membership bound, #105 the generic weighted pointwise-to-sum transfer,
+#106 the block oscillation bound (chains #104 into an actual modulus of continuity), #107 the harmonic-difference
+connector, and **#108 the concrete per-block sum bound** (assembles #104–#107 into #101's exact hypothesis
+shape — the payoff atom). Remaining: aggregate #108 over all `j<K` via #101, identify the total sums via #103
+(`e_0=1`, `e_K=N`), normalize by `log N`, and apply #102 to close the full concrete log-harmonic Riemann
+theorem. Three campaign-wide Lean pipeline lessons banked this session (see #104/#105/#106/#107/#108 entries
+above) — likely explains several historical multi-submission retries previously blamed on wrong lemma names.*
+
 *Results #98–#99 (2026-07-14, WALL 2 — log-harmonic transfer STARTED, main-loop direct): the transport layer that
 carries the analytic weight of the sum onto the interval integral (the route to the asymptotic Theorem 1.2, via §6
 eventual frontier exactness — confirmed as the cheapest/lowest-risk finishing path). #98 the normalized harmonic

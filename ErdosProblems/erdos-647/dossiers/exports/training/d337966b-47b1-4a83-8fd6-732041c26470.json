@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro r R P hr hpair\nhave hex : ∃ e : Fin r, ∀ i : Fin r, i ≠ e → P i ≤ R := by\n  by_cases hlarge : ∃ e : Fin r, R < P e\n  · obtain ⟨e, he⟩ := hlarge\n    refine ⟨e, ?_⟩\n    intro i hie\n    rcases hpair i e hie with hi | he'\n    · exact hi\n    · omega\n  · let e : Fin r := ⟨0, hr⟩\n    refine ⟨e, ?_⟩\n    intro i _\n    exact le_of_not_gt (fun hi => hlarge ⟨i, hi⟩)\nobtain ⟨e, he⟩ := hex\nrefine ⟨e, ?_⟩\ncalc\n  (∏ i ∈ Finset.univ.erase e, P i) ≤\n      ∏ _i ∈ Finset.univ.erase e, R := by\n    apply Finset.prod_le_prod'\n    intro i hi\n    exact he i (Finset.ne_of_mem_erase hi)\n  _ = R ^ (Finset.univ.erase e).card := by simp\n  _ = R ^ (r - 1) := by\n    rw [Finset.card_erase_of_mem (Finset.mem_univ e)]\n    simp",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro r R P hr hpair\nhave hex : ∃ e : Fin r, ∀ i : Fin r, i ≠ e → P i ≤ R := by\n  by_cases hlarge : ∃ e : Fin r, R < P e\n  · obtain ⟨e, he⟩ := hlarge\n    refine ⟨e, ?_⟩\n    intro i hie\n    rcases hpair i e hie with hi | he'\n    · exact hi\n    · omega\n  · let e : Fin r := ⟨0, hr⟩\n    refine ⟨e, ?_⟩\n    intro i _\n    exact le_of_not_gt (fun hi => hlarge ⟨i, hi⟩)\nobtain ⟨e, he⟩ := hex\nrefine ⟨e, ?_⟩\ncalc\n  (∏ i ∈ Finset.univ.erase e, P i) ≤\n      ∏ _i ∈ Finset.univ.erase e, R := by\n    apply Finset.prod_le_prod'\n    intro i hi\n    exact he i (Finset.ne_of_mem_erase hi)\n  _ = R ^ (Finset.univ.erase e).card := by simp\n  _ = R ^ (r - 1) := by\n    rw [Finset.card_erase_of_mem (Finset.mem_univ e)]\n    simp",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (r R : ℕ) (P : Fin r → ℕ),\n  0 < r →\n  (∀ i j : Fin r, i ≠ j → P i ≤ R ∨ P j ≤ R) →\n  ∃ e : Fin r,\n    (∏ i ∈ Finset.univ.erase e, P i) ≤ R ^ (r - 1)",
+        "module_source_hash": null,
+        "obligation_id": "e27e9467-e863-4204-a7a4-8a1dd96ee688",
+        "outcome": "kernel_pass",
+        "problem_version_id": "49e279d1-ab14-43a1-a0b3-d34bea43947a",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "5d47d29de39cae74c8a31fe4e48a365987cbcece930b4112088ec933a4526ada"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "d2007eb182d4ced4537d2b9b17bceb1f749f09999df3341349b73c9ec549191f"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

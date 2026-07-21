@@ -40,6 +40,7 @@ desktop.ini
 
 # Local MCP registration (machine-specific absolute paths)
 .mcp.json
+kilo.json
 
 # Local DB snapshots and incidental tooling
 *.bak
@@ -67,3 +68,9 @@ formal-conjectures/
 dev environment.zip
 .approval_tests_temp/
 .claude/
+
+# Copyrighted source papers / untrusted downloaded attachments (read locally
+# for formalization reference; never commit or redistribute).
+ErdosProblems/erdos-858/erdos858.pdf
+ErdosProblems/erdos-421.zip
+jacobian counter/jacobian.pdf

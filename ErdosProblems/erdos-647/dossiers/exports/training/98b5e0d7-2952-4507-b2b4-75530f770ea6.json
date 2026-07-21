@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "intro N a7 q7 hN hq7eq\nhave hpow7mod3 : ∀ a : ℕ, 7 ^ a % 3 = 1 := by\n  intro a\n  induction a with\n  | zero => norm_num\n  | succ a ih =>\n    rw [pow_succ, Nat.mul_mod, ih]\nhave hqmod : q7 % 3 = 2 := by\n  have hleft : (360 * N - 1) % 3 = 2 := by omega\n  have hprod := Nat.mul_mod (7 ^ a7) q7 3\n  rw [← hq7eq, hleft, hpow7mod3 a7] at hprod\n  omega\nconstructor\n· rintro (⟨p, hp, hpq, hpmod⟩ | ⟨p, q, hp, hq, hpq, hprod, hmods⟩)\n  · exact Or.inl ⟨p, hp, hpq⟩\n  · exact Or.inr ⟨p, q, hp, hq, hpq, hprod⟩\n· rintro (⟨p, hp, hpq⟩ | ⟨p, q, hp, hq, hpq, hprod⟩)\n  · left\n    have hpmodlt : p % 3 < 3 := Nat.mod_lt p (by norm_num)\n    have hp3 := Nat.pow_mod p 3 3\n    rw [hpq] at hqmod\n    interval_cases h : p % 3\n    · norm_num [h] at hp3\n      omega\n    · norm_num [h] at hp3\n      omega\n    · exact ⟨p, hp, hpq, h⟩\n  · right\n    refine ⟨p, q, hp, hq, hpq, hprod, ?_⟩\n    have hpmodlt : p % 3 < 3 := Nat.mod_lt p (by norm_num)\n    have hqmodlt : q % 3 < 3 := Nat.mod_lt q (by norm_num)\n    have hpqmod := Nat.mul_mod p q 3\n    rw [hprod] at hqmod\n    interval_cases hpmod : p % 3 <;>\n      interval_cases hqmod' : q % 3 <;>\n      norm_num [hpmod, hqmod'] at hpqmod hqmod ⊢ <;> omega",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "intro N a7 q7 hN hq7eq\nhave hpow7mod3 : ∀ a : ℕ, 7 ^ a % 3 = 1 := by\n  intro a\n  induction a with\n  | zero => norm_num\n  | succ a ih =>\n    rw [pow_succ, Nat.mul_mod, ih]\nhave hqmod : q7 % 3 = 2 := by\n  have hleft : (360 * N - 1) % 3 = 2 := by omega\n  have hprod := Nat.mul_mod (7 ^ a7) q7 3\n  rw [← hq7eq, hleft, hpow7mod3 a7] at hprod\n  omega\nconstructor\n· rintro (⟨p, hp, hpq, hpmod⟩ | ⟨p, q, hp, hq, hpq, hprod, hmods⟩)\n  · exact Or.inl ⟨p, hp, hpq⟩\n  · exact Or.inr ⟨p, q, hp, hq, hpq, hprod⟩\n· rintro (⟨p, hp, hpq⟩ | ⟨p, q, hp, hq, hpq, hprod⟩)\n  · left\n    have hpmodlt : p % 3 < 3 := Nat.mod_lt p (by norm_num)\n    have hp3 := Nat.pow_mod p 3 3\n    rw [hpq] at hqmod\n    interval_cases h : p % 3\n    · norm_num [h] at hp3\n      omega\n    · norm_num [h] at hp3\n      omega\n    · exact ⟨p, hp, hpq, h⟩\n  · right\n    refine ⟨p, q, hp, hq, hpq, hprod, ?_⟩\n    have hpmodlt : p % 3 < 3 := Nat.mod_lt p (by norm_num)\n    have hqmodlt : q % 3 < 3 := Nat.mod_lt q (by norm_num)\n    have hpqmod := Nat.mul_mod p q 3\n    rw [hprod] at hqmod\n    interval_cases hpmod : p % 3 <;>\n      interval_cases hqmod' : q % 3 <;>\n      norm_num [hpmod, hqmod'] at hpqmod hqmod ⊢ <;> omega",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ N a7 q7 : ℕ,\n      1 ≤ N →\n      360 * N - 1 = 7 ^ a7 * q7 →\n      (((∃ p : ℕ, Nat.Prime p ∧ q7 = p ^ 3 ∧ p % 3 = 2) ∨\n          ∃ p q : ℕ, Nat.Prime p ∧ Nat.Prime q ∧ p ≠ q ∧ q7 = p * q ∧\n            ((p % 3 = 1 ∧ q % 3 = 2) ∨ (p % 3 = 2 ∧ q % 3 = 1))) ↔\n        ((∃ p : ℕ, Nat.Prime p ∧ q7 = p ^ 3) ∨\n          ∃ p q : ℕ, Nat.Prime p ∧ Nat.Prime q ∧ p ≠ q ∧ q7 = p * q))",
+        "module_source_hash": null,
+        "obligation_id": "68c1b392-95a8-489e-823a-9935eb155e0c",
+        "outcome": "kernel_pass",
+        "problem_version_id": "c4a2bf8f-2742-4d17-b6d9-2903f7067ebe",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "6187c559f6e9631d94b5e75e32b0eff5e6818f6da97bf0fb4eaf388ff2b9a4e7"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "0de00ddb83268ae7566762c57887540f6288abf24d40f69b6367e301479fd7eb"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

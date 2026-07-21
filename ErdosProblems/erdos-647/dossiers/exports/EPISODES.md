@@ -3,7 +3,7 @@
 Generated 2026-07-16 from the campaign source, explicit Lean provenance,
 the evidence ledger, and a read-only transitive database closure audit.
 
-Episode count: 317 (310 kernel-verified; 7 non-success histories retained
+Episode count: 344 (337 kernel-verified; 7 non-success histories retained
 for audit completeness).
 
 - `0232fe34-07cf-4e9a-98c4-019dd746d6e5` - `KERNEL_VERIFIED`
@@ -326,3 +326,30 @@ for audit completeness).
 - `d50528e3-f045-4a4a-ae5f-df336cc05a8b` - `KERNEL_VERIFIED`
 - `da4d5b5b-314f-4204-8dc6-b917fd969062` - `KERNEL_VERIFIED`
 - `dbaf459e-7de3-4049-878b-0b6b0c4bf201` - `KERNEL_VERIFIED`
+- `ee02d203-8df1-4e28-9ec6-9d870909f52b` - `KERNEL_VERIFIED`
+- `227e1560-c30a-41f3-904e-91716252a014` - `KERNEL_VERIFIED`
+- `4a5b8d82-e89c-4893-8599-b6279c502a96` - `KERNEL_VERIFIED`
+- `48d2efa3-0198-4efd-927d-15a870c55cdf` - `KERNEL_VERIFIED`
+- `9d536e7d-f76b-4d89-9763-7b63728a8c2c` - `KERNEL_VERIFIED`
+- `d1a3a3ae-24ba-4ece-ae85-5df82815be36` - `KERNEL_VERIFIED`
+- `4faf6a2e-8528-4abd-a17d-9b30fc0ab98a` - `KERNEL_VERIFIED`
+- `f5375b3b-e1b3-4440-80ae-9b1fba14dc80` - `KERNEL_VERIFIED`
+- `426f582b-bd4c-44b1-a964-9ac85b1e7987` - `KERNEL_VERIFIED`
+- `003bb946-196b-40ba-9175-06d63d00f36f` - `KERNEL_VERIFIED`
+- `dce030c5-2b7c-4e69-99fc-f4596b52f736` - `KERNEL_VERIFIED`
+- `f9641fd5-9ce1-47ff-84d4-edc0a2083f42` - `KERNEL_VERIFIED`
+- `df6ab19d-4ade-4719-a408-02fa6b70c1db` - `KERNEL_VERIFIED`
+- `98b5e0d7-2952-4507-b2b4-75530f770ea6` - `KERNEL_VERIFIED`
+- `6e56eb5a-3a06-4e0d-9009-e7801b16e59c` - `KERNEL_VERIFIED`
+- `f1e3e1b6-b219-4fee-8aa9-d2ccb90067d8` - `KERNEL_VERIFIED`
+- `94642b76-cc98-4c65-9a79-1a97d03ac78d` - `KERNEL_VERIFIED`
+- `ea8a6198-7bf6-45fc-b416-55157e745ba4` - `KERNEL_VERIFIED`
+- `4422d699-6ac8-4eec-93ad-f8936c91f579` - `KERNEL_VERIFIED`
+- `d337966b-47b1-4a83-8fd6-732041c26470` - `KERNEL_VERIFIED`
+- `c019c06f-44c7-4714-800e-db983a9f0591` - `KERNEL_VERIFIED`
+- `cb2c9c32-8b4f-4855-b37b-f09cafb3163e` - `KERNEL_VERIFIED`
+- `c35a8466-1aa6-4918-a4d4-eb16097b989d` - `KERNEL_VERIFIED`
+- `1389c8e7-90b8-425b-9ef0-25883719efb0` - `KERNEL_VERIFIED`
+- `1a2f582d-0518-44c4-a7f3-8291210f36af` - `KERNEL_VERIFIED`
+- `4b77396c-9658-4fab-8b19-cb18681e5077` - `KERNEL_VERIFIED`
+- `6db8a792-918b-443d-9f43-0638ec6cbc55` - `KERNEL_VERIFIED`

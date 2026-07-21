@@ -34,7 +34,33 @@ inequality is a complete exclusion certificate. In the no-cross-product
 branch, prime peeling and two one-element exception bounds leave at least
 `W-2` smooth, explicitly bounded second-layer cofactors. The remaining seam is
 to force a violating re-entry remainder or contradict that smooth cofactor
-population uniformly.
+population uniformly. For the concrete base shifts `5,7,9,10`, exact residue
+dominance now forces some three-prime subproduct below the cube of the CRT
+remainder, so at most one of the four base primes remains exceptional. This
+is now promoted to arbitrary finite injective shift families: the coordinates
+whose selected prime exceeds the common remainder have cardinality at most
+one, and a single exceptional index can be named uniformly. After deleting
+that index, the product of every remaining selected prime is bounded by the
+`(r-1)`st power of the same remainder.
+For an actual candidate prefix, the single scalar gap
+`W^(W+1) < n-W` now constructs the injective large-prime family and yields
+this product-away-from-one-exception envelope in one kernel-verified theorem.
+It also forces the common remainder above `W` and gives the exact alternative:
+either the full selected product crosses `n`, or the remainder pays
+`2^W <= r+2`; violating both sides is now a direct candidate exclusion engine.
+A new maximal-subset feedback theorem avoids choosing between those branches
+too early: it selects a nonempty subproduct `Q<n`, obtains
+`2^|I|<=n%Q+2`, and simultaneously proves every omitted complementary
+cofactor is below `Q`. This is the reusable first-layer-to-second-layer
+induction interface now targeted for the uniform contradiction.
+Its balanced specialization proves that either roughly half the prime family
+forces an exponential re-entry budget, or more than half the coordinates
+remain as cofactors uniformly below `Q`; this replaces indefinite
+shift-by-shift extension with a repeatable quantitative split.
+The cofactor branch now also carries the exact halved divisor budget, and every
+`B`-smooth cofactor in it satisfies the kernel-verified bound
+`q ≤ B^(shift/2)`. Large-prime witnesses above the shift range can now be
+chosen injectively; the next proof target is their second CRT re-entry layer.
 
 **The concrete global density theorem is kernel-verified.** The bounded
 candidate set, exact `n = 2520N` reindexing, seven-shift coprimality bridge,
@@ -64,6 +90,52 @@ prime-power budget peeling, cofactor prime-factor control, and the exact next
 family-sensitive 2-adic stress tests of that abstraction. The missing theorem
 is global: prove that repeated exceptional lifts cannot persist indefinitely,
 or otherwise force a failed shift at depth growing with `n`.
+
+**The four-rung base state is now an exact finite factor-shape state.** The
+three residual cofactors with divisor budget at most three are forced prime by
+uniform square-residue obstructions. The remaining `q7` cofactor is prime, a
+prime cube, or a product of two distinct primes; if it is composite, the
+coupled shift-7 budget forces its 7-adic depth to be zero. Together with the
+total depth bound `≤5` and pairwise-coprime rung clique, the next task is to
+propagate this finite prime/semiprime state into a growing-shift contradiction,
+not to weaken it back to an undifferentiated divisor-count estimate.
+The two 5-adic depths are now eliminated as independent variables:
+`a5=1 ↔ N≡4 (mod 5)` and `a10=1 ↔ N≡3 (mod 5)`, tracked and replayed as
+episode `dce030c5-2b7c-4e69-99fc-f4596b52f736`. The next assembly can branch
+directly on `N mod 5` rather than carrying existential 5-adic depths.
+The same elimination is now complete for the bounded 7-adic and 3-adic
+depths: `a7` is read from `N mod 7,49`, and `a9` from `N mod 3,9`.
+Moreover the positive-depth shift-7 branch forces `q7` prime; its remaining
+cube and distinct-semiprime branches have exact factor residues modulo three.
+These three roots are tracked, kernel-verified, and replayed. The next proof
+target is the finite-state-to-growing-shift accumulation step.
+
+The candidate-facing assembly now removes the remaining bookkeeping layer.
+`candidate_exact_base_survivor_state` is tracked `kernel_verified` as episode
+`6e56eb5a-3a06-4e0d-9009-e7801b16e59c`; its stronger source theorem retains
+all four depth bounds, and `candidate_normalized_base_survivor_state` replaces
+the depth witnesses by explicit residue-controlled functions. Thus later-shift
+work may branch only on the finite residue state and four cofactors. The source
+compiles in the pinned environment. Replay of the tracked root found a
+historical durability mismatch—an earlier missing-object event now succeeds—
+not a mathematical or kernel-verification failure.
+
+The normalized four cofactors now inherit the full six-edge pairwise-coprime
+clique from their ambient rung cofactors. Combining this clique with the exact
+`q7` classification exposes four distinct prime atoms in the prime/cube cases
+and five in the distinct-semiprime case. The next proof target is to make these
+nonreusable atoms accumulate across later shifts until a budget fails.
+
+The first accumulation bridge is now source-verified: every candidate supplies
+four injectively indexed primes `>10` at shifts `5,7,9,10`, including a selected
+prime atom from either composite `q7` branch. A new arbitrary-shift CRT theorem
+accepts exactly this nonconsecutive interface and forces
+`2^r ≤ n mod (∏Pᵢ) + 2` whenever the selected product is below `n`.
+The direct candidate assembly is now sharper: for
+`Q=p5·p7·p9·p10`, every candidate satisfies either `n≤Q` or
+`Q<n` together with the explicit remainder interval `14≤n mod Q<Q`.
+Exact residue preservation now adds that at most one selected prime exceeds
+`n mod Q`; hence one of the four triple products is at most `(n mod Q)^3`.
 
 One analytic correction is now part of the proof record. The earlier
 Chebyshev/Mertens lower bound is valid, but its leading coefficient is
@@ -848,6 +920,35 @@ nonexistence, convergence, or Sophie Germain infinitude.
   block cannot repeat, without assuming the shifted values are pairwise
   coprime. Smoothness escape plus the divisor budget supplies an injective
   large-prime family whenever the shifted values cross their smooth bounds.
+- ✅ **Concrete rung-5/rung-7 non-reuse DONE (2026-07-16):** the exact relation
+  `5(504N-1)-7(360N-1)=2`, together with oddness, proves
+  `Coprime (504N-1) (360N-1)` for `N≥1`. Both roots are tracked
+  `kernel_verified` and replay cleanly. This is the first pair-specific
+  cross-rung incompatibility; extending such incompatibilities into a global
+  failed-shift theorem remains open.
+- ✅ **Four-rung coprimality clique DONE (2026-07-16):** six explicit positive
+  Bézout identities prove that `504N-1`, `360N-1`, `280N-1`, and `252N-1`
+  are pairwise coprime for every `N≥1`. Thus the shifts `5,7,9,10` always
+  supply four pairwise distinct prime factors. The six-edge root is tracked
+  `kernel_verified` as episode `4a5b8d82-e89c-4893-8599-b6279c502a96`.
+  Its first branch-level consequence is also tracked: the rung-5 and rung-10
+  5-adic depths cannot both be positive (episode
+  `48d2efa3-0198-4efd-927d-15a870c55cdf`).
+  Consequently the base-block total adic-depth bound sharpens from `4B+20`
+  to `3B+14`, tracked as episode
+  `9d536e7d-f76b-4d89-9763-7b63728a8c2c`; at `B=2`, this is `20` rather
+  than `28`. The source-checked theorem
+  `erdos647_base_gauntlet_adic_boundary_sharpened` now returns that improved
+  total directly from the candidate's four shift budgets. It is an integrated
+  assembly corollary, not a newly claimed tracked root.
+  The next theorem eliminates all four residual-cofactor-equals-one branches
+  by power residues modulo `4,3,8,4`. At `B=2` it improves the individual
+  depth bounds to `1,2,2,1`, returns residual divisor-count bounds
+  `3,4,3,3`, and—using the rung-5/rung-10 incompatibility—reduces the total
+  depth from `20` to `5`. This root is tracked `kernel_verified` as episode
+  `d1a3a3ae-24ba-4ece-ae85-5df82815be36` and replayed cleanly.
+  The next seam is to connect this forced novelty to one common host, a CRT
+  re-entry violation, or another global accumulation mechanism.
 - ✅ **Subset-product / CRT re-entry DONE (2026-07-16):** pair and general
   `t`-subset dichotomies identify a selected product `Q<n`. The re-entry shift
   `h=n mod Q` then satisfies the exact candidate sandwich

@@ -1,0 +1,51 @@
+{
+  "interactive_session_records": [],
+  "interactive_sessions": {
+    "session_count": 0,
+    "sessions": []
+  },
+  "proof_body_redacted": false,
+  "records": [
+    {
+      "action": {
+        "proof_format": "raw_lean_block",
+        "proof_term": "\n  classical\n  intro n r shift P hr hinj hP hQn hcand\n  let Q : ℕ := ∏ i : Fin r, P i\n  have hQpos : 0 < Q := by\n    dsimp [Q]\n    exact Finset.prod_pos fun i _ => (hP i).1.pos\n  have hPiQ : ∀ i : Fin r, P i ∣ Q := by\n    intro i\n    dsimp [Q]\n    exact Finset.dvd_prod_of_mem P (Finset.mem_univ i)\n  have hQnotdvd : ¬ Q ∣ n := by\n    intro hQdvd\n    let i : Fin r := ⟨0, hr⟩\n    have hPin : P i ∣ n := (hPiQ i).trans hQdvd\n    have hPshift : P i ∣ shift i := by\n      have h := Nat.dvd_sub hPin (hP i).2.2.2.2\n      have hrecover : n - shift i + shift i = n :=\n        Nat.sub_add_cancel (hP i).2.2.2.1.le\n      have heq : n - (n - shift i) = shift i := by omega\n      rwa [heq] at h\n    have hPle : P i ≤ shift i := Nat.le_of_dvd (hP i).2.1 hPshift\n    exact (not_lt_of_ge hPle) (hP i).2.2.1\n  have hrne : n % Q ≠ 0 := by\n    intro hz\n    exact hQnotdvd (Nat.dvd_iff_mod_eq_zero.mpr hz)\n  have hrpos : 0 < n % Q := Nat.pos_of_ne_zero hrne\n  have hrltQ : n % Q < Q := Nat.mod_lt n hQpos\n  have hrltN : n % Q < n := lt_trans hrltQ hQn\n  have hQhost : Q ∣ n - n % Q := by\n    refine ⟨n / Q, ?_⟩\n    have hdecomp := Nat.mod_add_div n Q\n    omega\n  have hhostpos : 0 < n - n % Q := by omega\n  let S : Finset ℕ := Finset.univ.image P\n  have hScard : S.card = r := by\n    dsimp [S]\n    rw [Finset.card_image_iff.mpr hinj.injOn]\n    simp\n  have hS : ∀ p ∈ S, p.Prime ∧ p ∣ n - n % Q := by\n    intro p hp\n    dsimp [S] at hp\n    simp only [Finset.mem_image] at hp\n    obtain ⟨i, _, rfl⟩ := hp\n    exact ⟨(hP i).1, (hPiQ i).trans hQhost⟩\n  have htau : 2 ^ r ≤ ArithmeticFunction.sigma 0 (n - n % Q) := by\n    rw [ArithmeticFunction.sigma_zero_apply, Nat.card_divisors hhostpos.ne']\n    have hsubset : S ⊆ (n - n % Q).primeFactors := by\n      intro p hp\n      exact Nat.mem_primeFactors.mpr ⟨(hS p hp).1, (hS p hp).2,\n        hhostpos.ne'⟩\n    have hcard : S.card ≤ (n - n % Q).primeFactors.card :=\n      Finset.card_le_card hsubset\n    have hpow : 2 ^ (n - n % Q).primeFactors.card ≤\n        ∏ p ∈ (n - n % Q).primeFactors,\n          ((n - n % Q).factorization p + 1) := by\n      apply Finset.pow_card_le_prod\n      intro p hp\n      have hp' : p ∈ (n - n % Q).factorization.support := by simpa using hp\n      have hfac : (n - n % Q).factorization p ≠ 0 :=\n        Finsupp.mem_support_iff.mp hp'\n      omega\n    rw [← hScard]\n    exact (pow_le_pow_right' (by norm_num) hcard).trans hpow\n  let f : Fin n → ℕ := fun x =>\n    (x : ℕ) + ArithmeticFunction.sigma 0 x\n  have hbdd : BddAbove (Set.range f) := by\n    refine ⟨2 * n, ?_⟩\n    rintro y ⟨x, rfl⟩\n    dsimp [f]\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hc := Nat.card_divisors_le_self (x : ℕ)\n    have hx : (x : ℕ) < n := x.isLt\n    omega\n  let m : Fin n := ⟨n - n % Q, by omega⟩\n  have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) hcand\n  dsimp [f, m] at hm\n  have hbudget : ArithmeticFunction.sigma 0 (n - n % Q) ≤ n % Q + 2 := by\n    omega\n  exact htau.trans hbudget",
+        "type": "solve"
+      },
+      "info": {
+        "accepted": true,
+        "action": {
+          "proof_format": "raw_lean_block",
+          "proof_term": "\n  classical\n  intro n r shift P hr hinj hP hQn hcand\n  let Q : ℕ := ∏ i : Fin r, P i\n  have hQpos : 0 < Q := by\n    dsimp [Q]\n    exact Finset.prod_pos fun i _ => (hP i).1.pos\n  have hPiQ : ∀ i : Fin r, P i ∣ Q := by\n    intro i\n    dsimp [Q]\n    exact Finset.dvd_prod_of_mem P (Finset.mem_univ i)\n  have hQnotdvd : ¬ Q ∣ n := by\n    intro hQdvd\n    let i : Fin r := ⟨0, hr⟩\n    have hPin : P i ∣ n := (hPiQ i).trans hQdvd\n    have hPshift : P i ∣ shift i := by\n      have h := Nat.dvd_sub hPin (hP i).2.2.2.2\n      have hrecover : n - shift i + shift i = n :=\n        Nat.sub_add_cancel (hP i).2.2.2.1.le\n      have heq : n - (n - shift i) = shift i := by omega\n      rwa [heq] at h\n    have hPle : P i ≤ shift i := Nat.le_of_dvd (hP i).2.1 hPshift\n    exact (not_lt_of_ge hPle) (hP i).2.2.1\n  have hrne : n % Q ≠ 0 := by\n    intro hz\n    exact hQnotdvd (Nat.dvd_iff_mod_eq_zero.mpr hz)\n  have hrpos : 0 < n % Q := Nat.pos_of_ne_zero hrne\n  have hrltQ : n % Q < Q := Nat.mod_lt n hQpos\n  have hrltN : n % Q < n := lt_trans hrltQ hQn\n  have hQhost : Q ∣ n - n % Q := by\n    refine ⟨n / Q, ?_⟩\n    have hdecomp := Nat.mod_add_div n Q\n    omega\n  have hhostpos : 0 < n - n % Q := by omega\n  let S : Finset ℕ := Finset.univ.image P\n  have hScard : S.card = r := by\n    dsimp [S]\n    rw [Finset.card_image_iff.mpr hinj.injOn]\n    simp\n  have hS : ∀ p ∈ S, p.Prime ∧ p ∣ n - n % Q := by\n    intro p hp\n    dsimp [S] at hp\n    simp only [Finset.mem_image] at hp\n    obtain ⟨i, _, rfl⟩ := hp\n    exact ⟨(hP i).1, (hPiQ i).trans hQhost⟩\n  have htau : 2 ^ r ≤ ArithmeticFunction.sigma 0 (n - n % Q) := by\n    rw [ArithmeticFunction.sigma_zero_apply, Nat.card_divisors hhostpos.ne']\n    have hsubset : S ⊆ (n - n % Q).primeFactors := by\n      intro p hp\n      exact Nat.mem_primeFactors.mpr ⟨(hS p hp).1, (hS p hp).2,\n        hhostpos.ne'⟩\n    have hcard : S.card ≤ (n - n % Q).primeFactors.card :=\n      Finset.card_le_card hsubset\n    have hpow : 2 ^ (n - n % Q).primeFactors.card ≤\n        ∏ p ∈ (n - n % Q).primeFactors,\n          ((n - n % Q).factorization p + 1) := by\n      apply Finset.pow_card_le_prod\n      intro p hp\n      have hp' : p ∈ (n - n % Q).factorization.support := by simpa using hp\n      have hfac : (n - n % Q).factorization p ≠ 0 :=\n        Finsupp.mem_support_iff.mp hp'\n      omega\n    rw [← hScard]\n    exact (pow_le_pow_right' (by norm_num) hcard).trans hpow\n  let f : Fin n → ℕ := fun x =>\n    (x : ℕ) + ArithmeticFunction.sigma 0 x\n  have hbdd : BddAbove (Set.range f) := by\n    refine ⟨2 * n, ?_⟩\n    rintro y ⟨x, rfl⟩\n    dsimp [f]\n    rw [ArithmeticFunction.sigma_zero_apply]\n    have hc := Nat.card_divisors_le_self (x : ℕ)\n    have hx : (x : ℕ) < n := x.isLt\n    omega\n  let m : Fin n := ⟨n - n % Q, by omega⟩\n  have hm : f m ≤ n + 2 := le_trans (le_ciSup hbdd m) hcand\n  dsimp [f, m] at hm\n  have hbudget : ArithmeticFunction.sigma 0 (n - n % Q) ≤ n % Q + 2 := by\n    omega\n  exact htau.trans hbudget",
+          "type": "solve"
+        },
+        "declaration_manifest_hash": null,
+        "dependency_obligation_ids": [],
+        "diagnostics": null,
+        "disposition": "accepted",
+        "lean_statement": "∀ (n r : ℕ) (shift P : Fin r → ℕ),\n      0 < r →\n      Function.Injective P →\n      (∀ i : Fin r,\n        (P i).Prime ∧ 0 < shift i ∧ shift i < P i ∧\n          shift i < n ∧ P i ∣ n - shift i) →\n      (∏ i : Fin r, P i) < n →\n      (⨆ m : Fin n,\n        (m : ℕ) + ArithmeticFunction.sigma 0 m) ≤ n + 2 →\n      2 ^ r ≤ n % (∏ i : Fin r, P i) + 2",
+        "module_source_hash": null,
+        "obligation_id": "a2ee5b33-b8ad-4e80-902a-8183865c6f95",
+        "outcome": "kernel_pass",
+        "problem_version_id": "26976ee1-6701-49f5-bcf0-f7694605566d",
+        "solve_kind": "single_theorem_solve",
+        "statement_hash": "5c23d4cf529820b16fcdbe6732145a4883439b4193b9254e2d80b99d267ca6a7"
+      },
+      "next_state": {
+        "state_hash": "28cca6776e79dd4d148e150e6a83e313df0581849ba1e5f87d1c2ad93cc33695"
+      },
+      "reward": 0.0,
+      "state": {
+        "state_hash": "cc0f7afe187579c04fb355aee7c102b0d38715e29876dfad2634e0f3f80e6c8a"
+      },
+      "terminated": false,
+      "truncated": false
+    }
+  ],
+  "verification_layers": {
+    "kernel_verified_layer_count": 0,
+    "layers": [],
+    "policy": "Per-layer verification status is additive metadata: a kernel-verified root theorem does not imply every layer is verified, and layer completeness never gates certification.",
+    "total_layer_count": 0
+  }
+}

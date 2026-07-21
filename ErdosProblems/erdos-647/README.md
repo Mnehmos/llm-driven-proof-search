@@ -30,9 +30,9 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 | [THEOREM-CATALOG.md](THEOREM-CATALOG.md) | theorem inventory and final assembly map |
 | [attack-plan.md](attack-plan.md) | completed density program and remaining existence directions |
 | [evidence.md](evidence.md) | tracked episode evidence plus the clean repository replay |
-| [dossiers/](dossiers/README.md) | complete 317-episode export archive and indexes |
+| [dossiers/](dossiers/README.md) | complete 332-episode export archive and indexes |
 | [credit.md](credit.md) | attribution, AI disclosure, and honest limits |
-| [proof/](proof/) | 169 Lean files containing 449 actual theorem declarations and five helper lemmas (454 theorem/lemma declarations total) |
+| [proof/](proof/) | 179 Lean files containing 473 actual theorem declarations and five helper lemmas (478 theorem/lemma declarations total) |
 
 ## Headline results — 2026-07-16
 
@@ -64,10 +64,10 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
    the all-avoid obstruction showed that bounded congruence trees cannot close
    the frontier.
 
-6. **Complete machine export archive.** All 317 related episodes
+6. **Complete machine export archive.** All 332 related episodes
    are exported in redacted JSON, full Markdown dossier, and structured
    training JSON forms under
-   [dossiers/exports/](dossiers/exports/README.md). Of these, 310 report
+   [dossiers/exports/](dossiers/exports/README.md). Of these, 325 report
    `KERNEL_VERIFIED`; the archive deliberately retains three unfinished,
    three gave-up, and one budget-exhausted trajectory for audit completeness.
    The terminal composition is separately identified as a clean source replay
@@ -88,6 +88,20 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
    definitionally equivalent, proves the bounded Finsets extensionally equal,
    and restates the density theorem over that exact set. The Formal Conjectures
    module independently compiles the matching API in its own pinned toolchain.
+
+9. **Exact base survivor state normalized.**
+   [`candidate_normalized_base_survivor_state`](proof/Erdos647_ExactBaseSurvivorState.lean)
+   eliminates all four adic-depth witnesses: their values are explicit functions
+   of `N mod 5`, `N mod 7,49`, and `N mod 3,9`. The remaining data are four
+   cofactors, three forced prime and the fourth prime/cube/semiprime with exact
+   factor residues. This is a finite structural reduction, not an emptiness proof.
+   The same module now proves that these four cofactors are pairwise coprime and
+   extracts the resulting four-or-five distinct prime-atom trichotomy.
+   It further selects four distinct primes larger than ten at the exact shifts
+   `5,7,9,10`; `Erdos647_ArbitraryShiftCRTReentry.lean` supplies the matching
+   nonconsecutive CRT re-entry bound. Their direct composition yields the exact
+   alternative `n≤Q` or `Q<n ∧ 14≤n%Q<Q` for their product `Q`; exact CRT
+   residues further force some three-prime subproduct below `(n%Q)^3`.
    This compatibility result fills none of its three research-open `sorry`s.
 
 9. **The open variants now have exact interfaces.** The global maximum is
@@ -244,6 +258,70 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
     [`Erdos647_CofactorGapRigidity.lean`](proof/Erdos647_CofactorGapRigidity.lean).
     This is the current structural frontier, not a contradiction.
 
+24. **Rungs 5, 7, 9, and 10 form a coprimality clique.**
+    [`Erdos647_Rung5Rung7Relation.lean`](proof/Erdos647_Rung5Rung7Relation.lean)
+    first proves the exact identity `5(504N-1)-7(360N-1)=2`, and
+    [`Erdos647_Rung5Rung7Coprime.lean`](proof/Erdos647_Rung5Rung7Coprime.lean)
+    combines it with parity. The stronger
+    [`Erdos647_RungCofactorsPairwiseCoprime.lean`](proof/Erdos647_RungCofactorsPairwiseCoprime.lean)
+    supplies six subtraction-free Bézout identities and proves that
+    `504N-1`, `360N-1`, `280N-1`, and `252N-1` are pairwise coprime for
+    `N≥1`. Consequently the four shifts always supply four distinct prime
+    factors. The same module also proves that the 5-adic escape depths attached
+    to rungs 5 and 10 cannot both be positive, deleting their joint exceptional
+    branch from the base-gauntlet state space and sharpening the total adic
+    boundary from `4B+20` to `3B+14` (`28` to `20` when `B=2`).
+    [`Erdos647_BaseGauntletAdicBoundary.lean`](proof/Erdos647_BaseGauntletAdicBoundary.lean)
+    now returns this sharper total directly from the four candidate shift
+    budgets. That integrated corollary compiles in the pinned project; its
+    branch-elimination and numerical ingredients are the separately tracked
+    kernel-verified roots. This is a concrete cross-rung
+    non-reuse theorem, but it does not
+    yet produce the global failed shift needed to close the existence
+    declaration.
+
+25. **Pure-power escape branches are eliminated.**
+    [`Erdos647_BaseGauntletSharpDepth.lean`](proof/Erdos647_BaseGauntletSharpDepth.lean)
+    proves that the four residual cofactors at shifts `5,7,9,10` are all
+    strictly larger than one: the excluded pure powers fail modulo
+    `4,3,8,4`. Their divisor counts are therefore at least two. Under the
+    actual candidate budgets, the four adic depths are bounded by
+    `1,2,2,1`, the residual divisor counts by `3,4,3,3`, and the rung-5 and
+    rung-10 incompatibility reduces the total depth to at most `5`. The root
+    is independently `kernel_verified` and replayed. This sharply reduces the
+    base state space but still does not prove a universal failed shift.
+
+26. **The residual factor shapes are now exact.**
+    [`Erdos647_BaseGauntletResidualPrimes.lean`](proof/Erdos647_BaseGauntletResidualPrimes.lean)
+    proves that the `q5`, `q9`, and `q10` residuals are prime: an integer with
+    `σ₀≤3` is prime or a square, while the defining affine forms exclude
+    squares modulo `8`, `8`, and `4` for every adic exponent.
+    [`Erdos647_SigmaFourClassification.lean`](proof/Erdos647_SigmaFourClassification.lean)
+    classifies the remaining `q7` residual as prime, a prime cube, or a
+    product of two distinct primes; its square branch is impossible modulo
+    `3`. The original coupled shift-7 budget further proves that either `q7`
+    is prime with depth at most two, or its depth is exactly zero and it has
+    one of the two composite shapes. All four new roots are independently
+    `kernel_verified` and replayed. The base gauntlet is therefore a shallow
+    finite prime/semiprime state, not merely a divisor-count bound.
+
+27. **The two 5-adic depths are exact residue data.**
+    [`Erdos647_BaseGauntletDepthResidues.lean`](proof/Erdos647_BaseGauntletDepthResidues.lean)
+    proves `a5=1 ↔ N%5=4` and `a10=1 ↔ N%5=3` from the sharp depth-one
+    factorizations and the extracted cofactors' nondivisibility by five. The
+    root is independently `kernel_verified` and replayed. This removes two
+    existential depth variables from the finite survivor state without
+    claiming a global failed shift.
+
+28. **The remaining 7-adic and 3-adic depths are exact residue data, and
+    the shift-7 residual shape is sharper.**
+    [Erdos647_BaseGauntletHigherDepthResidues.lean](proof/Erdos647_BaseGauntletHigherDepthResidues.lean)
+    identifies all depth values from `N mod 7,49,3,9`.
+    [Erdos647_Q7ResidueShapeRefinement.lean](proof/Erdos647_Q7ResidueShapeRefinement.lean)
+    proves that the positive-depth `q7` branch is prime and pins the cube
+    and distinct-semiprime factors to their exact nonzero residues modulo
+    three. All three new roots are `kernel_verified` and replayed.
+
 ## Verification snapshot
 
 - Pinned environment:
@@ -251,17 +329,17 @@ nonexistence to finding one failed budget `σ₀(n-k)>k+2` for each `n>24`.
 - Complete density dependency replay: 42 modules plus
   `proof/campaign/family2-classifications.lean`, exit code 0
 - No `sorry`, `admit`, or added axiom in the final assembly
-- Portable source contains 449 actual theorem declarations and five top-level
-  lemma declarations across 169 Lean files; including 47 definitions (45
-  public and two private helpers) gives 501 declarations. These are source
-  declarations, not 501 independent tracked discoveries.
+- Portable source contains 473 actual theorem declarations and five top-level
+  lemma declarations across 179 Lean files; including the supporting definitions gives
+  529 declarations. These are source declarations, not 529 independent
+  tracked discoveries.
 - The 2026-07-16 power-prefix/block/certificate batch contains 31 theorem
   declarations in nine modules. Twenty-three roots were independently
   tracked `kernel_verified`; the remaining eight are source-compiled helpers.
 - The later large-prime, CRT re-entry, and second-layer continuation contributes
   30 additional tracked roots. Direct proof-search export confirms all 30 are
   `KERNEL_VERIFIED` in the pinned environment; their full, public-summary,
-  and training artifacts are included in the 317-episode archive.
+  and training artifacts are included in the 332-episode archive.
 - None of these results closes a Formal Conjectures declaration. All three
   research-open `sorry`s remain explicit.
 - Generated `.olean` files are not committed

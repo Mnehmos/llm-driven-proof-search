@@ -2024,6 +2024,134 @@ CREATE TABLE IF NOT EXISTS artifact_uploads (
     CHECK(next_offset >= 0),
     CHECK(length(content) = expected_bytes)
 );
+
+-- Issue #242 dev diary, slice 1: project-scoped campaign metadata joining
+-- existing first-class evidence (problems, episodes, research dossiers,
+-- formalization plans, empirical searches, candidate constructions,
+-- verification layers, distilled strategies) into a chronological timeline.
+-- Deliberately metadata-only, same trust posture as the Level 4 research
+-- substrate above: no row here can mark anything proved, verified, or
+-- certified, and attachments never alter the artifact they point at.
+CREATE TABLE IF NOT EXISTS dev_diary_projects (
+    id TEXT PRIMARY KEY,
+    project_key TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    summary TEXT,
+    audience TEXT,
+    claim_policy TEXT,
+    public_links_json TEXT,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(status IN ('active', 'paused', 'completed', 'archived'))
+);
+
+-- Polymorphic link to an existing artifact, mirroring verification_layers'
+-- target_kind/target_id shape. external_link/public_post have no existing
+-- row to point at (a GitHub issue/PR URL, or a manually recorded public
+-- post), so target_id is server-minted for those two kinds and external_url
+-- carries the real reference instead.
+CREATE TABLE IF NOT EXISTS dev_diary_attachments (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES dev_diary_projects(id),
+    target_kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    external_url TEXT,
+    label TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(project_id, target_kind, target_id),
+    CHECK(target_kind IN (
+        'problem_version', 'episode', 'research_dossier', 'formalization_plan',
+        'empirical_search', 'candidate_construction', 'verification_layer',
+        'distilled_strategy', 'external_link', 'public_post'
+    )),
+    CHECK(target_kind NOT IN ('external_link', 'public_post') OR external_url IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_dev_diary_attachments_project ON dev_diary_attachments(project_id);
+
+-- checkpoint_number is assigned server-side (MAX+1 per project inside the
+-- insert transaction), never caller-supplied, so chronological order is
+-- guaranteed regardless of client behavior.
+CREATE TABLE IF NOT EXISTS dev_diary_checkpoints (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES dev_diary_projects(id),
+    checkpoint_number INTEGER NOT NULL,
+    checkpoint_kind TEXT NOT NULL,
+    note TEXT NOT NULL,
+    referenced_attachment_id TEXT REFERENCES dev_diary_attachments(id),
+    author TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(project_id, checkpoint_number),
+    CHECK(checkpoint_kind IN (
+        'campaign_started', 'candidate_found', 'proof_attempt_failed',
+        'root_cause_identified', 'kernel_result', 'mathlib_gap',
+        'method_exhausted', 'frontier_changed', 'claim_corrected',
+        'infrastructure_issue_opened', 'public_update_posted', 'other'
+    ))
+);
+CREATE INDEX IF NOT EXISTS idx_dev_diary_checkpoints_project ON dev_diary_checkpoints(project_id, checkpoint_number);
+
+-- Issue #242 dev diary, slice 3: an immutable ledger of every generated
+-- export. Records what was generated and against which cursor/limits, never
+-- the generated prose itself (the external host owns that) — replayable
+-- against source_hash if the same project state is queried again.
+CREATE TABLE IF NOT EXISTS dev_diary_publications (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES dev_diary_projects(id),
+    mode TEXT NOT NULL,
+    since_checkpoint_id TEXT REFERENCES dev_diary_checkpoints(id),
+    through_checkpoint_id TEXT REFERENCES dev_diary_checkpoints(id),
+    x_tier TEXT,
+    max_chars_per_post INTEGER,
+    dry_run INTEGER NOT NULL,
+    source_hash TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    CHECK(mode IN ('structured_json', 'markdown_diary', 'x_thread_prompt', 'single_x_post_prompt', 'blog_prompt', 'institute_update_prompt')),
+    CHECK(x_tier IS NULL OR x_tier IN ('free', 'premium')),
+    CHECK(dry_run IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_dev_diary_publications_project ON dev_diary_publications(project_id, generated_at);
+
+-- Issue #236: append-only storage ledger for proofsearch_core::literature_lineage's
+-- LiteratureLineage record (the pure record model + MCIP mapping already ship;
+-- this is the remaining storage + MCP surface). One row per hash-pinned
+-- lineage record built via LiteratureLineage::new(); the nested
+-- search_queries/sources/idea_to_source_map trees are stored as JSON exactly
+-- as that constructor produces them, so replay can reconstruct the real Rust
+-- type and recompute lineage_hash to detect tampering. Evidence only: no
+-- column here can confer proof authority.
+CREATE TABLE IF NOT EXISTS literature_lineages (
+    id TEXT PRIMARY KEY,
+    lineage_hash TEXT NOT NULL UNIQUE,
+    lineage_version TEXT NOT NULL,
+    episode_id TEXT NOT NULL REFERENCES episodes(id),
+    environment_hash TEXT NOT NULL,
+    problem_version_id TEXT REFERENCES problem_versions(id),
+    obligation_id TEXT REFERENCES episode_obligations(id),
+    search_queries_json TEXT NOT NULL,
+    sources_json TEXT NOT NULL,
+    idea_to_source_map_json TEXT NOT NULL,
+    all_model_visible INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK(all_model_visible IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_literature_lineages_episode ON literature_lineages(episode_id);
+
+-- Additional provenance links beyond the record's own direct
+-- episode/problem_version/obligation fields -- issue #236 also asks for
+-- links to research nodes, verified lemmas ("proof variants"), and verified
+-- modules. Pure provenance: linking never alters the linked target.
+CREATE TABLE IF NOT EXISTS literature_lineage_links (
+    id TEXT PRIMARY KEY,
+    lineage_id TEXT NOT NULL REFERENCES literature_lineages(id),
+    target_kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(lineage_id, target_kind, target_id),
+    CHECK(target_kind IN ('research_node', 'verified_lemma', 'verified_module'))
+);
+CREATE INDEX IF NOT EXISTS idx_literature_lineage_links_lineage ON literature_lineage_links(lineage_id);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
