@@ -2152,6 +2152,58 @@ CREATE TABLE IF NOT EXISTS literature_lineage_links (
     CHECK(target_kind IN ('research_node', 'verified_lemma', 'verified_module'))
 );
 CREATE INDEX IF NOT EXISTS idx_literature_lineage_links_lineage ON literature_lineage_links(lineage_id);
+
+-- Issue #237: the publication-review gate. Surfaces proofsearch_core::
+-- publication_review's 6-layer model (kernel/certificate, statement-fidelity,
+-- literature-completeness, citation-lineage, novelty-claim, exposition-
+-- disclosure). One row per episode: layers_json is exactly ReviewLayers as
+-- publication_review.rs serializes it, so the server can reconstruct the real
+-- Rust type and recompute publication_status() deterministically. This is a
+-- PUBLICATION gate over already-established truth, NEVER a proof authority:
+-- no column here can mark a theorem proved, and a review outcome never changes
+-- the kernel result (kernel_verified is read from the kernel_or_certificate
+-- layer, independent of publication_status).
+CREATE TABLE IF NOT EXISTS publication_reviews (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL UNIQUE REFERENCES episodes(id),
+    review_version TEXT NOT NULL,
+    contribution_type TEXT NOT NULL,
+    layers_json TEXT NOT NULL,
+    makes_strong_novelty_claim INTEGER NOT NULL,
+    novelty_uncertain INTEGER NOT NULL,
+    contribution_statement TEXT NOT NULL,
+    known_prior_art_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(makes_strong_novelty_claim IN (0, 1)),
+    CHECK(novelty_uncertain IN (0, 1)),
+    CHECK(contribution_type IN (
+        'new_proof', 'independent_rediscovery', 'formalization', 'verification',
+        'reconstruction', 'adaptation', 'literature_derived_synthesis'
+    ))
+);
+
+-- Append-only ledger of every layer decision, so revoking/updating a layer is
+-- an auditable event that updates publication status without altering kernel
+-- truth or erasing the prior decision. Each event is reviewer-attributed,
+-- timestamped, and bound to the proof/source hashes the decision rests on.
+CREATE TABLE IF NOT EXISTS publication_review_events (
+    id TEXT PRIMARY KEY,
+    review_id TEXT NOT NULL REFERENCES publication_reviews(id),
+    layer TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reviewer TEXT NOT NULL,
+    bound_hashes_json TEXT NOT NULL,
+    notes TEXT,
+    decided_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK(layer IN (
+        'kernel_or_certificate', 'statement_fidelity', 'literature_completeness',
+        'citation_lineage', 'novelty_claim', 'exposition_disclosure'
+    )),
+    CHECK(status IN ('not_started', 'in_progress', 'complete', 'blocked_missing_attribution'))
+);
+CREATE INDEX IF NOT EXISTS idx_publication_review_events_review ON publication_review_events(review_id, created_at);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
