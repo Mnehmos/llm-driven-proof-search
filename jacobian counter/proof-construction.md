@@ -146,7 +146,45 @@ certificate warrants). `certificates/layered_certificate_11var.py` replaces it:
    identity linear part, homogeneous degrees {2,3} only, zero fiber containing the three
    distinct shifted points, det JF₀ = 1 (structural + 40 random points).
 
-## 7. The Poisson bridge: status and the budget wall
+## 7. The Poisson bridge: CERTIFIED (theorem 6)
+
+**Update (2026-07-21, later same session): the wall was mapped to its breaking point and
+breached.** The Poisson-bridge computational core is now the sixth verified theorem —
+outcome **`certified`** (problem `a4044282`, episode `c25405a7`, fidelity review
+`3ee09581`): with the map in the paper's own notation (A = 1+xy, Bₚ = A²z + y²(4+3xy),
+F = (A·Bₚ, y+3x·Bₚ, R)), the Jacobian entry matrix j, and B its explicit cofactor
+transpose (sympy-verified equal to adjugate J entrywise),
+
+1. **∀ i k: Σᵣ ∂ᵣ(Fᵢ)·Bᵣₖ = −2δᵢₖ** — the mixed bracket relations {Ψxᵢ, Ψpₖ} = δᵢₖ of
+   the cotangent lift after −1/2 scaling; and
+2. **∀ i k s: Σᵣ (Bᵣᵢ·∂ᵣBₛₖ − Bᵣₖ·∂ᵣBₛᵢ) = 0** — all 27 commuting-derivation
+   identities giving {Ψpᵢ, Ψpₖ} = 0.
+
+Combined with certified non-injectivity (`f3b97f2c`), this is the complete
+polynomial-computation content of the counterexample to the canonical rank-3 Poisson
+conjecture; what remains is algebraic packaging (the endomorphism construction and the
+bijectivity-to-polynomial-inverse correspondence), not computation.
+
+The certification took 15 kernel interactions across a two-level Decompose tree:
+conjunct 1 in one command; each commuting family as 3 single-identity commands plus an
+assembly; and a root assembly using a generic antisymmetry lemma. The complete wall map
+that made it possible (each item cost failed attempts to establish):
+
+- **Statement budget**: nested lets in the paper's notation (~1.5KB) — flat literals
+  (4KB) and adjugate-under-pderiv both exhaust the fixed 200k-heartbeat command budget
+  before or during proof.
+- **Proof budget**: single-identity granularity via Decompose; `maxHeartbeats` is fixed
+  at command start (tactic-level raises are a no-op; only `maxRecDepth` is dynamic).
+- **Environment defect + workaround**: Decompose children never get durability builds,
+  so parent assemblies fail on missing `.olean`s; compile the environment's own
+  `LeanChecker/Verified/O_*.lean` modules with `lake env lean -o` into the expected
+  build paths (kernel verdicts are unaffected — this only materializes artifacts the
+  import mechanism requires). Worth an upstream issue.
+- **Assembly fragility**: `linear_combination` is syntactic-atom-based and breaks on
+  `fin_cases`' `Fin.mk`-literal forms; route symmetry arguments through generic
+  `have`-lemmas applied with `exact` (defeq unification).
+
+## 7b. Historical: the wall as first mapped
 
 Following the dependency order (Theorem 5 → Poisson bridge → Weyl → Dixmier), the
 Poisson-bridge computational core was attacked as theorem 6: J·B = −2·I (mixed brackets)

@@ -45,6 +45,7 @@ conjecture (Keller 1939) in dimension 3 — and by stabilization in every dimens
 | 3 | F's evaluation map ℂ³ → ℂ³ is not injective | `f3b97f2c` / `a8a4062d` | **`certified`** |
 | 4 | ¬ Jacobian Conjecture (ℂ, dim 4), stabilized witness (F, w) | `7312a555` / `591219bc` | **`certified`** |
 | 5 | Normalized form U = (R/2, Q, P): det = 1, U(0) = 0, JU(0) = I, three-point fiber over the fixed point (0,0,−1/4) (paper Cor. 3.2) | `c270a9d2` / `c8d0d87c` | **`certified`** |
+| 6 | **Poisson-bridge computational core**: J·B = −2·I (mixed brackets) + all 27 commuting-derivation identities for B = adj(J) in explicit cofactor form — the complete polynomial content of the rank-3 Poisson counterexample | `a4044282` / `c25405a7` | **`certified`** |
 
 `certified` = kernel-verified proof **+** hash-bound verified statement-fidelity review —
 the environment's highest trust level. Environment hash `9e26d28e…`; statement hashes and
