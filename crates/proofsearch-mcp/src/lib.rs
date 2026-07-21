@@ -1968,6 +1968,72 @@ pub struct RlExportArgs {
     pub allow_putnambench_proof_export: bool,
 }
 
+/// Issue #237: the publication-review gate tool. Surfaces the existing
+/// `proofsearch_core::publication_review` 6-layer model + `publication_status()`
+/// gate. A PUBLICATION gate over already-established truth — never a proof
+/// authority: no action here can mark a theorem proved, and a review outcome
+/// never changes the kernel result.
+#[derive(JsonSchema, Deserialize)]
+pub struct PublicationReviewArgs {
+    pub action: PublicationReviewAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PublicationReviewAction {
+    /// Start a publication review for an episode (rejects a duplicate).
+    Create {
+        episode_id: String,
+        /// new_proof | independent_rediscovery | formalization | verification |
+        /// reconstruction | adaptation | literature_derived_synthesis.
+        contribution_type: String,
+        contribution_statement: String,
+        #[serde(default)]
+        known_prior_art: Vec<String>,
+        #[serde(default)]
+        makes_strong_novelty_claim: bool,
+        #[serde(default)]
+        novelty_uncertain: bool,
+    },
+    /// Record a reviewer-attributed, timestamped, hash-bound decision for one
+    /// layer; appended to the append-only event ledger and recomputes status.
+    SetLayer {
+        episode_id: String,
+        /// kernel_or_certificate | statement_fidelity | literature_completeness |
+        /// citation_lineage | novelty_claim | exposition_disclosure.
+        layer: String,
+        /// not_started | in_progress | complete | blocked_missing_attribution.
+        status: String,
+        reviewer: String,
+        #[serde(default)]
+        bound_hashes: Vec<String>,
+        #[serde(default)]
+        notes: Option<String>,
+        /// RFC3339; defaults to now.
+        #[serde(default)]
+        decided_at: Option<String>,
+    },
+    /// Update contribution metadata / novelty flags (never touches the proof).
+    Update {
+        episode_id: String,
+        #[serde(default)]
+        contribution_type: Option<String>,
+        #[serde(default)]
+        contribution_statement: Option<String>,
+        #[serde(default)]
+        known_prior_art: Option<Vec<String>>,
+        #[serde(default)]
+        makes_strong_novelty_claim: Option<bool>,
+        #[serde(default)]
+        novelty_uncertain: Option<bool>,
+    },
+    /// Read the review with its computed publication_status + layer events.
+    Observe { episode_id: String },
+    /// The public contribution block (contribution statement + prior art +
+    /// computed publication_status); gated by the same publication_status().
+    ExportContribution { episode_id: String },
+}
+
 #[derive(JsonSchema, Deserialize)]
 pub struct TrajectoryExportArgs {
     pub episode_id: String,
@@ -4891,6 +4957,72 @@ fn literature_lineage_observe_json(conn: &Connection, lineage_id: &str) -> Resul
         "links": links,
         "trust_boundary": "A literature_lineage record is EVIDENCE, never proof authority — it has no proof-status field by construction (enforced by proofsearch_core::literature_lineage's own type, tested there). Linking it to a research_node/verified_lemma/verified_module is provenance only and never alters the linked target's own trust_status/fidelity_status/outcome.",
     }))
+}
+
+/// Issue #237: reconstruct the real `PublicationReview` from its stored row, so
+/// the server recomputes `publication_status()` deterministically rather than
+/// trusting a stored status. Returns `(review_id, review)`.
+fn load_publication_review(
+    conn: &Connection,
+    episode_id: &str,
+) -> Result<Option<(String, proofsearch_core::publication_review::PublicationReview)>, McpError> {
+    use proofsearch_core::publication_review as pr;
+    let row: Option<(String, String, String, String, i64, i64, String, String)> = conn
+        .query_row(
+            "SELECT id, review_version, contribution_type, layers_json, makes_strong_novelty_claim, \
+             novelty_uncertain, contribution_statement, known_prior_art_json \
+             FROM publication_reviews WHERE episode_id = ?1",
+            [episode_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)),
+        )
+        .optional()
+        .map_err(rs)?;
+    let Some((id, ver, ctype, layers_json, msnc, nu, stmt, prior_json)) = row else {
+        return Ok(None);
+    };
+    let layers: pr::ReviewLayers = serde_json::from_str(&layers_json)
+        .map_err(|e| mcp_internal_error(format!("corrupt layers_json: {e}")))?;
+    let contribution_type: pr::ContributionType = serde_json::from_value(serde_json::json!(ctype))
+        .map_err(|e| mcp_internal_error(format!("corrupt contribution_type: {e}")))?;
+    let known_prior_art: Vec<String> = serde_json::from_str(&prior_json).unwrap_or_default();
+    Ok(Some((
+        id,
+        pr::PublicationReview {
+            review_version: ver,
+            episode_id: episode_id.to_string(),
+            contribution_type,
+            layers,
+            makes_strong_novelty_claim: msnc != 0,
+            novelty_uncertain: nu != 0,
+            contribution_statement: stmt,
+            known_prior_art,
+        },
+    )))
+}
+
+/// #237: the full review JSON with its deterministically RECOMPUTED publication
+/// status (the gate) — never a stored status field.
+fn publication_review_json(
+    review_id: &str,
+    review: &proofsearch_core::publication_review::PublicationReview,
+) -> serde_json::Value {
+    serde_json::json!({
+        "review_id": review_id,
+        "review": review,
+        "publication_status": review.publication_status(),
+        "kernel_verified": review.kernel_verified(),
+        "trust_boundary": "publication_status is a PUBLICATION gate, not proof authority: kernel_verified is read from the kernel/certificate layer and is independent of publication_status — a blocking or revoked review layer never changes the kernel result.",
+    })
+}
+
+fn publication_review_result(
+    review_id: &str,
+    review: &proofsearch_core::publication_review::PublicationReview,
+    created: bool,
+) -> CallToolResult {
+    let mut out = publication_review_json(review_id, review);
+    out["created"] = serde_json::json!(created);
+    CallToolResult::success(vec![Content::text(serde_json::to_string(&out).unwrap())])
 }
 
 /// Issue #242 dev diary, slice 2: read an attached artifact's OWN status/
@@ -12625,6 +12757,166 @@ impl ChatDbMcp {
     // -----------------------------------------------------------------
 
     /// Issue #230: export a conformant MCIP v1 bundle for a verified obligation.
+    /// Issue #237: the publication-review gate. Surfaces the existing
+    /// `proofsearch_core::publication_review` model (6 layers + the
+    /// `publication_status()` state machine) as a stored, auditable workflow.
+    /// A publication gate over already-established truth — NEVER proof
+    /// authority: no action marks anything proved, and `kernel_verified` is read
+    /// from the kernel/certificate layer independent of publication status, so a
+    /// review outcome (including a revoked or blocking layer) never changes the
+    /// kernel result.
+    async fn do_publication_review(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        use proofsearch_core::publication_review as pr;
+        let args: PublicationReviewArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let now = Utc::now().to_rfc3339();
+        let mut conn = self.conn.lock().await;
+
+        let parse_contribution = |s: &str| -> Result<pr::ContributionType, McpError> {
+            serde_json::from_value(serde_json::json!(s))
+                .map_err(|_| mcp_invalid_params(format!("unknown contribution_type '{}'", s)))
+        };
+
+        match args.action {
+            PublicationReviewAction::Create {
+                episode_id, contribution_type, contribution_statement, known_prior_art,
+                makes_strong_novelty_claim, novelty_uncertain,
+            } => {
+                let ctype = parse_contribution(&contribution_type)?;
+                // Episode must exist (FK), and only one review per episode.
+                let exists: bool = conn.query_row("SELECT 1 FROM episodes WHERE id = ?1", [&episode_id], |_| Ok(()))
+                    .optional().map_err(rs)?.is_some();
+                if !exists {
+                    return Err(mcp_invalid_params(format!("unknown episode_id: {}", episode_id)));
+                }
+                if conn.query_row("SELECT 1 FROM publication_reviews WHERE episode_id = ?1", [&episode_id], |_| Ok(()))
+                    .optional().map_err(rs)?.is_some()
+                {
+                    return Err(mcp_invalid_params(format!(
+                        "a publication review already exists for episode {} — use set_layer/update", episode_id
+                    )));
+                }
+                let review_id = Uuid::new_v4().to_string();
+                let layers = pr::ReviewLayers::default();
+                conn.execute(
+                    "INSERT INTO publication_reviews (id, episode_id, review_version, contribution_type, layers_json, \
+                     makes_strong_novelty_claim, novelty_uncertain, contribution_statement, known_prior_art_json, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+                    rusqlite::params![
+                        review_id, episode_id, pr::PUBLICATION_REVIEW_VERSION, contribution_type,
+                        serde_json::to_string(&layers).unwrap(),
+                        makes_strong_novelty_claim as i64, novelty_uncertain as i64,
+                        contribution_statement, serde_json::to_string(&known_prior_art).unwrap(), now,
+                    ],
+                ).map_err(rs)?;
+                let review = pr::PublicationReview {
+                    review_version: pr::PUBLICATION_REVIEW_VERSION.into(), episode_id, contribution_type: ctype,
+                    layers, makes_strong_novelty_claim, novelty_uncertain, contribution_statement, known_prior_art,
+                };
+                Ok(publication_review_result(&review_id, &review, true))
+            }
+
+            PublicationReviewAction::SetLayer {
+                episode_id, layer, status, reviewer, bound_hashes, notes, decided_at,
+            } => {
+                let (review_id, mut review) = load_publication_review(&conn, &episode_id)?
+                    .ok_or_else(|| mcp_invalid_params(format!("no publication review for episode {}", episode_id)))?;
+                let decided_at = decided_at.unwrap_or_else(|| now.clone());
+                let new_status: pr::LayerStatus = serde_json::from_value(serde_json::json!(status))
+                    .map_err(|_| mcp_invalid_params(format!("unknown layer status '{}'", status)))?;
+                let decision = pr::ReviewDecision {
+                    status: new_status, reviewer: reviewer.clone(), decided_at: decided_at.clone(),
+                    bound_hashes: bound_hashes.clone(), notes: notes.clone(),
+                };
+                // Update the named layer in place (the append-only event ledger
+                // preserves the prior decision).
+                let slot = match layer.as_str() {
+                    "kernel_or_certificate" => &mut review.layers.kernel_or_certificate,
+                    "statement_fidelity" => &mut review.layers.statement_fidelity,
+                    "literature_completeness" => &mut review.layers.literature_completeness,
+                    "citation_lineage" => &mut review.layers.citation_lineage,
+                    "novelty_claim" => &mut review.layers.novelty_claim,
+                    "exposition_disclosure" => &mut review.layers.exposition_disclosure,
+                    other => return Err(mcp_invalid_params(format!("unknown layer '{}'", other))),
+                };
+                *slot = decision;
+
+                let tx = conn.transaction().map_err(rs)?;
+                tx.execute(
+                    "UPDATE publication_reviews SET layers_json = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![serde_json::to_string(&review.layers).unwrap(), now, review_id],
+                ).map_err(rs)?;
+                tx.execute(
+                    "INSERT INTO publication_review_events (id, review_id, layer, status, reviewer, bound_hashes_json, notes, decided_at, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    rusqlite::params![
+                        Uuid::new_v4().to_string(), review_id, layer, status, reviewer,
+                        serde_json::to_string(&bound_hashes).unwrap(), notes, decided_at, now,
+                    ],
+                ).map_err(rs)?;
+                tx.commit().map_err(rs)?;
+                Ok(publication_review_result(&review_id, &review, false))
+            }
+
+            PublicationReviewAction::Update {
+                episode_id, contribution_type, contribution_statement, known_prior_art,
+                makes_strong_novelty_claim, novelty_uncertain,
+            } => {
+                let (review_id, mut review) = load_publication_review(&conn, &episode_id)?
+                    .ok_or_else(|| mcp_invalid_params(format!("no publication review for episode {}", episode_id)))?;
+                if let Some(ct) = &contribution_type { review.contribution_type = parse_contribution(ct)?; }
+                if let Some(s) = contribution_statement { review.contribution_statement = s; }
+                if let Some(pa) = known_prior_art { review.known_prior_art = pa; }
+                if let Some(b) = makes_strong_novelty_claim { review.makes_strong_novelty_claim = b; }
+                if let Some(b) = novelty_uncertain { review.novelty_uncertain = b; }
+                let ct_str = serde_json::to_value(review.contribution_type).ok()
+                    .and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_default();
+                conn.execute(
+                    "UPDATE publication_reviews SET contribution_type = ?1, contribution_statement = ?2, \
+                     known_prior_art_json = ?3, makes_strong_novelty_claim = ?4, novelty_uncertain = ?5, updated_at = ?6 WHERE id = ?7",
+                    rusqlite::params![
+                        ct_str, review.contribution_statement, serde_json::to_string(&review.known_prior_art).unwrap(),
+                        review.makes_strong_novelty_claim as i64, review.novelty_uncertain as i64, now, review_id,
+                    ],
+                ).map_err(rs)?;
+                Ok(publication_review_result(&review_id, &review, false))
+            }
+
+            PublicationReviewAction::Observe { episode_id } => {
+                let (review_id, review) = load_publication_review(&conn, &episode_id)?
+                    .ok_or_else(|| mcp_invalid_params(format!("no publication review for episode {}", episode_id)))?;
+                let mut stmt = conn.prepare(
+                    "SELECT layer, status, reviewer, bound_hashes_json, notes, decided_at, created_at \
+                     FROM publication_review_events WHERE review_id = ?1 ORDER BY created_at ASC, id ASC",
+                ).map_err(rs)?;
+                let events = stmt.query_map([&review_id], |r| {
+                    Ok(serde_json::json!({
+                        "layer": r.get::<_, String>(0)?, "status": r.get::<_, String>(1)?,
+                        "reviewer": r.get::<_, String>(2)?,
+                        "bound_hashes": serde_json::from_str::<serde_json::Value>(&r.get::<_, String>(3)?).unwrap_or(serde_json::Value::Null),
+                        "notes": r.get::<_, Option<String>>(4)?,
+                        "decided_at": r.get::<_, String>(5)?, "created_at": r.get::<_, String>(6)?,
+                    }))
+                }).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+                drop(stmt);
+                let mut out = publication_review_json(&review_id, &review);
+                out["layer_events"] = serde_json::json!(events);
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&out).unwrap())]))
+            }
+
+            PublicationReviewAction::ExportContribution { episode_id } => {
+                let (_review_id, review) = load_publication_review(&conn, &episode_id)?
+                    .ok_or_else(|| mcp_invalid_params(format!("no publication review for episode {}", episode_id)))?;
+                let block = review.public_contribution_block();
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "episode_id": episode_id,
+                    "contribution_block": block,
+                    "gate": "publication_status is computed from the stored review layers, never asserted: a kernel_verified result is never 'publication_ready' without a completed citation_lineage (and every other) layer. kernel_verified is independent of publication status — a blocking/revoked review layer never changes the kernel result.",
+                })).unwrap())]))
+            }
+        }
+    }
+
     /// Issue #238: dedicated canonical RL-transition exporter. Surfaces the
     /// already-tested `dataset::export_rl_transitions` emitter (one hash-bound
     /// `proofsearch.rl_transition.v1` record per committed step, deterministic
@@ -15863,6 +16155,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<FormalizationPlanArgs>("formalization_plan", "Issue #184: ONE tool for the entire Level 3 formalization-plan family (issue #10) — create/inspect/maintain a formalization plan (required concepts, definitions, lemmas, modules and their Mathlib coverage status) for a problem. Advisory scaffolding, not a proof authority: nothing here can mark anything proved. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"problem_version_id\":\"..\",\"title\":\"..\"} (+ optional source_draft_id, seed_items_from_draft_moves [{\"draft_move_id\":\"..\",\"kind\":\"..\"}, ...], risk_flags — creates a plan, optionally seeded from selected moves of an existing draft; every seed move must belong to source_draft_id, not be already promoted, and the whole batch is validated before any row is written, so a bad move never leaves a partially-seeded plan behind; each seeded move is marked promoted) | {\"type\":\"observe\",\"plan_id\":\"..\"} (read-only: the plan and all its items with coverage/promotion status) | {\"type\":\"update\",\"plan_id\":\"..\"} (+ optional title, status \"draft\"|\"active\"|\"completed\"|\"abandoned\", risk_flags — partial in-place update: an omitted field keeps its current value) | {\"type\":\"add_item\",\"plan_id\":\"..\",\"kind\":\"concept\"|\"missing_definition\"|\"missing_lemma\"|\"planned_module\"|\"external_citation\",\"description\":\"..\"} (+ optional mathlib_candidate_names, asymptotic_role — appends one planning item) | {\"type\":\"attach_lookup\",\"plan_item_id\":\"..\",\"lookup_status\":\"..\"} (+ optional matched_name, diagnostics — attach a lean_declaration_lookup result to an OPEN plan item, mapping its status verbatim into the item's Mathlib coverage status found/not_found/partial/unknown. A hint attachment, not a re-check — nothing is re-validated or re-run, and it never changes proof status) | {\"type\":\"promote_item_to_obligation\",\"plan_item_id\":\"..\",\"episode_id\":\"..\",\"obligation_id\":\"..\"} (link an open plan item to an episode_obligation that ALREADY EXISTS — created through a normal Decompose action via episode_step and verified to belong to the given episode. Records the link only — this action never creates the obligation itself, so it can never bypass the episode's budget/CAS accounting; a DB-level UNIQUE index stops two plan items from claiming the same obligation) | {\"type\":\"attach_librarian_result\",\"plan_item_id\":\"..\",\"declaration_name\":\"..\",\"confidence\":\"exact_match\"|\"nearby_name\"|\"type_match\"|\"usage_example\"|\"unknown\"} (+ optional import_module, snippet — attach a mathlib_search_declarations/mathlib_search_local_artifacts result to an OPEN plan item: confidence is the CALLER's own assessment of its search hit, mapped into the same coverage vocabulary attach_lookup writes (exact_match→found, nearby_name/type_match/usage_example→partial, unknown→unknown); candidate declaration names ACCUMULATE deduped across attachments while the full latest result overwrites lookup_result_json, latest wins. A hint attachment, not a re-check — never changes proof status)"),
             make_tool::<ResearchDossierArgs>("research_dossier", "Issue #185: ONE tool for the entire Level 4 research-dossier family (issues #9/#11/#13) — research dossiers, nodes, citations, assumptions, and verification layers are explicit trust-boundary METADATA: they can reference Lean-backed artifacts, but they never create proof authority and never write to episode outcome, obligations, canonical lemmas, budgets, fidelity reviews, or benchmark result tables. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\"} (+ optional description, problem_version_id, episode_id — create a dossier optionally linked to a problem_version, an episode, both, or neither; metadata only: never changes proof, fidelity, budget, or benchmark state) | {\"type\":\"observe\",\"dossier_id\":\"..\"} (read-only: the dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets) | {\"type\":\"node_add\",\"dossier_id\":\"..\",\"node_type\":\"definition\"|\"proposition\"|\"lemma\"|\"theorem\"|\"remark\"|\"reference\"|\"open_gap\",\"title\":\"..\"} (+ optional section_id OR section_title, statement, content, trust_status, linked_obligation_id, linked_verified_lemma_id — add a typed research node. Trust status is explicit and never implies kernel verification unless linked to a real verified lemma: trust_status='proved_in_episode' REQUIRES linked_verified_lemma_id naming a verified lemma from THIS dossier's own episode/problem context — never borrowed kernel evidence from an unrelated episode; a node added here is metadata, never proof authority) | {\"type\":\"external_reference_add\",\"dossier_id\":\"..\",\"title\":\"..\"} (+ optional authors/venue/year/url/doi/raw_citation, and optionally ONE theorem claim via theorem_label/theorem_statement/claim_status/mathlib_name/proved_episode_id/proved_lemma_id/notes — records a citation as a TRACKED ASSUMPTION, never proof: external citations are self-reported metadata and never become kernel verification; claim_status='proved_in_episode' requires proved_lemma_id naming a verified lemma from THIS dossier's own context, with any proved_episode_id matching that lemma's actual episode, and 'imported_from_mathlib' requires mathlib_name) | {\"type\":\"assumption_boundary_add\",\"dossier_id\":\"..\",\"label\":\"..\",\"statement\":\"..\",\"assumption_status\":\"unformalized_assumption\"|\"rejected_unsafe_assumption\"} (+ optional node_id, rationale — add an unformalized or rejected unsafe assumption boundary. Assumptions are visible metadata, not proof authority) | {\"type\":\"citation_review_add\",\"dossier_id\":\"..\",\"external_theorem_claim_id\":\"..\",\"reviewer_id\":\"..\",\"decision\":\"human_reviewed\"|\"rejected\"|\"needs_formalization\"} (+ optional notes — record a human citation review for an external theorem claim. Human review remains distinct from Lean kernel verification and never upgrades a claim to a proved status) | {\"type\":\"verification_layer_set\",\"dossier_id\":\"..\",\"target_kind\":\"..\",\"target_id\":\"..\",\"layer_kind\":\"..\",\"status\":\"..\"} (+ optional summary, evidence_json — upsert an independent verification layer for a dossier target. Blocked/failed layers do not fail the dossier, and cited/reviewed/assumed artifacts cannot be mislabeled kernel_verified: this action is the ONLY PATH to a kernel_verified layer, and status='kernel_verified' is accepted only where kernel evidence already exists — e.g. a node whose trust_status is already proved_in_episode backed by a verified lemma from THIS dossier's own episode/problem context — it can never manufacture that evidence)"),
             make_tool::<DevDiaryArgs>("dev_diary", "Issue #242, slice 1: project-scoped dev diary — join existing tracked evidence (problems, episodes, research dossiers, formalization plans, empirical searches, candidate constructions, verification layers, distilled strategies) into a chronological campaign timeline so a long-running effort can be documented as it happens instead of reconstructed after the fact from a chat transcript. THIS TOOL NEVER CALLS AN LLM AND NEVER POSTS ANYWHERE — it only assembles evidence for an external host to turn into a narrative. This version covers project setup, attachment, chronological checkpoints, observe's resolved verified/failed/frontier view, and export. `action` is internally tagged — exactly one of: {\"type\":\"create_project\",\"project_key\":\"..\",\"title\":\"..\"} (+ optional summary, audience, claim_policy, public_links — project_key must be a unique slug; a duplicate key is rejected, never overwritten. Starts status='active') | {\"type\":\"attach\",\"project_id\":\"..\",\"target_kind\":\"problem_version\"|\"episode\"|\"research_dossier\"|\"formalization_plan\"|\"empirical_search\"|\"candidate_construction\"|\"verification_layer\"|\"distilled_strategy\"|\"external_link\"|\"public_post\"} (+ target_id for the 8 real kinds — existence-checked against that artifact's own table before attaching — OR external_url for external_link/public_post, e.g. a GitHub issue/PR URL or a manually recorded public post, neither of which has a backing row: target_id is then server-minted and private. Optional label, notes. A duplicate (project_id, target_kind, target_id) is rejected. Attaching NEVER alters the attached artifact's own trust_status, fidelity_status, or verification outcome) | {\"type\":\"checkpoint\",\"project_id\":\"..\",\"checkpoint_kind\":\"campaign_started\"|\"candidate_found\"|\"proof_attempt_failed\"|\"root_cause_identified\"|\"kernel_result\"|\"mathlib_gap\"|\"method_exhausted\"|\"frontier_changed\"|\"claim_corrected\"|\"infrastructure_issue_opened\"|\"public_update_posted\"|\"other\",\"note\":\"..\",\"author\":\"..\"} (+ optional referenced_attachment_id, which must already belong to the SAME project — cross-project references are rejected. checkpoint_number is assigned server-side, never caller-supplied, so chronological order is guaranteed regardless of client behavior. A checkpoint is chronological project metadata, the same trust posture as a reasoning_log entry: it can never mark anything proved, verified, or certified, and failed/negative checkpoints are preserved exactly like successful ones, never overwritten) | {\"type\":\"observe\",\"project_id\":\"..\"} (read-only: the project plus every attachment and checkpoint in order, PLUS a `resolved` view bucketing that same data into verified_results (attached episodes already outcome=certified/kernel_verified, or attached verification_layers already status=kernel_verified), failed_or_blocked (matching failure outcomes/statuses, plus proof_attempt_failed/method_exhausted checkpoints), reusable_artifacts (attached formalization_plan/distilled_strategy), claim_boundaries (each attached research_dossier's own assumption_boundaries, unchanged), checkpoints_by_kind, and current_frontier (the latest frontier_changed checkpoint). `resolved` never re-derives or upgrades any trust_status/fidelity_status/outcome — it only re-buckets columns already read off each attached artifact's own row. publication_history (a later slice) and episode_obligations-level 'open obligations' are not part of `resolved` yet) | {\"type\":\"export\",\"project_id\":\"..\",\"mode\":\"structured_json\"|\"markdown_diary\"|\"x_thread_prompt\"|\"single_x_post_prompt\"|\"blog_prompt\"|\"institute_update_prompt\"} (+ optional since_checkpoint_id (a cursor: only checkpoints AFTER that checkpoint's own checkpoint_number are included; attachments are never cursored, they are not chronological in that sense), max_posts (default 12, clamped 1-50, x_thread_prompt only), x_tier \"free\"|\"premium\" (default \"free\" whenever omitted — the conservative assumption, since most callers will not have a paid X account), max_chars_per_post (an optional override, ALWAYS clamped down to the resolved tier's real ceiling — 280 for free, 25000 for premium — so a mistaken override can never exceed X's actual limit), audience, dry_run (default false). structured_json returns the full packet (attachments/checkpoints/resolved view) with every internal id retained, for grounding and audit. markdown_diary renders the same packet as a human-readable document. The four *_prompt modes return a ready-to-send external-host prompt (populated with the resolved title/max_posts/max_chars_per_post and the JSON packet) plus the same packet for grounding — the prompt instructs the external host not to surface raw database ids/UUIDs in the prose it writes, but the attached packet always retains them. THIS TOOL NEVER CALLS AN LLM OR POSTS ANYWHERE ITSELF; only an external host does that with the returned text. Unless dry_run, every export records one immutable dev_diary_publications row (mode, cursor, resolved x_tier/max_chars_per_post, a SHA-256 source_hash over the packet, and a timestamp) so a later export audit shows exactly what a given thread was generated against; dry_run previews without recording)"),
+            make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
             make_tool::<CandidateConstructionArgs>("candidate_construction", "Issue #188: ONE tool for the entire candidate-construction family (issue #8) — propose a candidate mathematical object, record empirical checks against it, revise its status, and attach it to a research node or verification layer. A CANDIDATE CONSTRUCTION IS A PROPOSED MATHEMATICAL OBJECT, NOT A PROOF CERTIFICATE: every action records research artifacts useful for search and planning; trust_status never certifies anything — empirical support, human review, citation, and 'a formal statement exists' are all explicitly distinct from kernel verification, and no field can hold kernel evidence. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"construction_type\":\"graph_family\"|\"point_configuration\"|\"coloring\"|\"field_tower\"|\"lattice\"|\"counterexample\"|\"asymptotic_family\"|\"algebraic_object\"|\"combinatorial_design\"|\"other\",\"informal_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, verification_layer_id, problem_version_id, episode_id, name, parameters_json, construction_json, claimed_properties_json, known_failures_json, empirical_checks_json, verification_targets_json, status, trust_status, and motivated-discovery metadata: motivating_move, source_observation, intended_role, strategy_context, why_this_might_work, why_this_might_fail, next_check, future_challenge_relevance — propose a candidate construction. Can exist before a dossier, node, Lean theorem, problem, or episode; a research artifact, not a proof certificate) | {\"type\":\"observe\",\"candidate_construction_id\":\"..\",\"description\":\"..\",\"result\":\"supports\"|\"refutes\"|\"inconclusive\"} (+ optional details_json, observed_by — record one empirical check, appended to the construction's empirical_checks history. Never changes proof status, and 'supports' never implies proved) | {\"type\":\"update_status\",\"candidate_construction_id\":\"..\"} (+ at least one of status, trust_status, claimed_properties_json, known_failures_json, next_check — update the construction in place; a falsified/rejected construction stays visible, never deleted. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified — and no other trust_status confers proof either) | {\"type\":\"link_node\",\"candidate_construction_id\":\"..\",\"node_id\":\"..\"} (attach the construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier. Linking never changes either side's trust_status) | {\"type\":\"link_verification_layer\",\"candidate_construction_id\":\"..\",\"verification_layer_id\":\"..\"} (attach the construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier. Linking a layer is provenance, not promotion — the construction's trust_status is unchanged, and a kernel_verified_claim_linked construction is re-checked against the newly linked layer)"),
             make_tool::<EmpiricalSearchArgs>("empirical_search", "Issue #189: ONE tool for the entire empirical math-lab family (issue #26) — create and update finite checks, counterexample searches, construction searches, parameter sweeps, candidate rankings, and external-tool runs. AN EMPIRICAL SEARCH RESULT IS EXPERIMENTAL EVIDENCE, NEVER PROOF: no field can carry kernel evidence, no trust_status implies proof, and no status can certify an asymptotic or universal theorem. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"search_type\":\"small_case_search\"|\"counterexample_search\"|\"construction_search\"|\"parameter_sweep\"|\"finite_model_check\"|\"candidate_ranking\"|\"random_search\"|\"exhaustive_search\"|\"symbolic_search\"|\"external_tool_run\"|\"other\",\"search_space_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, candidate_construction_id, verification_layer_id, problem_version_id, episode_id, parameters_json, generator_description, checks_json, results_json, counterexamples_json, candidate_construction_ids_json, status, trust_status, runtime_metadata_json, cost_summary_json — record a search, which may exist before a dossier, candidate, episode, or Lean proof) | {\"type\":\"observe\",\"empirical_search_id\":\"..\",\"description\":\"..\",\"result\":\"supports_candidate\"|\"refutes_candidate\"|\"counterexample_found\"|\"no_counterexample\"|\"inconclusive\"} (+ optional details_json, counterexample_json, observed_by — append one check and optional counterexample witness. A counterexample stays visible; no_counterexample never certifies a universal claim) | {\"type\":\"update_status\",\"empirical_search_id\":\"..\"} (+ at least one of status, trust_status, results_json, candidate_construction_ids_json — update the search in place. Counterexamples are deliberately not updatable here and can only be appended through observe; falsified/failed/timed-out searches stay visible) | {\"type\":\"link_candidate\",\"empirical_search_id\":\"..\",\"candidate_construction_id\":\"..\"} (link a candidate construction, adopting its dossier when the search has none. Empirical support never proves the candidate's claimed properties) | {\"type\":\"link_verification_layer\",\"empirical_search_id\":\"..\",\"verification_layer_id\":\"..\"} (link an existing verification layer, adopting its dossier when the search has none. The link records evidence and can never make the layer kernel_verified)"),
@@ -16066,8 +16359,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 53,
-                        "total_tool_count": 53,
+                        "classified_tool_count": 54,
+                        "total_tool_count": 54,
                         "tools": {
                             "mathcorpus_export": {
                                 "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
@@ -16330,6 +16623,16 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic — checkpoint_number is server-assigned (MAX+1 per project) and stable, never caller-supplied; every non-dry-run export is hash-pinned via source_hash over its exact packet",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "project_metadata",
+                                "required_run_mode": "any"
+                            },
+                            "publication_review": {
+                                "side_effect": "mixed by action (issue #237): create writes one publication_reviews row; set_layer updates that row's layers_json and appends one immutable publication_review_events row; update patches contribution/novelty columns; observe/export_contribution are read_only. No action ever writes to episode outcome, obligations, canonical lemmas, budgets, or benchmark result tables",
+                                "trust_level": "publication gate, NOT proof authority — publication_status() is recomputed deterministically from the stored layers, never a stored field; kernel_verified is read from the kernel/certificate layer and is independent of publication_status, so a blocking or revoked review layer never changes the kernel result",
+                                "cost_surface": "none — DB reads/writes only, no Lean invocation",
+                                "benchmark_safety": "private_artifact by default — contribution statements / prior-art notes may reference real problem content; export_contribution returns only the contribution block + computed status, never proof source",
+                                "replayability": "deterministic — publication_status is a pure function of the stored ReviewLayers; the event ledger is append-only and reviewer-attributed",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "publication_review_metadata",
                                 "required_run_mode": "any"
                             },
                             "literature_lineage": {
@@ -17557,6 +17860,7 @@ impl ServerHandler for ChatDbMcp {
             "research_dossier" => self.do_research_dossier(args_val).await,
             "dev_diary" => self.do_dev_diary(args_val).await,
             "literature_lineage" => self.do_literature_lineage(args_val).await,
+            "publication_review" => self.do_publication_review(args_val).await,
             "candidate_construction" => self.do_candidate_construction(args_val).await,
             "empirical_search" => self.do_empirical_search(args_val).await,
             // -- Challenge / task / scoring substrate (issue #53) ---------------
@@ -18559,7 +18863,9 @@ mod tests {
         // model — create/observe/link) = 52.
         // + 1 rl_export (issue #238: canonical RL-transition JSONL exporter with
         // episode/problem_lineage/batch modes) = 53.
-        assert_eq!(list_res.tools.len(), 53);
+        // + 1 publication_review (issue #237: 6-layer publication gate over
+        // an episode - create/set_layer/update/observe/export_contribution) = 54.
+        assert_eq!(list_res.tools.len(), 54);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -20801,6 +21107,81 @@ mod tests {
             "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"], "expected_revision": req["episode_revision"],
             "claim_token": claim["claim_token"], "action": {"type": "solve", "proof_term": proof_term}, "cost_micros": 100,
         }).as_object().unwrap().clone())).await.unwrap())
+    }
+
+    /// #237: the publication-review gate. A kernel-verified result is never
+    /// `publication_ready` until citation-lineage (and every other layer) is
+    /// complete; novelty-uncertainty blocks a strong novelty claim without
+    /// invalidating the proof; the CDC reconstruction fixture (acknowledged
+    /// prior Fano-flow literature) reaches publication_ready. kernel_verified is
+    /// independent of publication status throughout.
+    #[tokio::test]
+    async fn test_publication_review_gate() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        async fn pr(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("publication_review")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+
+        // CDC-style formal reconstruction with acknowledged prior literature.
+        let created = pr(&peer, serde_json::json!({"action": {"type": "create",
+            "episode_id": episode_id, "contribution_type": "reconstruction",
+            "contribution_statement": "Formal reconstruction of the CDC theorem; not claimed novel.",
+            "known_prior_art": ["Prior Fano-flow literature"],
+        }})).await;
+        assert_eq!(created["created"], true, "{:?}", created);
+        assert_eq!(created["publication_status"], "not_started");
+        assert_eq!(created["kernel_verified"], false);
+
+        // Kernel layer complete: the proof verifies, but nothing publishes yet
+        // (no citation lineage) — kernel_verified is now true regardless.
+        let after_kernel = pr(&peer, serde_json::json!({"action": {"type": "set_layer",
+            "episode_id": episode_id, "layer": "kernel_or_certificate", "status": "complete",
+            "reviewer": "kernel", "bound_hashes": ["sha256:proof"],
+        }})).await;
+        assert_eq!(after_kernel["kernel_verified"], true);
+        assert_ne!(after_kernel["publication_status"], "publication_ready",
+            "kernel-verified alone must NOT be publication_ready: {:?}", after_kernel["publication_status"]);
+
+        // A missing-attribution block keeps the proof verified but blocks publication.
+        let blocked = pr(&peer, serde_json::json!({"action": {"type": "set_layer",
+            "episode_id": episode_id, "layer": "citation_lineage", "status": "blocked_missing_attribution",
+            "reviewer": "maintainer",
+        }})).await;
+        assert_eq!(blocked["publication_status"], "blocked_missing_attribution");
+        assert_eq!(blocked["kernel_verified"], true, "a blocking review layer never changes kernel truth");
+
+        // Complete every review layer -> publication_ready.
+        for layer in ["statement_fidelity", "literature_completeness", "citation_lineage",
+                      "novelty_claim", "exposition_disclosure"] {
+            pr(&peer, serde_json::json!({"action": {"type": "set_layer",
+                "episode_id": episode_id, "layer": layer, "status": "complete", "reviewer": "maintainer",
+            }})).await;
+        }
+        let ready = pr(&peer, serde_json::json!({"action": {"type": "observe", "episode_id": episode_id}})).await;
+        assert_eq!(ready["publication_status"], "publication_ready", "{:?}", ready);
+        // The append-only event ledger recorded every decision (incl. the revoked/superseded citation block).
+        assert!(ready["layer_events"].as_array().unwrap().len() >= 7, "{:?}", ready["layer_events"]);
+
+        // Novelty uncertainty blocks a STRONG novelty claim, without invalidating the proof.
+        pr(&peer, serde_json::json!({"action": {"type": "update", "episode_id": episode_id,
+            "makes_strong_novelty_claim": true, "novelty_uncertain": true}})).await;
+        let novelty_blocked = pr(&peer, serde_json::json!({"action": {"type": "observe", "episode_id": episode_id}})).await;
+        assert_eq!(novelty_blocked["publication_status"], "blocked_novelty_uncertain");
+        assert_eq!(novelty_blocked["kernel_verified"], true);
+
+        // export_contribution returns the required contribution block + computed status.
+        let exported = pr(&peer, serde_json::json!({"action": {"type": "export_contribution", "episode_id": episode_id}})).await;
+        assert_eq!(exported["contribution_block"]["contribution_type"], "reconstruction");
+        assert_eq!(exported["contribution_block"]["known_prior_art"][0], "Prior Fano-flow literature");
+        assert_eq!(exported["contribution_block"]["kernel_verified"], true);
     }
 
     /// #238: rl_export emits canonical RL transitions as JSONL for a solved
