@@ -86,4 +86,19 @@ theorem jacobian_conjecture_refuted_dim4 :
            (fun i => bind₁ G (F i)) = X ∧ (fun i => bind₁ F (G i)) = X) := by
   sorry
 
+/-- **Challenge 5** (verified over ℂ; environment problem `c270a9d2`, outcome
+**`certified`**): the normalized form (paper Cor. 3.2). With U = (R/2, Q, P):
+det Jac U = 1, Jac U(0) = I, U(0) = 0, and the three witness points all map to
+(0, 0, −1/4) — which is itself a fixed point of U. This is the standard input for the
+downstream Weyl-algebra (Dixmier), Poisson, and Zhao-machinery constructions. -/
+theorem normalized_map_facts :
+    (let U : Fin 3 → MvPolynomial (Fin 3) ℂ := ![X 0 - C (3/2) * (X 0)^2 * X 1 - C (1/2) * (X 0)^3 * X 2, X 1 + C 3 * X 0 * (1 + X 0 * X 1)^2 * X 2 + C 3 * X 0 * (X 1)^2 * (C 4 + C 3 * X 0 * X 1), (1 + X 0 * X 1)^3 * X 2 + (X 1)^2 * (1 + X 0 * X 1) * (C 4 + C 3 * X 0 * X 1)]
+     (Matrix.of fun i j => pderiv i (U j)).det = C (1 : ℂ)
+     ∧ (Matrix.of fun i j => aeval (fun _ => (0:ℂ)) (pderiv i (U j))) = 1
+     ∧ (fun i => aeval (fun _ => (0:ℂ)) (U i)) = (fun _ => (0:ℂ))
+     ∧ (fun i => aeval (![0, 0, -1/4] : Fin 3 → ℂ) (U i)) = (![0, 0, -1/4] : Fin 3 → ℂ)
+     ∧ (fun i => aeval (![1, -3/2, 13/2] : Fin 3 → ℂ) (U i)) = (![0, 0, -1/4] : Fin 3 → ℂ)
+     ∧ (fun i => aeval (![-1, 3/2, 13/2] : Fin 3 → ℂ) (U i)) = (![0, 0, -1/4] : Fin 3 → ℂ)) := by
+  sorry
+
 end JacobianChallenge

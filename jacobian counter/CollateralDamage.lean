@@ -37,8 +37,16 @@ References:
   [Zhao] W. Zhao, "Hessian nilpotent polynomials and the Jacobian conjecture",
          Trans. AMS 359 (2007) 249–274 (vanishing conjecture ⟺ JC).
   [Alp]  L. Alpöge, X post, July 19 2026 (the counterexample map).
-  [Cho]  P. Chojecki, "A Counterexample to the Jacobian Conjecture", ulam.ai research
-         write-up, July 20 2026 (jacobian.pdf: algebraic verification, fibers, families).
+  [Cho]  P. Chojecki, "A Counterexample to the Jacobian Conjecture",
+         https://www.ulam.ai/research/jacobian.pdf, July 20 2026 (algebraic
+         verification, fibers, families; byte-identical to this release's jacobian.pdf).
+  [Omni] "An Explicit Counterexample to the Dixmier Conjecture in A3",
+         omniscienceproject.com note, July 2026 — writes up the direct Weyl-algebra
+         endomorphism Φ(xᵢ) = Uᵢ, Φ(∂ᵢ) = Σ (adj J)ᵣᵢ ∂ᵣ from the counterexample.
+  [Gist] 11-variable degree-3 reduction certificate (ChatGPT-generated sympy script),
+         gist.github.com/Spacerat/08b4a43f6b6ca57178efabc220170ce8 — det −2, 52 terms,
+         same three-point collision; independently re-verified with sympy (including a
+         direct 11×11 Jacobian determinant computation) for this release.
 -/
 import Mathlib
 
@@ -182,6 +190,69 @@ theorem cubic_counterexample_exists_of_bridge
     (bridge : (∀ N : ℕ, CubicHomogeneousJacobianStatement N) → JacobianStatement 3) :
     ¬ (∀ N : ℕ, CubicHomogeneousJacobianStatement N) :=
   fun hc => jacobian_statement_false_dim3 (bridge hc)
+
+/-! ## Canonical Poisson conjecture -/
+
+/-- The canonical Poisson bracket on ℂ[x₁,x₂,x₃,p₁,p₂,p₃] (rank 3): position variables
+are `Sum.inl i`, momenta `Sum.inr i`, and {f, g} = Σᵢ (∂f/∂xᵢ·∂g/∂pᵢ − ∂f/∂pᵢ·∂g/∂xᵢ). -/
+noncomputable def poissonBracket
+    (f g : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ :=
+  ∑ i : Fin 3,
+    (pderiv (Sum.inl i) f * pderiv (Sum.inr i) g -
+     pderiv (Sum.inr i) f * pderiv (Sum.inl i) g)
+
+/-- The canonical (rank-3) Poisson conjecture: every ℂ-algebra endomorphism of the
+polynomial algebra that preserves the canonical bracket is bijective. See
+Adjamagbo–van den Essen (arXiv:math/0608009) for the stable equivalences among the
+Jacobian, Poisson, and Dixmier conjectures. -/
+def PoissonStatement : Prop :=
+  ∀ φ : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ →ₐ[ℂ] MvPolynomial (Fin 3 ⊕ Fin 3) ℂ,
+    (∀ f g, φ (poissonBracket f g) = poissonBracket (φ f) (φ g)) →
+    Function.Bijective φ
+
+/-- [CONDITIONAL] Granting the bridge Poisson ⟹ Jacobian (dimension 3) — realized
+concretely by the polynomial cotangent lift (x,p) ↦ (U(x), (Jac U)⁻ᵀ p) of any
+noninjective Keller map, whose bracket preservation and non-surjectivity are the
+content of the construction — the canonical Poisson conjecture is FALSE in rank 3.
+Sorry-free contrapositive. -/
+theorem poisson_false_of_bridge
+    (bridge : PoissonStatement → JacobianStatement 3) :
+    ¬ PoissonStatement :=
+  fun hp => jacobian_statement_false_dim3 (bridge hp)
+
+/-! ## Mathieu subspaces and Zhao's Image Conjecture -/
+
+/-- Zhao's Mathieu-subspace property for a ℂ-submodule M of a commutative ℂ-algebra:
+whenever all powers fᵐ (m ≥ 1) lie in M, every multiple g·fᵐ lies in M for m large. -/
+def IsMathieuSubspace {A : Type*} [CommRing A] [Algebra ℂ A]
+    (M : Submodule ℂ A) : Prop :=
+  ∀ f : A, (∀ m : ℕ, 0 < m → f ^ m ∈ M) →
+    ∀ g : A, ∃ N : ℕ, ∀ m : ℕ, N ≤ m → g * f ^ m ∈ M
+
+/-- The image subspace of Zhao's Image Conjecture in 2n variables: the sum of the
+ranges of the commuting operators Θᵢ = ∂/∂Zᵢ − ξᵢ (Z variables `Sum.inl`, ξ variables
+`Sum.inr`). -/
+noncomputable def zhaoImage (n : ℕ) :
+    Submodule ℂ (MvPolynomial (Fin n ⊕ Fin n) ℂ) :=
+  ⨆ i : Fin n,
+    LinearMap.range
+      ((pderiv (Sum.inl i)).toLinearMap -
+        LinearMap.mulLeft ℂ (X (Sum.inr i)))
+
+/-- Zhao's Image Conjecture in 2n variables (arXiv:0902.0210): `zhaoImage n` is a
+Mathieu subspace. -/
+def ZhaoImageStatement (n : ℕ) : Prop := IsMathieuSubspace (zhaoImage n)
+
+/-- [CONDITIONAL] Granting the bridge (Image Conjecture in all sizes ⟹ Jacobian in
+dimension 3, via Zhao's image/inversion identities applied to a cubic-homogeneous
+reduction of the counterexample), the Image Conjecture fails for some n — with the
+intended concrete witness M = zhaoImage 23, p = Σ ξᵢHᵢ(Z), g = Z₁ from the
+23-variable Yagzhev lift of the 11-variable cubic reduction certificate.
+Sorry-free contrapositive. -/
+theorem zhao_image_false_of_bridge
+    (bridge : (∀ n : ℕ, ZhaoImageStatement n) → JacobianStatement 3) :
+    ¬ (∀ n : ℕ, ZhaoImageStatement n) :=
+  fun hz => jacobian_statement_false_dim3 (bridge hz)
 
 /-! ## Mathieu's conjecture
 

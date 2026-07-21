@@ -12,6 +12,7 @@ Verified claims chain:
   2. `jacobian_conjecture_refuted_dim3`     — problem 654521be, episode 1f9dfbee, CERTIFIED
   3. `counterexample_map_not_injective`     — problem f3b97f2c, episode a8a4062d, CERTIFIED
   4. `jacobian_conjecture_refuted_dim4`     — problem 7312a555, episode 591219bc, CERTIFIED
+  5. `normalized_map_facts`                 — problem c270a9d2, episode c8d0d87c, CERTIFIED
 -/
 import Mathlib
 
@@ -131,5 +132,46 @@ theorem jacobian_conjecture_refuted_dim4 :
   rw [epts] at a0
   have hcontra : (![0, 0, -1/4, 0] : Fin 4 → ℂ) 0 = (![1, -3/2, 13/2, 0] : Fin 4 → ℂ) 0 := a0.symm.trans b0
   norm_num at hcontra
+
+/-- Challenge 5, solved (CERTIFIED over ℂ): normalized form, paper Cor. 3.2.
+Note the two techniques beyond the standard recipe: the statement let-binds U once
+(six-fold inlining exceeds the statement-elaboration heartbeat budget), and the
+determinant closes with `linear_combination W * h2` where h2 : 2·C 2⁻¹ = 1 supplies the
+scalar relation `ring` cannot know, with the cofactor W computed externally by exact
+polynomial division. -/
+theorem normalized_map_facts :
+    (let U : Fin 3 → MvPolynomial (Fin 3) ℂ := ![X 0 - C (3/2) * (X 0)^2 * X 1 - C (1/2) * (X 0)^3 * X 2, X 1 + C 3 * X 0 * (1 + X 0 * X 1)^2 * X 2 + C 3 * X 0 * (X 1)^2 * (C 4 + C 3 * X 0 * X 1), (1 + X 0 * X 1)^3 * X 2 + (X 1)^2 * (1 + X 0 * X 1) * (C 4 + C 3 * X 0 * X 1)]
+     (Matrix.of fun i j => pderiv i (U j)).det = C (1 : ℂ)
+     ∧ (Matrix.of fun i j => aeval (fun _ => (0:ℂ)) (pderiv i (U j))) = 1
+     ∧ (fun i => aeval (fun _ => (0:ℂ)) (U i)) = (fun _ => (0:ℂ))
+     ∧ (fun i => aeval (![0, 0, -1/4] : Fin 3 → ℂ) (U i)) = (![0, 0, -1/4] : Fin 3 → ℂ)
+     ∧ (fun i => aeval (![1, -3/2, 13/2] : Fin 3 → ℂ) (U i)) = (![0, 0, -1/4] : Fin 3 → ℂ)
+     ∧ (fun i => aeval (![-1, 3/2, 13/2] : Fin 3 → ℂ) (U i)) = (![0, 0, -1/4] : Fin 3 → ℂ)) := by
+  set_option maxHeartbeats 2000000 in
+  dsimp only
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [Matrix.det_fin_three]
+    rw [show (C (1 : ℂ) : MvPolynomial (Fin 3) ℂ) = C 2 * C (1/2) from by rw [← C_mul]; norm_num]
+    rw [show (C (3/2 : ℂ) : MvPolynomial (Fin 3) ℂ) = C 3 * C (1/2) from by rw [← C_mul]; norm_num]
+    set_option maxHeartbeats 2000000 in
+    set_option maxRecDepth 400000 in
+    simp [pderiv_mul, pderiv_pow, pderiv_C, pderiv_X_self, pderiv_X_of_ne, pderiv_one, Derivation.map_add, Derivation.map_sub]
+    set_option maxHeartbeats 2000000 in
+    set_option maxRecDepth 400000 in
+    simp only [map_ofNat, map_one]
+    have h2 : (2 : MvPolynomial (Fin 3) ℂ) * C ((2 : ℂ)⁻¹) = 1 := by rw [show (2 : MvPolynomial (Fin 3) ℂ) = C 2 from (map_ofNat C 2).symm, ← C_mul]; norm_num
+    set_option maxHeartbeats 2000000 in
+    set_option maxRecDepth 400000 in
+    linear_combination ((X 0 * X 1 + 1)^2 * (3 * (X 0)^4 * (X 1)^2 * X 2 + 9 * (X 0)^3 * (X 1)^3 + 6 * (X 0)^3 * X 1 * X 2 + 12 * (X 0)^2 * (X 1)^2 + 3 * (X 0)^2 * X 2 - X 0 * X 1 - 1)) * h2
+  · ext i j
+    fin_cases i <;> fin_cases j <;> (set_option maxHeartbeats 2000000 in set_option maxRecDepth 40000 in simp [pderiv_mul, pderiv_pow, pderiv_C, pderiv_X_self, pderiv_X_of_ne, pderiv_one, Derivation.map_add, Derivation.map_sub, Matrix.one_apply]) <;> (set_option maxHeartbeats 1000000 in norm_num)
+  · funext i
+    fin_cases i <;> (set_option maxHeartbeats 1000000 in set_option maxRecDepth 40000 in simp) <;> (set_option maxHeartbeats 1000000 in norm_num)
+  · funext i
+    fin_cases i <;> (set_option maxHeartbeats 1000000 in set_option maxRecDepth 40000 in simp) <;> (set_option maxHeartbeats 1000000 in norm_num)
+  · funext i
+    fin_cases i <;> (set_option maxHeartbeats 1000000 in set_option maxRecDepth 40000 in simp) <;> (set_option maxHeartbeats 1000000 in norm_num)
+  · funext i
+    fin_cases i <;> (set_option maxHeartbeats 1000000 in set_option maxRecDepth 40000 in simp) <;> (set_option maxHeartbeats 1000000 in norm_num)
 
 end JacobianChallenge
