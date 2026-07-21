@@ -12652,52 +12652,72 @@ impl ChatDbMcp {
             export_eligibility: "restricted".into(),
         };
 
+        // #264: all emitted record ids are colon-free (Windows/catalog safe) and
+        // cross-references share one namespace so the bundle folds into a packet
+        // with zero referential-integrity errors.
         let mut records: Vec<serde_json::Value> = Vec::new();
         records.push(mcip::packet_identity_to_mcip(
-            &env_for(format!("{}:packet_identity", obligation_id)),
+            &env_for(format!("pi.{}", obligation_id)),
             "1.0.0", Some(&formal_stmt_sha), &lean_ver, &mathlib_rev, "kernel_verified",
+        ));
+
+        // The proof variant the packet folds. Its id is the shared handle the
+        // proof_profile links to and that a verified repair trajectory terminates
+        // at (MathCorpus requires a verified terminal_ref to be a variant id).
+        let variant_id = format!("pv.{}.canonical", obligation_id);
+        records.push(mcip::proof_variant_to_mcip(
+            &env_for(variant_id.clone()), &formal_stmt_sha, "canonical", "proof_search",
         ));
 
         let profile = proofsearch_core::analyzer::analyze_proof(&source, solve_kind,
             proofsearch_core::analyzer::DependencyInputs { explicit, transitive: explicit, retrieval_depth: 0 });
-        let variant_id = format!("{}:variant", obligation_id);
-        records.push(mcip::proof_profile_to_mcip(&profile, &env_for(format!("{}:proof_profile", obligation_id)), &variant_id));
+        records.push(mcip::proof_profile_to_mcip(&profile, &env_for(format!("pp.{}", obligation_id)), &variant_id));
 
         let manifest = proofsearch_core::dependency_manifest::build_dependency_manifest(
             &conn, episode_id, obligation_id, &source, &env_hash, &import_manifest, None,
         ).map_err(mcp_internal_error)?;
-        records.push(mcip::dependency_manifest_to_mcip(&manifest, &env_for(format!("{}:dependency_manifest", obligation_id)), Some(&variant_id)));
+        records.push(mcip::dependency_manifest_to_mcip(&manifest, &env_for(format!("dm.{}", obligation_id)), Some(&variant_id)));
+
+        // Attempt records: one per real recorded attempt, keyed in the shared
+        // attempt-id namespace (mcip::attempt_ref). The succeeded attempt is the
+        // one every synthetic negative (a mutation of the winning proof) and the
+        // repair chain resolve against.
+        let summaries = proofsearch_core::repair_chain::attempt_summaries(&conn, obligation_id)
+            .map_err(mcp_internal_error)?;
+        for a in summaries.iter() {
+            records.push(mcip::attempt_record_to_mcip(
+                a, &env_for(mcip::attempt_ref(&a.attempt_id)), &episode_id.to_string(),
+            ));
+        }
+        let succeeded_attempt = summaries.iter().find(|a| !a.failed).map(|a| mcip::attempt_ref(&a.attempt_id));
 
         if args.include_negatives {
-            for (i, neg) in proofsearch_core::mutations::generate_mutations(&source).iter().enumerate() {
-                records.push(mcip::synthetic_negative_to_mcip(
-                    neg, &env_for(format!("{}:negative:{}", obligation_id, i)), &format!("{}:attempt", obligation_id),
-                ));
+            // A synthetic negative must reference a real attempt in this packet;
+            // without a recorded succeeded attempt there is nothing to attribute
+            // it to, so it is omitted rather than left dangling.
+            if let Some(succ) = succeeded_attempt.as_deref() {
+                for (i, neg) in proofsearch_core::mutations::generate_mutations(&source).iter().enumerate() {
+                    records.push(mcip::synthetic_negative_to_mcip(
+                        neg, &env_for(format!("neg.{}.{}", obligation_id, i)), succ,
+                    ));
+                }
             }
         }
         if args.include_transitions {
             let transitions = proofsearch_core::orchestrator::dataset::export_rl_transitions(&conn, episode_id)
                 .map_err(mcp_internal_error)?;
             for t in &transitions {
-                records.push(mcip::rl_transition_to_mcip(t, &env_for(format!("{}:transition:{}", episode_id, t.step_index)), &formal_stmt_sha));
+                records.push(mcip::rl_transition_to_mcip(t, &env_for(format!("tr.{}.{}", episode_id, t.step_index)), &formal_stmt_sha));
             }
         }
 
-        // Attempt records: one per real recorded attempt on this obligation.
-        let summaries = proofsearch_core::repair_chain::attempt_summaries(&conn, obligation_id)
-            .map_err(mcp_internal_error)?;
-        for (i, a) in summaries.iter().enumerate() {
-            records.push(mcip::attempt_record_to_mcip(
-                a, &env_for(format!("{}:attempt:{}", obligation_id, i)), &episode_id.to_string(),
-            ));
-        }
-
         // #235: an ordered repair chain, when this obligation was solved only
-        // after organic failures.
+        // after organic failures. Refs are namespaced and the verified terminus
+        // resolves to the proof variant above.
         if let Some(chain) = proofsearch_core::repair_chain::build_repair_chain(&conn, obligation_id)
             .map_err(mcp_internal_error)?
         {
-            records.push(mcip::repair_chain_to_mcip(&chain, &env_for(format!("{}:repair_trajectory", obligation_id))));
+            records.push(mcip::repair_chain_to_mcip(&chain, &env_for(format!("rt.{}", obligation_id)), &variant_id));
         }
 
         // #263: weave stored literature-lineage provenance. Each lineage row
@@ -12721,7 +12741,7 @@ impl ChatDbMcp {
                 records.extend(mcip::lineage_records(
                     &sources,
                     &env_for(String::new()),
-                    &format!("{}:lineage:{}", obligation_id, lineage_id),
+                    &format!("{}.{}", obligation_id, lineage_id),
                     &formal_stmt_sha,
                 ));
             }
