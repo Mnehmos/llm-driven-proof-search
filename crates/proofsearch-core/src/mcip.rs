@@ -411,25 +411,49 @@ pub fn literature_source_to_mcip(
     finalize("literature_source", env, f)
 }
 
-/// #236 -> MCIP `idea_attribution`.
+/// #236/#264 -> MCIP `idea_attribution`. `literature_source_id` is the catalog
+/// record id of the paired `literature_source` (what MathCorpus links on), and
+/// `source_sha256_pin` is that literature_source record's own `record_hash`
+/// (the value MathCorpus's catalog-pin check validates — NOT the paper's
+/// content hash, which lives in `literature_source.source_sha256`).
 pub fn idea_attribution_to_mcip(
     s: &crate::literature_lineage::SourceRecord,
     env: &Envelope,
     formal_statement_sha256: &str,
+    literature_source_id: &str,
+    source_record_hash: &str,
 ) -> Value {
     let mut f = BTreeMap::new();
     f.insert(
         "formal_statement_sha256".into(),
         json!(formal_statement_sha256),
     );
-    f.insert("literature_source_id".into(), json!(s.source_id));
-    f.insert("source_sha256_pin".into(), json!(s.source_hash));
+    f.insert("literature_source_id".into(), json!(literature_source_id));
+    f.insert("source_sha256_pin".into(), json!(source_record_hash));
     f.insert(
         "attribution_status".into(),
         json!(mcip_attribution_status(s.attribution)),
     );
     f.insert("visibility".into(), json!(mcip_visibility(s.visibility)));
     finalize("idea_attribution", env, f)
+}
+
+/// #264: a stable, Windows-safe catalog record id for a literature source,
+/// matching MathCorpus's `literature_sources/` naming (`literature_source.<id>`).
+/// The id is used as the catalog filename, so any character outside
+/// `[A-Za-z0-9._-]` is replaced with `_`.
+pub fn literature_source_record_id(source_id: &str) -> String {
+    let safe: String = source_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("literature_source.{}", safe)
 }
 
 /// #263: emit the paired `literature_source` + `idea_attribution` records for
@@ -452,19 +476,31 @@ pub fn lineage_records(
 ) -> Vec<Value> {
     let mut out = Vec::with_capacity(sources.len() * 2);
     for (i, s) in sources.iter().enumerate() {
+        // The literature_source goes to the shared catalog under a stable,
+        // Windows-safe id derived from its source_id; the idea_attribution links
+        // to THAT id and pins the literature_source record's own record_hash.
+        let ls_record_id = literature_source_record_id(&s.source_id);
         let src_env = Envelope {
-            record_id: format!("{}:literature_source:{}", record_id_prefix, i),
+            record_id: ls_record_id.clone(),
             ..base.clone()
         };
-        out.push(literature_source_to_mcip(s, &src_env));
+        let ls = literature_source_to_mcip(s, &src_env);
+        let ls_record_hash = ls
+            .get("record_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        out.push(ls);
         let idea_env = Envelope {
-            record_id: format!("{}:idea_attribution:{}", record_id_prefix, i),
+            record_id: format!("{}.idea_attribution.{}", record_id_prefix, i),
             ..base.clone()
         };
         out.push(idea_attribution_to_mcip(
             s,
             &idea_env,
             formal_statement_sha256,
+            &ls_record_id,
+            &ls_record_hash,
         ));
     }
     out
@@ -528,26 +564,110 @@ pub fn citation_review_to_mcip(
     finalize("citation_review", env, f)
 }
 
-/// #235 -> MCIP `repair_trajectory`.
-pub fn repair_chain_to_mcip(c: &crate::repair_chain::RepairChain, env: &Envelope) -> Value {
+/// #264: the MCIP `attempt_id` for a proof-search attempt UUID. One stable,
+/// colon-free namespace shared by `attempt_record` record ids, the
+/// `attempt_id` a `negative_example` references, and a `repair_trajectory`
+/// step's `from_attempt_id` / `to_ref` — so every reference resolves against
+/// the packet's own `attempts` after fold.
+pub fn attempt_ref(attempt_uuid: &str) -> String {
+    format!("ar.{}", attempt_uuid)
+}
+
+/// #264: MathCorpus's canonical repair-step hash — SHA-256 over the canonical
+/// JSON of exactly `{step_index, from_attempt_id, repair_action,
+/// diagnostic_category_addressed, to_ref}` (sorted keys, compact), matching
+/// `mathcorpus.hashing.repair_step_hash`. Computed over the FINAL (namespaced)
+/// ref values so a folded step's `step_hash` reproduces MathCorpus's recompute.
+fn repair_step_hash_canonical(
+    step_index: usize,
+    from_attempt_id: &str,
+    repair_action: &str,
+    diagnostic_category_addressed: Option<&str>,
+    to_ref: &str,
+) -> String {
+    let mut m = BTreeMap::new();
+    m.insert("step_index".to_string(), json!(step_index));
+    m.insert("from_attempt_id".to_string(), json!(from_attempt_id));
+    m.insert("repair_action".to_string(), json!(repair_action));
+    m.insert(
+        "diagnostic_category_addressed".to_string(),
+        match diagnostic_category_addressed {
+            Some(s) => json!(s),
+            None => Value::Null,
+        },
+    );
+    m.insert("to_ref".to_string(), json!(to_ref));
+    sha256_hex(&canonical_json(&m))
+}
+
+/// #264: emit the `proof_variant` record the packet folds as its proof variant.
+/// A `repair_trajectory`'s `verified_proof` `terminal_ref` resolves to this
+/// variant's id, and the `proof_profile` (whose `proof_variant_id` equals this
+/// record's id) folds in attached to it.
+pub fn proof_variant_to_mcip(
+    env: &Envelope,
+    formal_statement_sha256: &str,
+    variant_style: &str,
+    source: &str,
+) -> Value {
+    let mut f = BTreeMap::new();
+    f.insert(
+        "formal_statement_sha256".into(),
+        json!(formal_statement_sha256),
+    );
+    f.insert("variant_style".into(), json!(variant_style));
+    f.insert("proof_body_redacted".into(), json!(false));
+    f.insert("source".into(), json!(source));
+    f.insert("proof_profile_id".into(), json!(env.record_id));
+    finalize("proof_variant", env, f)
+}
+
+/// #235/#264 -> MCIP `repair_trajectory`. `variant_id` is the id of the
+/// `proof_variant` emitted for this obligation: a `verified_proof` terminus
+/// resolves to it (MathCorpus requires the terminal_ref of a verified
+/// trajectory to be a proof-variant id, not an attempt). Step `from_attempt_id`
+/// / `to_ref` are namespaced into the shared `attempt_ref` space, and each
+/// `step_hash` is recomputed over those final values via MathCorpus's canonical
+/// convention so the fold's integrity check passes.
+pub fn repair_chain_to_mcip(
+    c: &crate::repair_chain::RepairChain,
+    env: &Envelope,
+    variant_id: &str,
+) -> Value {
     let steps: Vec<Value> = c
         .steps
         .iter()
         .map(|s| {
+            let from = attempt_ref(&s.from_attempt_id);
+            let to = attempt_ref(&s.to_ref);
+            let step_hash = repair_step_hash_canonical(
+                s.step_index,
+                &from,
+                &s.repair_action,
+                s.diagnostic_category_addressed.as_deref(),
+                &to,
+            );
             json!({
                 "step_index": s.step_index,
-                "from_attempt_id": s.from_attempt_id,
+                "from_attempt_id": from,
                 "repair_action": s.repair_action,
                 "diagnostic_category_addressed": s.diagnostic_category_addressed,
-                "to_ref": s.to_ref,
-                "step_hash": s.step_hash,
+                "to_ref": to,
+                "step_hash": step_hash,
             })
         })
         .collect();
+    // A verified terminus points at the proof variant; a failure terminus points
+    // at the (namespaced) terminal attempt.
+    let terminal_ref = if c.terminal_outcome == "verified_proof" {
+        variant_id.to_string()
+    } else {
+        attempt_ref(&c.terminal_ref)
+    };
     let mut f = BTreeMap::new();
     f.insert("steps".into(), json!(steps));
     f.insert("terminal_outcome".into(), json!(c.terminal_outcome));
-    f.insert("terminal_ref".into(), json!(c.terminal_ref));
+    f.insert("terminal_ref".into(), json!(terminal_ref));
     finalize("repair_trajectory", env, f)
 }
 
@@ -754,8 +874,24 @@ mod tests {
             },
         ])
         .unwrap();
-        let rt = repair_chain_to_mcip(&chain, &env());
+        let variant_env = Envelope {
+            record_id: "pv.o1.canonical".into(),
+            ..env()
+        };
+        let pv = proof_variant_to_mcip(&variant_env, &"a".repeat(64), "canonical", "proof_search");
+        assert_eq!(pv["record_type"], "proof_variant");
+        std::fs::write(
+            out.join("proof_variant.json"),
+            serde_json::to_vec_pretty(&pv).unwrap(),
+        )
+        .unwrap();
+
+        let rt = repair_chain_to_mcip(&chain, &env(), "pv.o1.canonical");
         assert_eq!(rt["record_type"], "repair_trajectory");
+        // #264: a verified terminus resolves to the proof variant, refs are namespaced.
+        assert_eq!(rt["terminal_ref"], "pv.o1.canonical");
+        assert_eq!(rt["steps"][0]["from_attempt_id"], "ar.a1");
+        assert_eq!(rt["steps"][0]["to_ref"], "ar.a2");
         std::fs::write(
             out.join("repair_trajectory.json"),
             serde_json::to_vec_pretty(&rt).unwrap(),
@@ -787,8 +923,16 @@ mod tests {
             serde_json::to_vec_pretty(&ls).unwrap(),
         )
         .unwrap();
-        let ia = idea_attribution_to_mcip(&src, &env(), &"b".repeat(64));
+        let ia = idea_attribution_to_mcip(
+            &src,
+            &env(),
+            &"b".repeat(64),
+            "literature_source.src-1",
+            &ls["record_hash"].as_str().unwrap().to_string(),
+        );
         assert_eq!(ia["attribution_status"], "independent_rediscovery");
+        assert_eq!(ia["literature_source_id"], "literature_source.src-1");
+        assert_eq!(ia["source_sha256_pin"], ls["record_hash"]);
         std::fs::write(
             out.join("idea_attribution.json"),
             serde_json::to_vec_pretty(&ia).unwrap(),
@@ -849,9 +993,9 @@ mod tests {
         let bundle = build_bundle(
             "bundle-0001",
             "2026-07-12T00:00:00Z",
-            vec![pid, pp, rpm, dm, nm, tm, rt, ls, ia, cs, cr, ar],
+            vec![pid, pv, pp, rpm, dm, nm, tm, rt, ls, ia, cs, cr, ar],
         );
-        assert_eq!(bundle["records"].as_array().unwrap().len(), 12);
+        assert_eq!(bundle["records"].as_array().unwrap().len(), 13);
         std::fs::write(
             out.join("bundle.json"),
             serde_json::to_vec_pretty(&bundle).unwrap(),
@@ -887,7 +1031,7 @@ mod tests {
             mk("s1", lit::AttributionStatus::LikelyInfluential),
         ];
         let stmt_sha = "d".repeat(64);
-        let recs = lineage_records(&sources, &env(), "obl-1:lineage:lin-1", &stmt_sha);
+        let recs = lineage_records(&sources, &env(), "obl-1.lin-1", &stmt_sha);
 
         // Two sources -> four records, alternating source/attribution.
         assert_eq!(recs.len(), 4);
@@ -896,20 +1040,19 @@ mod tests {
         assert_eq!(recs[2]["record_type"], "literature_source");
         assert_eq!(recs[3]["record_type"], "idea_attribution");
 
-        // Each record is individually addressable (distinct record_id) and the
-        // attribution binds the obligation's statement hash + its source.
-        assert_eq!(
-            recs[0]["record_id"],
-            "obl-1:lineage:lin-1:literature_source:0"
-        );
-        assert_eq!(
-            recs[1]["record_id"],
-            "obl-1:lineage:lin-1:idea_attribution:0"
-        );
+        // #264: the literature_source carries a stable, Windows-safe catalog id
+        // (colon-free), and the idea_attribution links to THAT id and pins the
+        // literature_source record's own record_hash (not the paper content hash).
+        assert_eq!(recs[0]["record_id"], "literature_source.s0");
+        assert_eq!(recs[1]["record_id"], "obl-1.lin-1.idea_attribution.0");
+        assert!(!recs[0]["record_id"].as_str().unwrap().contains(':'));
+        assert!(!recs[1]["record_id"].as_str().unwrap().contains(':'));
         assert_eq!(recs[1]["formal_statement_sha256"], stmt_sha);
-        assert_eq!(recs[1]["literature_source_id"], "s0");
+        assert_eq!(recs[1]["literature_source_id"], "literature_source.s0");
+        assert_eq!(recs[1]["source_sha256_pin"], recs[0]["record_hash"]);
         assert_eq!(recs[1]["attribution_status"], "directly_used");
-        assert_eq!(recs[3]["literature_source_id"], "s1");
+        assert_eq!(recs[3]["literature_source_id"], "literature_source.s1");
+        assert_eq!(recs[3]["source_sha256_pin"], recs[2]["record_hash"]);
 
         // Every record is hash-pinned, and NONE carries a proof-status field —
         // provenance evidence, never proof authority.
