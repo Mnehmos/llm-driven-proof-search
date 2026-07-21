@@ -9120,6 +9120,31 @@ impl ChatDbMcp {
             None
         };
 
+        // #240: a causal diagnostic summary. The full ordered diagnostic list is
+        // persisted verbatim in action_attempts.lean_result_json; classify it so
+        // the prominent `diagnostics` string is complemented by a likely-ROOT
+        // selection (and cascade markers) rather than leaving the policy to treat
+        // a possibly-cascade symptom as the next observation. Advisory only — it
+        // never changes the verdict, and the full list stays retrievable via
+        // trajectory_export / the verification result.
+        let diagnostic_summary: Option<serde_json::Value> = {
+            let lrj: Option<String> = conn.query_row(
+                "SELECT lean_result_json FROM action_attempts WHERE id = ?1",
+                [attempt_uuid.to_string()], |r| r.get(0),
+            ).optional().map_err(rs)?.flatten();
+            lrj.as_deref()
+                .and_then(|s| serde_json::from_str::<proofsearch_core::models::LeanVerificationResult>(s).ok())
+                .filter(|r| !r.all_diagnostics.is_empty())
+                .map(|r| {
+                    let total = r.output_receipt.as_ref()
+                        .map(|o| o.total_diagnostics as usize)
+                        .unwrap_or(r.all_diagnostics.len());
+                    serde_json::to_value(
+                        proofsearch_core::diagnostics::classify_diagnostics(&r.all_diagnostics, total)
+                    ).unwrap_or(serde_json::Value::Null)
+                })
+        };
+
         let res = serde_json::json!({
             "accepted": accepted,
             "disposition": disposition,
@@ -9129,6 +9154,7 @@ impl ChatDbMcp {
             "termination_reason": term_reason,
             "truncation_reason": trunc_reason,
             "diagnostics": error_msg,
+            "diagnostic_summary": diagnostic_summary,
             "rejection_diagnostic": rejection_diagnostic,
             "next_action_request": next_action_request,
             "observation": observation
@@ -21107,6 +21133,86 @@ mod tests {
             "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"], "expected_revision": req["episode_revision"],
             "claim_token": claim["claim_token"], "action": {"type": "solve", "proof_term": proof_term}, "cost_micros": 100,
         }).as_object().unwrap().clone())).await.unwrap())
+    }
+
+    /// #240: a gateway that fails with an ordered diagnostic list — an
+    /// elaboration root followed by a `No goals` cascade — so the causal
+    /// diagnostic summary can be exercised end to end.
+    struct DiagnosticGateway;
+    impl LeanGateway for DiagnosticGateway {
+        fn verify_exact(
+            &self,
+            obligation: &Obligation,
+            _candidate_source: &str,
+            _approved_dependency_ids: &[Uuid],
+            environment: &str,
+            _import_manifest: &[String],
+            _proof_format: ProofFormat,
+        ) -> Result<LeanVerificationResult, String> {
+            let mk = |cat, msg: &str, span: Option<&str>| LeanDiagnostic {
+                category: cat,
+                primary_message: msg.to_string(),
+                source_span: span.map(|s| s.to_string()),
+                goal: None,
+                local_context: vec![],
+                unsolved_goals: vec![],
+                used_dependencies: vec![],
+                error_code: None,
+                canonical_goal_hash: None,
+            };
+            let elab = mk(LeanDiagnosticCategory::ElaborationError, "type mismatch: expected Nat", Some("3:5"));
+            let cascade = mk(LeanDiagnosticCategory::TacticFailure, "No goals to be solved", Some("5:3"));
+            Ok(LeanVerificationResult {
+                outcome: LeanVerificationOutcome::KernelFail,
+                attempt_id: Uuid::new_v4(),
+                obligation_id: obligation.id,
+                theorem_name: obligation.theorem_name.clone(),
+                expected_statement_hash: obligation.statement_hash.clone(),
+                elaborated_statement_hash: None,
+                environment_hash: environment.to_string(),
+                proof_source_hash: "".to_string(),
+                compiled_artifact_hash: None,
+                proof_term_hash: None,
+                diagnostic: Some(cascade.clone()), // the prominent (last) symptom, deliberately the cascade
+                all_diagnostics: vec![elab, cascade],
+                dependency_use_report: None,
+                resource_policy: None,
+                output_receipt: None,
+                durability_job: None,
+                wall_time_ms: 1,
+                lean_cpu_time_ms: 1,
+            })
+        }
+        fn validate_import_manifest(&self, _imports: &[String]) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// #240: episode_step surfaces a causal `diagnostic_summary` that selects the
+    /// elaboration ROOT over the prominent `No goals` cascade, keeping the full
+    /// ordered list classified.
+    #[tokio::test]
+    async fn test_episode_step_surfaces_causal_diagnostic_summary() {
+        let client = connected_client(test_handler_with_gateway(DiagnosticGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let step = claim_and_solve(&peer, &episode_id, "anything (gateway always fails with diagnostics)", "diag").await;
+        assert_eq!(step["accepted"], false, "a kernel-failing solve is not accepted: {:?}", step);
+
+        let summary = &step["diagnostic_summary"];
+        assert!(summary.is_object(), "diagnostic_summary must be present on a failing solve: {:?}", step);
+        assert_eq!(summary["primary_index"], 0, "the elaboration root, not the cascade, is primary: {:?}", summary);
+        assert_eq!(summary["selection_reason"], "earliest_non_cascade_parser_or_elaboration_error");
+        assert_eq!(summary["retained_diagnostics"], 2);
+        assert_eq!(summary["cascade_count"], 1);
+        assert_eq!(summary["candidates"][0]["classification"], "root_candidate");
+        assert_eq!(summary["candidates"][1]["classification"], "post_goal_tactic");
+        // The prominent legacy string remains for compatibility.
+        assert!(step["diagnostics"].is_string() || step["diagnostics"].is_null());
     }
 
     /// #237: the publication-review gate. A kernel-verified result is never
