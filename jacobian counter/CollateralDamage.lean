@@ -228,6 +228,235 @@ theorem poisson_false_of_bridge
     ¬ PoissonStatement :=
   fun hp => jacobian_statement_false_dim3 (bridge hp)
 
+/-! ## THEOREM 7: the canonical rank-3 Poisson conjecture is FALSE — unconditionally.
+
+[FILE-VERIFIED, sorry-free] Compiled clean against the pinned Mathlib (lake env lean);
+not yet transported through the proof-search environment's certification path.
+Supersedes `poisson_false_of_bridge` as the actual refutation: no inverse theorem, no
+bridge hypothesis. Structure: a generic bracket-calculus + generator-extension layer
+(independent of the counterexample), the concrete cotangent lift W (positions ↦ F,
+momenta ↦ −½·Bᵀp with B the explicit cofactor matrix of theorem 6), the 36 generator
+brackets re-verified in-file (integer arithmetic; the −½ scalar stays outside via the
+`C_mul` bracket lemmas), and non-surjectivity from the lifted two-point fiber via
+`MvPolynomial.algHom_ext` — a surjection would force 0 = 1 in ℂ. -/
+
+/-! ### Generic bracket calculus -/
+
+theorem poissonBracket_C_left (a : ℂ) (g : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) :
+    poissonBracket (C a) g = 0 := by
+  simp [poissonBracket]
+
+theorem poissonBracket_C_right (f : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) (a : ℂ) :
+    poissonBracket f (C a) = 0 := by
+  simp [poissonBracket]
+
+theorem poissonBracket_add_left (f g h : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) :
+    poissonBracket (f + g) h = poissonBracket f h + poissonBracket g h := by
+  simp only [poissonBracket, map_add]
+  rw [← Finset.sum_add_distrib]
+  exact Finset.sum_congr rfl fun i _ => by ring
+
+theorem poissonBracket_add_right (f g h : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) :
+    poissonBracket f (g + h) = poissonBracket f g + poissonBracket f h := by
+  simp only [poissonBracket, map_add]
+  rw [← Finset.sum_add_distrib]
+  exact Finset.sum_congr rfl fun i _ => by ring
+
+theorem poissonBracket_mul_left (f g h : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) :
+    poissonBracket (f * g) h = f * poissonBracket g h + g * poissonBracket f h := by
+  simp only [poissonBracket, Derivation.leibniz, smul_eq_mul, Finset.mul_sum]
+  rw [← Finset.sum_add_distrib]
+  exact Finset.sum_congr rfl fun i _ => by ring
+
+theorem poissonBracket_mul_right (f g h : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) :
+    poissonBracket f (g * h) = g * poissonBracket f h + h * poissonBracket f g := by
+  simp only [poissonBracket, Derivation.leibniz, smul_eq_mul, Finset.mul_sum]
+  rw [← Finset.sum_add_distrib]
+  exact Finset.sum_congr rfl fun i _ => by ring
+
+/-- Generator-extension lemma, step 1: bracket with a variable on the left. -/
+theorem aeval_poissonBracket_X
+    (W : Fin 3 ⊕ Fin 3 → MvPolynomial (Fin 3 ⊕ Fin 3) ℂ)
+    (hgen : ∀ i j, aeval W (poissonBracket (X i) (X j)) = poissonBracket (W i) (W j))
+    (n : Fin 3 ⊕ Fin 3) (g : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) :
+    aeval W (poissonBracket (X n) g) = poissonBracket (W n) (aeval W g) := by
+  induction g using MvPolynomial.induction_on with
+  | C a => simp [poissonBracket_C_right]
+  | add p q hp hq =>
+      rw [poissonBracket_add_right, map_add, hp, hq, map_add, poissonBracket_add_right]
+  | mul_X p m hp =>
+      rw [poissonBracket_mul_right, map_add, map_mul, map_mul, hp, hgen n m, map_mul,
+        aeval_X, poissonBracket_mul_right]
+
+/-- Generator-extension lemma: an `aeval` substitution preserving generator brackets
+preserves all brackets. Independent of any specific map. -/
+theorem aeval_preserves_poissonBracket
+    (W : Fin 3 ⊕ Fin 3 → MvPolynomial (Fin 3 ⊕ Fin 3) ℂ)
+    (hgen : ∀ i j, aeval W (poissonBracket (X i) (X j)) = poissonBracket (W i) (W j))
+    (f g : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) :
+    aeval W (poissonBracket f g) = poissonBracket (aeval W f) (aeval W g) := by
+  induction f using MvPolynomial.induction_on with
+  | C a => simp [poissonBracket_C_left]
+  | add p q hp hq =>
+      rw [poissonBracket_add_left, map_add, hp, hq, map_add, poissonBracket_add_left]
+  | mul_X p m hp =>
+      rw [poissonBracket_mul_left, map_add, map_mul, map_mul, hp,
+        aeval_poissonBracket_X W hgen, map_mul, aeval_X, poissonBracket_mul_left]
+
+/-! ### The concrete cotangent lift of the counterexample map -/
+
+theorem poissonBracket_C_mul_left (a : ℂ) (f g : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) :
+    poissonBracket (C a * f) g = C a * poissonBracket f g := by
+  rw [poissonBracket_mul_left, poissonBracket_C_left, mul_zero, add_zero]
+
+theorem poissonBracket_C_mul_right (a : ℂ) (f g : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) :
+    poissonBracket f (C a * g) = C a * poissonBracket f g := by
+  rw [poissonBracket_mul_right, poissonBracket_C_right, mul_zero, add_zero]
+
+noncomputable def xA : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ := 1 + X (Sum.inl 0) * X (Sum.inl 1)
+noncomputable def xBp : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ :=
+  xA^2 * X (Sum.inl 2) + (X (Sum.inl 1))^2 * (C 4 + C 3 * X (Sum.inl 0) * X (Sum.inl 1))
+noncomputable def xDx : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ :=
+  C 2 * xA * X (Sum.inl 1) * X (Sum.inl 2) + C 3 * (X (Sum.inl 1))^3
+noncomputable def xDy : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ :=
+  C 2 * xA * X (Sum.inl 0) * X (Sum.inl 2) + C 2 * X (Sum.inl 1) * (C 4 + C 3 * X (Sum.inl 0) * X (Sum.inl 1)) + C 3 * X (Sum.inl 0) * (X (Sum.inl 1))^2
+
+noncomputable def jm : Matrix (Fin 3) (Fin 3) (MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) :=
+  !![X (Sum.inl 1) * xBp + xA * xDx, X (Sum.inl 0) * xBp + xA * xDy, xA^3;
+     C 3 * xBp + C 3 * X (Sum.inl 0) * xDx, 1 + C 3 * X (Sum.inl 0) * xDy, C 3 * X (Sum.inl 0) * xA^2;
+     C 2 - C 6 * X (Sum.inl 0) * X (Sum.inl 1) - C 3 * (X (Sum.inl 0))^2 * X (Sum.inl 2), -(C 3) * (X (Sum.inl 0))^2, -(X (Sum.inl 0))^3]
+
+noncomputable def Bm : Matrix (Fin 3) (Fin 3) (MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) :=
+  !![jm 1 1 * jm 2 2 - jm 1 2 * jm 2 1, -(jm 0 1 * jm 2 2 - jm 0 2 * jm 2 1), jm 0 1 * jm 1 2 - jm 0 2 * jm 1 1;
+     -(jm 1 0 * jm 2 2 - jm 1 2 * jm 2 0), jm 0 0 * jm 2 2 - jm 0 2 * jm 2 0, -(jm 0 0 * jm 1 2 - jm 0 2 * jm 1 0);
+     jm 1 0 * jm 2 1 - jm 1 1 * jm 2 0, -(jm 0 0 * jm 2 1 - jm 0 1 * jm 2 0), jm 0 0 * jm 1 1 - jm 0 1 * jm 1 0]
+
+/-- Position images: the counterexample map components. -/
+noncomputable def Fv : Fin 3 → MvPolynomial (Fin 3 ⊕ Fin 3) ℂ :=
+  ![xA * xBp,
+    X (Sum.inl 1) + C 3 * X (Sum.inl 0) * xBp,
+    C 2 * X (Sum.inl 0) - C 3 * (X (Sum.inl 0))^2 * X (Sum.inl 1) - (X (Sum.inl 0))^3 * X (Sum.inl 2)]
+
+/-- Unscaled momentum images: columns of the inverse Jacobian paired with momenta. -/
+noncomputable def Qv : Fin 3 → MvPolynomial (Fin 3 ⊕ Fin 3) ℂ :=
+  fun k => ∑ r : Fin 3, Bm r k * X (Sum.inr r)
+
+/-- The cotangent-lift generator images: `x_i ↦ F_i`, `p_k ↦ −(1/2)·Σ_r B_{rk}·p_r`. -/
+noncomputable def Wgen : Fin 3 ⊕ Fin 3 → MvPolynomial (Fin 3 ⊕ Fin 3) ℂ :=
+  Sum.elim Fv (fun k => C (-(1/2) : ℂ) * Qv k)
+
+/-! ### Generator brackets (the heavy identities; integer coefficients throughout) -/
+
+set_option maxRecDepth 400000 in
+set_option maxHeartbeats 4000000 in
+theorem pb_F_F (i j : Fin 3) : poissonBracket (Fv i) (Fv j) = 0 := by
+  fin_cases i <;> fin_cases j <;>
+    simp [poissonBracket, Fv, xA, xBp, Fin.sum_univ_three, pderiv_mul, pderiv_pow, pderiv_C,
+      pderiv_X_self, pderiv_X_of_ne, pderiv_one, Derivation.map_add, Derivation.map_sub]
+
+set_option maxRecDepth 400000 in
+set_option maxHeartbeats 16000000 in
+theorem pb_F_Q (i k : Fin 3) :
+    poissonBracket (Fv i) (Qv k) = if i = k then C (-2 : ℂ) else 0 := by
+  fin_cases i <;> fin_cases k <;>
+    (simp [poissonBracket, Fv, Qv, Bm, jm, xA, xBp, xDx, xDy, Fin.sum_univ_three, pderiv_mul,
+      pderiv_pow, pderiv_C, pderiv_X_self, pderiv_X_of_ne, pderiv_one, Derivation.map_add,
+      Derivation.map_sub];
+     simp only [map_ofNat, map_one];
+     ring)
+
+set_option maxRecDepth 400000 in
+set_option maxHeartbeats 64000000 in
+theorem pb_Q_Q (i k : Fin 3) : poissonBracket (Qv i) (Qv k) = 0 := by
+  fin_cases i <;> fin_cases k <;>
+    (simp [poissonBracket, Qv, Bm, jm, xA, xBp, xDx, xDy, Fin.sum_univ_three, pderiv_mul,
+      pderiv_pow, pderiv_C, pderiv_X_self, pderiv_X_of_ne, pderiv_one, Derivation.map_add,
+      Derivation.map_sub];
+     simp only [map_ofNat, map_one];
+     ring)
+
+theorem poissonBracket_antisymm (f g : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) :
+    poissonBracket f g = -poissonBracket g f := by
+  simp only [poissonBracket, ← Finset.sum_neg_distrib]
+  exact Finset.sum_congr rfl fun i _ => by ring
+
+/-! ### hgen and bracket preservation for the lift -/
+
+set_option maxHeartbeats 1000000 in
+theorem hgen_Wgen (i j : Fin 3 ⊕ Fin 3) :
+    aeval Wgen (poissonBracket (X i) (X j)) = poissonBracket (Wgen i) (Wgen j) := by
+  have hXX : ∀ (a b : Fin 3 ⊕ Fin 3), poissonBracket (X a) (X b) =
+      (if ∃ t : Fin 3, a = Sum.inl t ∧ b = Sum.inr t then 1
+       else if ∃ t : Fin 3, a = Sum.inr t ∧ b = Sum.inl t then -1 else 0) := by
+    rintro (a | a) (b | b) <;> fin_cases a <;> fin_cases b <;>
+      simp [poissonBracket, Fin.sum_univ_three, pderiv_X_self, pderiv_X_of_ne]
+  rcases i with i | i <;> rcases j with j | j
+  · rw [hXX]
+    simp only [Wgen, Sum.elim_inl]
+    rw [pb_F_F]
+    simp
+  · rw [hXX]
+    simp only [Wgen, Sum.elim_inl, Sum.elim_inr]
+    rw [poissonBracket_C_mul_right, pb_F_Q]
+    by_cases h : i = j
+    · subst h
+      rw [if_pos rfl,
+        show (C (-(1/2) : ℂ) * C (-2 : ℂ) : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) = 1 from by
+          rw [← C_mul]; norm_num]
+      simp
+    · simp [h, Ne.symm h]
+  · rw [hXX]
+    simp only [Wgen, Sum.elim_inl, Sum.elim_inr]
+    rw [poissonBracket_antisymm, poissonBracket_C_mul_right, pb_F_Q]
+    by_cases h : j = i
+    · subst h
+      rw [if_pos rfl,
+        show (C (-(1/2) : ℂ) * C (-2 : ℂ) : MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) = 1 from by
+          rw [← C_mul]; norm_num]
+      simp
+    · simp [h, Ne.symm h]
+  · rw [hXX]
+    simp only [Wgen, Sum.elim_inr]
+    rw [poissonBracket_C_mul_right, poissonBracket_C_mul_left, pb_Q_Q]
+    simp
+
+/-! ### Non-surjectivity from the lifted two-point fiber -/
+
+noncomputable def av : Fin 3 ⊕ Fin 3 → ℂ := Sum.elim ![0, 0, -1/4] 0
+noncomputable def bv : Fin 3 ⊕ Fin 3 → ℂ := Sum.elim ![1, -3/2, 13/2] 0
+
+set_option maxRecDepth 400000 in
+set_option maxHeartbeats 4000000 in
+theorem Wgen_eval_eq (n : Fin 3 ⊕ Fin 3) : aeval av (Wgen n) = aeval bv (Wgen n) := by
+  rcases n with i | k
+  · simp only [Wgen, Sum.elim_inl]
+    fin_cases i <;> (simp [Fv, xA, xBp, av, bv]; norm_num)
+  · simp only [Wgen, Sum.elim_inr]
+    fin_cases k <;> simp [Qv, av, bv, Fin.sum_univ_three]
+
+theorem phi_not_surjective :
+    ¬ Function.Surjective (aeval Wgen :
+      MvPolynomial (Fin 3 ⊕ Fin 3) ℂ →ₐ[ℂ] MvPolynomial (Fin 3 ⊕ Fin 3) ℂ) := by
+  intro hs
+  obtain ⟨G, hG⟩ := hs (X (Sum.inl 0))
+  have hcomp : (aeval av).comp (aeval Wgen) = (aeval bv).comp (aeval Wgen) :=
+    MvPolynomial.algHom_ext fun n => by simpa using Wgen_eval_eq n
+  have h3 : aeval av (aeval Wgen G) = aeval bv (aeval Wgen G) := by
+    have := DFunLike.congr_fun hcomp G
+    simpa using this
+  rw [hG] at h3
+  simp [av, bv] at h3
+
+/-- **Theorem 7**: the canonical rank-3 Poisson conjecture is FALSE, unconditionally.
+The cotangent lift of the counterexample map is a bracket-preserving ℂ-algebra
+endomorphism (generator brackets + the generic extension lemma) that is not surjective
+(the lifted two-point fiber separates the evaluation homomorphisms). -/
+theorem poisson_statement_false : ¬ PoissonStatement := by
+  intro h
+  have hpres := aeval_preserves_poissonBracket Wgen hgen_Wgen
+  have hbij := h (aeval Wgen) hpres
+  exact phi_not_surjective hbij.2
+
 /-! ## Mathieu subspaces and Zhao's Image Conjecture -/
 
 /-- Zhao's Mathieu-subspace property for a ℂ-submodule M of a commutative ℂ-algebra:

@@ -37,7 +37,11 @@ conjecture (Keller 1939) in dimension 3 — and by stabilization in every dimens
 | `CollateralDamage.lean` | Dixmier / Zhao / cubic-reduction statements; certified core + sorry-free conditional refutations + cited open bridges | see file header labels |
 | `jacobian.pdf` | Source paper: P. Chojecki, *A Counterexample to the Jacobian Conjecture* (ulam.ai) | external, not committed |
 
-## The six verified theorems
+## The verified theorems
+
+Six theorems through the environment's kernel path (rows 1–6: one `kernel_verified`,
+five `certified`), plus one file-verified theorem (row 7: sorry-free, compiled clean
+against the pinned Mathlib, not yet transported through the certification path).
 
 | # | Claim | Problem / Episode | Outcome |
 |---|-------|-------------------|---------|
@@ -47,6 +51,7 @@ conjecture (Keller 1939) in dimension 3 — and by stabilization in every dimens
 | 4 | ¬ Jacobian Conjecture (ℂ, dim 4), stabilized witness (F, w) | `7312a555` / `591219bc` | **`certified`** |
 | 5 | Normalized form U = (R/2, Q, P): det = 1, U(0) = 0, JU(0) = I, three-point fiber over the fixed point (0,0,−1/4) (paper Cor. 3.2) | `c270a9d2` / `c8d0d87c` | **`certified`** |
 | 6 | **Poisson-bridge computational core**: J·B = −2·I (mixed brackets) + all 27 commuting-derivation identities for B = adj(J) in explicit cofactor form — the complete polynomial content of the rank-3 Poisson counterexample | `a4044282` / `c25405a7` | **`certified`** |
+| 7 | **¬PoissonStatement, unconditional**: the canonical rank-3 Poisson conjecture is FALSE — cotangent lift is a bracket-preserving non-surjective endomorphism (generic generator-extension lemma + 36 in-file generator brackets + two-point-fiber separation; no inverse theorem, no bridge). In `CollateralDamage.lean` | in-repo, `poisson_statement_false` | **file-verified, sorry-free** (`lake env lean` exit 0; not yet environment-certified) |
 
 `certified` = kernel-verified proof **+** hash-bound verified statement-fidelity review —
 the environment's highest trust level. Environment hash `9e26d28e…`; statement hashes and

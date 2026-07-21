@@ -184,6 +184,39 @@ that made it possible (each item cost failed attempts to establish):
   `fin_cases`' `Fin.mk`-literal forms; route symmetry arguments through generic
   `have`-lemmas applied with `exact` (defeq unification).
 
+## 7a. Theorem 7: ¬PoissonStatement, unconditional (file-verified)
+
+**The first complete collateral casualty.** `CollateralDamage.lean` now proves, sorry-free
+and compiled clean against the pinned Mathlib:
+
+```lean
+theorem poisson_statement_false : ¬ PoissonStatement
+```
+
+Architecture (no inverse theorem, no bridge hypothesis — the blueprint that avoids
+recreating the symbolic wall in generic clothing):
+
+1. **Generic layer** (counterexample-independent): bracket calculus
+   (`poissonBracket_C/add/mul_left/right` via `Derivation.leibniz` + per-summand `ring`)
+   and the two-step generator-extension lemma `aeval_preserves_poissonBracket` by
+   `MvPolynomial.induction_on` — first bracket-with-a-variable, then full bilinearity.
+   Never expands `pderiv (bind₁ …)`.
+2. **Concrete lift**: `Wgen = Sum.elim Fv (fun k => C(−½) * Qv k)` with the theorem-6
+   nested-let vocabulary transported to `Fin 3 ⊕ Fin 3`; the −½ scalar is kept outside
+   every heavy identity via `poissonBracket_C_mul_*`, so `pb_F_F = 0`,
+   `pb_F_Q = −2δ`, `pb_Q_Q = 0` are pure integer computations (file-level
+   `set_option maxHeartbeats` makes the environment's fixed-budget wall irrelevant here).
+3. **Non-surjectivity from the certified fiber**: at zero momentum the lifted points
+   (a,0), (b,0) separate nothing in the image — `MvPolynomial.algHom_ext` on six
+   generators gives `(aeval α).comp Φ = (aeval β).comp Φ`, so a preimage of `x₁` would
+   force 0 = 1 in ℂ.
+
+Status label: **file-verified, sorry-free** (`lake env lean` exit 0) — one level below
+the environment's `certified` (no tracked attempt path or fidelity review). Environment
+transport via the theorem-6 Decompose playbook is mechanical if certification is wanted;
+the mathematical content is identical. `poisson_false_of_bridge` remains in the file as
+a generic-implication example but is superseded as the actual refutation.
+
 ## 7b. Historical: the wall as first mapped
 
 Following the dependency order (Theorem 5 → Poisson bridge → Weyl → Dixmier), the
