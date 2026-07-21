@@ -432,6 +432,44 @@ pub fn idea_attribution_to_mcip(
     finalize("idea_attribution", env, f)
 }
 
+/// #263: emit the paired `literature_source` + `idea_attribution` records for
+/// every source of a stored lineage. `base` supplies the shared envelope
+/// context (packet_id, environment_hash, created_at, trust_status,
+/// export_eligibility); a distinct `record_id` is minted per emitted record
+/// from `record_id_prefix` so the two records for source `i` are individually
+/// addressable and hash-stable. `idea_attribution` binds to the obligation's
+/// `formal_statement_sha256`, the same statement hash the bundle's
+/// `packet_identity` carries.
+///
+/// Provenance EVIDENCE only: neither emitted record has a proof-status field,
+/// and surfacing them changes no trust decision — exactly the boundary the
+/// `literature_lineage` type and its #236 storage already enforce.
+pub fn lineage_records(
+    sources: &[crate::literature_lineage::SourceRecord],
+    base: &Envelope,
+    record_id_prefix: &str,
+    formal_statement_sha256: &str,
+) -> Vec<Value> {
+    let mut out = Vec::with_capacity(sources.len() * 2);
+    for (i, s) in sources.iter().enumerate() {
+        let src_env = Envelope {
+            record_id: format!("{}:literature_source:{}", record_id_prefix, i),
+            ..base.clone()
+        };
+        out.push(literature_source_to_mcip(s, &src_env));
+        let idea_env = Envelope {
+            record_id: format!("{}:idea_attribution:{}", record_id_prefix, i),
+            ..base.clone()
+        };
+        out.push(idea_attribution_to_mcip(
+            s,
+            &idea_env,
+            formal_statement_sha256,
+        ));
+    }
+    out
+}
+
 /// #237 -> MCIP `contribution_statement`.
 pub fn contribution_statement_to_mcip(
     r: &crate::publication_review::PublicationReview,
@@ -819,6 +857,71 @@ mod tests {
             serde_json::to_vec_pretty(&bundle).unwrap(),
         )
         .unwrap();
+    }
+
+    /// #263: `lineage_records` emits a paired literature_source +
+    /// idea_attribution per source, each individually addressable, hash-stable,
+    /// and bound to the obligation's formal-statement hash — carrying no
+    /// proof-status field.
+    #[test]
+    fn lineage_records_pairs_source_and_attribution_per_source() {
+        use crate::literature_lineage as lit;
+        let mk = |id: &str, attribution| lit::SourceRecord {
+            source_id: id.into(),
+            title: format!("Paper {}", id),
+            authors: vec!["A. Author".into()],
+            year: Some(2026),
+            venue: None,
+            doi_or_url: Some(format!("https://example.org/{}", id)),
+            source_hash: Some("c".repeat(64)),
+            retrieved_passages_artifact_ref: None,
+            visibility: lit::Visibility::ModelVisible,
+            retrieval_timing: lit::RetrievalTiming::BeforeProofDiscovery,
+            attribution,
+            extracted_claims: vec![],
+            reviewer_notes: None,
+            confidence: "high".into(),
+        };
+        let sources = vec![
+            mk("s0", lit::AttributionStatus::DirectlyUsed),
+            mk("s1", lit::AttributionStatus::LikelyInfluential),
+        ];
+        let stmt_sha = "d".repeat(64);
+        let recs = lineage_records(&sources, &env(), "obl-1:lineage:lin-1", &stmt_sha);
+
+        // Two sources -> four records, alternating source/attribution.
+        assert_eq!(recs.len(), 4);
+        assert_eq!(recs[0]["record_type"], "literature_source");
+        assert_eq!(recs[1]["record_type"], "idea_attribution");
+        assert_eq!(recs[2]["record_type"], "literature_source");
+        assert_eq!(recs[3]["record_type"], "idea_attribution");
+
+        // Each record is individually addressable (distinct record_id) and the
+        // attribution binds the obligation's statement hash + its source.
+        assert_eq!(
+            recs[0]["record_id"],
+            "obl-1:lineage:lin-1:literature_source:0"
+        );
+        assert_eq!(
+            recs[1]["record_id"],
+            "obl-1:lineage:lin-1:idea_attribution:0"
+        );
+        assert_eq!(recs[1]["formal_statement_sha256"], stmt_sha);
+        assert_eq!(recs[1]["literature_source_id"], "s0");
+        assert_eq!(recs[1]["attribution_status"], "directly_used");
+        assert_eq!(recs[3]["literature_source_id"], "s1");
+
+        // Every record is hash-pinned, and NONE carries a proof-status field —
+        // provenance evidence, never proof authority.
+        for r in &recs {
+            assert_eq!(r["record_hash"].as_str().unwrap().len(), 64);
+            assert!(r.get("outcome").is_none());
+            assert!(r.get("proof_authority").is_none());
+            assert!(r.get("kernel_verified").is_none());
+        }
+
+        // Empty input yields no records (bundle unchanged when no lineage).
+        assert!(lineage_records(&[], &env(), "p", &stmt_sha).is_empty());
     }
 
     #[test]
