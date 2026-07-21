@@ -13,13 +13,14 @@
 //! guessed. Records are hash-pinned; the storage layer appends them (append-only
 //! ledger), and this type carries a stable `lineage_hash` for replay/export.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const LITERATURE_LINEAGE_VERSION: &str = "1.0";
 
 /// How a source relates to the final proof. `Uncertain` and `NotUsed` are
 /// explicit — provenance is never guessed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AttributionStatus {
     DirectlyUsed,
@@ -32,7 +33,7 @@ pub enum AttributionStatus {
 
 /// Whether the source was shown to the model during the run, or surfaced only in
 /// post-hoc human review — the two must never be conflated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
     ModelVisible,
@@ -40,7 +41,7 @@ pub enum Visibility {
 }
 
 /// When the source was retrieved relative to proof discovery.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RetrievalTiming {
     BeforeProofDiscovery,
@@ -48,7 +49,7 @@ pub enum RetrievalTiming {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaimKind {
     Theorem,
@@ -58,7 +59,7 @@ pub enum ClaimKind {
 }
 
 /// A claim extracted from a source, hash-pinned.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExtractedClaim {
     pub claim_id: String,
     pub kind: ClaimKind,
@@ -67,7 +68,7 @@ pub struct ExtractedClaim {
 }
 
 /// A literature search event.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchQuery {
     pub query: String,
     /// RFC3339 timestamp (supplied by the caller — deterministic input).
@@ -75,7 +76,7 @@ pub struct SearchQuery {
 }
 
 /// One source and everything known about how it relates to the proof.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SourceRecord {
     pub source_id: String,
     pub title: String,
@@ -105,7 +106,7 @@ pub struct SourceRecord {
 }
 
 /// A link from a final proof step or dependency to a source claim it draws on.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct IdeaToSourceLink {
     /// A proof step id / dependency name in the final artifact.
     pub proof_element: String,

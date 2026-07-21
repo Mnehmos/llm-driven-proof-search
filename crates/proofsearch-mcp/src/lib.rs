@@ -43,6 +43,7 @@ use proofsearch_core::models::episode::{EpisodeOutcome, TerminationReason, Trunc
 use proofsearch_core::models::reward::{RewardComponent, RewardComponentId, RewardPolicy};
 use proofsearch_core::hashing::canonical_hash;
 use proofsearch_core::putnambench::to_pi_form;
+use proofsearch_core::literature_lineage::{LiteratureLineage, SearchQuery, SourceRecord, IdeaToSourceLink};
 
 /// Interactive proof-state sessions (issue #161) are SEARCH EVIDENCE, never
 /// proof authority — see `proofsearch_core::lean::interactive`'s and
@@ -2580,6 +2581,218 @@ pub struct ResearchDossierArgs {
     pub action: ResearchDossierAction,
 }
 
+// -- Dev diary (issue #242), slice 1 ----------------------------------------
+//
+// Project-scoped campaign metadata joining existing first-class evidence
+// (problems, episodes, research dossiers, formalization plans, empirical
+// searches, candidate constructions, verification layers, distilled
+// strategies) into a chronological timeline, so a long-running campaign can
+// be documented as it happens instead of reconstructed after the fact from a
+// chat transcript. Deliberately metadata-only, same trust posture as
+// `research_dossier`: no action here can mark anything proved, verified, or
+// certified, and attaching an artifact never alters it. Slice 1 covers the
+// write path (create_project/attach/checkpoint) plus a raw chronological
+// `observe`; the resolved narrative view and `export` (structured_json,
+// markdown_diary, and the X-thread/blog/institute prompt modes gated by an
+// explicit x_tier/max_chars_per_post — see issue #242) are later slices.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DevDiaryAction {
+    CreateProject {
+        project_key: String,
+        title: String,
+        #[serde(default)]
+        summary: Option<String>,
+        #[serde(default)]
+        audience: Option<String>,
+        #[serde(default)]
+        claim_policy: Option<String>,
+        #[serde(default)]
+        public_links: Option<Vec<String>>,
+    },
+    Attach {
+        project_id: String,
+        target_kind: String,
+        #[serde(default)]
+        target_id: Option<String>,
+        #[serde(default)]
+        external_url: Option<String>,
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        notes: Option<String>,
+    },
+    Checkpoint {
+        project_id: String,
+        checkpoint_kind: String,
+        note: String,
+        author: String,
+        #[serde(default)]
+        referenced_attachment_id: Option<String>,
+    },
+    Observe {
+        project_id: String,
+    },
+    Export {
+        project_id: String,
+        mode: String,
+        #[serde(default)]
+        since_checkpoint_id: Option<String>,
+        #[serde(default)]
+        max_posts: Option<i64>,
+        #[serde(default)]
+        x_tier: Option<String>,
+        #[serde(default)]
+        max_chars_per_post: Option<i64>,
+        #[serde(default)]
+        audience: Option<String>,
+        #[serde(default)]
+        dry_run: Option<bool>,
+    },
+}
+
+/// Args for the single consolidated `dev_diary` tool. The entire payload
+/// lives on the internally-tagged `action` — see `DevDiaryAction`'s doc.
+#[derive(JsonSchema, Deserialize)]
+pub struct DevDiaryArgs {
+    pub action: DevDiaryAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct DevDiaryCreateProjectArgs {
+    pub project_key: String,
+    pub title: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub audience: Option<String>,
+    #[serde(default)]
+    pub claim_policy: Option<String>,
+    #[serde(default)]
+    pub public_links: Option<Vec<String>>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct DevDiaryAttachArgs {
+    pub project_id: String,
+    pub target_kind: String,
+    #[serde(default)]
+    pub target_id: Option<String>,
+    #[serde(default)]
+    pub external_url: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct DevDiaryCheckpointArgs {
+    pub project_id: String,
+    pub checkpoint_kind: String,
+    pub note: String,
+    pub author: String,
+    #[serde(default)]
+    pub referenced_attachment_id: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct DevDiaryObserveArgs {
+    pub project_id: String,
+}
+
+// -- Literature lineage (issue #236) ----------------------------------------
+//
+// proofsearch_core::literature_lineage already ships the pure record model
+// (LiteratureLineage/SourceRecord/etc, hash-pinned, no proof-status field by
+// construction) and its MCIP mapping. This tool is the remaining append-only
+// storage ledger + MCP surface the issue asked for: create a lineage record
+// for an episode (optionally linked to a problem_version/obligation, exactly
+// like the Rust type's own fields), read it back, and link it to additional
+// provenance targets (research_node/verified_lemma/verified_module) the type
+// itself doesn't carry a direct field for.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LiteratureLineageAction {
+    Create {
+        episode_id: String,
+        environment_hash: String,
+        #[serde(default)]
+        problem_version_id: Option<String>,
+        #[serde(default)]
+        obligation_id: Option<String>,
+        #[serde(default)]
+        search_queries: Vec<SearchQuery>,
+        sources: Vec<SourceRecord>,
+        #[serde(default)]
+        idea_to_source_map: Vec<IdeaToSourceLink>,
+    },
+    Observe {
+        #[serde(default)]
+        lineage_id: Option<String>,
+        #[serde(default)]
+        episode_id: Option<String>,
+    },
+    Link {
+        lineage_id: String,
+        target_kind: String,
+        target_id: String,
+    },
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct LiteratureLineageArgs {
+    pub action: LiteratureLineageAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct LiteratureLineageCreateArgs {
+    pub episode_id: String,
+    pub environment_hash: String,
+    #[serde(default)]
+    pub problem_version_id: Option<String>,
+    #[serde(default)]
+    pub obligation_id: Option<String>,
+    #[serde(default)]
+    pub search_queries: Vec<SearchQuery>,
+    pub sources: Vec<SourceRecord>,
+    #[serde(default)]
+    pub idea_to_source_map: Vec<IdeaToSourceLink>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct LiteratureLineageObserveArgs {
+    #[serde(default)]
+    pub lineage_id: Option<String>,
+    #[serde(default)]
+    pub episode_id: Option<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct LiteratureLineageLinkArgs {
+    pub lineage_id: String,
+    pub target_kind: String,
+    pub target_id: String,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct DevDiaryExportArgs {
+    pub project_id: String,
+    pub mode: String,
+    #[serde(default)]
+    pub since_checkpoint_id: Option<String>,
+    #[serde(default)]
+    pub max_posts: Option<i64>,
+    #[serde(default)]
+    pub x_tier: Option<String>,
+    #[serde(default)]
+    pub max_chars_per_post: Option<i64>,
+    #[serde(default)]
+    pub audience: Option<String>,
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+}
+
 // -- Candidate construction artifacts (issue #8) ----------------------------
 //
 // Candidate constructions are proposed mathematical objects -- graph
@@ -4436,6 +4649,264 @@ fn require_row_in_dossier(tx: &Transaction, table: &str, id: &str, dossier_id: &
     }
 }
 
+// -- Dev diary (issue #242), slice 1 helpers --------------------------------
+
+const DEV_DIARY_ATTACHMENT_TARGET_KINDS: &[&str] = &[
+    "problem_version", "episode", "research_dossier", "formalization_plan",
+    "empirical_search", "candidate_construction", "verification_layer",
+    "distilled_strategy", "external_link", "public_post",
+];
+const DEV_DIARY_CHECKPOINT_KINDS: &[&str] = &[
+    "campaign_started", "candidate_found", "proof_attempt_failed",
+    "root_cause_identified", "kernel_result", "mathlib_gap",
+    "method_exhausted", "frontier_changed", "claim_corrected",
+    "infrastructure_issue_opened", "public_update_posted", "other",
+];
+
+/// Maps an attachment's `target_kind` to the real table it must exist in.
+/// `external_link`/`public_post` have no backing table — they carry a
+/// caller-supplied `external_url` instead of referencing an existing row.
+fn dev_diary_target_table(target_kind: &str) -> Option<&'static str> {
+    match target_kind {
+        "problem_version" => Some("problem_versions"),
+        "episode" => Some("episodes"),
+        "research_dossier" => Some("research_dossiers"),
+        "formalization_plan" => Some("formalization_plans"),
+        "empirical_search" => Some("empirical_searches"),
+        "candidate_construction" => Some("candidate_constructions"),
+        "verification_layer" => Some("verification_layers"),
+        "distilled_strategy" => Some("distilled_strategy_artifacts"),
+        "external_link" | "public_post" => None,
+        _ => None,
+    }
+}
+
+fn require_row_in_project(tx: &Transaction, table: &str, id: &str, project_id: &str, label: &str) -> Result<(), McpError> {
+    let sql = format!("SELECT 1 FROM {} WHERE id = ?1 AND project_id = ?2", table);
+    let exists: Option<i64> = tx.query_row(&sql, (id, project_id), |row| row.get(0)).optional().map_err(rs)?;
+    if exists.is_some() {
+        Ok(())
+    } else {
+        Err(mcp_invalid_params(format!("unknown {} for project: {}", label, id)))
+    }
+}
+
+/// Issue #242 dev diary, slice 2/3: groups a checkpoint list (already
+/// filtered to whatever chronological window the caller wants — the full
+/// project in `observe`, or a `since_checkpoint_id` cursor window in
+/// `export`) by `checkpoint_kind`, picks out the latest `frontier_changed`
+/// note, and surfaces `proof_attempt_failed`/`method_exhausted` checkpoints
+/// as failed-route entries. Shared by `dev_diary_observe_json` and
+/// `do_dev_diary_export` so the two never drift.
+fn dev_diary_bucket_checkpoints(checkpoints: &[serde_json::Value]) -> (serde_json::Map<String, serde_json::Value>, Option<serde_json::Value>, Vec<serde_json::Value>) {
+    let mut checkpoints_by_kind = serde_json::Map::new();
+    let mut current_frontier: Option<serde_json::Value> = None;
+    let mut checkpoint_failures: Vec<serde_json::Value> = Vec::new();
+    for cp in checkpoints {
+        let kind = cp["checkpoint_kind"].as_str().unwrap_or("").to_string();
+        checkpoints_by_kind.entry(kind.clone())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+            .as_array_mut().unwrap()
+            .push(cp.clone());
+        match kind.as_str() {
+            "frontier_changed" => current_frontier = Some(cp.clone()),
+            "proof_attempt_failed" | "method_exhausted" => checkpoint_failures.push(serde_json::json!({"checkpoint": cp})),
+            _ => {}
+        }
+    }
+    (checkpoints_by_kind, current_frontier, checkpoint_failures)
+}
+
+const DEV_DIARY_EXPORT_MODES: &[&str] = &[
+    "structured_json", "markdown_diary", "x_thread_prompt", "single_x_post_prompt", "blog_prompt", "institute_update_prompt",
+];
+const DEV_DIARY_X_TIERS: &[&str] = &["free", "premium"];
+
+/// Issue #242: X's real character limits — 280 for a non-premium account,
+/// 25,000 for Premium. `x_tier` defaults to "free" whenever omitted, and a
+/// caller-supplied `max_chars_per_post` is always clamped DOWN to the tier's
+/// ceiling, never allowed to exceed it, so a mistaken override can never
+/// silently produce an unpostable (or falsely conservative) thread.
+fn dev_diary_x_tier_ceiling(x_tier: &str) -> i64 {
+    if x_tier == "premium" { 25000 } else { 280 }
+}
+
+fn dev_diary_render_markdown(packet: &serde_json::Value) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# {}\n\n", packet["title"].as_str().unwrap_or("")));
+    if let Some(summary) = packet["summary"].as_str() {
+        out.push_str(summary);
+        out.push_str("\n\n");
+    }
+    out.push_str("## Chronological checkpoints\n\n");
+    for cp in packet["checkpoints"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+        out.push_str(&format!("{}. **{}** — {} ({})\n",
+            cp["checkpoint_number"], cp["checkpoint_kind"].as_str().unwrap_or(""),
+            cp["note"].as_str().unwrap_or(""), cp["created_at"].as_str().unwrap_or("")));
+    }
+    out.push_str("\n## Verified results\n\n");
+    for v in packet["resolved"]["verified_results"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+        out.push_str(&format!("- {} `{}` — {}\n", v["target_kind"].as_str().unwrap_or(""), v["target_id"].as_str().unwrap_or(""), v["target_status"]));
+    }
+    out.push_str("\n## Failed or blocked routes\n\n");
+    for f in packet["resolved"]["failed_or_blocked"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+        if let Some(cp) = f.get("checkpoint") {
+            out.push_str(&format!("- checkpoint #{}: {}\n", cp["checkpoint_number"], cp["note"].as_str().unwrap_or("")));
+        } else {
+            out.push_str(&format!("- {} `{}` — {}\n", f["target_kind"].as_str().unwrap_or(""), f["target_id"].as_str().unwrap_or(""), f["target_status"]));
+        }
+    }
+    out.push_str("\n## Claim boundaries\n\n");
+    for c in packet["resolved"]["claim_boundaries"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+        out.push_str(&format!("- {}: {}\n", c["assumption"]["label"].as_str().unwrap_or(""), c["assumption"]["statement"].as_str().unwrap_or("")));
+    }
+    out.push_str("\n## Reusable artifacts\n\n");
+    for r in packet["resolved"]["reusable_artifacts"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+        out.push_str(&format!("- {} `{}`\n", r["target_kind"].as_str().unwrap_or(""), r["target_id"].as_str().unwrap_or("")));
+    }
+    if !packet["resolved"]["current_frontier"].is_null() {
+        out.push_str(&format!("\n## Current frontier\n\n{}\n", packet["resolved"]["current_frontier"]["note"].as_str().unwrap_or("")));
+    }
+    out.push_str("\n---\nThis diary packages tracked evidence only. It does not call an LLM and does not post anywhere — an external host does that, using this document or the structured packet as grounding.\n");
+    out
+}
+
+const DEV_DIARY_PROMPT_COMMON_RULES: &str = "Use only the attached structured campaign packet. Do not invent results, motives, chronology, novelty, citations, or verification status. Clearly distinguish candidate, empirical evidence, human review, kernel verification, and certification. Mention exact verified milestones only when the packet marks them verified. Include what each result does not prove. Preserve the actual chronology of checkpoints. Do not use hype such as \"AI solved mathematics\" unless the evidence literally supports it. Use no em dashes. Do not surface raw database ids or internal UUIDs in the prose itself — the structured packet below retains them for your own verification only.";
+
+fn dev_diary_x_thread_prompt(title: &str, max_posts: i64, max_chars_per_post: i64, packet_json: &str) -> String {
+    format!(
+        "You are the public research diarist for {title}.\n\n{rules}\n\nWrite a chronological X thread documenting what the prover LLM and human operator actually experienced. The audience is technically curious but may not know Lean or the mathematics.\n\nRequirements:\n1. Start with an honest hook. State clearly whether the main problem was solved.\n2. Explain the problem in plain language before discussing formal details.\n3. Show the research process, including failed routes, diagnostics, repairs, and changes of direction.\n4. Explain discovered infrastructure gaps and reusable artifacts.\n5. Produce {max_posts} numbered posts, each at or under {max_chars_per_post} characters. Never exceed this limit.\n6. End with the current frontier and the next concrete research step.\n\nTone: first-person research diary, direct, curious, technically honest, no corporate marketing language.\n\nCampaign packet:\n{packet_json}\n",
+        title = title, rules = DEV_DIARY_PROMPT_COMMON_RULES, max_posts = max_posts, max_chars_per_post = max_chars_per_post, packet_json = packet_json,
+    )
+}
+
+fn dev_diary_single_x_post_prompt(title: &str, max_chars_per_post: i64, packet_json: &str) -> String {
+    format!(
+        "You are the public research diarist for {title}.\n\n{rules}\n\nWrite exactly ONE X post summarizing the campaign's current state: whether the main problem is solved, the single most important verified result (if any), the current frontier, and the next concrete step.\n\nThe post MUST be at or under {max_chars_per_post} characters. Never exceed this limit.\n\nTone: first-person research diary, direct, technically honest, no corporate marketing language.\n\nCampaign packet:\n{packet_json}\n",
+        title = title, rules = DEV_DIARY_PROMPT_COMMON_RULES, max_chars_per_post = max_chars_per_post, packet_json = packet_json,
+    )
+}
+
+fn dev_diary_blog_prompt(title: &str, packet_json: &str) -> String {
+    format!(
+        "You are the public research diarist for {title}.\n\n{rules}\n\nWrite a long-form blog post documenting the campaign chronologically: the problem in plain language, the research process (including failed routes and repairs), verified results and exactly what they do and do not prove, claim boundaries and assumptions, reusable artifacts and infrastructure gaps discovered along the way, the current frontier, and the next concrete step. There is no length limit — use as much space as the material genuinely supports, but do not pad with filler.\n\nCampaign packet:\n{packet_json}\n",
+        title = title, rules = DEV_DIARY_PROMPT_COMMON_RULES, packet_json = packet_json,
+    )
+}
+
+fn dev_diary_institute_update_prompt(title: &str, packet_json: &str) -> String {
+    format!(
+        "You are drafting a formal research-progress update on {title} for an institutional audience (colleagues, funders, or collaborators).\n\n{rules}\n\nStructure the update with explicit sections: Summary, Verified Results (kernel-backed only), Claim Boundaries and Open Assumptions, Infrastructure Findings and Reusable Artifacts, Current Frontier, Next Steps. Use a formal, precise register — no marketing language, no unearned superlatives.\n\nCampaign packet:\n{packet_json}\n",
+        title = title, rules = DEV_DIARY_PROMPT_COMMON_RULES, packet_json = packet_json,
+    )
+}
+
+const LITERATURE_LINEAGE_LINK_TARGET_KINDS: &[&str] = &["research_node", "verified_lemma", "verified_module"];
+
+fn literature_lineage_link_target_table(target_kind: &str) -> Option<&'static str> {
+    match target_kind {
+        "research_node" => Some("research_nodes"),
+        "verified_lemma" => Some("episode_verified_lemmas"),
+        "verified_module" => Some("episode_verified_modules"),
+        _ => None,
+    }
+}
+
+/// Issue #236: read one `literature_lineages` row back with its links. The
+/// stored `*_json` columns are exactly what `LiteratureLineage::new()`
+/// produced — reconstructing the real Rust type from them and recomputing
+/// `canonical_hash` must reproduce `lineage_hash` bit-for-bit (see the
+/// `test_literature_lineage_replay_hash_matches_stored_lineage_hash` test),
+/// which is what makes this an append-only, tamper-evident ledger rather
+/// than a plain JSON dump.
+fn literature_lineage_observe_json(conn: &Connection, lineage_id: &str) -> Result<serde_json::Value, McpError> {
+    let row: Option<(String, String, String, String, Option<String>, Option<String>, String, String, String, i64, String)> = conn.query_row(
+        "SELECT lineage_hash, lineage_version, episode_id, environment_hash, problem_version_id, obligation_id,
+                search_queries_json, sources_json, idea_to_source_map_json, all_model_visible, created_at
+         FROM literature_lineages WHERE id = ?1",
+        [lineage_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?)),
+    ).optional().map_err(rs)?;
+    let Some((lineage_hash, lineage_version, episode_id, environment_hash, problem_version_id, obligation_id,
+              search_queries_json, sources_json, idea_to_source_map_json, all_model_visible, created_at)) = row else {
+        return Err(mcp_invalid_params(format!("unknown lineage_id: {}", lineage_id)));
+    };
+
+    let mut stmt = conn.prepare(
+        "SELECT id, target_kind, target_id, created_at FROM literature_lineage_links WHERE lineage_id = ?1 ORDER BY created_at ASC, id ASC",
+    ).map_err(rs)?;
+    let links = stmt.query_map([lineage_id], |row| {
+        Ok(serde_json::json!({
+            "link_id": row.get::<_, String>(0)?,
+            "target_kind": row.get::<_, String>(1)?,
+            "target_id": row.get::<_, String>(2)?,
+            "created_at": row.get::<_, String>(3)?,
+        }))
+    }).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(stmt);
+
+    Ok(serde_json::json!({
+        "lineage_id": lineage_id,
+        "lineage_hash": lineage_hash,
+        "lineage_version": lineage_version,
+        "episode_id": episode_id,
+        "environment_hash": environment_hash,
+        "problem_version_id": problem_version_id,
+        "obligation_id": obligation_id,
+        "search_queries": serde_json::from_str::<serde_json::Value>(&search_queries_json).unwrap_or(serde_json::Value::Null),
+        "sources": serde_json::from_str::<serde_json::Value>(&sources_json).unwrap_or(serde_json::Value::Null),
+        "idea_to_source_map": serde_json::from_str::<serde_json::Value>(&idea_to_source_map_json).unwrap_or(serde_json::Value::Null),
+        "all_model_visible": all_model_visible != 0,
+        "created_at": created_at,
+        "links": links,
+        "trust_boundary": "A literature_lineage record is EVIDENCE, never proof authority — it has no proof-status field by construction (enforced by proofsearch_core::literature_lineage's own type, tested there). Linking it to a research_node/verified_lemma/verified_module is provenance only and never alters the linked target's own trust_status/fidelity_status/outcome.",
+    }))
+}
+
+/// Issue #242 dev diary, slice 2: read an attached artifact's OWN status/
+/// trust columns, unchanged and unreinterpreted, so `observe` can bucket
+/// attachments into verified/failed without ever re-deriving or upgrading
+/// anything. Returns `Value::Null` for `external_link`/`public_post` (no
+/// backing row) or a target_id that no longer resolves.
+fn dev_diary_attachment_target_status(conn: &Connection, target_kind: &str, target_id: &str) -> Result<serde_json::Value, McpError> {
+    let value = match target_kind {
+        "problem_version" => conn.query_row(
+            "SELECT fidelity_status, state FROM problem_versions WHERE id = ?1",
+            [target_id], |r| Ok(serde_json::json!({"fidelity_status": r.get::<_, String>(0)?, "state": r.get::<_, String>(1)?})),
+        ).optional().map_err(rs)?,
+        "episode" => conn.query_row(
+            "SELECT outcome, state FROM episodes WHERE id = ?1",
+            [target_id], |r| Ok(serde_json::json!({"outcome": r.get::<_, Option<String>>(0)?, "state": r.get::<_, String>(1)?})),
+        ).optional().map_err(rs)?,
+        "research_dossier" => conn.query_row(
+            "SELECT status FROM research_dossiers WHERE id = ?1",
+            [target_id], |r| Ok(serde_json::json!({"status": r.get::<_, String>(0)?})),
+        ).optional().map_err(rs)?,
+        "formalization_plan" => conn.query_row(
+            "SELECT status FROM formalization_plans WHERE id = ?1",
+            [target_id], |r| Ok(serde_json::json!({"status": r.get::<_, String>(0)?})),
+        ).optional().map_err(rs)?,
+        "empirical_search" => conn.query_row(
+            "SELECT status, trust_status FROM empirical_searches WHERE id = ?1",
+            [target_id], |r| Ok(serde_json::json!({"status": r.get::<_, String>(0)?, "trust_status": r.get::<_, String>(1)?})),
+        ).optional().map_err(rs)?,
+        "candidate_construction" => conn.query_row(
+            "SELECT status, trust_status FROM candidate_constructions WHERE id = ?1",
+            [target_id], |r| Ok(serde_json::json!({"status": r.get::<_, String>(0)?, "trust_status": r.get::<_, String>(1)?})),
+        ).optional().map_err(rs)?,
+        "verification_layer" => conn.query_row(
+            "SELECT status FROM verification_layers WHERE id = ?1",
+            [target_id], |r| Ok(serde_json::json!({"status": r.get::<_, String>(0)?})),
+        ).optional().map_err(rs)?,
+        "distilled_strategy" => conn.query_row(
+            "SELECT trust_status FROM distilled_strategy_artifacts WHERE id = ?1",
+            [target_id], |r| Ok(serde_json::json!({"trust_status": r.get::<_, String>(0)?})),
+        ).optional().map_err(rs)?,
+        _ => None,
+    };
+    Ok(value.unwrap_or(serde_json::Value::Null))
+}
+
 /// Issues #9/#11/#13 trust-boundary tightening (PR #55 review): a research node
 /// or external claim may only be marked `proved_in_episode` by linking to a
 /// verified lemma that belongs to THIS dossier's own proof context — the
@@ -5724,6 +6195,135 @@ fn research_dossier_observe_json(conn: &Connection, dossier_id: &str) -> Result<
         "challenges": challenges,
         "distilled_strategy_artifacts": distilled_strategy_artifacts,
         "trust_boundary": trust_boundary,
+    }))
+}
+
+/// Issue #242 dev diary, slice 1+2: chronological read-back of a project —
+/// its metadata, every attachment (in attach order, each carrying its
+/// target's OWN unmodified status/trust columns), every checkpoint (in
+/// server-assigned checkpoint_number order), plus a `resolved` view that
+/// buckets that same data into verified results, failed/blocked routes,
+/// reusable artifacts, surfaced claim boundaries, and the current frontier.
+/// `resolved` derives EVERYTHING from columns already read above — it never
+/// queries anything new, re-decides a trust_status, or marks anything
+/// proved/verified/certified that wasn't already. `publication_history`
+/// (slice 3) and episode-obligation-level "open obligations" are not part of
+/// `resolved` yet — see its own `note` field.
+fn dev_diary_observe_json(conn: &Connection, project_id: &str) -> Result<serde_json::Value, McpError> {
+    let project: Option<(String, String, Option<String>, Option<String>, Option<String>, Option<String>, String, String, String)> = conn.query_row(
+        "SELECT project_key, title, summary, audience, claim_policy, public_links_json, status, created_at, updated_at
+         FROM dev_diary_projects WHERE id = ?1",
+        [project_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+    ).optional().map_err(rs)?;
+    let Some((project_key, title, summary, audience, claim_policy, public_links_json, status, created_at, updated_at)) = project else {
+        return Err(mcp_invalid_params(format!("unknown project_id: {}", project_id)));
+    };
+    let public_links: serde_json::Value = match public_links_json {
+        Some(raw) => serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!([])),
+        None => serde_json::json!([]),
+    };
+
+    let mut stmt = conn.prepare(
+        "SELECT id, target_kind, target_id, external_url, label, notes, created_at
+         FROM dev_diary_attachments WHERE project_id = ?1 ORDER BY created_at ASC, id ASC",
+    ).map_err(rs)?;
+    let attachment_rows: Vec<(String, String, String, Option<String>, Option<String>, Option<String>, String)> = stmt.query_map([project_id], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?))
+    }).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(stmt);
+
+    let mut attachments: Vec<serde_json::Value> = Vec::new();
+    let mut verified_results: Vec<serde_json::Value> = Vec::new();
+    let mut failed_or_blocked: Vec<serde_json::Value> = Vec::new();
+    let mut reusable_artifacts: Vec<serde_json::Value> = Vec::new();
+    let mut claim_boundaries: Vec<serde_json::Value> = Vec::new();
+    for (attachment_id, target_kind, target_id, external_url, label, notes, attached_at) in &attachment_rows {
+        let target_status = dev_diary_attachment_target_status(conn, target_kind, target_id)?;
+        let entry = serde_json::json!({
+            "attachment_id": attachment_id,
+            "target_kind": target_kind,
+            "target_id": target_id,
+            "external_url": external_url,
+            "label": label,
+            "notes": notes,
+            "created_at": attached_at,
+            "target_status": target_status,
+        });
+
+        match target_kind.as_str() {
+            "episode" => match target_status.get("outcome").and_then(|v| v.as_str()) {
+                Some("certified") | Some("kernel_verified") => verified_results.push(entry.clone()),
+                Some("refuted") | Some("gave_up") | Some("timeout") | Some("budget_exhausted") | Some("model_error") | Some("infrastructure_error") =>
+                    failed_or_blocked.push(entry.clone()),
+                _ => {}
+            },
+            "verification_layer" => match target_status.get("status").and_then(|v| v.as_str()) {
+                Some("kernel_verified") => verified_results.push(entry.clone()),
+                Some("failed") | Some("blocked") | Some("rejected") => failed_or_blocked.push(entry.clone()),
+                _ => {}
+            },
+            "distilled_strategy" | "formalization_plan" => reusable_artifacts.push(entry.clone()),
+            "research_dossier" => {
+                let dossier = research_dossier_observe_json(conn, target_id)?;
+                if let Some(assumptions) = dossier.get("assumption_boundaries").and_then(|v| v.as_array()) {
+                    for assumption in assumptions {
+                        claim_boundaries.push(serde_json::json!({
+                            "attachment_id": attachment_id,
+                            "dossier_id": target_id,
+                            "assumption": assumption,
+                        }));
+                    }
+                }
+            }
+            _ => {}
+        }
+        attachments.push(entry);
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT id, checkpoint_number, checkpoint_kind, note, referenced_attachment_id, author, created_at
+         FROM dev_diary_checkpoints WHERE project_id = ?1 ORDER BY checkpoint_number ASC",
+    ).map_err(rs)?;
+    let checkpoints = stmt.query_map([project_id], |row| {
+        Ok(serde_json::json!({
+            "checkpoint_id": row.get::<_, String>(0)?,
+            "checkpoint_number": row.get::<_, i64>(1)?,
+            "checkpoint_kind": row.get::<_, String>(2)?,
+            "note": row.get::<_, String>(3)?,
+            "referenced_attachment_id": row.get::<_, Option<String>>(4)?,
+            "author": row.get::<_, String>(5)?,
+            "created_at": row.get::<_, String>(6)?,
+        }))
+    }).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(stmt);
+
+    let (checkpoints_by_kind, current_frontier, checkpoint_failures) = dev_diary_bucket_checkpoints(&checkpoints);
+    failed_or_blocked.extend(checkpoint_failures);
+
+    Ok(serde_json::json!({
+        "project_id": project_id,
+        "project_key": project_key,
+        "title": title,
+        "summary": summary,
+        "audience": audience,
+        "claim_policy": claim_policy,
+        "public_links": public_links,
+        "status": status,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "attachments": attachments,
+        "checkpoints": checkpoints,
+        "resolved": {
+            "verified_results": verified_results,
+            "failed_or_blocked": failed_or_blocked,
+            "reusable_artifacts": reusable_artifacts,
+            "claim_boundaries": claim_boundaries,
+            "checkpoints_by_kind": checkpoints_by_kind,
+            "current_frontier": current_frontier,
+            "note": "Derived purely from each attachment's own target_status column and each checkpoint's checkpoint_kind — no new evidence, re-derivation, or trust upgrade happens here. verified_results requires an attached episode.outcome already in (certified, kernel_verified), or an attached verification_layer already status=kernel_verified. failed_or_blocked covers the matching failure outcomes/statuses plus proof_attempt_failed/method_exhausted checkpoints. claim_boundaries surfaces each attached research_dossier's own assumption_boundaries unchanged. publication_history (issue #242 slice 3) and episode_obligations-level 'open obligations' are not resolved here.",
+        },
+        "trust_boundary": "Dev diary project/attachment/checkpoint rows are chronological campaign metadata, not proof authority. Attaching a problem, episode, research dossier, formalization plan, empirical search, candidate construction, verification layer, or distilled strategy references that artifact's own id only — it never re-derives or upgrades its trust_status, fidelity_status, or verification outcome. A checkpoint is a human/agent note plus an optional attachment reference; it can never mark anything proved, verified, or certified. The `resolved` bucket above is a read-only view over this same data, not a second source of truth.",
     }))
 }
 
@@ -10623,6 +11223,454 @@ impl ChatDbMcp {
 
     // -----------------------------------------------------------------
 
+    /// Issue #242 dev diary, slice 1: dispatcher for the single `dev_diary`
+    /// tool, mirroring `do_research_dossier`'s shape exactly.
+    async fn do_dev_diary(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: DevDiaryArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize dev_diary action: {}", e)))?;
+        match &args.action {
+            DevDiaryAction::CreateProject { .. } => self.do_dev_diary_create_project(inner).await,
+            DevDiaryAction::Attach { .. } => self.do_dev_diary_attach(inner).await,
+            DevDiaryAction::Checkpoint { .. } => self.do_dev_diary_checkpoint(inner).await,
+            DevDiaryAction::Observe { .. } => self.do_dev_diary_observe(inner).await,
+            DevDiaryAction::Export { .. } => self.do_dev_diary_export(inner).await,
+        }
+    }
+
+    async fn do_dev_diary_create_project(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: DevDiaryCreateProjectArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let project_key = args.project_key.trim();
+        let title = args.title.trim();
+        if project_key.is_empty() {
+            return Err(mcp_invalid_params("project_key must be non-empty"));
+        }
+        if title.is_empty() {
+            return Err(mcp_invalid_params("title must be non-empty"));
+        }
+        let public_links_json = match &args.public_links {
+            Some(links) => Some(serde_json::to_string(links).map_err(|e| mcp_internal_error(format!("failed to serialize public_links: {}", e)))?),
+            None => None,
+        };
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        let project_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO dev_diary_projects (
+                id, project_key, title, summary, audience, claim_policy, public_links_json, status, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8, ?8)",
+            (
+                &project_id,
+                project_key,
+                title,
+                args.summary.as_deref(),
+                args.audience.as_deref(),
+                args.claim_policy.as_deref(),
+                public_links_json.as_deref(),
+                &now,
+            ),
+        ).map_err(|e| if matches!(&e, rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE) {
+            mcp_invalid_params(format!("project_key {:?} already exists", project_key))
+        } else {
+            rs(e)
+        })?;
+        let observed = dev_diary_observe_json(&tx, &project_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&observed).unwrap())]))
+    }
+
+    async fn do_dev_diary_attach(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: DevDiaryAttachArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("target_kind", &args.target_kind, DEV_DIARY_ATTACHMENT_TARGET_KINDS)?;
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        require_row_exists(&tx, "dev_diary_projects", &args.project_id, "project_id")?;
+
+        let (target_id, external_url): (String, Option<String>) = match dev_diary_target_table(&args.target_kind) {
+            Some(table) => {
+                let target_id = args.target_id.clone().ok_or_else(|| mcp_invalid_params(format!(
+                    "target_id is required for target_kind {:?}", args.target_kind
+                )))?;
+                require_row_exists(&tx, table, &target_id, "target_id")?;
+                (target_id, None)
+            }
+            None => {
+                let external_url = args.external_url.clone().filter(|u| !u.trim().is_empty()).ok_or_else(|| mcp_invalid_params(format!(
+                    "external_url is required for target_kind {:?}", args.target_kind
+                )))?;
+                (Uuid::new_v4().to_string(), Some(external_url))
+            }
+        };
+
+        let already_attached: Option<String> = tx.query_row(
+            "SELECT id FROM dev_diary_attachments WHERE project_id = ?1 AND target_kind = ?2 AND target_id = ?3",
+            (&args.project_id, &args.target_kind, &target_id),
+            |row| row.get(0),
+        ).optional().map_err(rs)?;
+        if already_attached.is_some() {
+            return Err(mcp_invalid_params(format!(
+                "target_kind {:?} target_id {:?} is already attached to project {}", args.target_kind, target_id, args.project_id
+            )));
+        }
+
+        let attachment_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO dev_diary_attachments (
+                id, project_id, target_kind, target_id, external_url, label, notes, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            (
+                &attachment_id,
+                &args.project_id,
+                &args.target_kind,
+                &target_id,
+                external_url.as_deref(),
+                args.label.as_deref(),
+                args.notes.as_deref(),
+                &now,
+            ),
+        ).map_err(rs)?;
+        let observed = dev_diary_observe_json(&tx, &args.project_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "attachment_id": attachment_id,
+            "project": observed,
+        })).unwrap())]))
+    }
+
+    async fn do_dev_diary_checkpoint(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: DevDiaryCheckpointArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("checkpoint_kind", &args.checkpoint_kind, DEV_DIARY_CHECKPOINT_KINDS)?;
+        let note = args.note.trim();
+        let author = args.author.trim();
+        if note.is_empty() {
+            return Err(mcp_invalid_params("note must be non-empty"));
+        }
+        if author.is_empty() {
+            return Err(mcp_invalid_params("author must be non-empty"));
+        }
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        require_row_exists(&tx, "dev_diary_projects", &args.project_id, "project_id")?;
+        if let Some(attachment_id) = &args.referenced_attachment_id {
+            require_row_in_project(&tx, "dev_diary_attachments", attachment_id, &args.project_id, "referenced_attachment_id")?;
+        }
+
+        let next_number: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(checkpoint_number), 0) + 1 FROM dev_diary_checkpoints WHERE project_id = ?1",
+            [&args.project_id],
+            |row| row.get(0),
+        ).map_err(rs)?;
+
+        let checkpoint_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO dev_diary_checkpoints (
+                id, project_id, checkpoint_number, checkpoint_kind, note, referenced_attachment_id, author, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            (
+                &checkpoint_id,
+                &args.project_id,
+                next_number,
+                &args.checkpoint_kind,
+                note,
+                args.referenced_attachment_id.as_deref(),
+                author,
+                &now,
+            ),
+        ).map_err(rs)?;
+        let observed = dev_diary_observe_json(&tx, &args.project_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "checkpoint_id": checkpoint_id,
+            "checkpoint_number": next_number,
+            "project": observed,
+        })).unwrap())]))
+    }
+
+    async fn do_dev_diary_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: DevDiaryObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let conn = self.conn.lock().await;
+        let observed = dev_diary_observe_json(&conn, &args.project_id)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&observed).unwrap())]))
+    }
+
+    /// Issue #242 dev diary, slices 3-4: deterministic export. Builds the
+    /// packet from `dev_diary_observe_json` (the SAME resolved view `observe`
+    /// returns), applies the `since_checkpoint_id` cursor to the checkpoint
+    /// window only (attachments are not chronological in this sense and are
+    /// never cursored), resolves the X character-limit gate, renders the
+    /// requested mode, and — unless `dry_run` — records one immutable
+    /// `dev_diary_publications` row. No mode ever calls an LLM or posts
+    /// anywhere; the external host does that with this tool's output.
+    async fn do_dev_diary_export(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: DevDiaryExportArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("mode", &args.mode, DEV_DIARY_EXPORT_MODES)?;
+        let x_tier = args.x_tier.clone().unwrap_or_else(|| "free".to_string());
+        validate_one_of("x_tier", &x_tier, DEV_DIARY_X_TIERS)?;
+        let tier_ceiling = dev_diary_x_tier_ceiling(&x_tier);
+        let max_chars_per_post = args.max_chars_per_post.unwrap_or(tier_ceiling).clamp(1, tier_ceiling);
+        let max_posts = args.max_posts.unwrap_or(12).clamp(1, 50);
+        let dry_run = args.dry_run.unwrap_or(false);
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        require_row_exists(&tx, "dev_diary_projects", &args.project_id, "project_id")?;
+
+        let since_checkpoint_number: Option<i64> = match &args.since_checkpoint_id {
+            Some(cid) => {
+                require_row_in_project(&tx, "dev_diary_checkpoints", cid, &args.project_id, "since_checkpoint_id")?;
+                let n: i64 = tx.query_row(
+                    "SELECT checkpoint_number FROM dev_diary_checkpoints WHERE id = ?1", [cid], |r| r.get(0),
+                ).map_err(rs)?;
+                Some(n)
+            }
+            None => None,
+        };
+
+        let full = dev_diary_observe_json(&tx, &args.project_id)?;
+
+        let mut stmt = tx.prepare(
+            "SELECT id, checkpoint_number, checkpoint_kind, note, referenced_attachment_id, author, created_at
+             FROM dev_diary_checkpoints WHERE project_id = ?1 AND (?2 IS NULL OR checkpoint_number > ?2) ORDER BY checkpoint_number ASC",
+        ).map_err(rs)?;
+        let filtered_checkpoints: Vec<serde_json::Value> = stmt.query_map((&args.project_id, since_checkpoint_number), |row| {
+            Ok(serde_json::json!({
+                "checkpoint_id": row.get::<_, String>(0)?,
+                "checkpoint_number": row.get::<_, i64>(1)?,
+                "checkpoint_kind": row.get::<_, String>(2)?,
+                "note": row.get::<_, String>(3)?,
+                "referenced_attachment_id": row.get::<_, Option<String>>(4)?,
+                "author": row.get::<_, String>(5)?,
+                "created_at": row.get::<_, String>(6)?,
+            }))
+        }).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        drop(stmt);
+
+        let (checkpoints_by_kind, current_frontier, checkpoint_failures) = dev_diary_bucket_checkpoints(&filtered_checkpoints);
+        let mut failed_or_blocked: Vec<serde_json::Value> = full["resolved"]["failed_or_blocked"].as_array().cloned().unwrap_or_default()
+            .into_iter().filter(|e| e.get("checkpoint").is_none()).collect();
+        failed_or_blocked.extend(checkpoint_failures);
+        let through_checkpoint_id = filtered_checkpoints.last().and_then(|cp| cp["checkpoint_id"].as_str()).map(|s| s.to_string());
+        let audience = args.audience.clone().or_else(|| full["audience"].as_str().map(|s| s.to_string()));
+
+        let packet = serde_json::json!({
+            "project_id": full["project_id"],
+            "project_key": full["project_key"],
+            "title": full["title"],
+            "summary": full["summary"],
+            "audience": audience,
+            "status": full["status"],
+            "attachments": full["attachments"],
+            "checkpoints": filtered_checkpoints,
+            "resolved": {
+                "verified_results": full["resolved"]["verified_results"],
+                "failed_or_blocked": failed_or_blocked,
+                "reusable_artifacts": full["resolved"]["reusable_artifacts"],
+                "claim_boundaries": full["resolved"]["claim_boundaries"],
+                "checkpoints_by_kind": checkpoints_by_kind,
+                "current_frontier": current_frontier,
+            },
+            "since_checkpoint_id": args.since_checkpoint_id,
+            "through_checkpoint_id": through_checkpoint_id,
+        });
+        let title = full["title"].as_str().unwrap_or("").to_string();
+        let source_hash = canonical_hash(&packet).map_err(mcp_internal_error)?;
+        let packet_json = serde_json::to_string_pretty(&packet).unwrap();
+
+        let publication_id = if dry_run {
+            None
+        } else {
+            let id = Uuid::new_v4().to_string();
+            let now = Utc::now().to_rfc3339();
+            tx.execute(
+                "INSERT INTO dev_diary_publications (
+                    id, project_id, mode, since_checkpoint_id, through_checkpoint_id, x_tier, max_chars_per_post, dry_run, source_hash, generated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9)",
+                (
+                    &id, &args.project_id, &args.mode, args.since_checkpoint_id.as_deref(),
+                    packet["through_checkpoint_id"].as_str(), &x_tier, max_chars_per_post, &source_hash, &now,
+                ),
+            ).map_err(rs)?;
+            Some(id)
+        };
+        tx.commit().map_err(rs)?;
+
+        let output = match args.mode.as_str() {
+            "structured_json" => serde_json::json!({
+                "mode": "structured_json", "publication_id": publication_id, "source_hash": source_hash, "dry_run": dry_run, "packet": packet,
+            }),
+            "markdown_diary" => serde_json::json!({
+                "mode": "markdown_diary", "publication_id": publication_id, "source_hash": source_hash, "dry_run": dry_run,
+                "document": dev_diary_render_markdown(&packet),
+            }),
+            "x_thread_prompt" => serde_json::json!({
+                "mode": "x_thread_prompt", "publication_id": publication_id, "source_hash": source_hash, "dry_run": dry_run,
+                "x_tier": x_tier, "max_chars_per_post": max_chars_per_post, "max_posts": max_posts,
+                "prompt": dev_diary_x_thread_prompt(&title, max_posts, max_chars_per_post, &packet_json),
+            }),
+            "single_x_post_prompt" => serde_json::json!({
+                "mode": "single_x_post_prompt", "publication_id": publication_id, "source_hash": source_hash, "dry_run": dry_run,
+                "x_tier": x_tier, "max_chars_per_post": max_chars_per_post,
+                "prompt": dev_diary_single_x_post_prompt(&title, max_chars_per_post, &packet_json),
+            }),
+            "blog_prompt" => serde_json::json!({
+                "mode": "blog_prompt", "publication_id": publication_id, "source_hash": source_hash, "dry_run": dry_run,
+                "prompt": dev_diary_blog_prompt(&title, &packet_json),
+            }),
+            "institute_update_prompt" => serde_json::json!({
+                "mode": "institute_update_prompt", "publication_id": publication_id, "source_hash": source_hash, "dry_run": dry_run,
+                "prompt": dev_diary_institute_update_prompt(&title, &packet_json),
+            }),
+            _ => unreachable!("mode already validated against DEV_DIARY_EXPORT_MODES"),
+        };
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&output).unwrap())]))
+    }
+
+    // -----------------------------------------------------------------
+
+    /// Issue #236: dispatcher for the single `literature_lineage` tool.
+    async fn do_literature_lineage(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: LiteratureLineageArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let inner = serde_json::to_value(&args.action)
+            .map_err(|e| mcp_internal_error(format!("failed to re-serialize literature_lineage action: {}", e)))?;
+        match &args.action {
+            LiteratureLineageAction::Create { .. } => self.do_literature_lineage_create(inner).await,
+            LiteratureLineageAction::Observe { .. } => self.do_literature_lineage_observe(inner).await,
+            LiteratureLineageAction::Link { .. } => self.do_literature_lineage_link(inner).await,
+        }
+    }
+
+    async fn do_literature_lineage_create(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: LiteratureLineageCreateArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if args.sources.is_empty() {
+            return Err(mcp_invalid_params("sources must be non-empty"));
+        }
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        require_row_exists(&tx, "episodes", &args.episode_id, "episode_id")?;
+        if let Some(id) = &args.problem_version_id {
+            require_row_exists(&tx, "problem_versions", id, "problem_version_id")?;
+        }
+        if let Some(id) = &args.obligation_id {
+            require_row_exists(&tx, "episode_obligations", id, "obligation_id")?;
+        }
+
+        let record = LiteratureLineage::new(
+            &args.episode_id, &args.environment_hash, args.problem_version_id.clone(), args.obligation_id.clone(),
+            args.search_queries.clone(), args.sources.clone(), args.idea_to_source_map.clone(),
+        );
+
+        // Idempotent on lineage_hash: resubmitting byte-identical evidence for
+        // the same episode returns the already-recorded row rather than
+        // duplicating it — this is append-only evidence, not a form to refill.
+        let existing_id: Option<String> = tx.query_row(
+            "SELECT id FROM literature_lineages WHERE lineage_hash = ?1", [&record.lineage_hash], |r| r.get(0),
+        ).optional().map_err(rs)?;
+        let (lineage_id, created) = if let Some(id) = existing_id {
+            (id, false)
+        } else {
+            let id = Uuid::new_v4().to_string();
+            let now = Utc::now().to_rfc3339();
+            let search_queries_json = serde_json::to_string(&record.search_queries).unwrap();
+            let sources_json = serde_json::to_string(&record.sources).unwrap();
+            let idea_to_source_map_json = serde_json::to_string(&record.idea_to_source_map).unwrap();
+            tx.execute(
+                "INSERT INTO literature_lineages (
+                    id, lineage_hash, lineage_version, episode_id, environment_hash, problem_version_id, obligation_id,
+                    search_queries_json, sources_json, idea_to_source_map_json, all_model_visible, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                (
+                    &id, &record.lineage_hash, &record.lineage_version, &record.episode_id, &record.environment_hash,
+                    record.problem_version_id.as_deref(), record.obligation_id.as_deref(),
+                    &search_queries_json, &sources_json, &idea_to_source_map_json,
+                    record.all_model_visible() as i64, &now,
+                ),
+            ).map_err(rs)?;
+            (id, true)
+        };
+        let observed = literature_lineage_observe_json(&tx, &lineage_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "lineage_id": lineage_id, "created": created, "lineage": observed,
+        })).unwrap())]))
+    }
+
+    async fn do_literature_lineage_observe(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: LiteratureLineageObserveArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let conn = self.conn.lock().await;
+        if let Some(id) = &args.lineage_id {
+            let observed = literature_lineage_observe_json(&conn, id)?;
+            return Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&observed).unwrap())]));
+        }
+        if let Some(episode_id) = &args.episode_id {
+            let mut stmt = conn.prepare(
+                "SELECT id FROM literature_lineages WHERE episode_id = ?1 ORDER BY created_at ASC, id ASC",
+            ).map_err(rs)?;
+            let ids: Vec<String> = stmt.query_map([episode_id], |r| r.get(0)).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+            drop(stmt);
+            let mut lineages = Vec::new();
+            for id in &ids {
+                lineages.push(literature_lineage_observe_json(&conn, id)?);
+            }
+            return Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                "episode_id": episode_id, "lineages": lineages,
+            })).unwrap())]));
+        }
+        Err(mcp_invalid_params("either lineage_id or episode_id must be given"))
+    }
+
+    async fn do_literature_lineage_link(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: LiteratureLineageLinkArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        validate_one_of("target_kind", &args.target_kind, LITERATURE_LINEAGE_LINK_TARGET_KINDS)?;
+
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction().map_err(rs)?;
+        require_row_exists(&tx, "literature_lineages", &args.lineage_id, "lineage_id")?;
+        let table = literature_lineage_link_target_table(&args.target_kind)
+            .ok_or_else(|| mcp_invalid_params(format!("unsupported target_kind: {}", args.target_kind)))?;
+        require_row_exists(&tx, table, &args.target_id, "target_id")?;
+
+        let already: Option<String> = tx.query_row(
+            "SELECT id FROM literature_lineage_links WHERE lineage_id = ?1 AND target_kind = ?2 AND target_id = ?3",
+            (&args.lineage_id, &args.target_kind, &args.target_id), |r| r.get(0),
+        ).optional().map_err(rs)?;
+        if already.is_some() {
+            return Err(mcp_invalid_params(format!(
+                "target_kind {:?} target_id {:?} is already linked to lineage {}", args.target_kind, args.target_id, args.lineage_id
+            )));
+        }
+
+        let link_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO literature_lineage_links (id, lineage_id, target_kind, target_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            (&link_id, &args.lineage_id, &args.target_kind, &args.target_id, &now),
+        ).map_err(rs)?;
+        let observed = literature_lineage_observe_json(&tx, &args.lineage_id)?;
+        tx.commit().map_err(rs)?;
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "link_id": link_id, "lineage": observed,
+        })).unwrap())]))
+    }
+
+    // -----------------------------------------------------------------
+
     /// Issue #191 (epic #182): the single `challenge` tool's dispatcher.
     /// Deserializes `ChallengeArgs`, matches on the internally-tagged
     /// action, and routes to the per-action handlers below UNCHANGED (each
@@ -14638,6 +15686,8 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<DraftArgs>("draft", "Issue #195: ONE tool for the draft artifact lifecycle (issue #23) — register an informal Draft, read it back with its recorded moves, and extract structured moves an external agent identified in its content. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"problem_version_id\":\"..\",\"content\":\"..\",\"author\":\"..\"} (+ optional episode_id — registers an informal Draft artifact: untrusted planning/reasoning content preserved before formalization begins. A draft can never mark anything proved. episode_id is optional since a draft may exist before any episode is created for the problem; when given, it must belong to problem_version_id) | {\"type\":\"observe\",\"draft_id\":\"..\"} (read back a draft's content and any moves recorded against it, in move_order) | {\"type\":\"extract_moves\",\"draft_id\":\"..\",\"moves\":[{\"move_kind\":\"construction\"|\"auxiliary_lemma\"|\"case_split\"|\"induction\"|\"reduction\"|\"bijection\"|\"counterexample_search\"|\"asymptotic_step\"|\"external_citation\"|\"unknown\",\"description\":\"..\"}, ...]} (records structured moves the external agent identified in a draft — the server never infers these itself (no inference code lives in LLM-Driven Proof Search Environment). Appended after any moves already recorded for this draft, not replaced. Metadata only — moves are not obligations: a move becomes a formalization plan item only via formalization_plan_create's seed_items_from_draft_moves action, and only that resulting plan item (never a draft move directly) can later be promoted to an obligation via formalization_plan_promote_item_to_obligation)"),
             make_tool::<FormalizationPlanArgs>("formalization_plan", "Issue #184: ONE tool for the entire Level 3 formalization-plan family (issue #10) — create/inspect/maintain a formalization plan (required concepts, definitions, lemmas, modules and their Mathlib coverage status) for a problem. Advisory scaffolding, not a proof authority: nothing here can mark anything proved. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"problem_version_id\":\"..\",\"title\":\"..\"} (+ optional source_draft_id, seed_items_from_draft_moves [{\"draft_move_id\":\"..\",\"kind\":\"..\"}, ...], risk_flags — creates a plan, optionally seeded from selected moves of an existing draft; every seed move must belong to source_draft_id, not be already promoted, and the whole batch is validated before any row is written, so a bad move never leaves a partially-seeded plan behind; each seeded move is marked promoted) | {\"type\":\"observe\",\"plan_id\":\"..\"} (read-only: the plan and all its items with coverage/promotion status) | {\"type\":\"update\",\"plan_id\":\"..\"} (+ optional title, status \"draft\"|\"active\"|\"completed\"|\"abandoned\", risk_flags — partial in-place update: an omitted field keeps its current value) | {\"type\":\"add_item\",\"plan_id\":\"..\",\"kind\":\"concept\"|\"missing_definition\"|\"missing_lemma\"|\"planned_module\"|\"external_citation\",\"description\":\"..\"} (+ optional mathlib_candidate_names, asymptotic_role — appends one planning item) | {\"type\":\"attach_lookup\",\"plan_item_id\":\"..\",\"lookup_status\":\"..\"} (+ optional matched_name, diagnostics — attach a lean_declaration_lookup result to an OPEN plan item, mapping its status verbatim into the item's Mathlib coverage status found/not_found/partial/unknown. A hint attachment, not a re-check — nothing is re-validated or re-run, and it never changes proof status) | {\"type\":\"promote_item_to_obligation\",\"plan_item_id\":\"..\",\"episode_id\":\"..\",\"obligation_id\":\"..\"} (link an open plan item to an episode_obligation that ALREADY EXISTS — created through a normal Decompose action via episode_step and verified to belong to the given episode. Records the link only — this action never creates the obligation itself, so it can never bypass the episode's budget/CAS accounting; a DB-level UNIQUE index stops two plan items from claiming the same obligation) | {\"type\":\"attach_librarian_result\",\"plan_item_id\":\"..\",\"declaration_name\":\"..\",\"confidence\":\"exact_match\"|\"nearby_name\"|\"type_match\"|\"usage_example\"|\"unknown\"} (+ optional import_module, snippet — attach a mathlib_search_declarations/mathlib_search_local_artifacts result to an OPEN plan item: confidence is the CALLER's own assessment of its search hit, mapped into the same coverage vocabulary attach_lookup writes (exact_match→found, nearby_name/type_match/usage_example→partial, unknown→unknown); candidate declaration names ACCUMULATE deduped across attachments while the full latest result overwrites lookup_result_json, latest wins. A hint attachment, not a re-check — never changes proof status)"),
             make_tool::<ResearchDossierArgs>("research_dossier", "Issue #185: ONE tool for the entire Level 4 research-dossier family (issues #9/#11/#13) — research dossiers, nodes, citations, assumptions, and verification layers are explicit trust-boundary METADATA: they can reference Lean-backed artifacts, but they never create proof authority and never write to episode outcome, obligations, canonical lemmas, budgets, fidelity reviews, or benchmark result tables. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\"} (+ optional description, problem_version_id, episode_id — create a dossier optionally linked to a problem_version, an episode, both, or neither; metadata only: never changes proof, fidelity, budget, or benchmark state) | {\"type\":\"observe\",\"dossier_id\":\"..\"} (read-only: the dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets) | {\"type\":\"node_add\",\"dossier_id\":\"..\",\"node_type\":\"definition\"|\"proposition\"|\"lemma\"|\"theorem\"|\"remark\"|\"reference\"|\"open_gap\",\"title\":\"..\"} (+ optional section_id OR section_title, statement, content, trust_status, linked_obligation_id, linked_verified_lemma_id — add a typed research node. Trust status is explicit and never implies kernel verification unless linked to a real verified lemma: trust_status='proved_in_episode' REQUIRES linked_verified_lemma_id naming a verified lemma from THIS dossier's own episode/problem context — never borrowed kernel evidence from an unrelated episode; a node added here is metadata, never proof authority) | {\"type\":\"external_reference_add\",\"dossier_id\":\"..\",\"title\":\"..\"} (+ optional authors/venue/year/url/doi/raw_citation, and optionally ONE theorem claim via theorem_label/theorem_statement/claim_status/mathlib_name/proved_episode_id/proved_lemma_id/notes — records a citation as a TRACKED ASSUMPTION, never proof: external citations are self-reported metadata and never become kernel verification; claim_status='proved_in_episode' requires proved_lemma_id naming a verified lemma from THIS dossier's own context, with any proved_episode_id matching that lemma's actual episode, and 'imported_from_mathlib' requires mathlib_name) | {\"type\":\"assumption_boundary_add\",\"dossier_id\":\"..\",\"label\":\"..\",\"statement\":\"..\",\"assumption_status\":\"unformalized_assumption\"|\"rejected_unsafe_assumption\"} (+ optional node_id, rationale — add an unformalized or rejected unsafe assumption boundary. Assumptions are visible metadata, not proof authority) | {\"type\":\"citation_review_add\",\"dossier_id\":\"..\",\"external_theorem_claim_id\":\"..\",\"reviewer_id\":\"..\",\"decision\":\"human_reviewed\"|\"rejected\"|\"needs_formalization\"} (+ optional notes — record a human citation review for an external theorem claim. Human review remains distinct from Lean kernel verification and never upgrades a claim to a proved status) | {\"type\":\"verification_layer_set\",\"dossier_id\":\"..\",\"target_kind\":\"..\",\"target_id\":\"..\",\"layer_kind\":\"..\",\"status\":\"..\"} (+ optional summary, evidence_json — upsert an independent verification layer for a dossier target. Blocked/failed layers do not fail the dossier, and cited/reviewed/assumed artifacts cannot be mislabeled kernel_verified: this action is the ONLY PATH to a kernel_verified layer, and status='kernel_verified' is accepted only where kernel evidence already exists — e.g. a node whose trust_status is already proved_in_episode backed by a verified lemma from THIS dossier's own episode/problem context — it can never manufacture that evidence)"),
+            make_tool::<DevDiaryArgs>("dev_diary", "Issue #242, slice 1: project-scoped dev diary — join existing tracked evidence (problems, episodes, research dossiers, formalization plans, empirical searches, candidate constructions, verification layers, distilled strategies) into a chronological campaign timeline so a long-running effort can be documented as it happens instead of reconstructed after the fact from a chat transcript. THIS TOOL NEVER CALLS AN LLM AND NEVER POSTS ANYWHERE — it only assembles evidence for an external host to turn into a narrative. This version covers project setup, attachment, chronological checkpoints, observe's resolved verified/failed/frontier view, and export. `action` is internally tagged — exactly one of: {\"type\":\"create_project\",\"project_key\":\"..\",\"title\":\"..\"} (+ optional summary, audience, claim_policy, public_links — project_key must be a unique slug; a duplicate key is rejected, never overwritten. Starts status='active') | {\"type\":\"attach\",\"project_id\":\"..\",\"target_kind\":\"problem_version\"|\"episode\"|\"research_dossier\"|\"formalization_plan\"|\"empirical_search\"|\"candidate_construction\"|\"verification_layer\"|\"distilled_strategy\"|\"external_link\"|\"public_post\"} (+ target_id for the 8 real kinds — existence-checked against that artifact's own table before attaching — OR external_url for external_link/public_post, e.g. a GitHub issue/PR URL or a manually recorded public post, neither of which has a backing row: target_id is then server-minted and private. Optional label, notes. A duplicate (project_id, target_kind, target_id) is rejected. Attaching NEVER alters the attached artifact's own trust_status, fidelity_status, or verification outcome) | {\"type\":\"checkpoint\",\"project_id\":\"..\",\"checkpoint_kind\":\"campaign_started\"|\"candidate_found\"|\"proof_attempt_failed\"|\"root_cause_identified\"|\"kernel_result\"|\"mathlib_gap\"|\"method_exhausted\"|\"frontier_changed\"|\"claim_corrected\"|\"infrastructure_issue_opened\"|\"public_update_posted\"|\"other\",\"note\":\"..\",\"author\":\"..\"} (+ optional referenced_attachment_id, which must already belong to the SAME project — cross-project references are rejected. checkpoint_number is assigned server-side, never caller-supplied, so chronological order is guaranteed regardless of client behavior. A checkpoint is chronological project metadata, the same trust posture as a reasoning_log entry: it can never mark anything proved, verified, or certified, and failed/negative checkpoints are preserved exactly like successful ones, never overwritten) | {\"type\":\"observe\",\"project_id\":\"..\"} (read-only: the project plus every attachment and checkpoint in order, PLUS a `resolved` view bucketing that same data into verified_results (attached episodes already outcome=certified/kernel_verified, or attached verification_layers already status=kernel_verified), failed_or_blocked (matching failure outcomes/statuses, plus proof_attempt_failed/method_exhausted checkpoints), reusable_artifacts (attached formalization_plan/distilled_strategy), claim_boundaries (each attached research_dossier's own assumption_boundaries, unchanged), checkpoints_by_kind, and current_frontier (the latest frontier_changed checkpoint). `resolved` never re-derives or upgrades any trust_status/fidelity_status/outcome — it only re-buckets columns already read off each attached artifact's own row. publication_history (a later slice) and episode_obligations-level 'open obligations' are not part of `resolved` yet) | {\"type\":\"export\",\"project_id\":\"..\",\"mode\":\"structured_json\"|\"markdown_diary\"|\"x_thread_prompt\"|\"single_x_post_prompt\"|\"blog_prompt\"|\"institute_update_prompt\"} (+ optional since_checkpoint_id (a cursor: only checkpoints AFTER that checkpoint's own checkpoint_number are included; attachments are never cursored, they are not chronological in that sense), max_posts (default 12, clamped 1-50, x_thread_prompt only), x_tier \"free\"|\"premium\" (default \"free\" whenever omitted — the conservative assumption, since most callers will not have a paid X account), max_chars_per_post (an optional override, ALWAYS clamped down to the resolved tier's real ceiling — 280 for free, 25000 for premium — so a mistaken override can never exceed X's actual limit), audience, dry_run (default false). structured_json returns the full packet (attachments/checkpoints/resolved view) with every internal id retained, for grounding and audit. markdown_diary renders the same packet as a human-readable document. The four *_prompt modes return a ready-to-send external-host prompt (populated with the resolved title/max_posts/max_chars_per_post and the JSON packet) plus the same packet for grounding — the prompt instructs the external host not to surface raw database ids/UUIDs in the prose it writes, but the attached packet always retains them. THIS TOOL NEVER CALLS AN LLM OR POSTS ANYWHERE ITSELF; only an external host does that with the returned text. Unless dry_run, every export records one immutable dev_diary_publications row (mode, cursor, resolved x_tier/max_chars_per_post, a SHA-256 source_hash over the packet, and a timestamp) so a later export audit shows exactly what a given thread was generated against; dry_run previews without recording)"),
+            make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
             make_tool::<CandidateConstructionArgs>("candidate_construction", "Issue #188: ONE tool for the entire candidate-construction family (issue #8) — propose a candidate mathematical object, record empirical checks against it, revise its status, and attach it to a research node or verification layer. A CANDIDATE CONSTRUCTION IS A PROPOSED MATHEMATICAL OBJECT, NOT A PROOF CERTIFICATE: every action records research artifacts useful for search and planning; trust_status never certifies anything — empirical support, human review, citation, and 'a formal statement exists' are all explicitly distinct from kernel verification, and no field can hold kernel evidence. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"construction_type\":\"graph_family\"|\"point_configuration\"|\"coloring\"|\"field_tower\"|\"lattice\"|\"counterexample\"|\"asymptotic_family\"|\"algebraic_object\"|\"combinatorial_design\"|\"other\",\"informal_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, verification_layer_id, problem_version_id, episode_id, name, parameters_json, construction_json, claimed_properties_json, known_failures_json, empirical_checks_json, verification_targets_json, status, trust_status, and motivated-discovery metadata: motivating_move, source_observation, intended_role, strategy_context, why_this_might_work, why_this_might_fail, next_check, future_challenge_relevance — propose a candidate construction. Can exist before a dossier, node, Lean theorem, problem, or episode; a research artifact, not a proof certificate) | {\"type\":\"observe\",\"candidate_construction_id\":\"..\",\"description\":\"..\",\"result\":\"supports\"|\"refutes\"|\"inconclusive\"} (+ optional details_json, observed_by — record one empirical check, appended to the construction's empirical_checks history. Never changes proof status, and 'supports' never implies proved) | {\"type\":\"update_status\",\"candidate_construction_id\":\"..\"} (+ at least one of status, trust_status, claimed_properties_json, known_failures_json, next_check — update the construction in place; a falsified/rejected construction stays visible, never deleted. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified — and no other trust_status confers proof either) | {\"type\":\"link_node\",\"candidate_construction_id\":\"..\",\"node_id\":\"..\"} (attach the construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier. Linking never changes either side's trust_status) | {\"type\":\"link_verification_layer\",\"candidate_construction_id\":\"..\",\"verification_layer_id\":\"..\"} (attach the construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier. Linking a layer is provenance, not promotion — the construction's trust_status is unchanged, and a kernel_verified_claim_linked construction is re-checked against the newly linked layer)"),
             make_tool::<EmpiricalSearchArgs>("empirical_search", "Issue #189: ONE tool for the entire empirical math-lab family (issue #26) — create and update finite checks, counterexample searches, construction searches, parameter sweeps, candidate rankings, and external-tool runs. AN EMPIRICAL SEARCH RESULT IS EXPERIMENTAL EVIDENCE, NEVER PROOF: no field can carry kernel evidence, no trust_status implies proof, and no status can certify an asymptotic or universal theorem. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"search_type\":\"small_case_search\"|\"counterexample_search\"|\"construction_search\"|\"parameter_sweep\"|\"finite_model_check\"|\"candidate_ranking\"|\"random_search\"|\"exhaustive_search\"|\"symbolic_search\"|\"external_tool_run\"|\"other\",\"search_space_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, candidate_construction_id, verification_layer_id, problem_version_id, episode_id, parameters_json, generator_description, checks_json, results_json, counterexamples_json, candidate_construction_ids_json, status, trust_status, runtime_metadata_json, cost_summary_json — record a search, which may exist before a dossier, candidate, episode, or Lean proof) | {\"type\":\"observe\",\"empirical_search_id\":\"..\",\"description\":\"..\",\"result\":\"supports_candidate\"|\"refutes_candidate\"|\"counterexample_found\"|\"no_counterexample\"|\"inconclusive\"} (+ optional details_json, counterexample_json, observed_by — append one check and optional counterexample witness. A counterexample stays visible; no_counterexample never certifies a universal claim) | {\"type\":\"update_status\",\"empirical_search_id\":\"..\"} (+ at least one of status, trust_status, results_json, candidate_construction_ids_json — update the search in place. Counterexamples are deliberately not updatable here and can only be appended through observe; falsified/failed/timed-out searches stay visible) | {\"type\":\"link_candidate\",\"empirical_search_id\":\"..\",\"candidate_construction_id\":\"..\"} (link a candidate construction, adopting its dossier when the search has none. Empirical support never proves the candidate's claimed properties) | {\"type\":\"link_verification_layer\",\"empirical_search_id\":\"..\",\"verification_layer_id\":\"..\"} (link an existing verification layer, adopting its dossier when the search has none. The link records evidence and can never make the layer kernel_verified)"),
             make_tool::<ChallengeArgs>("challenge", "Issue #191: ONE tool for the challenge lifecycle (issue #53) — define a challenge in a dossier, read it back with its tasks/submissions/scores/reviews, and update its status. A bounded, scored, reviewable competition frame for AI-generated math: a challenge/task/score is research bookkeeping, NEVER proof. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"dossier_id\":\"..\",\"title\":\"..\",\"created_by\":\"..\"} (+ optional description, problem_version_id, episode_id — define a challenge in an existing dossier, optionally linked to a problem_version and/or episode that must already exist. Starts status='open') | {\"type\":\"observe\",\"challenge_id\":\"..\"} (read-only: the challenge with its tasks -> submissions -> scores/reviews, plus the export grouping accepted/rejected/superseded/open shown separately. Nothing here is proof) | {\"type\":\"update_status\",\"challenge_id\":\"..\",\"status\":\"open\"|\"closed\"|\"archived\"|\"superseded\"} (update a challenge's status; never touches proof/fidelity/benchmark state — a closed/archived/superseded challenge stays visible). `validation_protocol_create` is dossier-scoped, not challenge-scoped (challenge_id on it is optional), and remains its own standalone tool rather than folding into this one"),
@@ -14840,8 +15890,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 50,
-                        "total_tool_count": 50,
+                        "classified_tool_count": 52,
+                        "total_tool_count": 52,
                         "tools": {
                             "mathcorpus_export": {
                                 "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
@@ -15084,6 +16134,26 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic for every action",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "none — nodes/claims/citations/assumptions are visible metadata, never proof authority or a proof status mutation; verification_layer_set can attach kernel_verified only where kernel evidence already exists elsewhere, never create it",
+                                "required_run_mode": "any"
+                            },
+                            "dev_diary": {
+                                "side_effect": "mixed by action (issue #242): create_project/attach/checkpoint write append-mostly project metadata to dev_diary_projects/dev_diary_attachments/dev_diary_checkpoints ONLY; observe is read_only, joining a project with its attachments and checkpoints in chronological order plus a resolved verified/failed/reusable/claim-boundary/frontier view computed purely from those same rows; export is read_only against every OTHER table (it never mutates an attached artifact, an episode, or anything upstream) but writes exactly one immutable dev_diary_publications row per call unless dry_run=true. No action ever writes to episode outcome, obligations, canonical lemmas, budgets, fidelity reviews, benchmark result tables, or any attached artifact's own row",
+                                "trust_level": "advisory project metadata — attach references an existing first-class artifact by id (existence-checked against its own table) but never reads or upgrades its trust_status/fidelity_status/verification outcome; checkpoint is a free-text human/agent note plus an optional same-project attachment reference, the same trust posture as a reasoning_log entry; observe's and export's resolved view only re-bucket each attachment's own already-recorded status column (e.g. an attached episode's outcome), never re-deciding it; export's x_tier/max_chars_per_post gate is a hard clamp down to X's real published limits (280 free, 25000 premium), never an override past them. No field in this tool can mark anything proved, verified, or certified, and no mode calls an LLM or posts anywhere — the returned prompt/document is for an external host to act on",
+                                "cost_surface": "none — DB reads/writes only, no Lean invocation",
+                                "benchmark_safety": "private_artifact by default — attachment labels/notes and checkpoint text may reference real problem/episode content; export's structured_json/markdown_diary retain internal ids for audit, the four *_prompt modes instruct (but cannot enforce past the model) the external host not to surface raw ids in generated prose",
+                                "replayability": "deterministic — checkpoint_number is server-assigned (MAX+1 per project) and stable, never caller-supplied; every non-dry-run export is hash-pinned via source_hash over its exact packet",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "project_metadata",
+                                "required_run_mode": "any"
+                            },
+                            "literature_lineage": {
+                                "side_effect": "mixed by action (issue #236): create writes one literature_lineages row (idempotent on lineage_hash — a byte-identical resubmission returns the existing row rather than duplicating it) plus its JSON evidence columns; link writes one literature_lineage_links row; observe is read_only. No action ever writes to episode outcome, obligations, canonical lemmas, budgets, fidelity reviews, or benchmark result tables",
+                                "trust_level": "evidence only, by construction — proofsearch_core::literature_lineage::LiteratureLineage has no proof-status field (asserted by that module's own tests), and this tool stores/reads it verbatim; link references an existing research_node/verified_lemma/verified_module by id (existence-checked) but never reads or upgrades its trust_status/fidelity_status/verification outcome",
+                                "cost_surface": "none — DB reads/writes only, no Lean invocation",
+                                "benchmark_safety": "private_artifact by default — sources/extracted claims may reference real problem/episode content",
+                                "replayability": "deterministic and tamper-evident — reconstructing the real LiteratureLineage type from a stored row's JSON columns and recomputing its canonical hash must reproduce the stored lineage_hash exactly",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "research_provenance_metadata",
                                 "required_run_mode": "any"
                             },
                             "candidate_construction": {
@@ -16299,6 +17369,8 @@ impl ServerHandler for ChatDbMcp {
             "draft" => self.do_draft(args_val).await,
             "formalization_plan" => self.do_formalization_plan(args_val).await,
             "research_dossier" => self.do_research_dossier(args_val).await,
+            "dev_diary" => self.do_dev_diary(args_val).await,
+            "literature_lineage" => self.do_literature_lineage(args_val).await,
             "candidate_construction" => self.do_candidate_construction(args_val).await,
             "empirical_search" => self.do_empirical_search(args_val).await,
             // -- Challenge / task / scoring substrate (issue #53) ---------------
@@ -17293,7 +18365,12 @@ mod tests {
         // + 1 dependency_manifest (issue #234: verifier-backed dependency &
         // retrieval manifest for an accepted solve) = 49.
         // + 1 mathcorpus_export (issue #230: MCIP v1 bundle export) = 50.
-        assert_eq!(list_res.tools.len(), 50);
+        // + 1 dev_diary (issue #242, slice 1: project-scoped campaign diary —
+        // create_project/attach/checkpoint/observe) = 51.
+        // + 1 literature_lineage (issue #236: append-only storage ledger +
+        // MCP surface for the existing hash-pinned literature-lineage record
+        // model — create/observe/link) = 52.
+        assert_eq!(list_res.tools.len(), 52);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -27555,5 +28632,659 @@ mod tests {
         assert_eq!(training_export["sessions"][0]["kernel_verified"], false, "{:?}", training_export);
         let step0 = &training_export["sessions"][0]["steps"][0];
         assert!(step0["progress_labels"].as_array().unwrap().iter().any(|v| v == "goal_closed"), "{:?}", step0);
+    }
+
+    // -- Dev diary (issue #242), slice 1 -------------------------------------
+
+    async fn create_dev_diary_project(peer: &rmcp::service::Peer<rmcp::RoleClient>, project_key: &str) -> serde_json::Value {
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "create_project",
+            "project_key": project_key,
+            "title": format!("Project {}", project_key),
+        }}).as_object().unwrap().clone())).await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_create_project_happy_path() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let project = create_dev_diary_project(&peer, "erdos-647").await;
+        assert_eq!(project["project_key"], "erdos-647");
+        assert_eq!(project["status"], "active");
+        assert!(project["project_id"].as_str().is_some_and(|s| !s.is_empty()), "{:?}", project);
+        assert_eq!(project["attachments"].as_array().unwrap().len(), 0);
+        assert_eq!(project["checkpoints"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_create_project_rejects_duplicate_key() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        create_dev_diary_project(&peer, "dup-key").await;
+
+        let denied = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "create_project",
+            "project_key": "dup-key",
+            "title": "Second attempt",
+        }}).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "duplicate project_key must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_create_project_rejects_empty_title() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+
+        let denied = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "create_project",
+            "project_key": "empty-title",
+            "title": "   ",
+        }}).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "empty title must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_attach_validates_target_existence() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "attach-existence").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+        let pv_id = create_problem(&peer, "True").await;
+
+        let attached = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "attach",
+            "project_id": project_id,
+            "target_kind": "problem_version",
+            "target_id": pv_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert!(attached["attachment_id"].as_str().is_some_and(|s| !s.is_empty()), "{:?}", attached);
+        assert_eq!(attached["project"]["attachments"].as_array().unwrap().len(), 1);
+
+        let denied = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "attach",
+            "project_id": project_id,
+            "target_kind": "problem_version",
+            "target_id": "00000000-0000-0000-0000-000000000000",
+        }}).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "attaching a nonexistent problem_version must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_attach_external_link_requires_url() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "attach-external").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+
+        let attached = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "attach",
+            "project_id": project_id,
+            "target_kind": "external_link",
+            "external_url": "https://github.com/Mnehmos/llm-driven-proof-search/issues/242",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(attached["project"]["attachments"][0]["external_url"], "https://github.com/Mnehmos/llm-driven-proof-search/issues/242");
+
+        let denied = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "attach",
+            "project_id": project_id,
+            "target_kind": "external_link",
+        }}).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "external_link attach without external_url must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_attach_rejects_duplicate() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "attach-dup").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+        let pv_id = create_problem(&peer, "True").await;
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "attach",
+            "project_id": project_id, "target_kind": "problem_version", "target_id": pv_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+
+        let denied = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "attach",
+            "project_id": project_id, "target_kind": "problem_version", "target_id": pv_id,
+        }}).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "duplicate (project_id, target_kind, target_id) attach must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_checkpoint_numbers_are_chronological_and_kind_is_validated() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "checkpoint-order").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+
+        let cp1 = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_id, "checkpoint_kind": "campaign_started", "note": "kicked off", "author": "agent",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(cp1["checkpoint_number"], 1);
+
+        let cp2 = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_id, "checkpoint_kind": "proof_attempt_failed", "note": "first attempt failed", "author": "agent",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(cp2["checkpoint_number"], 2);
+
+        let denied = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_id, "checkpoint_kind": "not_a_real_kind", "note": "bad", "author": "agent",
+        }}).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "unknown checkpoint_kind must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_checkpoint_rejects_cross_project_attachment_reference() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project_a = create_dev_diary_project(&peer, "cross-proj-a").await;
+        let project_a_id = project_a["project_id"].as_str().unwrap().to_string();
+        let project_b = create_dev_diary_project(&peer, "cross-proj-b").await;
+        let project_b_id = project_b["project_id"].as_str().unwrap().to_string();
+
+        let attached_b = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "attach",
+            "project_id": project_b_id, "target_kind": "external_link", "external_url": "https://example.com/b",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let attachment_b_id = attached_b["attachment_id"].as_str().unwrap().to_string();
+
+        let denied = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_a_id, "checkpoint_kind": "other", "note": "cross-project ref", "author": "agent",
+            "referenced_attachment_id": attachment_b_id,
+        }}).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "a checkpoint must not be able to reference another project's attachment");
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_observe_isolates_projects() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project_a = create_dev_diary_project(&peer, "isolate-a").await;
+        let project_a_id = project_a["project_id"].as_str().unwrap().to_string();
+        let project_b = create_dev_diary_project(&peer, "isolate-b").await;
+        let project_b_id = project_b["project_id"].as_str().unwrap().to_string();
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "attach",
+            "project_id": project_a_id, "target_kind": "external_link", "external_url": "https://example.com/a",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_a_id, "checkpoint_kind": "campaign_started", "note": "a started", "author": "agent",
+        }}).as_object().unwrap().clone())).await.unwrap());
+
+        let observed_b = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "observe",
+            "project_id": project_b_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed_b["attachments"].as_array().unwrap().len(), 0, "{:?}", observed_b);
+        assert_eq!(observed_b["checkpoints"].as_array().unwrap().len(), 0, "{:?}", observed_b);
+
+        let observed_a = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "observe",
+            "project_id": project_a_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed_a["attachments"].as_array().unwrap().len(), 1, "{:?}", observed_a);
+        assert_eq!(observed_a["checkpoints"].as_array().unwrap().len(), 1, "{:?}", observed_a);
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_unknown_project_id_is_rejected() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let bogus = "00000000-0000-0000-0000-000000000000";
+
+        let observe_denied = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "observe",
+            "project_id": bogus,
+        }}).as_object().unwrap().clone())).await;
+        assert!(observe_denied.is_err(), "observe on unknown project_id must be rejected");
+
+        let attach_denied = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "attach",
+            "project_id": bogus, "target_kind": "external_link", "external_url": "https://example.com/x",
+        }}).as_object().unwrap().clone())).await;
+        assert!(attach_denied.is_err(), "attach on unknown project_id must be rejected");
+
+        let checkpoint_denied = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": bogus, "checkpoint_kind": "other", "note": "x", "author": "agent",
+        }}).as_object().unwrap().clone())).await;
+        assert!(checkpoint_denied.is_err(), "checkpoint on unknown project_id must be rejected");
+    }
+
+    // -- Dev diary (issue #242), slice 2: resolved observe view --------------
+
+    #[tokio::test]
+    async fn test_dev_diary_resolved_view_flags_kernel_verified_episode_attachment() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "resolved-verified").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let step = claim_and_solve(&peer, &episode_id, "trivial", "dev-diary-verified").await;
+        assert_eq!(step["outcome"], "kernel_verified");
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "attach",
+            "project_id": project_id, "target_kind": "episode", "target_id": episode_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "observe",
+            "project_id": project_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let verified = observed["resolved"]["verified_results"].as_array().unwrap();
+        assert_eq!(verified.len(), 1, "{:?}", observed["resolved"]);
+        assert_eq!(verified[0]["target_id"], episode_id);
+        assert_eq!(verified[0]["target_status"]["outcome"], "kernel_verified");
+        assert_eq!(observed["resolved"]["failed_or_blocked"].as_array().unwrap().len(), 0, "{:?}", observed["resolved"]);
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_resolved_view_flags_failed_episode_and_checkpoint() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "resolved-failed").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let obs = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_observe").with_arguments(serde_json::json!({
+            "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let req = &obs["action_request"];
+        let claim = tool_json(&peer.call_tool(CallToolRequestParams::new("attempt_claim").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_request_id": req["id"], "idempotency_key": "dev-diary-give-up", "expected_revision": req["episode_revision"],
+        }).as_object().unwrap().clone())).await.unwrap());
+        // give_up's SOP gate (docs/sop-reasoning-logs.md) requires a fresh,
+        // detailed reasoning_log with actual_outcome + lesson_learned first.
+        tool_json(&peer.call_tool(CallToolRequestParams::new("reasoning_log").with_arguments(serde_json::json!({
+            "action": {
+                "type": "add", "episode_id": episode_id, "episode_revision": req["episode_revision"],
+                "reasoning_kind": "other", "approach_summary": "dev_diary slice 2 test: intentionally give up to exercise the failed_or_blocked bucket",
+                "actual_outcome": "no proof attempted; this test only needs the episode to reach a failure outcome",
+                "lesson_learned": "n/a — synthetic test fixture",
+                "confidence": "high", "author": "test",
+            }
+        }).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("episode_step").with_arguments(serde_json::json!({
+            "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"], "expected_revision": req["episode_revision"],
+            "claim_token": claim["claim_token"], "action": {"type": "give_up"}, "cost_micros": 100,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "attach",
+            "project_id": project_id, "target_kind": "episode", "target_id": episode_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_id, "checkpoint_kind": "proof_attempt_failed", "note": "gave up on first route", "author": "agent",
+        }}).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "observe",
+            "project_id": project_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let failed = observed["resolved"]["failed_or_blocked"].as_array().unwrap();
+        assert_eq!(failed.len(), 2, "expected the gave_up episode attachment AND the proof_attempt_failed checkpoint: {:?}", observed["resolved"]);
+        assert_eq!(observed["resolved"]["verified_results"].as_array().unwrap().len(), 0, "{:?}", observed["resolved"]);
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_resolved_view_surfaces_dossier_claim_boundaries() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "resolved-claims").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
+            "title": "Dev diary claim boundary source",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "assumption_boundary_add",
+            "dossier_id": dossier_id, "label": "smoothness", "statement": "the function is assumed smooth", "assumption_status": "unformalized_assumption",
+        }}).as_object().unwrap().clone())).await.unwrap());
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "attach",
+            "project_id": project_id, "target_kind": "research_dossier", "target_id": dossier_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "observe",
+            "project_id": project_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let claims = observed["resolved"]["claim_boundaries"].as_array().unwrap();
+        assert_eq!(claims.len(), 1, "{:?}", observed["resolved"]);
+        assert_eq!(claims[0]["assumption"]["label"], "smoothness");
+        assert_eq!(claims[0]["assumption"]["assumption_status"], "unformalized_assumption");
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_resolved_view_tracks_latest_frontier_checkpoint() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "resolved-frontier").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_id, "checkpoint_kind": "frontier_changed", "note": "first frontier", "author": "agent",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_id, "checkpoint_kind": "candidate_found", "note": "unrelated checkpoint", "author": "agent",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_id, "checkpoint_kind": "frontier_changed", "note": "second frontier", "author": "agent",
+        }}).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "observe",
+            "project_id": project_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["resolved"]["current_frontier"]["note"], "second frontier", "{:?}", observed["resolved"]);
+        let by_kind = observed["resolved"]["checkpoints_by_kind"]["frontier_changed"].as_array().unwrap();
+        assert_eq!(by_kind.len(), 2, "{:?}", observed["resolved"]["checkpoints_by_kind"]);
+    }
+
+    // -- Dev diary (issue #242), slices 3-4: export --------------------------
+
+    #[tokio::test]
+    async fn test_dev_diary_export_structured_json_and_dry_run() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "export-structured").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_id, "checkpoint_kind": "campaign_started", "note": "kicked off", "author": "agent",
+        }}).as_object().unwrap().clone())).await.unwrap());
+
+        let dry = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "export",
+            "project_id": project_id, "mode": "structured_json", "dry_run": true,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert!(dry["publication_id"].is_null(), "{:?}", dry);
+        assert_eq!(dry["packet"]["checkpoints"].as_array().unwrap().len(), 1);
+
+        let real = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "export",
+            "project_id": project_id, "mode": "structured_json",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert!(real["publication_id"].as_str().is_some_and(|s| !s.is_empty()), "{:?}", real);
+        assert!(real["source_hash"].as_str().is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())), "{:?}", real);
+
+        let real2 = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "export",
+            "project_id": project_id, "mode": "structured_json",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_ne!(real["publication_id"], real2["publication_id"], "each non-dry-run export must record its own publication row");
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_export_markdown_diary_contains_title_and_checkpoint() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "export-markdown").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_id, "checkpoint_kind": "campaign_started", "note": "the unique checkpoint note", "author": "agent",
+        }}).as_object().unwrap().clone())).await.unwrap());
+
+        let exported = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "export",
+            "project_id": project_id, "mode": "markdown_diary",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let doc = exported["document"].as_str().unwrap();
+        assert!(doc.contains("Project export-markdown"), "{doc}");
+        assert!(doc.contains("the unique checkpoint note"), "{doc}");
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_export_x_tier_gate_defaults_free_and_clamps_override() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "export-tier").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+
+        let default_free = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "export",
+            "project_id": project_id, "mode": "x_thread_prompt",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(default_free["x_tier"], "free");
+        assert_eq!(default_free["max_chars_per_post"], 280);
+
+        let premium = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "export",
+            "project_id": project_id, "mode": "x_thread_prompt", "x_tier": "premium",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(premium["max_chars_per_post"], 25000);
+
+        let clamped = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "export",
+            "project_id": project_id, "mode": "x_thread_prompt", "x_tier": "free", "max_chars_per_post": 999999,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(clamped["max_chars_per_post"], 280, "an override must never exceed the tier's real ceiling: {:?}", clamped);
+
+        let denied = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "export",
+            "project_id": project_id, "mode": "x_thread_prompt", "x_tier": "enterprise",
+        }}).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "unknown x_tier must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_export_since_checkpoint_id_cursor() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "export-cursor").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+
+        let cp1 = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_id, "checkpoint_kind": "campaign_started", "note": "first", "author": "agent",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_id, "checkpoint_kind": "candidate_found", "note": "second", "author": "agent",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "checkpoint",
+            "project_id": project_id, "checkpoint_kind": "candidate_found", "note": "third", "author": "agent",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let cp1_id = cp1["checkpoint_id"].as_str().unwrap().to_string();
+
+        let full = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "export",
+            "project_id": project_id, "mode": "structured_json",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(full["packet"]["checkpoints"].as_array().unwrap().len(), 3, "{:?}", full);
+
+        let cursored = tool_json(&peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "export",
+            "project_id": project_id, "mode": "structured_json", "since_checkpoint_id": cp1_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let checkpoints = cursored["packet"]["checkpoints"].as_array().unwrap();
+        assert_eq!(checkpoints.len(), 2, "{:?}", cursored);
+        assert_eq!(checkpoints[0]["note"], "second");
+        assert_eq!(checkpoints[1]["note"], "third");
+    }
+
+    #[tokio::test]
+    async fn test_dev_diary_export_rejects_unknown_mode_and_project() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let project = create_dev_diary_project(&peer, "export-invalid").await;
+        let project_id = project["project_id"].as_str().unwrap().to_string();
+
+        let bad_mode = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "export",
+            "project_id": project_id, "mode": "tweet_thread",
+        }}).as_object().unwrap().clone())).await;
+        assert!(bad_mode.is_err(), "unknown mode must be rejected");
+
+        let bad_project = peer.call_tool(CallToolRequestParams::new("dev_diary").with_arguments(serde_json::json!({"action": {"type": "export",
+            "project_id": "00000000-0000-0000-0000-000000000000", "mode": "structured_json",
+        }}).as_object().unwrap().clone())).await;
+        assert!(bad_project.is_err(), "export on unknown project_id must be rejected");
+    }
+
+    // -- Literature lineage (issue #236) -------------------------------------
+
+    #[tokio::test]
+    async fn test_literature_lineage_create_and_observe() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "create",
+            "episode_id": episode_id, "environment_hash": "env-1",
+            "search_queries": [{"query": "irrationality of sqrt 2", "searched_at": "2026-07-12T00:00:00Z"}],
+            "sources": [{
+                "source_id": "s1", "title": "A classical proof", "visibility": "model_visible",
+                "retrieval_timing": "before_proof_discovery", "attribution": "directly_used", "confidence": "high",
+            }],
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(created["created"], true, "{:?}", created);
+        let lineage_id = created["lineage_id"].as_str().unwrap().to_string();
+        assert_eq!(created["lineage"]["all_model_visible"], true);
+        assert_eq!(created["lineage"]["sources"][0]["source_id"], "s1");
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "observe",
+            "lineage_id": lineage_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["lineage_id"], lineage_id);
+        assert_eq!(observed["episode_id"], episode_id);
+    }
+
+    #[tokio::test]
+    async fn test_literature_lineage_create_is_idempotent_on_lineage_hash() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let args = serde_json::json!({"action": {"type": "create",
+            "episode_id": episode_id, "environment_hash": "env-1",
+            "sources": [{
+                "source_id": "s1", "title": "A classical proof", "visibility": "model_visible",
+                "retrieval_timing": "before_proof_discovery", "attribution": "directly_used", "confidence": "high",
+            }],
+        }});
+        let first = tool_json(&peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(args.as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(first["created"], true, "{:?}", first);
+        let second = tool_json(&peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(args.as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(second["created"], false, "resubmitting byte-identical evidence must not duplicate it: {:?}", second);
+        assert_eq!(first["lineage_id"], second["lineage_id"]);
+    }
+
+    #[tokio::test]
+    async fn test_literature_lineage_create_rejects_empty_sources_and_unknown_episode() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let empty = peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "create",
+            "episode_id": episode_id, "environment_hash": "env-1", "sources": [],
+        }}).as_object().unwrap().clone())).await;
+        assert!(empty.is_err(), "empty sources must be rejected");
+
+        let unknown_episode = peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "create",
+            "episode_id": "00000000-0000-0000-0000-000000000000", "environment_hash": "env-1",
+            "sources": [{"source_id": "s1", "title": "t", "visibility": "model_visible", "retrieval_timing": "unknown", "attribution": "uncertain", "confidence": "low"}],
+        }}).as_object().unwrap().clone())).await;
+        assert!(unknown_episode.is_err(), "unknown episode_id must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_literature_lineage_link_to_research_node_and_rejects_duplicate() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let dossier = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "create",
+            "title": "Lineage link target dossier",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let dossier_id = dossier["dossier_id"].as_str().unwrap().to_string();
+        let node = tool_json(&peer.call_tool(CallToolRequestParams::new("research_dossier").with_arguments(serde_json::json!({"action": {"type": "node_add",
+            "dossier_id": dossier_id, "node_type": "lemma", "title": "A helper lemma",
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let node_id = node["node_id"].as_str().unwrap().to_string();
+
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "create",
+            "episode_id": episode_id, "environment_hash": "env-1",
+            "sources": [{"source_id": "s1", "title": "t", "visibility": "model_visible", "retrieval_timing": "unknown", "attribution": "uncertain", "confidence": "low"}],
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let lineage_id = created["lineage_id"].as_str().unwrap().to_string();
+
+        let linked = tool_json(&peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "link",
+            "lineage_id": lineage_id, "target_kind": "research_node", "target_id": node_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(linked["lineage"]["links"].as_array().unwrap().len(), 1, "{:?}", linked);
+
+        let dup = peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "link",
+            "lineage_id": lineage_id, "target_kind": "research_node", "target_id": node_id,
+        }}).as_object().unwrap().clone())).await;
+        assert!(dup.is_err(), "duplicate link must be rejected");
+
+        let bad_target = peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "link",
+            "lineage_id": lineage_id, "target_kind": "research_node", "target_id": "00000000-0000-0000-0000-000000000000",
+        }}).as_object().unwrap().clone())).await;
+        assert!(bad_target.is_err(), "nonexistent target_id must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_literature_lineage_observe_by_episode_id_lists_all() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        tool_json(&peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "create",
+            "episode_id": episode_id, "environment_hash": "env-1",
+            "sources": [{"source_id": "s1", "title": "t1", "visibility": "model_visible", "retrieval_timing": "unknown", "attribution": "uncertain", "confidence": "low"}],
+        }}).as_object().unwrap().clone())).await.unwrap());
+        tool_json(&peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "create",
+            "episode_id": episode_id, "environment_hash": "env-2",
+            "sources": [{"source_id": "s2", "title": "t2", "visibility": "post_hoc_review_only", "retrieval_timing": "after_proof_discovery", "attribution": "independently_rediscovered", "confidence": "medium"}],
+        }}).as_object().unwrap().clone())).await.unwrap());
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "observe",
+            "episode_id": episode_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+        assert_eq!(observed["lineages"].as_array().unwrap().len(), 2, "{:?}", observed);
+    }
+
+    #[tokio::test]
+    async fn test_literature_lineage_replay_hash_matches_stored_lineage_hash() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+
+        let created = tool_json(&peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "create",
+            "episode_id": episode_id, "environment_hash": "env-replay",
+            "search_queries": [{"query": "descent method", "searched_at": "2026-07-12T00:00:00Z"}],
+            "sources": [{
+                "source_id": "s1", "title": "A paper", "authors": ["A. Author"], "year": 2020, "venue": "J. Math",
+                "doi_or_url": "https://doi.org/10.0/s1", "visibility": "model_visible",
+                "retrieval_timing": "before_proof_discovery", "attribution": "likely_influential", "confidence": "medium",
+                "extracted_claims": [{"claim_id": "c1", "kind": "proof_strategy", "text": "descent via minimal counterexample", "claim_hash": "irrelevant-for-replay-but-must-round-trip"}],
+            }],
+            "idea_to_source_map": [{"proof_element": "step:descent", "source_id": "s1", "claim_id": "c1", "attribution": "likely_influential"}],
+        }}).as_object().unwrap().clone())).await.unwrap());
+        let lineage_id = created["lineage_id"].as_str().unwrap().to_string();
+        let stored_hash = created["lineage"]["lineage_hash"].as_str().unwrap().to_string();
+
+        let observed = tool_json(&peer.call_tool(CallToolRequestParams::new("literature_lineage").with_arguments(serde_json::json!({"action": {"type": "observe",
+            "lineage_id": lineage_id,
+        }}).as_object().unwrap().clone())).await.unwrap());
+
+        // Reconstruct the REAL Rust type from exactly what observe returned
+        // and recompute its canonical hash -- proves the ledger is replayable
+        // and tamper-evident, not just a JSON round-trip.
+        let search_queries: Vec<SearchQuery> = serde_json::from_value(observed["search_queries"].clone()).unwrap();
+        let sources: Vec<SourceRecord> = serde_json::from_value(observed["sources"].clone()).unwrap();
+        let idea_to_source_map: Vec<IdeaToSourceLink> = serde_json::from_value(observed["idea_to_source_map"].clone()).unwrap();
+        let reconstructed = LiteratureLineage::new(
+            observed["episode_id"].as_str().unwrap(),
+            observed["environment_hash"].as_str().unwrap(),
+            observed["problem_version_id"].as_str().map(|s| s.to_string()),
+            observed["obligation_id"].as_str().map(|s| s.to_string()),
+            search_queries, sources, idea_to_source_map,
+        );
+        assert_eq!(reconstructed.lineage_hash, stored_hash, "replaying the stored evidence must reproduce the exact same lineage_hash");
     }
 }

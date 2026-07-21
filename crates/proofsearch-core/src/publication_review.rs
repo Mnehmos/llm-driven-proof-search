@@ -11,13 +11,14 @@
 //! publication status, and a kernel-verified result can NEVER become
 //! `publication_ready` without a completed citation-lineage review.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const PUBLICATION_REVIEW_VERSION: &str = "1.0";
 
 /// What kind of contribution the output claims to be — these are NOT
 /// interchangeable and must be stated explicitly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ContributionType {
     NewProof,
@@ -30,7 +31,7 @@ pub enum ContributionType {
 }
 
 /// Per-layer review state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LayerStatus {
     NotStarted,

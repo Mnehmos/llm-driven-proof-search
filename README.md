@@ -106,6 +106,7 @@ Antigravity, or a custom script — should call this first.
 | `benchmark_problem` | ONE tool for the benchmark-problem lifecycle (issues #29/#30/#62/#65), dispatching on an internally-tagged `action` (`register` / `observe`) — exactly like `episode_step`'s typed `action`. `register` records one problem from a suite — `root_statement_hash` is server-computed from `root_formal_statement`, never client-supplied, and a `prover_ready_statement` (+ its own hash) is derived automatically (never client-supplied) when the statement is a `theorem NAME (binders) : type` declaration; `import_manifest` entries may be Lean module paths and/or `open [scoped] <Namespace> ...` directives (issue #62). `observe` reads back one registered problem by `benchmark_problem_id` or by (`suite_id`, `upstream_problem_id`), returning the full row including both hashes and the server-derived `prover_ready_statement` |
 | `benchmark_run` | ONE tool for the whole benchmark-run family (issue #182's `benchmark_run_create`/`benchmark_result_record`/`benchmark_run_observe` consolidation), dispatching on an internally-tagged `action` (`create` / `result_record` / `observe`) — exactly like `episode_step`'s typed `action`. `create` starts a run against a suite; `lean_version`/`mathlib_commit` are read from the server's OWN detected Lean environment, never accepted from the client. `result_record` records (or upserts, for pass@k) one problem's result within a run — if `episode_id` is given, cross-checked against that episode's ACTUAL recorded outcome AND that it proved the SAME statement as the benchmark problem (issue #36), and a `kernel_verified`/`certified` claim additionally requires the issue #38 fidelity-basis policy (a trusted suite's own canonical statement-hash match, or an independently `fidelity_status='verified'` problem) — this trust boundary is unchanged by the consolidation. `observe` reads back a run, its results, and aggregate metrics — `solved_rate` (solved at all) vs `pass_at_1_rate` (genuine first-attempt success) are reported separately |
 | `proof_session` | ONE tool for the whole interactive (tactic-by-tactic) proof-session family, dispatching on an internally-tagged `action` (`start` / `observe` / `tactic_step` / `branch` / `select_node` / `reconstruct` / `promote_to_attempt` / `close` / `export` / `replay`) — exactly like `episode_step`'s typed `action`. Search evidence only, except the `promote_to_attempt` action (and `replay` mode `final_proof`), which resubmits a reconstructed script through the real `attempt_claim` + `episode_step(Solve)` kernel-verification path. See [Interactive Proof Sessions](#interactive-proof-sessions) |
+| `dev_diary` | ONE tool for the project-scoped dev diary family (issue #242), dispatching on an internally-tagged `action` (`create_project` / `attach` / `checkpoint` / `observe` / `export`) — exactly like `episode_step`'s typed `action`. Joins existing tracked evidence (problems, episodes, research dossiers, formalization plans, empirical searches, candidate constructions, verification layers, distilled strategies) into a chronological campaign timeline that a long-running effort can document as it happens. **This tool never calls an LLM and never posts anywhere** — it only assembles evidence for an external host to turn into a narrative. `create_project` starts a campaign (rejects a duplicate `project_key` rather than overwriting it); `attach` links an existing artifact by id (existence-checked against its own table) or an `external_link`/`public_post` URL, never altering the attached artifact's own trust/fidelity/outcome; `checkpoint` records a chronological, server-numbered milestone (success or failure) with an optional same-project attachment reference; `observe` reads back the project with every attachment/checkpoint plus a `resolved` view bucketing that same data into verified results, failed/blocked routes, reusable artifacts, surfaced claim boundaries, and the current frontier — purely re-bucketed from each artifact's own already-recorded status, never re-derived; `export` renders `structured_json` / `markdown_diary` / `x_thread_prompt` / `single_x_post_prompt` / `blog_prompt` / `institute_update_prompt`, gated by an explicit `x_tier`/`max_chars_per_post` (default `"free"` → 280 chars, X's real non-premium limit; `"premium"` → 25,000 — a caller override is always clamped DOWN to the tier's real ceiling, never up), supports a `since_checkpoint_id` cursor and `dry_run` preview, and records one immutable `dev_diary_publications` ledger row per non-dry-run call, hash-pinned for replay. See [Dev Diary](#dev-diary-project-campaigns) |
 
 ## Budget Accounting
 
@@ -453,6 +454,71 @@ recorded structured items and re-verifies against the kernel. Full detail,
 including the mutual-recursion trust boundary and injection hardening: see
 [`docs/submit_module.md`](docs/submit_module.md). For what level of capability
 this represents and what's still missing, see [`docs/roadmap.md`](docs/roadmap.md).
+
+## Dev Diary (Project Campaigns)
+
+A long-running campaign (issue #242) — a single Erdős problem worked over
+weeks, say — spans hundreds of problems, episodes, dossiers, and diagnostic
+dead ends. Reconstructing that story after the fact from a chat transcript is
+slow and error-prone. `dev_diary` is a project-scoped layer that joins
+existing tracked evidence into a chronological timeline as the campaign
+happens, and can export a grounded packet plus a ready-to-use prompt for an
+external host to turn into an X thread, a blog post, or an institute update.
+
+**`dev_diary` itself never calls an LLM and never posts to X or anywhere
+else.** It has no provider SDKs, no API keys, no network client — the same
+boundary this whole environment holds everywhere else. It assembles evidence;
+an external agent host (Claude Code, or whatever is calling this tool) writes
+the prose and decides whether/where to publish it.
+
+- `create_project` starts a campaign keyed by a unique, human-stable
+  `project_key` (e.g. `erdos-647`). A duplicate key is rejected, never
+  silently overwritten.
+- `attach` links an existing first-class artifact — a `problem_version`,
+  `episode`, `research_dossier`, `formalization_plan`, `empirical_search`,
+  `candidate_construction`, `verification_layer`, or `distilled_strategy` — by
+  id, existence-checked against that artifact's own table. `external_link` and
+  `public_post` (a GitHub issue/PR URL, or a manually recorded public post)
+  carry an `external_url` instead, since neither has a backing row. Attaching
+  is provenance only: it never reads back, alters, or upgrades the attached
+  artifact's own `trust_status`/`fidelity_status`/outcome.
+- `checkpoint` records one chronological milestone — `campaign_started`,
+  `candidate_found`, `proof_attempt_failed`, `root_cause_identified`,
+  `kernel_result`, `mathlib_gap`, `method_exhausted`, `frontier_changed`,
+  `claim_corrected`, `infrastructure_issue_opened`, `public_update_posted`, or
+  `other` — with a human/agent note and an optional same-project attachment
+  reference. `checkpoint_number` is assigned server-side (never
+  caller-supplied), so chronological order is guaranteed regardless of client
+  behavior. Failed and negative checkpoints are preserved exactly like
+  successful ones, the same append-only posture as `reasoning_log`.
+- `observe` reads the project back with every attachment and checkpoint in
+  order, plus a `resolved` view: `verified_results` (attachments whose
+  underlying `episode.outcome` is already `certified`/`kernel_verified`, or
+  whose `verification_layer.status` is already `kernel_verified`),
+  `failed_or_blocked` (matching failure outcomes/statuses, plus
+  `proof_attempt_failed`/`method_exhausted` checkpoints), `reusable_artifacts`
+  (attached `formalization_plan`/`distilled_strategy` rows),
+  `claim_boundaries` (each attached dossier's own `assumption_boundaries`,
+  unchanged), `checkpoints_by_kind`, and `current_frontier` (the latest
+  `frontier_changed` note). Every bucket is re-derived purely from columns
+  already recorded elsewhere — `observe` never re-decides a trust status.
+- `export` renders the project as `structured_json` (full detail, internal
+  ids retained, for grounding/audit), `markdown_diary` (a human-readable
+  document), or one of four external-host prompts — `x_thread_prompt`,
+  `single_x_post_prompt`, `blog_prompt`, `institute_update_prompt` — each
+  populated with the resolved packet and an instruction not to surface raw
+  database ids in the generated prose. The two X modes are gated by an
+  explicit `x_tier` (`"free"` or `"premium"`, defaulting to `"free"` whenever
+  omitted — the conservative assumption, since most callers will not have a
+  paid account) resolving to `max_chars_per_post` (280 for free, X's real
+  non-premium limit; 25,000 for premium): a caller-supplied override is always
+  clamped DOWN to the resolved tier's ceiling, never allowed past it. A
+  `since_checkpoint_id` cursor scopes an export to checkpoints after a given
+  checkpoint (attachments are not cursored — they are not chronological in
+  that sense). Unless `dry_run`, every export records one immutable
+  `dev_diary_publications` row (mode, cursor, resolved `x_tier`/
+  `max_chars_per_post`, and a canonical hash of the exact packet) so a later
+  audit shows precisely what a given thread was generated against.
 
 ## Interactive Proof Sessions
 
