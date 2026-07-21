@@ -1943,6 +1943,31 @@ pub struct ProofSessionArgs {
     pub action: ProofSessionAction,
 }
 
+/// Issue #238: dedicated canonical RL-transition exporter. `mode` selects the
+/// scope; the emitter (`proofsearch_core::orchestrator::dataset`) already
+/// produces one hash-bound `proofsearch.rl_transition.v1` record per committed
+/// step in deterministic, gap-free order, with explicit `missing_reason`
+/// markers for legacy episodes.
+#[derive(JsonSchema, Deserialize)]
+pub struct RlExportArgs {
+    /// `episode` (default) — one episode; `problem_lineage` — every episode of
+    /// `problem_version_id`; `batch` — the explicit `episode_ids` list.
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub episode_id: Option<String>,
+    #[serde(default)]
+    pub problem_version_id: Option<String>,
+    #[serde(default)]
+    pub episode_ids: Option<Vec<String>>,
+    /// Required (true) when any targeted episode's problem is linked to a tracked
+    /// benchmark suite: a transition's `action`/`state` carries completed
+    /// proof-body content (proof_term/module_items), the same content issue #33's
+    /// contamination policy gates in `proof_export`/`trajectory_export`.
+    #[serde(default)]
+    pub allow_putnambench_proof_export: bool,
+}
+
 #[derive(JsonSchema, Deserialize)]
 pub struct TrajectoryExportArgs {
     pub episode_id: String,
@@ -12600,6 +12625,104 @@ impl ChatDbMcp {
     // -----------------------------------------------------------------
 
     /// Issue #230: export a conformant MCIP v1 bundle for a verified obligation.
+    /// Issue #238: dedicated canonical RL-transition exporter. Surfaces the
+    /// already-tested `dataset::export_rl_transitions` emitter (one hash-bound
+    /// `proofsearch.rl_transition.v1` record per committed step, deterministic
+    /// and gap-free, with explicit legacy `missing_reason` markers) as JSONL,
+    /// with episode / problem-lineage / batch scoping. Honors the same
+    /// benchmark contamination gate as `trajectory_export`/`proof_export`,
+    /// since a transition's action/state carries proof-body content. Read-only.
+    async fn do_rl_export(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        use proofsearch_core::orchestrator::dataset;
+        let args: RlExportArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let mode = args.mode.as_deref().unwrap_or("episode");
+
+        let conn = self.conn.lock().await;
+
+        // Resolve the target episode id list from the mode.
+        let episode_ids: Vec<String> = match mode {
+            "episode" => {
+                let id = args.episode_id.as_deref().ok_or_else(|| {
+                    mcp_invalid_params("mode=episode requires episode_id".to_string())
+                })?;
+                vec![id.to_string()]
+            }
+            "problem_lineage" => {
+                let pv = args.problem_version_id.as_deref().ok_or_else(|| {
+                    mcp_invalid_params("mode=problem_lineage requires problem_version_id".to_string())
+                })?;
+                let mut stmt = conn
+                    .prepare("SELECT id FROM episodes WHERE problem_version_id = ?1 ORDER BY created_at ASC, id ASC")
+                    .map_err(rs)?;
+                let ids = stmt
+                    .query_map([pv], |r| r.get::<_, String>(0))
+                    .map_err(rs)?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(rs)?;
+                ids
+            }
+            "batch" => args
+                .episode_ids
+                .clone()
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| mcp_invalid_params("mode=batch requires a non-empty episode_ids".to_string()))?,
+            other => {
+                return Err(mcp_invalid_params(format!(
+                    "unknown mode '{}' (expected episode | problem_lineage | batch)",
+                    other
+                )))
+            }
+        };
+
+        // Contamination gate: reject up front if ANY targeted episode is
+        // benchmark-linked and the caller has not opted in — a transition's
+        // action/state can expose the completed proof body.
+        if !args.allow_putnambench_proof_export {
+            for eid in &episode_ids {
+                if let Some(link) = benchmark_suite_name_for_episode(&conn, eid)? {
+                    return Err(mcp_invalid_params(format!(
+                        "episode {} is linked to benchmark suite '{}' — an RL transition's action/state can \
+                         expose the completed proof body (proof_term/module_items), so rl_export requires \
+                         allow_putnambench_proof_export=true (same policy as trajectory_export/proof_export).",
+                        eid, link.suite_name
+                    )));
+                }
+            }
+        }
+
+        let mut jsonl = String::new();
+        let mut per_episode: Vec<serde_json::Value> = Vec::new();
+        let mut total: usize = 0;
+        for eid in &episode_ids {
+            let ep_uuid = Uuid::parse_str(eid)
+                .map_err(|_| mcp_invalid_params(format!("episode_id is not a valid UUID: {}", eid)))?;
+            let transitions =
+                dataset::export_rl_transitions(&conn, ep_uuid).map_err(mcp_internal_error)?;
+            for t in &transitions {
+                jsonl.push_str(&serde_json::to_string(t).map_err(|e| mcp_internal_error(e.to_string()))?);
+                jsonl.push('\n');
+            }
+            per_episode.push(serde_json::json!({
+                "episode_id": eid,
+                "transition_count": transitions.len(),
+            }));
+            total += transitions.len();
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&serde_json::json!({
+                "schema_version": dataset::RL_TRANSITION_SCHEMA_VERSION,
+                "mode": mode,
+                "episodes": per_episode,
+                "total_transitions": total,
+                "jsonl": jsonl,
+                "policy": "Canonical RL transitions (proofsearch.rl_transition.v1): one hash-bound record per committed step, deterministic and gap-free; legacy episodes carry explicit info.missing_reason rather than fabricated zeros. Read-only.",
+            }))
+            .unwrap(),
+        )]))
+    }
+
     async fn do_mathcorpus_export(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
         use proofsearch_core::mcip;
         let args: MathcorpusExportArgs = serde_json::from_value(args_val)
@@ -15731,6 +15854,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ModelCallReserveArgs>("model_call_reserve", "Reserve a model-call budget lease and immediately debit bounded episode budget"),
             make_tool::<ModelCallSettleArgs>("model_call_settle", "Settle or void a lease, applying only the reserved-vs-actual budget delta"),
             make_tool::<TrajectoryExportArgs>("trajectory_export", "Export trajectory with pagination (cursor + page_size). Raw event payload_json can expose a completed proof body (proof_term/module_items) — for a benchmark-linked episode this requires allow_putnambench_proof_export=true, same contamination policy as proof_export (issue #33)"),
+            make_tool::<RlExportArgs>("rl_export", "Issue #238: export canonical RL transitions (schema `proofsearch.rl_transition.v1`) as JSONL — one hash-bound record per committed environment step (state, action, reward, next_state, terminated, truncated, termination/truncation reasons, outcome, info) in deterministic, gap-free order. `mode`: `episode` (default; needs episode_id) | `problem_lineage` (all episodes of problem_version_id) | `batch` (explicit episode_ids). Real persisted values, never packet metadata; legacy episodes carry explicit info.missing_reason rather than fabricated zeros. Returns {schema_version, mode, episodes:[{episode_id,transition_count}], total_transitions, jsonl}. A transition's action/state can carry proof-body content, so a benchmark-linked episode requires allow_putnambench_proof_export=true (same gate as trajectory_export/proof_export). Read-only."),
             make_tool::<EpisodeReplayArgs>("episode_replay", "Re-execute typed actions through canonical reducer with Lean re-verification"),
             make_tool::<ProofExportArgs>("proof_export", "Render an episode as a proof dossier. format: \"markdown\" (default, full dossier) | \"lean\" (bare assembled source) | \"public_summary\" (redacted, safe for public/benchmark disclosure — never includes the proof body) | \"audit_archive\" (full dossier, explicitly labeled private) | \"training_export\" (structured JSON records for SFT/RL/DPO) | \"paper_dossier\" (full dossier plus a written narrative section) | \"maintainer_submission\" (full dossier packaged for a benchmark suite's own maintainers). Modes that expose the completed proof body require allow_putnambench_proof_export=true when the episode's problem is linked to a tracked benchmark suite — see docs/benchmarks/putnambench.md"),
             make_tool::<LeanDeclarationLookupArgs>("lean_declaration_lookup", "Check whether declaration names resolve — WITHOUT changing proof strategy first. An 'unknown identifier' error from episode_step only ever proves a name didn't resolve under the exact import manifest that attempt used; it never proves the name is absent from the pinned Mathlib. By default this only checks under the problem's own manifest (fast, a few seconds) and returns 'not_available_under_current_manifest' if it fails to resolve — that result alone does NOT mean the name is absent from the library, only that it needs an import. Pass deep_check=true to additionally check under the full Mathlib umbrella and distinguish 'not_in_current_import_scope' (add an import to problem_imports, see problem_create) from genuinely 'unknown_declaration' (misspelled, wrong namespace, or absent); deep_check loads all of Mathlib and reliably takes 15-40+ seconds. Epistemic rule: before concluding an API is unavailable, call this tool with deep_check=true — do not infer library capability from one elaboration failure or from a fast-path result alone"),
@@ -15942,8 +16066,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 52,
-                        "total_tool_count": 52,
+                        "classified_tool_count": 53,
+                        "total_tool_count": 53,
                         "tools": {
                             "mathcorpus_export": {
                                 "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
@@ -16063,6 +16187,16 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "replayable_with_hashes — this IS the hash chain episode_replay verifies against",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "proof_body (now gated) for a benchmark-linked episode; diagnostic_only otherwise",
+                                "required_run_mode": "private_audit for a benchmark-linked episode; any otherwise"
+                            },
+                            "rl_export": {
+                                "side_effect": "read_only — reads persisted committed-step trajectory events + #231 reward/terminal fields and renders canonical proofsearch.rl_transition.v1 JSONL; writes nothing",
+                                "trust_level": "verifier_backed — real persisted reward/observation/terminal values, each transition hash-bound to episode+environment; legacy episodes carry explicit info.missing_reason rather than fabricated zeros",
+                                "cost_surface": "none — DB reads + pure serialization, no Lean invocation",
+                                "benchmark_safety": "contamination_risk — a transition's action/state can carry a solve proof_term / submit_module module_items, so it requires allow_putnambench_proof_export=true for a benchmark-linked episode, the same #33 gate as trajectory_export/proof_export (checked up front across every targeted episode in problem_lineage/batch modes)",
+                                "replayability": "deterministic — canonical, gap-free per-episode ordering; every transition_hash regenerable from persisted state",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "proof_body (gated) for a benchmark-linked episode; transition_metadata otherwise",
                                 "required_run_mode": "private_audit for a benchmark-linked episode; any otherwise"
                             },
                             "episode_replay": {
@@ -17492,6 +17626,7 @@ impl ServerHandler for ChatDbMcp {
             "proof_profile" => self.do_proof_profile(args_val).await,
             "dependency_manifest" => self.do_dependency_manifest(args_val).await,
             "mathcorpus_export" => self.do_mathcorpus_export(args_val).await,
+            "rl_export" => self.do_rl_export(args_val).await,
             "semantic_skeleton" => self.do_semantic_skeleton(args_val).await,
             "expert_review" => self.do_expert_review(args_val).await,
             "mathlib_search_declarations" => {
@@ -18422,7 +18557,9 @@ mod tests {
         // + 1 literature_lineage (issue #236: append-only storage ledger +
         // MCP surface for the existing hash-pinned literature-lineage record
         // model — create/observe/link) = 52.
-        assert_eq!(list_res.tools.len(), 52);
+        // + 1 rl_export (issue #238: canonical RL-transition JSONL exporter with
+        // episode/problem_lineage/batch modes) = 53.
+        assert_eq!(list_res.tools.len(), 53);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -20664,6 +20801,54 @@ mod tests {
             "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"], "expected_revision": req["episode_revision"],
             "claim_token": claim["claim_token"], "action": {"type": "solve", "proof_term": proof_term}, "cost_micros": 100,
         }).as_object().unwrap().clone())).await.unwrap())
+    }
+
+    /// #238: rl_export emits canonical RL transitions as JSONL for a solved
+    /// episode, and every line round-trips back to a proofsearch.rl_transition.v1
+    /// record in deterministic, gap-free order.
+    #[tokio::test]
+    async fn test_rl_export_emits_canonical_jsonl_and_round_trips() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        let pv_id = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+        let step = claim_and_solve(&peer, &episode_id, "trivial", "rl-export").await;
+        assert_eq!(step["outcome"], "kernel_verified");
+
+        let out = tool_json(&peer.call_tool(CallToolRequestParams::new("rl_export").with_arguments(serde_json::json!({
+            "mode": "episode", "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+
+        assert_eq!(out["schema_version"], "proofsearch.rl_transition.v1");
+        assert_eq!(out["mode"], "episode");
+        let total = out["total_transitions"].as_u64().unwrap();
+        assert!(total >= 1, "a solved episode has at least one committed transition: {:?}", out);
+        assert_eq!(out["episodes"][0]["episode_id"], episode_id);
+        assert_eq!(out["episodes"][0]["transition_count"].as_u64().unwrap(), total);
+
+        // Round-trip: every JSONL line parses back to a schema-versioned record,
+        // and step_index is deterministic + gap-free from 0.
+        let jsonl = out["jsonl"].as_str().unwrap();
+        let lines: Vec<serde_json::Value> = jsonl.lines()
+            .map(|l| serde_json::from_str(l).expect("each rl_export line is valid JSON"))
+            .collect();
+        assert_eq!(lines.len() as u64, total, "one JSONL line per transition");
+        for (i, rec) in lines.iter().enumerate() {
+            assert_eq!(rec["schema_version"], "proofsearch.rl_transition.v1");
+            assert_eq!(rec["episode_id"], episode_id);
+            assert_eq!(rec["step_index"].as_u64().unwrap(), i as u64, "gap-free ordered step_index");
+            assert!(rec["transition_hash"].as_str().unwrap().len() == 64, "hash-bound transition");
+            assert!(rec.get("state").is_some() && rec.get("action").is_some() && rec.get("next_state").is_some());
+        }
+
+        // Unknown mode is rejected.
+        let bad = peer.call_tool(CallToolRequestParams::new("rl_export").with_arguments(serde_json::json!({
+            "mode": "nonsense", "episode_id": episode_id,
+        }).as_object().unwrap().clone())).await;
+        assert!(bad.is_err(), "unknown mode must be rejected");
     }
 
     /// THE EXPLOIT REGRESSION: a kernel-verified root of a weakened/vacuous
