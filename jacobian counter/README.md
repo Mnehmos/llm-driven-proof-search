@@ -3,7 +3,21 @@
 Machine-certified formalization of the July 19, 2026 counterexample to the **Jacobian
 Conjecture** (L. Alpöge; question credited to Akhil Mathew, construction credited to the
 AI model Fable), verified through the LLM-Driven Proof Search Environment's pinned
-Lean 4 + Mathlib kernel on July 20, 2026.
+Lean 4 + Mathlib kernel, July 20–21, 2026.
+
+**Summary of record** (Wall Map closeout, commit `5b28607`): The project kernel-verifies
+the explicit three-dimensional Jacobian counterexample, its normalized determinant-one
+form, and all map-specific polynomial identities needed for its canonical Poisson and
+Weyl lifts. It also contains a direct, unconditional, sorry-free Lean proof that the
+canonical rank-three Poisson conjecture is false: the cotangent lift is a
+bracket-preserving but non-surjective algebra endomorphism. Six theorems have passed
+through the project's tracked verification environment — five with certified statement
+fidelity — and the Poisson refutation is separately file-verified against the pinned
+Mathlib. Exact external certificates additionally construct an eleven-variable cubic
+normalization and a twenty-three-variable cubic-homogeneous counterexample. The
+Weyl/Dixmier and Zhao consequences remain transport and infrastructure targets; the
+genuinely open mathematics is the dimension-two problem (control of escape at infinity)
+and an explicit finite-type SU(3) moment witness.
 
 The algebraic verification and global geometry of the map are developed in
 P. Chojecki, *A Counterexample to the Jacobian Conjecture* (ulam.ai research write-up,
