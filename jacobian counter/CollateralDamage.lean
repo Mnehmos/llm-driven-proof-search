@@ -45,8 +45,16 @@ References:
          endomorphism Φ(xᵢ) = Uᵢ, Φ(∂ᵢ) = Σ (adj J)ᵣᵢ ∂ᵣ from the counterexample.
   [Gist] 11-variable degree-3 reduction certificate (ChatGPT-generated sympy script),
          gist.github.com/Spacerat/08b4a43f6b6ca57178efabc220170ce8 — det −2, 52 terms,
-         same three-point collision; independently re-verified with sympy (including a
-         direct 11×11 Jacobian determinant computation) for this release.
+         same three-point collision. PRECISION NOTE: the gist certifies the determinant
+         via its construction chain, not a direct expansion; a direct symbolic 11×11
+         Berkowitz computation attempted for this release STALLED and was replaced by
+         the layered certificate in certificates/layered_certificate_11var.py (chain
+         assertions + det = −2 at 40 exact random points + structural linear factors +
+         the verified monic normalization). Status: E (exact/CAS), not kernel-certified.
+         The 23-variable cubic-homogeneous Yagzhev lift built on it is verified in
+         certificates/cubic_homogeneous_23_lift.py (K = id + cubic-homogeneous H,
+         det JK = 1, JH nilpotent, three distinct points collide) — the explicit
+         witness giving 5 ≤ n_cubic-homogeneous ≤ 23 and the intended Zhao Image input.
 -/
 import Mathlib
 

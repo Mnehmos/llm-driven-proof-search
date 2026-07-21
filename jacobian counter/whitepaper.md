@@ -30,7 +30,7 @@ This release contains a **formal, kernel-checked verification** of the counterex
 
 ## 2. What is formally proved
 
-Four theorems were verified through the LLM-Driven Proof Search Environment, a verifier-backed proof environment in which the only path to a "proved" status runs through a pinned Lean 4 + Mathlib kernel, and in which statement fidelity is tracked by hash-checked review records. Three of the four carry the environment's highest trust level, `certified` (kernel-verified proof **and** verified statement-fidelity review); the first carries `kernel_verified` (its review used the environment's dev-attestation path).
+Six theorems were verified through the LLM-Driven Proof Search Environment, a verifier-backed proof environment in which the only path to a "proved" status runs through a pinned Lean 4 + Mathlib kernel, and in which statement fidelity is tracked by hash-checked review records. Five of the six carry the environment's highest trust level, `certified` (kernel-verified proof **and** verified statement-fidelity review); the first carries `kernel_verified` (its review used the environment's dev-attestation path).
 
 | # | Statement | Field | Outcome |
 |---|-----------|-------|---------|
@@ -38,6 +38,8 @@ Four theorems were verified through the LLM-Driven Proof Search Environment, a v
 | 2 | ¬(every Keller map `Fin 3 → MvPolynomial (Fin 3) ℂ` has a two-sided compositional polynomial inverse) — the negation of `formal-conjectures`' `jacobian_conjecture` at k = ℂ, σ = Fin 3 | ℂ | **`certified`** |
 | 3 | The evaluation map of F on ℂ³ is not injective | ℂ | **`certified`** |
 | 4 | The dimension-4 statement is also false (stabilization: append w as a fourth component) | ℂ | **`certified`** |
+| 5 | The normalized map U = (R/2, Q, P) has det = 1, U(0) = 0, JU(0) = I, and a three-point fiber over its fixed point (0,0,−1/4) (paper Cor. 3.2) | ℂ | **`certified`** |
+| 6 | The Poisson-bridge core: J·B = −2·I plus all 27 commuting-derivation identities for the explicit inverse Jacobian B — the complete polynomial content of the rank-3 canonical Poisson counterexample | ℂ | **`certified`** |
 
 Precise statements are in `Challenge.lean`; kernel-accepted proofs are transcribed verbatim in `ChallengeSolved.lean`; episode identifiers and hashes are in `README.md`.
 

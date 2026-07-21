@@ -1,5 +1,8 @@
 /-
-Challenge.lean — The Jacobian Conjecture is false: four formal challenges.
+Challenge.lean — The Jacobian Conjecture is false: five formal challenges.
+(A sixth certified theorem, the Poisson-bridge computational core, lives in the
+environment ledger as problem a4044282 / episode c25405a7; its 15-command Decompose
+tree is documented in proof-construction.md §7.)
 
 Source: L. Alpöge, X post, July 19 2026 (https://x.com/__alpoge__/status/2079028340955197566),
 and P. Chojecki, "A Counterexample to the Jacobian Conjecture" (ulam.ai research

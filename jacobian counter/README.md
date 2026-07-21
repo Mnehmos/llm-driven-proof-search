@@ -31,12 +31,13 @@ conjecture (Keller 1939) in dimension 3 — and by stabilization in every dimens
 |------|----------|--------|
 | `whitepaper.md` | Public-facing account: what happened, what is formally proved, what "certified" means, collateral damage | doc |
 | `proof-construction.md` | Technical construction: mechanism, formal architecture, engineering pitfalls, full verification ledger | doc |
-| `Challenge.lean` | The four theorem statements with `sorry` — solve them yourself | compiles (with `sorry` warnings) |
-| `ChallengeSolved.lean` | Verbatim kernel-accepted proofs of all four | **compiles clean** against Mathlib `v4.32.0-rc1` |
+| `Challenge.lean` | Theorem statements 1–5 with `sorry` — solve them yourself | compiles (with `sorry` warnings) |
+| `ChallengeSolved.lean` | Verbatim kernel-accepted proofs of theorems 1–5 | **compiles clean** against Mathlib `v4.32.0-rc1` |
+| `certificates/` | Layered 11-variable determinant certificate; 23-variable cubic-homogeneous lift certificate (both exact sympy, status E) | all checks pass |
 | `CollateralDamage.lean` | Dixmier / Zhao / cubic-reduction statements; certified core + sorry-free conditional refutations + cited open bridges | see file header labels |
 | `jacobian.pdf` | Source paper: P. Chojecki, *A Counterexample to the Jacobian Conjecture* (ulam.ai) | external, not committed |
 
-## The four verified theorems
+## The six verified theorems
 
 | # | Claim | Problem / Episode | Outcome |
 |---|-------|-------------------|---------|
