@@ -127,7 +127,43 @@ it separately. The three certified problems carry review records
 A review can only authorize the exact text it reviewed: the server recomputes all hashes
 on submission and rejects mismatches.
 
-## 6. What remains informal
+## 6. The 11-variable cubic reduction: layered certificate
+
+The gist certificate (`certificates/11var_cubic_reduction_gist.py`) reduces the map to an
+11-variable degree-3 map Φ with the same three-point collision. Its determinant claim
+rests on the construction chain (stabilizations + triangular automorphisms + two det −1
+linear changes), asserted symbolically end-to-end by its own script; it never computes
+the 11×11 determinant directly, and a direct symbolic Berkowitz expansion stalled
+(hours, no output — as predicted, the raw expansion is far more expensive than the
+certificate warrants). `certificates/layered_certificate_11var.py` replaces it:
+
+1. **Random-point redundancy**: det JΦ = −2 at 40 exact integer points in [−10⁴,10⁴]¹¹
+   (Schwartz–Zippel, deg ≤ 22 — transcription-error detection, not symbolic proof);
+2. **Structural factors**: det of the linear part = −2, matching the chain;
+3. **Monic normalization** closing the `F₀ = X + Q + C` fidelity gap: F₀ :=
+   JΦ(p₁)⁻¹·(Φ(·+p₁) − Φ(p₁)) — the linear factor must be **JΦ(p₁)**, not JΦ(0)
+   (translation regenerates linear terms through z = −1/4, c = ½). Verified exactly:
+   identity linear part, homogeneous degrees {2,3} only, zero fiber containing the three
+   distinct shifted points, det JF₀ = 1 (structural + 40 random points).
+
+## 7. The Poisson bridge: status and the budget wall
+
+Following the dependency order (Theorem 5 → Poisson bridge → Weyl → Dixmier), the
+Poisson-bridge computational core was attacked as theorem 6: J·B = −2·I (mixed brackets)
+plus the 27 commuting-derivation identities Σᵣ (Bᵣᵢ∂ᵣBₛⱼ − Bᵣⱼ∂ᵣBₛᵢ) = 0 (p-brackets),
+with B the inverse-Jacobian matrix. All 36 identities are **verified in exact sympy
+arithmetic**, and one conjunct is **kernel-verified**: episode `563b30de` proved
+`J * J.adjugate = −2•1` through the tracked path before its give-up. The commuting
+identities hit a hard environment constraint mapped precisely across three episodes
+(`563b30de`, `7eb8bafc` ledgers): the kernel's 200k-heartbeat budget is fixed at command
+start (tactic-level `set_option maxHeartbeats` is a no-op, unlike `maxRecDepth`), the
+statement and proof share it, adjugate-unfolds-under-`pderiv` blow it in proof, and even
+stating the 9 explicit inverse entries (~4KB of literals) blows it in elaboration.
+Next-session design: three per-column-pair problems (6 entries, ~2.5KB each) or factored
+nested literals, then a packaging theorem. The environment lessons are recorded in the
+episode ledgers and the project memory.
+
+## 8. What remains informal
 
 - The paper's fibration analysis (Prop. 4.1: ℂ³ ≅ the simple-root locus of the incidence
   cubic), fiber counts, the image ℂ³ ∖ Γ, the nonproperness set Σ = V(Δ), the properness
