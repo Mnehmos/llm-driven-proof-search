@@ -2034,6 +2034,87 @@ pub enum PublicationReviewAction {
     ExportContribution { episode_id: String },
 }
 
+/// Issue #243: the Verified Artifact Registry (VAR) foundation tool. Promotes a
+/// KERNEL-BACKED verified lemma into a curated, immutable, versioned research
+/// artifact with a lifecycle. The registry curates already-established kernel
+/// truth — no action fabricates proof authority, and no maturity/review change
+/// alters a version's copied kernel hashes.
+#[derive(JsonSchema, Deserialize)]
+pub struct VerifiedArtifactArgs {
+    pub action: VerifiedArtifactAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VerifiedArtifactAction {
+    /// Promote an existing kernel-backed verified lemma into a new registry
+    /// artifact (version 1). Rejects promotion of anything not kernel-backed.
+    Promote {
+        episode_id: String,
+        /// Disambiguates when the episode proved more than one lemma; defaults to
+        /// the episode's single verified lemma.
+        #[serde(default)]
+        obligation_id: Option<String>,
+        /// helper_lemma | definition | theorem | abstraction | reduction |
+        /// classification | construction | negative_result | proof_module | tactic_recipe.
+        artifact_kind: String,
+        canonical_name: String,
+        #[serde(default)]
+        informal_summary: Option<String>,
+        #[serde(default)]
+        source_campaign: Option<String>,
+        #[serde(default)]
+        promotion_reason: Option<String>,
+        #[serde(default)]
+        candidate_for_mathlib: bool,
+    },
+    /// Append a new immutable version from another kernel-backed origin (e.g. a
+    /// generalized form) — never overwrites the original version.
+    AddVersion {
+        artifact_id: String,
+        episode_id: String,
+        #[serde(default)]
+        obligation_id: Option<String>,
+        #[serde(default)]
+        canonical_name: Option<String>,
+        #[serde(default)]
+        formal_statement: Option<String>,
+        #[serde(default)]
+        promotion_reason: Option<String>,
+    },
+    /// Read the artifact with every version, origin, status event, and review.
+    Observe { artifact_id: String },
+    /// Append a maturity lifecycle event (curation only; never proof authority).
+    SetStatus {
+        artifact_id: String,
+        /// discovered | kernel_verified_local | promoted | reused | generalized |
+        /// independently_reviewed | upstream_candidate | upstreamed | retained_local | superseded.
+        to_status: String,
+        actor: String,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    /// Append a review (moves review_status; never alters kernel hashes/proof).
+    Review {
+        artifact_id: String,
+        /// unreviewed | in_review | reviewed_with_caveats | independently_reviewed | rejected.
+        review_status: String,
+        reviewer: String,
+        #[serde(default)]
+        notes: Option<String>,
+        #[serde(default)]
+        version_id: Option<String>,
+    },
+    /// Mark this artifact superseded by another; the original stays navigable.
+    Supersede {
+        artifact_id: String,
+        superseded_by: String,
+        actor: String,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+}
+
 #[derive(JsonSchema, Deserialize)]
 pub struct TrajectoryExportArgs {
     pub episode_id: String,
@@ -5023,6 +5104,165 @@ fn publication_review_result(
     let mut out = publication_review_json(review_id, review);
     out["created"] = serde_json::json!(created);
     CallToolResult::success(vec![Content::text(serde_json::to_string(&out).unwrap())])
+}
+
+/// #243: the kernel-backed source of a promotion. Only a positive
+/// (kernel-verified) `episode_verified_lemma` can be promoted; its immutable
+/// hashes are copied into a registry version verbatim.
+struct ResolvedVerifiedLemma {
+    lemma_id: String,
+    problem_version_id: Option<String>,
+    statement_hash: String,
+    proof_body_hash: String,
+    environment_hash: String,
+    kernel_result_hash: String,
+    dependency_ids_json: String,
+}
+
+fn resolve_verified_lemma(
+    conn: &Connection,
+    episode_id: &str,
+    obligation_id: Option<&str>,
+) -> Result<ResolvedVerifiedLemma, McpError> {
+    fn map_row(r: &rusqlite::Row) -> rusqlite::Result<ResolvedVerifiedLemma> {
+        Ok(ResolvedVerifiedLemma {
+            lemma_id: r.get(0)?,
+            problem_version_id: r.get(1)?,
+            statement_hash: r.get(2)?,
+            proof_body_hash: r.get(3)?,
+            environment_hash: r.get(4)?,
+            kernel_result_hash: r.get(5)?,
+            dependency_ids_json: r.get(6)?,
+        })
+    }
+    let base = "SELECT l.id, e.problem_version_id, l.statement_hash, l.proof_source_artifact_hash, \
+                l.environment_hash, l.kernel_result_hash, l.actual_dependency_ids_json \
+                FROM episode_verified_lemmas l JOIN episodes e ON e.id = l.episode_id \
+                WHERE l.episode_id = ?1 AND l.polarity = 'positive'";
+    if let Some(oid) = obligation_id {
+        conn.query_row(&format!("{} AND l.obligation_id = ?2", base), rusqlite::params![episode_id, oid], map_row)
+            .optional()
+            .map_err(rs)?
+            .ok_or_else(|| mcp_invalid_params(format!(
+                "no positive kernel-verified lemma for episode {} obligation {} — only a kernel-backed lemma can be promoted",
+                episode_id, oid
+            )))
+    } else {
+        let mut stmt = conn.prepare(base).map_err(rs)?;
+        let rows = stmt.query_map([episode_id], map_row).map_err(rs)?
+            .collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        match rows.len() {
+            0 => Err(mcp_invalid_params(format!("episode {} has no positive kernel-verified lemma to promote", episode_id))),
+            1 => Ok(rows.into_iter().next().unwrap()),
+            n => Err(mcp_invalid_params(format!("episode {} has {} verified lemmas — pass obligation_id to disambiguate", episode_id, n))),
+        }
+    }
+}
+
+fn insert_artifact_version(
+    tx: &Transaction, artifact_id: &str, version: i64, canonical_name: &str,
+    formal_statement: Option<&str>, lemma: &ResolvedVerifiedLemma, promotion_reason: Option<&str>,
+    now: &str, version_id: &str,
+) -> Result<(), McpError> {
+    tx.execute(
+        "INSERT INTO verified_artifact_versions (id, artifact_id, artifact_version, canonical_name, formal_statement, \
+         statement_hash, proof_body_hash, environment_hash, kernel_result_hash, dependency_ids_json, promotion_reason, replay_status, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'origin_recorded', ?12)",
+        rusqlite::params![version_id, artifact_id, version, canonical_name, formal_statement,
+            lemma.statement_hash, lemma.proof_body_hash, lemma.environment_hash, lemma.kernel_result_hash,
+            lemma.dependency_ids_json, promotion_reason, now],
+    ).map_err(rs)?;
+    Ok(())
+}
+
+fn insert_artifact_origin(
+    tx: &Transaction, version_id: &str, episode_id: &str, lemma: &ResolvedVerifiedLemma, now: &str,
+) -> Result<(), McpError> {
+    tx.execute(
+        "INSERT INTO verified_artifact_origins (id, version_id, origin_kind, origin_problem_version_id, \
+         origin_episode_id, origin_lemma_id, origin_module_item_id, created_at) \
+         VALUES (?1, ?2, 'episode_verified_lemma', ?3, ?4, ?5, NULL, ?6)",
+        rusqlite::params![Uuid::new_v4().to_string(), version_id, lemma.problem_version_id, episode_id, lemma.lemma_id, now],
+    ).map_err(rs)?;
+    Ok(())
+}
+
+/// #243: read an artifact with every immutable version (+ its kernel-backed
+/// origins), the append-only maturity lifecycle, and reviews.
+fn verified_artifact_observe_json(conn: &Connection, artifact_id: &str) -> Result<serde_json::Value, McpError> {
+    let art: Option<serde_json::Value> = conn.query_row(
+        "SELECT artifact_kind, canonical_name, informal_summary, source_campaign, current_version, \
+         maturity_status, review_status, candidate_for_mathlib, superseded_by, created_at, updated_at \
+         FROM verified_artifacts WHERE id = ?1",
+        [artifact_id],
+        |r| Ok(serde_json::json!({
+            "artifact_id": artifact_id, "artifact_kind": r.get::<_, String>(0)?, "canonical_name": r.get::<_, String>(1)?,
+            "informal_summary": r.get::<_, Option<String>>(2)?, "source_campaign": r.get::<_, Option<String>>(3)?,
+            "current_version": r.get::<_, i64>(4)?, "maturity_status": r.get::<_, String>(5)?, "review_status": r.get::<_, String>(6)?,
+            "candidate_for_mathlib": r.get::<_, i64>(7)? != 0, "superseded_by": r.get::<_, Option<String>>(8)?,
+            "created_at": r.get::<_, String>(9)?, "updated_at": r.get::<_, String>(10)?,
+        })),
+    ).optional().map_err(rs)?;
+    let Some(mut out) = art else { return Err(mcp_invalid_params(format!("unknown artifact_id: {}", artifact_id))); };
+
+    let mut vstmt = conn.prepare(
+        "SELECT id, artifact_version, canonical_name, formal_statement, statement_hash, proof_body_hash, \
+         environment_hash, kernel_result_hash, dependency_ids_json, promotion_reason, replay_status, created_at \
+         FROM verified_artifact_versions WHERE artifact_id = ?1 ORDER BY artifact_version ASC",
+    ).map_err(rs)?;
+    let versions = vstmt.query_map([artifact_id], |r| {
+        let vid: String = r.get(0)?;
+        Ok((vid.clone(), serde_json::json!({
+            "version_id": vid, "artifact_version": r.get::<_, i64>(1)?, "canonical_name": r.get::<_, String>(2)?,
+            "formal_statement": r.get::<_, Option<String>>(3)?, "statement_hash": r.get::<_, String>(4)?,
+            "proof_body_hash": r.get::<_, String>(5)?, "environment_hash": r.get::<_, String>(6)?,
+            "kernel_result_hash": r.get::<_, String>(7)?,
+            "dependency_ids": serde_json::from_str::<serde_json::Value>(&r.get::<_, String>(8)?).unwrap_or(serde_json::Value::Null),
+            "promotion_reason": r.get::<_, Option<String>>(9)?, "replay_status": r.get::<_, String>(10)?, "created_at": r.get::<_, String>(11)?,
+        })))
+    }).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(vstmt);
+    let mut versions_json = Vec::new();
+    for (vid, mut vj) in versions {
+        let mut ostmt = conn.prepare(
+            "SELECT origin_kind, origin_problem_version_id, origin_episode_id, origin_lemma_id, origin_module_item_id \
+             FROM verified_artifact_origins WHERE version_id = ?1",
+        ).map_err(rs)?;
+        let origins = ostmt.query_map([&vid], |r| Ok(serde_json::json!({
+            "origin_kind": r.get::<_, String>(0)?, "origin_problem_version_id": r.get::<_, Option<String>>(1)?,
+            "origin_episode_id": r.get::<_, Option<String>>(2)?, "origin_lemma_id": r.get::<_, Option<String>>(3)?,
+            "origin_module_item_id": r.get::<_, Option<String>>(4)?,
+        }))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        drop(ostmt);
+        vj["origins"] = serde_json::json!(origins);
+        versions_json.push(vj);
+    }
+    out["versions"] = serde_json::json!(versions_json);
+
+    let mut sstmt = conn.prepare(
+        "SELECT from_status, to_status, reason, actor, created_at FROM verified_artifact_status_events \
+         WHERE artifact_id = ?1 ORDER BY created_at ASC, id ASC",
+    ).map_err(rs)?;
+    let events = sstmt.query_map([artifact_id], |r| Ok(serde_json::json!({
+        "from_status": r.get::<_, Option<String>>(0)?, "to_status": r.get::<_, String>(1)?,
+        "reason": r.get::<_, Option<String>>(2)?, "actor": r.get::<_, String>(3)?, "created_at": r.get::<_, String>(4)?,
+    }))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(sstmt);
+    out["status_events"] = serde_json::json!(events);
+
+    let mut rstmt = conn.prepare(
+        "SELECT version_id, review_status, reviewer, notes, created_at FROM verified_artifact_reviews \
+         WHERE artifact_id = ?1 ORDER BY created_at ASC, id ASC",
+    ).map_err(rs)?;
+    let reviews = rstmt.query_map([artifact_id], |r| Ok(serde_json::json!({
+        "version_id": r.get::<_, Option<String>>(0)?, "review_status": r.get::<_, String>(1)?,
+        "reviewer": r.get::<_, String>(2)?, "notes": r.get::<_, Option<String>>(3)?, "created_at": r.get::<_, String>(4)?,
+    }))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+    drop(rstmt);
+    out["reviews"] = serde_json::json!(reviews);
+
+    out["trust_boundary"] = serde_json::json!("The registry curates already-established kernel truth. Each version's statement_hash/proof_body_hash/environment_hash/kernel_result_hash are copied verbatim from the promoted kernel-verified lemma and are immutable; no maturity/review/supersede action changes them or confers proof authority.");
+    Ok(out)
 }
 
 /// Issue #242 dev diary, slice 2: read an attached artifact's OWN status/
@@ -12783,6 +13023,137 @@ impl ChatDbMcp {
     // -----------------------------------------------------------------
 
     /// Issue #230: export a conformant MCIP v1 bundle for a verified obligation.
+    /// Issue #243: Verified Artifact Registry foundation. Promote a kernel-backed
+    /// verified lemma into a curated, immutable, versioned artifact and drive its
+    /// lifecycle. The registry curates already-established kernel truth: promotion
+    /// copies the origin's immutable kernel hashes verbatim, and no status/review
+    /// action ever alters a version's hashes or a theorem's proof authority.
+    async fn do_verified_artifact(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: VerifiedArtifactArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let now = Utc::now().to_rfc3339();
+        const KINDS: &[&str] = &["helper_lemma", "definition", "theorem", "abstraction", "reduction",
+            "classification", "construction", "negative_result", "proof_module", "tactic_recipe"];
+        const MATURITIES: &[&str] = &["discovered", "kernel_verified_local", "promoted", "reused",
+            "generalized", "independently_reviewed", "upstream_candidate", "upstreamed", "retained_local", "superseded"];
+        const REVIEWS: &[&str] = &["unreviewed", "in_review", "reviewed_with_caveats", "independently_reviewed", "rejected"];
+        let mut conn = self.conn.lock().await;
+
+        match args.action {
+            VerifiedArtifactAction::Promote {
+                episode_id, obligation_id, artifact_kind, canonical_name, informal_summary,
+                source_campaign, promotion_reason, candidate_for_mathlib,
+            } => {
+                if !KINDS.contains(&artifact_kind.as_str()) {
+                    return Err(mcp_invalid_params(format!("unknown artifact_kind '{}'", artifact_kind)));
+                }
+                let lemma = resolve_verified_lemma(&conn, &episode_id, obligation_id.as_deref())?;
+                let artifact_id = Uuid::new_v4().to_string();
+                let version_id = Uuid::new_v4().to_string();
+                let tx = conn.transaction().map_err(rs)?;
+                tx.execute(
+                    "INSERT INTO verified_artifacts (id, artifact_kind, canonical_name, informal_summary, source_campaign, \
+                     current_version, maturity_status, review_status, candidate_for_mathlib, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, 1, 'promoted', 'unreviewed', ?6, ?7, ?7)",
+                    rusqlite::params![artifact_id, artifact_kind, canonical_name, informal_summary,
+                        source_campaign, candidate_for_mathlib as i64, now],
+                ).map_err(rs)?;
+                insert_artifact_version(&tx, &artifact_id, 1, &canonical_name, None, &lemma, promotion_reason.as_deref(), &now, &version_id)?;
+                insert_artifact_origin(&tx, &version_id, &episode_id, &lemma, &now)?;
+                tx.execute(
+                    "INSERT INTO verified_artifact_status_events (id, artifact_id, from_status, to_status, reason, actor, created_at) \
+                     VALUES (?1, ?2, 'discovered', 'promoted', ?3, 'promoter', ?4)",
+                    rusqlite::params![Uuid::new_v4().to_string(), artifact_id, promotion_reason, now],
+                ).map_err(rs)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&verified_artifact_observe_json(&conn, &artifact_id)?).unwrap())]))
+            }
+
+            VerifiedArtifactAction::AddVersion { artifact_id, episode_id, obligation_id, canonical_name, formal_statement, promotion_reason } => {
+                let cur: Option<(i64, String)> = conn.query_row(
+                    "SELECT current_version, canonical_name FROM verified_artifacts WHERE id = ?1",
+                    [&artifact_id], |r| Ok((r.get(0)?, r.get(1)?)),
+                ).optional().map_err(rs)?;
+                let Some((current_version, existing_name)) = cur else {
+                    return Err(mcp_invalid_params(format!("unknown artifact_id: {}", artifact_id)));
+                };
+                let lemma = resolve_verified_lemma(&conn, &episode_id, obligation_id.as_deref())?;
+                let next = current_version + 1;
+                let version_id = Uuid::new_v4().to_string();
+                let name = canonical_name.unwrap_or(existing_name);
+                let tx = conn.transaction().map_err(rs)?;
+                insert_artifact_version(&tx, &artifact_id, next, &name, formal_statement.as_deref(), &lemma, promotion_reason.as_deref(), &now, &version_id)?;
+                insert_artifact_origin(&tx, &version_id, &episode_id, &lemma, &now)?;
+                tx.execute("UPDATE verified_artifacts SET current_version = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![next, now, artifact_id]).map_err(rs)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&verified_artifact_observe_json(&conn, &artifact_id)?).unwrap())]))
+            }
+
+            VerifiedArtifactAction::Observe { artifact_id } => {
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&verified_artifact_observe_json(&conn, &artifact_id)?).unwrap())]))
+            }
+
+            VerifiedArtifactAction::SetStatus { artifact_id, to_status, actor, reason } => {
+                if !MATURITIES.contains(&to_status.as_str()) {
+                    return Err(mcp_invalid_params(format!("unknown maturity status '{}'", to_status)));
+                }
+                let from: Option<String> = conn.query_row(
+                    "SELECT maturity_status FROM verified_artifacts WHERE id = ?1", [&artifact_id], |r| r.get(0),
+                ).optional().map_err(rs)?;
+                let Some(from) = from else { return Err(mcp_invalid_params(format!("unknown artifact_id: {}", artifact_id))); };
+                let tx = conn.transaction().map_err(rs)?;
+                tx.execute(
+                    "INSERT INTO verified_artifact_status_events (id, artifact_id, from_status, to_status, reason, actor, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    rusqlite::params![Uuid::new_v4().to_string(), artifact_id, from, to_status, reason, actor, now],
+                ).map_err(rs)?;
+                tx.execute("UPDATE verified_artifacts SET maturity_status = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![to_status, now, artifact_id]).map_err(rs)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&verified_artifact_observe_json(&conn, &artifact_id)?).unwrap())]))
+            }
+
+            VerifiedArtifactAction::Review { artifact_id, review_status, reviewer, notes, version_id } => {
+                if !REVIEWS.contains(&review_status.as_str()) {
+                    return Err(mcp_invalid_params(format!("unknown review_status '{}'", review_status)));
+                }
+                let exists: bool = conn.query_row("SELECT 1 FROM verified_artifacts WHERE id = ?1", [&artifact_id], |_| Ok(()))
+                    .optional().map_err(rs)?.is_some();
+                if !exists { return Err(mcp_invalid_params(format!("unknown artifact_id: {}", artifact_id))); }
+                let tx = conn.transaction().map_err(rs)?;
+                tx.execute(
+                    "INSERT INTO verified_artifact_reviews (id, artifact_id, version_id, review_status, reviewer, notes, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    rusqlite::params![Uuid::new_v4().to_string(), artifact_id, version_id, review_status, reviewer, notes, now],
+                ).map_err(rs)?;
+                tx.execute("UPDATE verified_artifacts SET review_status = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![review_status, now, artifact_id]).map_err(rs)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&verified_artifact_observe_json(&conn, &artifact_id)?).unwrap())]))
+            }
+
+            VerifiedArtifactAction::Supersede { artifact_id, superseded_by, actor, reason } => {
+                for id in [&artifact_id, &superseded_by] {
+                    if conn.query_row("SELECT 1 FROM verified_artifacts WHERE id = ?1", [id], |_| Ok(())).optional().map_err(rs)?.is_none() {
+                        return Err(mcp_invalid_params(format!("unknown artifact_id: {}", id)));
+                    }
+                }
+                let from: String = conn.query_row("SELECT maturity_status FROM verified_artifacts WHERE id = ?1", [&artifact_id], |r| r.get(0)).map_err(rs)?;
+                let tx = conn.transaction().map_err(rs)?;
+                tx.execute("UPDATE verified_artifacts SET superseded_by = ?1, maturity_status = 'superseded', updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![superseded_by, now, artifact_id]).map_err(rs)?;
+                tx.execute(
+                    "INSERT INTO verified_artifact_status_events (id, artifact_id, from_status, to_status, reason, actor, created_at) \
+                     VALUES (?1, ?2, ?3, 'superseded', ?4, ?5, ?6)",
+                    rusqlite::params![Uuid::new_v4().to_string(), artifact_id, from, reason, actor, now],
+                ).map_err(rs)?;
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&verified_artifact_observe_json(&conn, &artifact_id)?).unwrap())]))
+            }
+        }
+    }
+
     /// Issue #237: the publication-review gate. Surfaces the existing
     /// `proofsearch_core::publication_review` model (6 layers + the
     /// `publication_status()` state machine) as a stored, auditable workflow.
@@ -16181,6 +16552,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<FormalizationPlanArgs>("formalization_plan", "Issue #184: ONE tool for the entire Level 3 formalization-plan family (issue #10) — create/inspect/maintain a formalization plan (required concepts, definitions, lemmas, modules and their Mathlib coverage status) for a problem. Advisory scaffolding, not a proof authority: nothing here can mark anything proved. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"problem_version_id\":\"..\",\"title\":\"..\"} (+ optional source_draft_id, seed_items_from_draft_moves [{\"draft_move_id\":\"..\",\"kind\":\"..\"}, ...], risk_flags — creates a plan, optionally seeded from selected moves of an existing draft; every seed move must belong to source_draft_id, not be already promoted, and the whole batch is validated before any row is written, so a bad move never leaves a partially-seeded plan behind; each seeded move is marked promoted) | {\"type\":\"observe\",\"plan_id\":\"..\"} (read-only: the plan and all its items with coverage/promotion status) | {\"type\":\"update\",\"plan_id\":\"..\"} (+ optional title, status \"draft\"|\"active\"|\"completed\"|\"abandoned\", risk_flags — partial in-place update: an omitted field keeps its current value) | {\"type\":\"add_item\",\"plan_id\":\"..\",\"kind\":\"concept\"|\"missing_definition\"|\"missing_lemma\"|\"planned_module\"|\"external_citation\",\"description\":\"..\"} (+ optional mathlib_candidate_names, asymptotic_role — appends one planning item) | {\"type\":\"attach_lookup\",\"plan_item_id\":\"..\",\"lookup_status\":\"..\"} (+ optional matched_name, diagnostics — attach a lean_declaration_lookup result to an OPEN plan item, mapping its status verbatim into the item's Mathlib coverage status found/not_found/partial/unknown. A hint attachment, not a re-check — nothing is re-validated or re-run, and it never changes proof status) | {\"type\":\"promote_item_to_obligation\",\"plan_item_id\":\"..\",\"episode_id\":\"..\",\"obligation_id\":\"..\"} (link an open plan item to an episode_obligation that ALREADY EXISTS — created through a normal Decompose action via episode_step and verified to belong to the given episode. Records the link only — this action never creates the obligation itself, so it can never bypass the episode's budget/CAS accounting; a DB-level UNIQUE index stops two plan items from claiming the same obligation) | {\"type\":\"attach_librarian_result\",\"plan_item_id\":\"..\",\"declaration_name\":\"..\",\"confidence\":\"exact_match\"|\"nearby_name\"|\"type_match\"|\"usage_example\"|\"unknown\"} (+ optional import_module, snippet — attach a mathlib_search_declarations/mathlib_search_local_artifacts result to an OPEN plan item: confidence is the CALLER's own assessment of its search hit, mapped into the same coverage vocabulary attach_lookup writes (exact_match→found, nearby_name/type_match/usage_example→partial, unknown→unknown); candidate declaration names ACCUMULATE deduped across attachments while the full latest result overwrites lookup_result_json, latest wins. A hint attachment, not a re-check — never changes proof status)"),
             make_tool::<ResearchDossierArgs>("research_dossier", "Issue #185: ONE tool for the entire Level 4 research-dossier family (issues #9/#11/#13) — research dossiers, nodes, citations, assumptions, and verification layers are explicit trust-boundary METADATA: they can reference Lean-backed artifacts, but they never create proof authority and never write to episode outcome, obligations, canonical lemmas, budgets, fidelity reviews, or benchmark result tables. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\"} (+ optional description, problem_version_id, episode_id — create a dossier optionally linked to a problem_version, an episode, both, or neither; metadata only: never changes proof, fidelity, budget, or benchmark state) | {\"type\":\"observe\",\"dossier_id\":\"..\"} (read-only: the dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets) | {\"type\":\"node_add\",\"dossier_id\":\"..\",\"node_type\":\"definition\"|\"proposition\"|\"lemma\"|\"theorem\"|\"remark\"|\"reference\"|\"open_gap\",\"title\":\"..\"} (+ optional section_id OR section_title, statement, content, trust_status, linked_obligation_id, linked_verified_lemma_id — add a typed research node. Trust status is explicit and never implies kernel verification unless linked to a real verified lemma: trust_status='proved_in_episode' REQUIRES linked_verified_lemma_id naming a verified lemma from THIS dossier's own episode/problem context — never borrowed kernel evidence from an unrelated episode; a node added here is metadata, never proof authority) | {\"type\":\"external_reference_add\",\"dossier_id\":\"..\",\"title\":\"..\"} (+ optional authors/venue/year/url/doi/raw_citation, and optionally ONE theorem claim via theorem_label/theorem_statement/claim_status/mathlib_name/proved_episode_id/proved_lemma_id/notes — records a citation as a TRACKED ASSUMPTION, never proof: external citations are self-reported metadata and never become kernel verification; claim_status='proved_in_episode' requires proved_lemma_id naming a verified lemma from THIS dossier's own context, with any proved_episode_id matching that lemma's actual episode, and 'imported_from_mathlib' requires mathlib_name) | {\"type\":\"assumption_boundary_add\",\"dossier_id\":\"..\",\"label\":\"..\",\"statement\":\"..\",\"assumption_status\":\"unformalized_assumption\"|\"rejected_unsafe_assumption\"} (+ optional node_id, rationale — add an unformalized or rejected unsafe assumption boundary. Assumptions are visible metadata, not proof authority) | {\"type\":\"citation_review_add\",\"dossier_id\":\"..\",\"external_theorem_claim_id\":\"..\",\"reviewer_id\":\"..\",\"decision\":\"human_reviewed\"|\"rejected\"|\"needs_formalization\"} (+ optional notes — record a human citation review for an external theorem claim. Human review remains distinct from Lean kernel verification and never upgrades a claim to a proved status) | {\"type\":\"verification_layer_set\",\"dossier_id\":\"..\",\"target_kind\":\"..\",\"target_id\":\"..\",\"layer_kind\":\"..\",\"status\":\"..\"} (+ optional summary, evidence_json — upsert an independent verification layer for a dossier target. Blocked/failed layers do not fail the dossier, and cited/reviewed/assumed artifacts cannot be mislabeled kernel_verified: this action is the ONLY PATH to a kernel_verified layer, and status='kernel_verified' is accepted only where kernel evidence already exists — e.g. a node whose trust_status is already proved_in_episode backed by a verified lemma from THIS dossier's own episode/problem context — it can never manufacture that evidence)"),
             make_tool::<DevDiaryArgs>("dev_diary", "Issue #242, slice 1: project-scoped dev diary — join existing tracked evidence (problems, episodes, research dossiers, formalization plans, empirical searches, candidate constructions, verification layers, distilled strategies) into a chronological campaign timeline so a long-running effort can be documented as it happens instead of reconstructed after the fact from a chat transcript. THIS TOOL NEVER CALLS AN LLM AND NEVER POSTS ANYWHERE — it only assembles evidence for an external host to turn into a narrative. This version covers project setup, attachment, chronological checkpoints, observe's resolved verified/failed/frontier view, and export. `action` is internally tagged — exactly one of: {\"type\":\"create_project\",\"project_key\":\"..\",\"title\":\"..\"} (+ optional summary, audience, claim_policy, public_links — project_key must be a unique slug; a duplicate key is rejected, never overwritten. Starts status='active') | {\"type\":\"attach\",\"project_id\":\"..\",\"target_kind\":\"problem_version\"|\"episode\"|\"research_dossier\"|\"formalization_plan\"|\"empirical_search\"|\"candidate_construction\"|\"verification_layer\"|\"distilled_strategy\"|\"external_link\"|\"public_post\"} (+ target_id for the 8 real kinds — existence-checked against that artifact's own table before attaching — OR external_url for external_link/public_post, e.g. a GitHub issue/PR URL or a manually recorded public post, neither of which has a backing row: target_id is then server-minted and private. Optional label, notes. A duplicate (project_id, target_kind, target_id) is rejected. Attaching NEVER alters the attached artifact's own trust_status, fidelity_status, or verification outcome) | {\"type\":\"checkpoint\",\"project_id\":\"..\",\"checkpoint_kind\":\"campaign_started\"|\"candidate_found\"|\"proof_attempt_failed\"|\"root_cause_identified\"|\"kernel_result\"|\"mathlib_gap\"|\"method_exhausted\"|\"frontier_changed\"|\"claim_corrected\"|\"infrastructure_issue_opened\"|\"public_update_posted\"|\"other\",\"note\":\"..\",\"author\":\"..\"} (+ optional referenced_attachment_id, which must already belong to the SAME project — cross-project references are rejected. checkpoint_number is assigned server-side, never caller-supplied, so chronological order is guaranteed regardless of client behavior. A checkpoint is chronological project metadata, the same trust posture as a reasoning_log entry: it can never mark anything proved, verified, or certified, and failed/negative checkpoints are preserved exactly like successful ones, never overwritten) | {\"type\":\"observe\",\"project_id\":\"..\"} (read-only: the project plus every attachment and checkpoint in order, PLUS a `resolved` view bucketing that same data into verified_results (attached episodes already outcome=certified/kernel_verified, or attached verification_layers already status=kernel_verified), failed_or_blocked (matching failure outcomes/statuses, plus proof_attempt_failed/method_exhausted checkpoints), reusable_artifacts (attached formalization_plan/distilled_strategy), claim_boundaries (each attached research_dossier's own assumption_boundaries, unchanged), checkpoints_by_kind, and current_frontier (the latest frontier_changed checkpoint). `resolved` never re-derives or upgrades any trust_status/fidelity_status/outcome — it only re-buckets columns already read off each attached artifact's own row. publication_history (a later slice) and episode_obligations-level 'open obligations' are not part of `resolved` yet) | {\"type\":\"export\",\"project_id\":\"..\",\"mode\":\"structured_json\"|\"markdown_diary\"|\"x_thread_prompt\"|\"single_x_post_prompt\"|\"blog_prompt\"|\"institute_update_prompt\"} (+ optional since_checkpoint_id (a cursor: only checkpoints AFTER that checkpoint's own checkpoint_number are included; attachments are never cursored, they are not chronological in that sense), max_posts (default 12, clamped 1-50, x_thread_prompt only), x_tier \"free\"|\"premium\" (default \"free\" whenever omitted — the conservative assumption, since most callers will not have a paid X account), max_chars_per_post (an optional override, ALWAYS clamped down to the resolved tier's real ceiling — 280 for free, 25000 for premium — so a mistaken override can never exceed X's actual limit), audience, dry_run (default false). structured_json returns the full packet (attachments/checkpoints/resolved view) with every internal id retained, for grounding and audit. markdown_diary renders the same packet as a human-readable document. The four *_prompt modes return a ready-to-send external-host prompt (populated with the resolved title/max_posts/max_chars_per_post and the JSON packet) plus the same packet for grounding — the prompt instructs the external host not to surface raw database ids/UUIDs in the prose it writes, but the attached packet always retains them. THIS TOOL NEVER CALLS AN LLM OR POSTS ANYWHERE ITSELF; only an external host does that with the returned text. Unless dry_run, every export records one immutable dev_diary_publications row (mode, cursor, resolved x_tier/max_chars_per_post, a SHA-256 source_hash over the packet, and a timestamp) so a later export audit shows exactly what a given thread was generated against; dry_run previews without recording)"),
+            make_tool::<VerifiedArtifactArgs>("verified_artifact", "Issue #243: Verified Artifact Registry (VAR) foundation — promote a KERNEL-BACKED verified lemma into a curated, immutable, versioned research artifact with a lifecycle, distinct from an episode-local helper or a raw canonical result. TRUST BOUNDARY: the registry CURATES already-established kernel truth — promotion copies the origin lemma's immutable kernel hashes (statement_hash/proof_body_hash/environment_hash/kernel_result_hash) verbatim, versions are append-only (mathematical history is never overwritten), and no maturity/review/supersede action changes those hashes or confers proof authority. `action` is internally tagged — exactly one of: {\"type\":\"promote\",\"episode_id\":\"..\",\"artifact_kind\":\"helper_lemma\"|\"definition\"|\"theorem\"|\"abstraction\"|\"reduction\"|\"classification\"|\"construction\"|\"negative_result\"|\"proof_module\"|\"tactic_recipe\",\"canonical_name\":\"..\"} (+ optional obligation_id (disambiguates when an episode proved >1 lemma), informal_summary, source_campaign, promotion_reason, candidate_for_mathlib — mints artifact v1 from an existing positive episode_verified_lemma; rejects anything not kernel-backed. Starts maturity=promoted, review=unreviewed) | {\"type\":\"add_version\",\"artifact_id\":\"..\",\"episode_id\":\"..\"} (+ optional obligation_id, canonical_name, formal_statement, promotion_reason — appends a new IMMUTABLE version from another kernel-backed origin, e.g. a generalization; never overwrites the original) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read-only: the artifact with every version + kernel-backed origins, the append-only maturity lifecycle, and reviews) | {\"type\":\"set_status\",\"artifact_id\":\"..\",\"to_status\":\"discovered\"|\"kernel_verified_local\"|\"promoted\"|\"reused\"|\"generalized\"|\"independently_reviewed\"|\"upstream_candidate\"|\"upstreamed\"|\"retained_local\"|\"superseded\",\"actor\":\"..\"} (+ optional reason — appends a maturity lifecycle event; curation only, never proof authority) | {\"type\":\"review\",\"artifact_id\":\"..\",\"review_status\":\"unreviewed\"|\"in_review\"|\"reviewed_with_caveats\"|\"independently_reviewed\"|\"rejected\",\"reviewer\":\"..\"} (+ optional notes, version_id — appends a review and moves review_status; never alters a version's kernel hashes) | {\"type\":\"supersede\",\"artifact_id\":\"..\",\"superseded_by\":\"..\",\"actor\":\"..\"} (+ optional reason — marks the artifact superseded by another; the original stays fully navigable). Foundation for the #239 VAR family (#244 math_search, #247-#253 build on this)."),
             make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
             make_tool::<CandidateConstructionArgs>("candidate_construction", "Issue #188: ONE tool for the entire candidate-construction family (issue #8) — propose a candidate mathematical object, record empirical checks against it, revise its status, and attach it to a research node or verification layer. A CANDIDATE CONSTRUCTION IS A PROPOSED MATHEMATICAL OBJECT, NOT A PROOF CERTIFICATE: every action records research artifacts useful for search and planning; trust_status never certifies anything — empirical support, human review, citation, and 'a formal statement exists' are all explicitly distinct from kernel verification, and no field can hold kernel evidence. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"construction_type\":\"graph_family\"|\"point_configuration\"|\"coloring\"|\"field_tower\"|\"lattice\"|\"counterexample\"|\"asymptotic_family\"|\"algebraic_object\"|\"combinatorial_design\"|\"other\",\"informal_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, verification_layer_id, problem_version_id, episode_id, name, parameters_json, construction_json, claimed_properties_json, known_failures_json, empirical_checks_json, verification_targets_json, status, trust_status, and motivated-discovery metadata: motivating_move, source_observation, intended_role, strategy_context, why_this_might_work, why_this_might_fail, next_check, future_challenge_relevance — propose a candidate construction. Can exist before a dossier, node, Lean theorem, problem, or episode; a research artifact, not a proof certificate) | {\"type\":\"observe\",\"candidate_construction_id\":\"..\",\"description\":\"..\",\"result\":\"supports\"|\"refutes\"|\"inconclusive\"} (+ optional details_json, observed_by — record one empirical check, appended to the construction's empirical_checks history. Never changes proof status, and 'supports' never implies proved) | {\"type\":\"update_status\",\"candidate_construction_id\":\"..\"} (+ at least one of status, trust_status, claimed_properties_json, known_failures_json, next_check — update the construction in place; a falsified/rejected construction stays visible, never deleted. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified — and no other trust_status confers proof either) | {\"type\":\"link_node\",\"candidate_construction_id\":\"..\",\"node_id\":\"..\"} (attach the construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier. Linking never changes either side's trust_status) | {\"type\":\"link_verification_layer\",\"candidate_construction_id\":\"..\",\"verification_layer_id\":\"..\"} (attach the construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier. Linking a layer is provenance, not promotion — the construction's trust_status is unchanged, and a kernel_verified_claim_linked construction is re-checked against the newly linked layer)"),
@@ -16385,8 +16757,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 54,
-                        "total_tool_count": 54,
+                        "classified_tool_count": 55,
+                        "total_tool_count": 55,
                         "tools": {
                             "mathcorpus_export": {
                                 "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
@@ -16649,6 +17021,16 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic — checkpoint_number is server-assigned (MAX+1 per project) and stable, never caller-supplied; every non-dry-run export is hash-pinned via source_hash over its exact packet",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "project_metadata",
+                                "required_run_mode": "any"
+                            },
+                            "verified_artifact": {
+                                "side_effect": "mixed by action (issue #243): promote/add_version write immutable verified_artifact_versions + verified_artifact_origins rows and a verified_artifacts row/current_version bump; set_status/review append to the verified_artifact_status_events/_reviews ledgers; supersede sets superseded_by; observe is read_only. No action ever writes to episode outcome, obligations, episode_verified_lemmas, canonical lemmas, budgets, or benchmark result tables",
+                                "trust_level": "curates already-established kernel truth, NOT proof authority — promotion only accepts an existing positive episode_verified_lemma and copies its statement_hash/proof_body_hash/environment_hash/kernel_result_hash verbatim into an immutable version; no maturity/review/supersede action can change those hashes or confer proof authority",
+                                "cost_surface": "none — DB reads/writes only, no Lean invocation",
+                                "benchmark_safety": "private_artifact by default — versions carry formal statements + kernel hashes referencing real proof content; observe returns hashes and metadata, never proof source bytes",
+                                "replayability": "deterministic — every version records its kernel-backed origin (episode/lemma) + immutable hashes as the reconstruction anchor; the status/review ledgers are append-only",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "verified_artifact_registry_metadata",
                                 "required_run_mode": "any"
                             },
                             "publication_review": {
@@ -17887,6 +18269,7 @@ impl ServerHandler for ChatDbMcp {
             "dev_diary" => self.do_dev_diary(args_val).await,
             "literature_lineage" => self.do_literature_lineage(args_val).await,
             "publication_review" => self.do_publication_review(args_val).await,
+            "verified_artifact" => self.do_verified_artifact(args_val).await,
             "candidate_construction" => self.do_candidate_construction(args_val).await,
             "empirical_search" => self.do_empirical_search(args_val).await,
             // -- Challenge / task / scoring substrate (issue #53) ---------------
@@ -18891,7 +19274,9 @@ mod tests {
         // episode/problem_lineage/batch modes) = 53.
         // + 1 publication_review (issue #237: 6-layer publication gate over
         // an episode - create/set_layer/update/observe/export_contribution) = 54.
-        assert_eq!(list_res.tools.len(), 54);
+        // + 1 verified_artifact (issue #243: Verified Artifact Registry foundation
+        // - promote/add_version/observe/set_status/review/supersede) = 55.
+        assert_eq!(list_res.tools.len(), 55);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -21133,6 +21518,95 @@ mod tests {
             "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"], "expected_revision": req["episode_revision"],
             "claim_token": claim["claim_token"], "action": {"type": "solve", "proof_term": proof_term}, "cost_micros": 100,
         }).as_object().unwrap().clone())).await.unwrap())
+    }
+
+    /// #243: the Verified Artifact Registry foundation. Promotion accepts only a
+    /// kernel-backed lemma and copies its immutable hashes; maturity/review
+    /// changes never alter a version's hashes or proof authority; versions are
+    /// immutable; supersede keeps the original navigable.
+    #[tokio::test]
+    async fn test_verified_artifact_registry() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        async fn va(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("verified_artifact")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn solved_episode(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv_id: &str, idem: &str) -> String {
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv_id,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+            let step = claim_and_solve(peer, &episode_id, "trivial", idem).await;
+            assert_eq!(step["outcome"], "kernel_verified");
+            episode_id
+        }
+
+        let pv_id = create_problem(&peer, "True").await;
+        let episode_id = solved_episode(&peer, &pv_id, "va-1").await;
+
+        // Promoting an episode with NO kernel-verified lemma is rejected.
+        let empty_ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv_id,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let denied = peer.call_tool(CallToolRequestParams::new("verified_artifact").with_arguments(serde_json::json!({
+            "action": {"type": "promote", "episode_id": empty_ep["episode_id"], "artifact_kind": "helper_lemma", "canonical_name": "nope"}
+        }).as_object().unwrap().clone())).await;
+        assert!(denied.is_err(), "promoting an unsolved episode (no kernel-backed lemma) must be rejected");
+
+        // Promote the real verified lemma.
+        let promoted = va(&peer, serde_json::json!({"action": {"type": "promote",
+            "episode_id": episode_id, "artifact_kind": "helper_lemma", "canonical_name": "triv_true",
+            "informal_summary": "trivially true", "source_campaign": "test", "promotion_reason": "reusable",
+        }})).await;
+        let artifact_id = promoted["artifact_id"].as_str().unwrap().to_string();
+        assert_eq!(promoted["maturity_status"], "promoted");
+        assert_eq!(promoted["review_status"], "unreviewed");
+        assert_eq!(promoted["current_version"], 1);
+        let v1_hashes = promoted["versions"][0].clone();
+        assert!(!v1_hashes["statement_hash"].as_str().unwrap().is_empty(), "version copies the kernel statement hash");
+        assert!(v1_hashes["kernel_result_hash"].is_string(), "kernel_result_hash is copied verbatim from the lemma");
+        assert_eq!(v1_hashes["replay_status"], "origin_recorded");
+        assert_eq!(promoted["versions"][0]["origins"][0]["origin_kind"], "episode_verified_lemma");
+        assert_eq!(promoted["versions"][0]["origins"][0]["origin_episode_id"], episode_id);
+        // Promotion recorded the discovered->promoted lifecycle event.
+        assert_eq!(promoted["status_events"][0]["to_status"], "promoted");
+
+        // A maturity upgrade appends an event and changes maturity, but NEVER the
+        // version's kernel hashes.
+        let upgraded = va(&peer, serde_json::json!({"action": {"type": "set_status",
+            "artifact_id": artifact_id, "to_status": "reused", "actor": "curator", "reason": "used downstream"}})).await;
+        assert_eq!(upgraded["maturity_status"], "reused");
+        assert_eq!(upgraded["versions"][0]["statement_hash"], v1_hashes["statement_hash"],
+            "a maturity change must not alter a version's kernel hash");
+        assert_eq!(upgraded["versions"][0]["kernel_result_hash"], v1_hashes["kernel_result_hash"]);
+        assert!(upgraded["status_events"].as_array().unwrap().len() >= 2);
+
+        // A review moves review_status without touching proof authority.
+        let reviewed = va(&peer, serde_json::json!({"action": {"type": "review",
+            "artifact_id": artifact_id, "review_status": "reviewed_with_caveats", "reviewer": "mathematician", "notes": "fine"}})).await;
+        assert_eq!(reviewed["review_status"], "reviewed_with_caveats");
+        assert_eq!(reviewed["versions"][0]["kernel_result_hash"], v1_hashes["kernel_result_hash"]);
+
+        // Add an immutable second version from another kernel-backed origin.
+        let episode2 = solved_episode(&peer, &pv_id, "va-2").await;
+        let v2 = va(&peer, serde_json::json!({"action": {"type": "add_version",
+            "artifact_id": artifact_id, "episode_id": episode2, "promotion_reason": "generalized"}})).await;
+        assert_eq!(v2["current_version"], 2);
+        assert_eq!(v2["versions"].as_array().unwrap().len(), 2, "the original version is preserved, not overwritten");
+        assert_eq!(v2["versions"][0]["statement_hash"], v1_hashes["statement_hash"], "v1 is immutable");
+
+        // Supersede by a fresh artifact; the original stays navigable.
+        let episode3 = solved_episode(&peer, &pv_id, "va-3").await;
+        let newer = va(&peer, serde_json::json!({"action": {"type": "promote",
+            "episode_id": episode3, "artifact_kind": "theorem", "canonical_name": "successor"}})).await;
+        let newer_id = newer["artifact_id"].as_str().unwrap().to_string();
+        va(&peer, serde_json::json!({"action": {"type": "supersede",
+            "artifact_id": artifact_id, "superseded_by": newer_id, "actor": "curator", "reason": "generalized away"}})).await;
+        let old = va(&peer, serde_json::json!({"action": {"type": "observe", "artifact_id": artifact_id}})).await;
+        assert_eq!(old["maturity_status"], "superseded");
+        assert_eq!(old["superseded_by"], newer_id);
+        assert_eq!(old["versions"].as_array().unwrap().len(), 2, "a superseded artifact stays fully navigable");
     }
 
     /// #240: a gateway that fails with an ordered diagnostic list — an

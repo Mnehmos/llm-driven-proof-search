@@ -2204,6 +2204,113 @@ CREATE TABLE IF NOT EXISTS publication_review_events (
     CHECK(status IN ('not_started', 'in_progress', 'complete', 'blocked_missing_attribution'))
 );
 CREATE INDEX IF NOT EXISTS idx_publication_review_events_review ON publication_review_events(review_id, created_at);
+
+-- Issue #243: Verified Artifact Registry (VAR) foundation. Promotes a
+-- KERNEL-BACKED episode_verified_lemma into a curated, immutable, versioned,
+-- queryable research artifact with a lifecycle — distinct from an episode-local
+-- helper, a canonical result, an unreviewed abstraction, a generalized reusable
+-- lemma, or an upstream-ready Mathlib contribution. TRUST BOUNDARY: the registry
+-- CURATES already-established kernel truth. Promotion never fabricates proof
+-- authority — every version copies the origin's immutable kernel hashes verbatim
+-- and no review or maturity change can alter them; no column here can mark a
+-- theorem proved that the kernel did not.
+CREATE TABLE IF NOT EXISTS verified_artifacts (
+    id TEXT PRIMARY KEY,
+    artifact_kind TEXT NOT NULL,
+    canonical_name TEXT NOT NULL,
+    informal_summary TEXT,
+    source_campaign TEXT,
+    -- The latest (MAX) version number; versions themselves are immutable rows.
+    current_version INTEGER NOT NULL,
+    maturity_status TEXT NOT NULL,
+    review_status TEXT NOT NULL,
+    candidate_for_mathlib INTEGER NOT NULL DEFAULT 0,
+    -- Set when this artifact is superseded by another; the original stays navigable.
+    superseded_by TEXT REFERENCES verified_artifacts(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(artifact_kind IN (
+        'helper_lemma', 'definition', 'theorem', 'abstraction', 'reduction',
+        'classification', 'construction', 'negative_result', 'proof_module', 'tactic_recipe'
+    )),
+    CHECK(maturity_status IN (
+        'discovered', 'kernel_verified_local', 'promoted', 'reused', 'generalized',
+        'independently_reviewed', 'upstream_candidate', 'upstreamed', 'retained_local', 'superseded'
+    )),
+    CHECK(review_status IN (
+        'unreviewed', 'in_review', 'reviewed_with_caveats', 'independently_reviewed', 'rejected'
+    )),
+    CHECK(candidate_for_mathlib IN (0, 1))
+);
+
+-- Immutable versioned snapshots — appended, never overwritten, so mathematical
+-- history is preserved. Kernel hashes are copied verbatim from the promoted
+-- lemma at promotion time and are the deterministic reconstruction anchors.
+CREATE TABLE IF NOT EXISTS verified_artifact_versions (
+    id TEXT PRIMARY KEY,
+    artifact_id TEXT NOT NULL REFERENCES verified_artifacts(id),
+    artifact_version INTEGER NOT NULL,
+    canonical_name TEXT NOT NULL,
+    formal_statement TEXT,
+    statement_hash TEXT NOT NULL,
+    proof_body_hash TEXT NOT NULL,
+    environment_hash TEXT NOT NULL,
+    kernel_result_hash TEXT NOT NULL,
+    dependency_ids_json TEXT NOT NULL,
+    promotion_reason TEXT,
+    replay_status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(artifact_id, artifact_version)
+);
+CREATE INDEX IF NOT EXISTS idx_var_versions_artifact ON verified_artifact_versions(artifact_id, artifact_version);
+
+-- Provenance: the kernel-backed origin each version was promoted from — a
+-- deterministic path back to the source verification evidence.
+CREATE TABLE IF NOT EXISTS verified_artifact_origins (
+    id TEXT PRIMARY KEY,
+    version_id TEXT NOT NULL REFERENCES verified_artifact_versions(id),
+    origin_kind TEXT NOT NULL,
+    origin_problem_version_id TEXT,
+    origin_episode_id TEXT,
+    origin_lemma_id TEXT,
+    origin_module_item_id TEXT,
+    created_at TEXT NOT NULL,
+    CHECK(origin_kind IN ('episode_verified_lemma', 'episode_verified_module_item'))
+);
+CREATE INDEX IF NOT EXISTS idx_var_origins_version ON verified_artifact_origins(version_id);
+
+-- Append-only maturity lifecycle events. A status change is a CURATION event,
+-- recorded and never destructive; it never changes proof authority.
+CREATE TABLE IF NOT EXISTS verified_artifact_status_events (
+    id TEXT PRIMARY KEY,
+    artifact_id TEXT NOT NULL REFERENCES verified_artifacts(id),
+    from_status TEXT,
+    to_status TEXT NOT NULL,
+    reason TEXT,
+    actor TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK(to_status IN (
+        'discovered', 'kernel_verified_local', 'promoted', 'reused', 'generalized',
+        'independently_reviewed', 'upstream_candidate', 'upstreamed', 'retained_local', 'superseded'
+    ))
+);
+CREATE INDEX IF NOT EXISTS idx_var_status_events_artifact ON verified_artifact_status_events(artifact_id, created_at);
+
+-- Append-only reviews. A review records an assessment and can move review_status,
+-- but can NEVER alter a version's kernel hashes or a theorem's proof authority.
+CREATE TABLE IF NOT EXISTS verified_artifact_reviews (
+    id TEXT PRIMARY KEY,
+    artifact_id TEXT NOT NULL REFERENCES verified_artifacts(id),
+    version_id TEXT REFERENCES verified_artifact_versions(id),
+    review_status TEXT NOT NULL,
+    reviewer TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    CHECK(review_status IN (
+        'unreviewed', 'in_review', 'reviewed_with_caveats', 'independently_reviewed', 'rejected'
+    ))
+);
+CREATE INDEX IF NOT EXISTS idx_var_reviews_artifact ON verified_artifact_reviews(artifact_id, created_at);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
