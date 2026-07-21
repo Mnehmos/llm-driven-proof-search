@@ -85,9 +85,8 @@ fn has_context(d: &LeanDiagnostic) -> bool {
 fn classify_one(i: usize, diags: &[LeanDiagnostic]) -> (DiagnosticClass, String) {
     let d = &diags[i];
     let earlier = &diags[..i];
-    let earlier_has = |cats: &[LeanDiagnosticCategory]| {
-        earlier.iter().any(|e| cats.contains(&e.category))
-    };
+    let earlier_has =
+        |cats: &[LeanDiagnosticCategory]| earlier.iter().any(|e| cats.contains(&e.category));
 
     // Strong cascade: a cleanup tactic reporting "No goals to be solved" after an
     // earlier tactic already closed the goal.
@@ -121,7 +120,10 @@ fn classify_one(i: usize, diags: &[LeanDiagnostic]) -> (DiagnosticClass, String)
             // The first parse error is the root; a later parse error is usually a
             // cascade of the first (the parser never recovered cleanly).
             if earlier_has(&[LeanDiagnosticCategory::ParseError]) {
-                (DiagnosticClass::CascadeCandidate, "parse_error_after_earlier_parse_error".into())
+                (
+                    DiagnosticClass::CascadeCandidate,
+                    "parse_error_after_earlier_parse_error".into(),
+                )
             } else {
                 (DiagnosticClass::RootCandidate, "parser_error".into())
             }
@@ -130,49 +132,77 @@ fn classify_one(i: usize, diags: &[LeanDiagnostic]) -> (DiagnosticClass, String)
             // A source-level elaboration/type error is a strong root; if a parse
             // error preceded it, the elaboration is downstream of the syntax.
             if earlier_has(&[LeanDiagnosticCategory::ParseError]) {
-                (DiagnosticClass::CascadeCandidate, "elaboration_after_parse_error".into())
+                (
+                    DiagnosticClass::CascadeCandidate,
+                    "elaboration_after_parse_error".into(),
+                )
             } else if d.source_span.is_some() {
-                (DiagnosticClass::RootCandidate, "concrete_source_failure_with_span".into())
+                (
+                    DiagnosticClass::RootCandidate,
+                    "concrete_source_failure_with_span".into(),
+                )
             } else {
-                (DiagnosticClass::RootCandidate, "elaboration_or_type_error".into())
+                (
+                    DiagnosticClass::RootCandidate,
+                    "elaboration_or_type_error".into(),
+                )
             }
         }
         LeanDiagnosticCategory::TacticFailure => {
             if has_context(d) {
-                (DiagnosticClass::RootCandidate, "tactic_failure_with_concrete_context".into())
+                (
+                    DiagnosticClass::RootCandidate,
+                    "tactic_failure_with_concrete_context".into(),
+                )
             } else {
-                (DiagnosticClass::Unknown, "tactic_failure_without_context".into())
+                (
+                    DiagnosticClass::Unknown,
+                    "tactic_failure_without_context".into(),
+                )
             }
         }
         LeanDiagnosticCategory::UnsolvedGoals => {
             (DiagnosticClass::UnsolvedGoal, "unsolved_goals".into())
         }
-        LeanDiagnosticCategory::ProhibitedConstruct => {
-            (DiagnosticClass::IndependentError, "prohibited_construct".into())
-        }
-        LeanDiagnosticCategory::DependencyMismatch => {
-            (DiagnosticClass::IndependentError, "dependency_mismatch".into())
-        }
-        LeanDiagnosticCategory::Timeout | LeanDiagnosticCategory::InternalError => {
-            (DiagnosticClass::IndependentError, "infrastructure_or_timeout".into())
-        }
+        LeanDiagnosticCategory::ProhibitedConstruct => (
+            DiagnosticClass::IndependentError,
+            "prohibited_construct".into(),
+        ),
+        LeanDiagnosticCategory::DependencyMismatch => (
+            DiagnosticClass::IndependentError,
+            "dependency_mismatch".into(),
+        ),
+        LeanDiagnosticCategory::Timeout | LeanDiagnosticCategory::InternalError => (
+            DiagnosticClass::IndependentError,
+            "infrastructure_or_timeout".into(),
+        ),
     }
 }
 
 /// Classify an ordered diagnostic list and select the most likely root.
 /// `total_diagnostics` is the verifier's own count (>= `diags.len()` when the
 /// verifier truncated under its diagnostic cap).
-pub fn classify_diagnostics(diags: &[LeanDiagnostic], total_diagnostics: usize) -> DiagnosticSummary {
+pub fn classify_diagnostics(
+    diags: &[LeanDiagnostic],
+    total_diagnostics: usize,
+) -> DiagnosticSummary {
     let candidates: Vec<DiagnosticCandidate> = diags
         .iter()
         .enumerate()
         .map(|(i, _)| {
             let (classification, reason) = classify_one(i, diags);
-            DiagnosticCandidate { diagnostic_index: i, classification, reason }
+            DiagnosticCandidate {
+                diagnostic_index: i,
+                classification,
+                reason,
+            }
         })
         .collect();
 
-    let cascade_count = candidates.iter().filter(|c| c.classification.is_cascade()).count();
+    let cascade_count = candidates
+        .iter()
+        .filter(|c| c.classification.is_cascade())
+        .count();
     let is_cascade = |i: usize| candidates[i].classification.is_cascade();
 
     // Selection order (issue #240): earliest non-cascade parser/elaboration/type
@@ -240,17 +270,32 @@ mod tests {
     /// error as root and mark the "No goals" as a post-goal cascade.
     #[test]
     fn selects_root_over_no_goals_cascade() {
-        let mut elab = diag(LeanDiagnosticCategory::ElaborationError, "type expected, got Foo");
+        let mut elab = diag(
+            LeanDiagnosticCategory::ElaborationError,
+            "type expected, got Foo",
+        );
         elab.source_span = Some("12:3".into());
         let diags = vec![
             elab,
-            diag(LeanDiagnosticCategory::TacticFailure, "No goals to be solved"),
+            diag(
+                LeanDiagnosticCategory::TacticFailure,
+                "No goals to be solved",
+            ),
         ];
         let s = classify_diagnostics(&diags, 2);
         assert_eq!(s.primary_index, Some(0));
-        assert_eq!(s.selection_reason, "earliest_non_cascade_parser_or_elaboration_error");
-        assert_eq!(s.candidates[0].classification, DiagnosticClass::RootCandidate);
-        assert_eq!(s.candidates[1].classification, DiagnosticClass::PostGoalTactic);
+        assert_eq!(
+            s.selection_reason,
+            "earliest_non_cascade_parser_or_elaboration_error"
+        );
+        assert_eq!(
+            s.candidates[0].classification,
+            DiagnosticClass::RootCandidate
+        );
+        assert_eq!(
+            s.candidates[1].classification,
+            DiagnosticClass::PostGoalTactic
+        );
         assert_eq!(s.cascade_count, 1);
         assert!(s.has_additional_diagnostics);
     }
@@ -261,20 +306,32 @@ mod tests {
     fn unknown_identifier_after_source_failure_is_cascade() {
         let diags = vec![
             diag(LeanDiagnosticCategory::ParseError, "unexpected token"),
-            diag(LeanDiagnosticCategory::UnknownDeclaration, "unknown identifier 'helper'"),
+            diag(
+                LeanDiagnosticCategory::UnknownDeclaration,
+                "unknown identifier 'helper'",
+            ),
         ];
         let s = classify_diagnostics(&diags, 2);
         assert_eq!(s.primary_index, Some(0));
-        assert_eq!(s.candidates[1].classification, DiagnosticClass::UnknownIdentifierFromPriorFailure);
+        assert_eq!(
+            s.candidates[1].classification,
+            DiagnosticClass::UnknownIdentifierFromPriorFailure
+        );
     }
 
     /// A standalone unknown identifier (no prior failure) is a real independent
     /// error, and — absent any parser/elaboration root — is selected.
     #[test]
     fn standalone_unknown_identifier_is_independent_and_selected() {
-        let diags = vec![diag(LeanDiagnosticCategory::UnknownDeclaration, "unknown identifier 'Nat.foo'")];
+        let diags = vec![diag(
+            LeanDiagnosticCategory::UnknownDeclaration,
+            "unknown identifier 'Nat.foo'",
+        )];
         let s = classify_diagnostics(&diags, 1);
-        assert_eq!(s.candidates[0].classification, DiagnosticClass::IndependentError);
+        assert_eq!(
+            s.candidates[0].classification,
+            DiagnosticClass::IndependentError
+        );
         assert_eq!(s.primary_index, Some(0));
         assert_eq!(s.selection_reason, "earliest_non_cascade_diagnostic");
     }
@@ -292,7 +349,10 @@ mod tests {
         ];
         let s = classify_diagnostics(&diags, 2);
         assert_eq!(s.primary_index, Some(1));
-        assert_eq!(s.selection_reason, "earliest_non_cascade_tactic_failure_with_context");
+        assert_eq!(
+            s.selection_reason,
+            "earliest_non_cascade_tactic_failure_with_context"
+        );
     }
 
     #[test]
