@@ -2156,6 +2156,50 @@ pub enum ProactiveRetrievalAction {
     },
 }
 
+/// Issue #249: portable Verified Artifact Registry bundle — export/validate/
+/// import/observe_import a self-contained, hash-pinned package that another Proof
+/// Search instance can validate, import, index, and replay WITHOUT the origin
+/// database. Every published hash travels with its canonical preimage; a
+/// bundle_hash over the content makes tampering detectable; import preserves
+/// origin ids/hashes, quarantines conflicts and unavailable environments, and
+/// NEVER translates an imported review into local kernel authority.
+#[derive(JsonSchema, Deserialize)]
+pub struct ArtifactRegistryBundleArgs {
+    pub action: ArtifactRegistryBundleAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ArtifactRegistryBundleAction {
+    /// Export the registry (or a subset) as a canonical, hash-pinned bundle.
+    Export {
+        /// Restrict to these artifact ids (default: the whole registry). Edges are
+        /// kept only when BOTH endpoints are in the exported set.
+        #[serde(default)]
+        artifact_ids: Option<Vec<String>>,
+        /// Include proof-source bytes behind each proof_body_hash so an importer
+        /// can replay (default true). false redacts them (restricted / benchmark-
+        /// sensitive bodies) — hashes still travel, proof_source_available=false.
+        #[serde(default)]
+        include_proof_bodies: Option<bool>,
+    },
+    /// Validate a bundle's content hash, referential integrity, and preimage
+    /// presence WITHOUT writing anything.
+    Validate { bundle_json: String },
+    /// Import a bundle into this instance. Validates first (a tampered bundle is
+    /// rejected before any write), preserves origin ids/hashes, detects exact
+    /// duplicates / version conflicts / same-name-different-statement collisions,
+    /// quarantines what it cannot safely accept, and rolls back atomically on
+    /// error. dry_run reports what WOULD happen and writes nothing.
+    Import {
+        bundle_json: String,
+        #[serde(default)]
+        dry_run: bool,
+    },
+    /// Read a recorded import (what was inserted / skipped / quarantined).
+    ObserveImport { import_id: String },
+}
+
 /// Issue #243: the Verified Artifact Registry (VAR) foundation tool. Promotes a
 /// KERNEL-BACKED verified lemma into a curated, immutable, versioned research
 /// artifact with a lifecycle. The registry curates already-established kernel
@@ -5780,6 +5824,311 @@ fn retrieval_packet_json(conn: &Connection, packet_id: &str) -> Result<serde_jso
         "budget": parse(&budget),
         "trust_boundary": "Advisory retrieval record only (#248). Candidates are ranked suggestions, never applicability or proof authority; a selection here is not a verifier-backed dependency (those are verified_artifact_edges with evidence_kind='verifier'). Retrieved-but-unused candidates stay explicitly distinguished from real dependencies.",
     }))
+}
+
+/// Portable VAR bundle format version (#249). Bumped whenever the canonical
+/// bundle content shape changes so an importer can refuse an unknown layout.
+const VAR_BUNDLE_VERSION: &str = "var_bundle/1.0";
+
+/// The pinned Lean toolchain string this instance would replay against, read
+/// from the project's `lean-toolchain` file. Part of a bundle so an importer can
+/// tell whether it can replay an imported artifact or must quarantine it.
+fn read_lean_toolchain(lean_project_path: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(lean_project_path.join("lean-toolchain")).ok()
+        .map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// Build the CANONICAL CONTENT of a portable Verified Artifact Registry bundle
+/// (#249) — the executable mathematical-library package another instance can
+/// validate, import, index, and replay WITHOUT the origin database. Every
+/// published hash travels with its preimage: a version carries its
+/// formal_statement (statement_hash preimage) and, when resolvable and not
+/// redacted, the proof-source bytes behind proof_body_hash. The content is fully
+/// sorted (by id) so re-export from the same DB is byte-deterministic; volatile
+/// export metadata (origin instance id, timestamp) lives in the wrapper, outside
+/// the content hash.
+fn build_var_bundle_content(
+    conn: &Connection,
+    lean_project_path: &std::path::Path,
+    artifact_ids: Option<&[String]>,
+    include_proof_bodies: bool,
+) -> Result<serde_json::Value, McpError> {
+    // Resolve the target artifact id set (explicit subset, or the whole registry).
+    let ids: Vec<String> = match artifact_ids {
+        Some(list) => {
+            for id in list {
+                if conn.query_row("SELECT 1 FROM verified_artifacts WHERE id = ?1", [id], |_| Ok(()))
+                    .optional().map_err(rs)?.is_none()
+                {
+                    return Err(mcp_invalid_params(format!("unknown artifact_id: {}", id)));
+                }
+            }
+            let mut v = list.to_vec();
+            v.sort();
+            v.dedup();
+            v
+        }
+        None => {
+            let mut stmt = conn.prepare("SELECT id FROM verified_artifacts ORDER BY id ASC").map_err(rs)?;
+            let v = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(rs)?
+                .collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+            v
+        }
+    };
+    let in_set = |id: &str| ids.iter().any(|x| x == id);
+
+    // --- artifacts ---
+    let mut artifacts = Vec::new();
+    for id in &ids {
+        let row = conn.query_row(
+            "SELECT id, artifact_kind, canonical_name, informal_summary, source_campaign, current_version, \
+             maturity_status, review_status, candidate_for_mathlib, superseded_by, created_at, updated_at \
+             FROM verified_artifacts WHERE id = ?1",
+            [id],
+            |r| Ok(serde_json::json!({
+                "id": r.get::<_, String>(0)?, "artifact_kind": r.get::<_, String>(1)?,
+                "canonical_name": r.get::<_, String>(2)?, "informal_summary": r.get::<_, Option<String>>(3)?,
+                "source_campaign": r.get::<_, Option<String>>(4)?, "current_version": r.get::<_, i64>(5)?,
+                "maturity_status": r.get::<_, String>(6)?, "review_status": r.get::<_, String>(7)?,
+                "candidate_for_mathlib": r.get::<_, i64>(8)?, "superseded_by": r.get::<_, Option<String>>(9)?,
+                "created_at": r.get::<_, String>(10)?, "updated_at": r.get::<_, String>(11)?,
+            })),
+        ).map_err(rs)?;
+        artifacts.push(row);
+    }
+
+    // --- versions (+ formal-statement preimage + optional proof source) ---
+    let mut versions = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, artifact_id, artifact_version, canonical_name, formal_statement, statement_hash, \
+             proof_body_hash, environment_hash, kernel_result_hash, dependency_ids_json, promotion_reason, \
+             replay_status, created_at FROM verified_artifact_versions ORDER BY artifact_id ASC, artifact_version ASC",
+        ).map_err(rs)?;
+        let rows = stmt.query_map([], |r| Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?,
+            r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?,
+            r.get::<_, String>(8)?, r.get::<_, String>(9)?, r.get::<_, Option<String>>(10)?, r.get::<_, String>(11)?,
+            r.get::<_, String>(12)?,
+        ))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        drop(stmt);
+        for (id, artifact_id, ver, name, formal, stmt_hash, proof_hash, env_hash, kernel_hash, deps, reason, replay, created) in rows {
+            if !in_set(&artifact_id) { continue; }
+            // Resolve the proof-source bytes behind proof_body_hash so an importer
+            // can replay. Redaction (include_proof_bodies=false) or an unresolvable
+            // artifact leaves proof_source_available=false — never a fake.
+            let (proof_source_b64, proof_sidecar, proof_available) = if include_proof_bodies {
+                let (content_path, sidecar_path) = verifier_artifact_paths(lean_project_path, &proof_hash);
+                match (std::fs::read(&content_path), std::fs::read(&sidecar_path)) {
+                    (Ok(bytes), Ok(sc)) => {
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        let sidecar = serde_json::from_slice::<serde_json::Value>(&sc).unwrap_or(serde_json::Value::Null);
+                        (serde_json::json!(b64), sidecar, true)
+                    }
+                    _ => (serde_json::Value::Null, serde_json::Value::Null, false),
+                }
+            } else {
+                (serde_json::Value::Null, serde_json::Value::Null, false)
+            };
+            versions.push(serde_json::json!({
+                "id": id, "artifact_id": artifact_id, "artifact_version": ver, "canonical_name": name,
+                "formal_statement": formal, "statement_hash": stmt_hash, "proof_body_hash": proof_hash,
+                "environment_hash": env_hash, "kernel_result_hash": kernel_hash,
+                "dependency_ids_json": deps, "promotion_reason": reason, "replay_status": replay,
+                "created_at": created,
+                "proof_source_b64": proof_source_b64, "proof_sidecar": proof_sidecar,
+                "proof_source_available": proof_available,
+            }));
+        }
+    }
+
+    // --- origins (joined to versions of selected artifacts) ---
+    let mut origins = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT o.id, o.version_id, o.origin_kind, o.origin_problem_version_id, o.origin_episode_id, \
+             o.origin_lemma_id, o.origin_module_item_id, o.created_at, v.artifact_id \
+             FROM verified_artifact_origins o JOIN verified_artifact_versions v ON v.id = o.version_id \
+             ORDER BY o.id ASC",
+        ).map_err(rs)?;
+        let rows = stmt.query_map([], |r| Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?,
+            r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?,
+            r.get::<_, String>(7)?, r.get::<_, String>(8)?,
+        ))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        drop(stmt);
+        for (id, version_id, kind, pv, ep, lemma, module_item, created, artifact_id) in rows {
+            if !in_set(&artifact_id) { continue; }
+            origins.push(serde_json::json!({
+                "id": id, "version_id": version_id, "origin_kind": kind,
+                "origin_problem_version_id": pv, "origin_episode_id": ep,
+                "origin_lemma_id": lemma, "origin_module_item_id": module_item, "created_at": created,
+            }));
+        }
+    }
+
+    // --- status events, reviews, upstream readiness, edges (filtered to set) ---
+    let collect_by_artifact = |sql: &str, map: &dyn Fn(&rusqlite::Row) -> rusqlite::Result<(String, serde_json::Value)>| -> Result<Vec<serde_json::Value>, McpError> {
+        let mut stmt = conn.prepare(sql).map_err(rs)?;
+        let rows = stmt.query_map([], |r| map(r)).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        drop(stmt);
+        Ok(rows.into_iter().filter(|(aid, _)| in_set(aid)).map(|(_, v)| v).collect())
+    };
+    let status_events = collect_by_artifact(
+        "SELECT id, artifact_id, from_status, to_status, reason, actor, created_at FROM verified_artifact_status_events ORDER BY id ASC",
+        &|r| Ok((r.get::<_, String>(1)?, serde_json::json!({
+            "id": r.get::<_, String>(0)?, "artifact_id": r.get::<_, String>(1)?, "from_status": r.get::<_, Option<String>>(2)?,
+            "to_status": r.get::<_, String>(3)?, "reason": r.get::<_, Option<String>>(4)?, "actor": r.get::<_, String>(5)?, "created_at": r.get::<_, String>(6)?,
+        }))),
+    )?;
+    let reviews = collect_by_artifact(
+        "SELECT id, artifact_id, version_id, review_status, reviewer, notes, created_at FROM verified_artifact_reviews ORDER BY id ASC",
+        &|r| Ok((r.get::<_, String>(1)?, serde_json::json!({
+            "id": r.get::<_, String>(0)?, "artifact_id": r.get::<_, String>(1)?, "version_id": r.get::<_, Option<String>>(2)?,
+            "review_status": r.get::<_, String>(3)?, "reviewer": r.get::<_, String>(4)?, "notes": r.get::<_, Option<String>>(5)?, "created_at": r.get::<_, String>(6)?,
+        }))),
+    )?;
+    let upstream = collect_by_artifact(
+        "SELECT artifact_id, status, checklist_json, reviewer, notes, updated_at FROM verified_artifact_upstream_readiness ORDER BY artifact_id ASC",
+        &|r| Ok((r.get::<_, String>(0)?, serde_json::json!({
+            "artifact_id": r.get::<_, String>(0)?, "status": r.get::<_, String>(1)?, "checklist_json": r.get::<_, String>(2)?,
+            "reviewer": r.get::<_, Option<String>>(3)?, "notes": r.get::<_, Option<String>>(4)?, "updated_at": r.get::<_, String>(5)?,
+        }))),
+    )?;
+    // Edges: keep only edges whose BOTH endpoints are in the exported set, so the
+    // bundle is referentially closed.
+    let mut edges = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, from_artifact_id, to_artifact_id, edge_kind, evidence_kind, episode_id, campaign, notes, created_at \
+             FROM verified_artifact_edges ORDER BY id ASC",
+        ).map_err(rs)?;
+        let rows = stmt.query_map([], |r| Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?, r.get::<_, Option<String>>(7)?,
+            r.get::<_, String>(8)?,
+        ))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        drop(stmt);
+        for (id, from, to, kind, evidence, ep, campaign, notes, created) in rows {
+            if !in_set(&from) || !in_set(&to) { continue; }
+            edges.push(serde_json::json!({
+                "id": id, "from_artifact_id": from, "to_artifact_id": to, "edge_kind": kind,
+                "evidence_kind": evidence, "episode_id": ep, "campaign": campaign, "notes": notes, "created_at": created,
+            }));
+        }
+    }
+
+    Ok(serde_json::json!({
+        "bundle_version": VAR_BUNDLE_VERSION,
+        "lean_toolchain": read_lean_toolchain(lean_project_path),
+        "include_proof_bodies": include_proof_bodies,
+        "artifacts": artifacts,
+        "artifact_versions": versions,
+        "artifact_origins": origins,
+        "artifact_status_events": status_events,
+        "artifact_reviews": reviews,
+        "artifact_upstream_readiness": upstream,
+        "artifact_edges": edges,
+    }))
+}
+
+/// Validate a portable VAR bundle (#249): recompute the content hash to detect
+/// tampering, then check referential integrity and preimage presence. Returns a
+/// structured report — it NEVER writes and never confers proof authority.
+fn validate_var_bundle(wrapper: &serde_json::Value) -> serde_json::Value {
+    // Hard errors set ok=false (tamper, unsupported layout, dangling references):
+    // they mean the bundle cannot be safely imported. Warnings are data-
+    // completeness notes (an empty kernel hash from a fixture, a missing
+    // formal_statement preimage) that DON'T block import but travel in the report
+    // so an importer knows an artifact may not be replayable.
+    let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let content = match wrapper.get("content") {
+        Some(c) => c,
+        None => {
+            return serde_json::json!({"ok": false, "referential_integrity_errors": ["bundle missing `content`"], "warnings": [], "bundle_hash_matches": false});
+        }
+    };
+    // Tamper detection: recompute the canonical hash over the content.
+    let recomputed = proofsearch_core::hashing::canonical_hash(content).ok();
+    let embedded = wrapper.get("bundle_hash").and_then(|v| v.as_str());
+    let hash_matches = matches!((&recomputed, embedded), (Some(r), Some(e)) if r == e);
+    if !hash_matches {
+        errors.push(format!(
+            "bundle_hash mismatch — content was tampered or re-serialized: embedded={:?}, recomputed={:?}",
+            embedded, recomputed));
+    }
+    if content.get("bundle_version").and_then(|v| v.as_str()) != Some(VAR_BUNDLE_VERSION) {
+        errors.push(format!("unsupported bundle_version: {:?}", content.get("bundle_version")));
+    }
+    let arr = |k: &str| content.get(k).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let artifacts = arr("artifacts");
+    let versions = arr("artifact_versions");
+    let artifact_ids: std::collections::BTreeSet<String> = artifacts.iter()
+        .filter_map(|a| a.get("id").and_then(|v| v.as_str()).map(|s| s.to_string())).collect();
+    let version_ids: std::collections::BTreeSet<String> = versions.iter()
+        .filter_map(|v| v.get("id").and_then(|x| x.as_str()).map(|s| s.to_string())).collect();
+    // Every version references an artifact in the bundle, has its statement-hash
+    // preimage (formal_statement), and carries its immutable kernel hashes.
+    for v in &versions {
+        let aid = v.get("artifact_id").and_then(|x| x.as_str()).unwrap_or("");
+        if !artifact_ids.contains(aid) {
+            errors.push(format!("version {} references missing artifact {}", v.get("id").and_then(|x| x.as_str()).unwrap_or("?"), aid));
+        }
+        let vid = v.get("id").and_then(|x| x.as_str()).unwrap_or("?");
+        for h in ["statement_hash", "proof_body_hash", "environment_hash", "kernel_result_hash"] {
+            match v.get(h).and_then(|x| x.as_str()) {
+                None => errors.push(format!("version {} is missing the {} field entirely", vid, h)),
+                Some(s) if s.is_empty() => warnings.push(format!("version {} has an empty {} (not replayable until re-derived)", vid, h)),
+                _ => {}
+            }
+        }
+        // The statement_hash preimage is the formal_statement; flag its absence as
+        // a warning (the artifact may not be replayable) rather than a hard error.
+        let stmt_hash_nonempty = v.get("statement_hash").and_then(|x| x.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+        let has_formal = v.get("formal_statement").and_then(|x| x.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+        if stmt_hash_nonempty && !has_formal {
+            warnings.push(format!("version {} has a statement_hash but no formal_statement preimage", vid));
+        }
+    }
+    // superseded_by, origins, edges must point inside the bundle.
+    for a in &artifacts {
+        if let Some(s) = a.get("superseded_by").and_then(|x| x.as_str()) {
+            if !artifact_ids.contains(s) {
+                errors.push(format!("artifact {} superseded_by {} which is not in the bundle", a.get("id").and_then(|x| x.as_str()).unwrap_or("?"), s));
+            }
+        }
+    }
+    for o in &arr("artifact_origins") {
+        let vid = o.get("version_id").and_then(|x| x.as_str()).unwrap_or("");
+        if !version_ids.contains(vid) {
+            errors.push(format!("origin {} references missing version {}", o.get("id").and_then(|x| x.as_str()).unwrap_or("?"), vid));
+        }
+    }
+    for e in &arr("artifact_edges") {
+        for endpoint in ["from_artifact_id", "to_artifact_id"] {
+            let id = e.get(endpoint).and_then(|x| x.as_str()).unwrap_or("");
+            if !artifact_ids.contains(id) {
+                errors.push(format!("edge {} endpoint {} missing artifact {}", e.get("id").and_then(|x| x.as_str()).unwrap_or("?"), endpoint, id));
+            }
+        }
+    }
+    serde_json::json!({
+        "ok": errors.is_empty(),
+        "bundle_hash_matches": hash_matches,
+        "referential_integrity_errors": errors,
+        "warnings": warnings,
+        "counts": {
+            "artifacts": artifacts.len(),
+            "versions": versions.len(),
+            "origins": arr("artifact_origins").len(),
+            "status_events": arr("artifact_status_events").len(),
+            "reviews": arr("artifact_reviews").len(),
+            "upstream_readiness": arr("artifact_upstream_readiness").len(),
+            "edges": arr("artifact_edges").len(),
+        },
+        "trust_boundary": "Validation checks tamper (content hash), referential integrity, and preimage presence only. It never re-verifies a proof and never confers proof authority; a valid bundle's kernel hashes are inert data until replayed against the pinned environment.",
+    })
 }
 
 /// Issue #242 dev diary, slice 2: read an attached artifact's OWN status/
@@ -13961,6 +14310,318 @@ impl ChatDbMcp {
         }
     }
 
+    /// Issue #249: portable Verified Artifact Registry bundle. Export the registry
+    /// as a self-contained, hash-pinned package another instance can validate,
+    /// import, index, and replay without the origin database — and import one
+    /// safely (tamper detection before any write, quarantine on conflict or
+    /// unavailable environment, preserved origin ids/hashes, atomic rollback,
+    /// idempotent re-import). Never confers proof authority: imported kernel hashes
+    /// are inert data until re-verified against the pinned environment.
+    async fn do_artifact_registry_bundle(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ArtifactRegistryBundleArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        match args.action {
+            ArtifactRegistryBundleAction::Export { artifact_ids, include_proof_bodies } => {
+                let include = include_proof_bodies.unwrap_or(true);
+                let conn = self.conn.lock().await;
+                let content = build_var_bundle_content(&conn, &self.lean_project_path, artifact_ids.as_deref(), include)?;
+                let bundle_hash = proofsearch_core::hashing::canonical_hash(&content)
+                    .map_err(mcp_internal_error)?;
+                let counts = serde_json::json!({
+                    "artifacts": content["artifacts"].as_array().map(|a| a.len()).unwrap_or(0),
+                    "versions": content["artifact_versions"].as_array().map(|a| a.len()).unwrap_or(0),
+                    "edges": content["artifact_edges"].as_array().map(|a| a.len()).unwrap_or(0),
+                });
+                let wrapper = serde_json::json!({
+                    "content": content,
+                    "bundle_hash": bundle_hash,
+                    // Volatile export metadata, DELIBERATELY outside the content hash
+                    // so re-export from the same DB is byte-deterministic (the
+                    // "deterministic modulo instance/import metadata" guarantee).
+                    "origin_instance_id": Uuid::new_v4().to_string(),
+                    "exported_at": Utc::now().to_rfc3339(),
+                    "record_counts": counts,
+                    "note": "Portable VAR bundle (#249). A database-only hash is not portable evidence — this bundle carries the canonical preimages (formal statements, and proof-source bytes unless redacted) behind every published hash. Validate before importing; a valid bundle's kernel hashes remain inert data until replayed against the pinned lean_toolchain.",
+                });
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&wrapper).unwrap())]))
+            }
+
+            ArtifactRegistryBundleAction::Validate { bundle_json } => {
+                let wrapper: serde_json::Value = serde_json::from_str(&bundle_json)
+                    .map_err(|e| mcp_invalid_params(format!("bundle_json is not valid JSON: {}", e)))?;
+                let report = validate_var_bundle(&wrapper);
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&report).unwrap())]))
+            }
+
+            ArtifactRegistryBundleAction::Import { bundle_json, dry_run } => {
+                let wrapper: serde_json::Value = serde_json::from_str(&bundle_json)
+                    .map_err(|e| mcp_invalid_params(format!("bundle_json is not valid JSON: {}", e)))?;
+                // Validate FIRST — a tampered or structurally broken bundle is
+                // rejected before a single row is written.
+                let report = validate_var_bundle(&wrapper);
+                if !report["ok"].as_bool().unwrap_or(false) {
+                    return Err(mcp_invalid_params(format!(
+                        "bundle failed validation; refusing to import: {}", report)));
+                }
+                let content = &wrapper["content"];
+                let bundle_hash = wrapper["bundle_hash"].as_str().unwrap_or("").to_string();
+                let bundle_version = content["bundle_version"].as_str().unwrap_or("").to_string();
+                let origin_instance_id = wrapper.get("origin_instance_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let bundle_toolchain = content.get("lean_toolchain").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let local_toolchain = read_lean_toolchain(&self.lean_project_path);
+                // Environment availability: if the bundle names a toolchain that
+                // this instance does not match, imported artifacts cannot be
+                // replayed here — they must be quarantined, never falsely accepted.
+                let environment_unavailable = match (&bundle_toolchain, &local_toolchain) {
+                    (Some(b), Some(l)) => b != l,
+                    (Some(_), None) => true,
+                    _ => false,
+                };
+
+                let arr = |k: &str| content.get(k).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let artifacts = arr("artifacts");
+                let versions = arr("artifact_versions");
+                // version_id -> artifact_id, and artifact_id -> current statement_hash.
+                let mut version_artifact: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+                for v in &versions {
+                    if let (Some(vid), Some(aid)) = (v.get("id").and_then(|x| x.as_str()), v.get("artifact_id").and_then(|x| x.as_str())) {
+                        version_artifact.insert(vid.to_string(), aid.to_string());
+                    }
+                }
+                let current_stmt_hash = |aid: &str| -> Option<String> {
+                    let cur = artifacts.iter().find(|a| a.get("id").and_then(|x| x.as_str()) == Some(aid))
+                        .and_then(|a| a.get("current_version")).and_then(|v| v.as_i64())?;
+                    versions.iter().find(|v| v.get("artifact_id").and_then(|x| x.as_str()) == Some(aid)
+                        && v.get("artifact_version").and_then(|x| x.as_i64()) == Some(cur))
+                        .and_then(|v| v.get("statement_hash").and_then(|x| x.as_str())).map(|s| s.to_string())
+                };
+
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+
+                // Classify each artifact.
+                let mut inserted: Vec<String> = Vec::new();
+                let mut skipped_duplicate: Vec<serde_json::Value> = Vec::new();
+                let mut quarantined: Vec<serde_json::Value> = Vec::new();
+                for a in &artifacts {
+                    let aid = a.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    let name = a.get("canonical_name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    let bundle_hash_for_art = current_stmt_hash(&aid);
+                    if environment_unavailable {
+                        quarantined.push(serde_json::json!({"artifact_id": aid, "reason": "environment_unavailable",
+                            "detail": format!("bundle lean_toolchain {:?} != local {:?}; cannot replay here", bundle_toolchain, local_toolchain)}));
+                        continue;
+                    }
+                    // Same id already present locally?
+                    let local: Option<(String, i64)> = tx.query_row(
+                        "SELECT canonical_name, current_version FROM verified_artifacts WHERE id = ?1",
+                        [&aid], |r| Ok((r.get(0)?, r.get(1)?)),
+                    ).optional().map_err(rs)?;
+                    if let Some((local_name, local_cur)) = local {
+                        let local_stmt: Option<String> = tx.query_row(
+                            "SELECT statement_hash FROM verified_artifact_versions WHERE artifact_id = ?1 AND artifact_version = ?2",
+                            rusqlite::params![&aid, local_cur], |r| r.get(0),
+                        ).optional().map_err(rs)?;
+                        if local_name == name && local_stmt == bundle_hash_for_art {
+                            skipped_duplicate.push(serde_json::json!({"artifact_id": aid, "reason": "exact_duplicate"}));
+                        } else {
+                            quarantined.push(serde_json::json!({"artifact_id": aid, "reason": "version_conflict",
+                                "detail": "an artifact with this id already exists with a different name/statement; not overwritten"}));
+                        }
+                        continue;
+                    }
+                    // Same NAME under a different id, with a different statement? A collision.
+                    let name_collision: Option<String> = tx.query_row(
+                        "SELECT a.id FROM verified_artifacts a \
+                         JOIN verified_artifact_versions v ON v.artifact_id = a.id AND v.artifact_version = a.current_version \
+                         WHERE a.canonical_name = ?1 AND v.statement_hash <> ?2 LIMIT 1",
+                        rusqlite::params![&name, bundle_hash_for_art.clone().unwrap_or_default()], |r| r.get(0),
+                    ).optional().map_err(rs)?;
+                    if let Some(other) = name_collision {
+                        quarantined.push(serde_json::json!({"artifact_id": aid, "reason": "name_collision",
+                            "detail": format!("canonical_name {:?} already used by local artifact {} with a different statement", name, other)}));
+                        continue;
+                    }
+                    inserted.push(aid);
+                }
+                let inserted_set: std::collections::BTreeSet<String> = inserted.iter().cloned().collect();
+
+                if !dry_run {
+                    // Insert artifacts (superseded_by NULL first to avoid a dangling
+                    // self-FK), then versions/origins/events/reviews/upstream/edges,
+                    // then patch superseded_by for pairs both present.
+                    for a in &artifacts {
+                        let aid = a.get("id").and_then(|x| x.as_str()).unwrap_or("");
+                        if !inserted_set.contains(aid) { continue; }
+                        tx.execute(
+                            "INSERT INTO verified_artifacts (id, artifact_kind, canonical_name, informal_summary, \
+                             source_campaign, current_version, maturity_status, review_status, candidate_for_mathlib, \
+                             superseded_by, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,NULL,?10,?11)",
+                            rusqlite::params![
+                                aid, a["artifact_kind"].as_str(), a["canonical_name"].as_str(), a["informal_summary"].as_str(),
+                                a["source_campaign"].as_str(), a["current_version"].as_i64(), a["maturity_status"].as_str(),
+                                a["review_status"].as_str(), a["candidate_for_mathlib"].as_i64().unwrap_or(0),
+                                a["created_at"].as_str(), a["updated_at"].as_str(),
+                            ],
+                        ).map_err(rs)?;
+                    }
+                    for v in &versions {
+                        let aid = v.get("artifact_id").and_then(|x| x.as_str()).unwrap_or("");
+                        if !inserted_set.contains(aid) { continue; }
+                        tx.execute(
+                            "INSERT INTO verified_artifact_versions (id, artifact_id, artifact_version, canonical_name, \
+                             formal_statement, statement_hash, proof_body_hash, environment_hash, kernel_result_hash, \
+                             dependency_ids_json, promotion_reason, replay_status, created_at) \
+                             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                            rusqlite::params![
+                                v["id"].as_str(), aid, v["artifact_version"].as_i64(), v["canonical_name"].as_str(),
+                                v["formal_statement"].as_str(), v["statement_hash"].as_str(), v["proof_body_hash"].as_str(),
+                                v["environment_hash"].as_str(), v["kernel_result_hash"].as_str(),
+                                v["dependency_ids_json"].as_str(), v["promotion_reason"].as_str(),
+                                v["replay_status"].as_str(), v["created_at"].as_str(),
+                            ],
+                        ).map_err(rs)?;
+                        // Rematerialize proof-source bytes so this instance can replay
+                        // (best-effort; never fails the import).
+                        if v.get("proof_source_available").and_then(|x| x.as_bool()).unwrap_or(false) {
+                            if let (Some(b64), sidecar) = (v.get("proof_source_b64").and_then(|x| x.as_str()), v.get("proof_sidecar")) {
+                                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                                    let (cpath, spath) = verifier_artifact_paths(&self.lean_project_path, v["proof_body_hash"].as_str().unwrap_or(""));
+                                    if let Some(parent) = cpath.parent() {
+                                        let _ = std::fs::create_dir_all(parent);
+                                        let _ = std::fs::write(&cpath, &bytes);
+                                        if let Some(sc) = sidecar {
+                                            let _ = std::fs::write(&spath, serde_json::to_vec(sc).unwrap_or_default());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    for o in &arr("artifact_origins") {
+                        let vid = o.get("version_id").and_then(|x| x.as_str()).unwrap_or("");
+                        if version_artifact.get(vid).map(|a| inserted_set.contains(a)).unwrap_or(false) {
+                            tx.execute(
+                                "INSERT INTO verified_artifact_origins (id, version_id, origin_kind, origin_problem_version_id, \
+                                 origin_episode_id, origin_lemma_id, origin_module_item_id, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                                rusqlite::params![
+                                    o["id"].as_str(), vid, o["origin_kind"].as_str(), o["origin_problem_version_id"].as_str(),
+                                    o["origin_episode_id"].as_str(), o["origin_lemma_id"].as_str(),
+                                    o["origin_module_item_id"].as_str(), o["created_at"].as_str(),
+                                ],
+                            ).map_err(rs)?;
+                        }
+                    }
+                    for s in &arr("artifact_status_events") {
+                        let aid = s.get("artifact_id").and_then(|x| x.as_str()).unwrap_or("");
+                        if !inserted_set.contains(aid) { continue; }
+                        tx.execute(
+                            "INSERT INTO verified_artifact_status_events (id, artifact_id, from_status, to_status, reason, actor, created_at) \
+                             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                            rusqlite::params![s["id"].as_str(), aid, s["from_status"].as_str(), s["to_status"].as_str(),
+                                s["reason"].as_str(), s["actor"].as_str(), s["created_at"].as_str()],
+                        ).map_err(rs)?;
+                    }
+                    for rv in &arr("artifact_reviews") {
+                        let aid = rv.get("artifact_id").and_then(|x| x.as_str()).unwrap_or("");
+                        if !inserted_set.contains(aid) { continue; }
+                        tx.execute(
+                            "INSERT INTO verified_artifact_reviews (id, artifact_id, version_id, review_status, reviewer, notes, created_at) \
+                             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                            rusqlite::params![rv["id"].as_str(), aid, rv["version_id"].as_str(), rv["review_status"].as_str(),
+                                rv["reviewer"].as_str(), rv["notes"].as_str(), rv["created_at"].as_str()],
+                        ).map_err(rs)?;
+                    }
+                    for u in &arr("artifact_upstream_readiness") {
+                        let aid = u.get("artifact_id").and_then(|x| x.as_str()).unwrap_or("");
+                        if !inserted_set.contains(aid) { continue; }
+                        tx.execute(
+                            "INSERT INTO verified_artifact_upstream_readiness (artifact_id, status, checklist_json, reviewer, notes, updated_at) \
+                             VALUES (?1,?2,?3,?4,?5,?6)",
+                            rusqlite::params![aid, u["status"].as_str(), u["checklist_json"].as_str(), u["reviewer"].as_str(),
+                                u["notes"].as_str(), u["updated_at"].as_str()],
+                        ).map_err(rs)?;
+                    }
+                    for e in &arr("artifact_edges") {
+                        let from = e.get("from_artifact_id").and_then(|x| x.as_str()).unwrap_or("");
+                        let to = e.get("to_artifact_id").and_then(|x| x.as_str()).unwrap_or("");
+                        if !inserted_set.contains(from) || !inserted_set.contains(to) { continue; }
+                        tx.execute(
+                            "INSERT INTO verified_artifact_edges (id, from_artifact_id, to_artifact_id, edge_kind, evidence_kind, episode_id, campaign, notes, created_at) \
+                             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                            rusqlite::params![e["id"].as_str(), from, to, e["edge_kind"].as_str(), e["evidence_kind"].as_str(),
+                                e["episode_id"].as_str(), e["campaign"].as_str(), e["notes"].as_str(), e["created_at"].as_str()],
+                        ).map_err(rs)?;
+                    }
+                    // Second pass: superseded_by, only where both ends were inserted.
+                    for a in &artifacts {
+                        let aid = a.get("id").and_then(|x| x.as_str()).unwrap_or("");
+                        if !inserted_set.contains(aid) { continue; }
+                        if let Some(sb) = a.get("superseded_by").and_then(|x| x.as_str()) {
+                            if inserted_set.contains(sb) {
+                                tx.execute("UPDATE verified_artifacts SET superseded_by = ?1 WHERE id = ?2",
+                                    rusqlite::params![sb, aid]).map_err(rs)?;
+                            }
+                        }
+                    }
+                }
+
+                let import_id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                let summary = serde_json::json!({
+                    "inserted": inserted,
+                    "inserted_count": inserted.len(),
+                    "skipped_duplicate": skipped_duplicate,
+                    "quarantined": quarantined,
+                    "environment_unavailable": environment_unavailable,
+                    "bundle_toolchain": bundle_toolchain,
+                    "local_toolchain": local_toolchain,
+                });
+                // Record the import (even a dry-run) as an append-only ledger row.
+                tx.execute(
+                    "INSERT INTO artifact_bundle_imports (id, origin_instance_id, bundle_version, bundle_hash, dry_run, imported_at, summary_json) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                    rusqlite::params![&import_id, &origin_instance_id, &bundle_version, &bundle_hash,
+                        i64::from(dry_run), &now, serde_json::to_string(&summary).unwrap()],
+                ).map_err(rs)?;
+                tx.commit().map_err(rs)?;
+
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "import_id": import_id,
+                    "dry_run": dry_run,
+                    "origin_instance_id": origin_instance_id,
+                    "bundle_hash": bundle_hash,
+                    "validation": report,
+                    "summary": summary,
+                    "trust_boundary": "Imported artifacts are source-distinguished (origin_instance_id) and their kernel hashes are inert data until replayed against the pinned environment. An imported review is NEVER local kernel authority. Quarantined artifacts are recorded, never falsely verified; a dry_run wrote nothing but this ledger row.",
+                })).unwrap())]))
+            }
+
+            ArtifactRegistryBundleAction::ObserveImport { import_id } => {
+                let conn = self.conn.lock().await;
+                let row = conn.query_row(
+                    "SELECT id, origin_instance_id, bundle_version, bundle_hash, dry_run, imported_at, summary_json \
+                     FROM artifact_bundle_imports WHERE id = ?1",
+                    [&import_id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?)),
+                ).optional().map_err(rs)?;
+                let Some((id, origin, version, hash, dry, at, summary)) = row else {
+                    return Err(mcp_invalid_params(format!("unknown import_id: {}", import_id)));
+                };
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "import_id": id,
+                    "origin_instance_id": origin,
+                    "bundle_version": version,
+                    "bundle_hash": hash,
+                    "dry_run": dry != 0,
+                    "imported_at": at,
+                    "summary": serde_json::from_str::<serde_json::Value>(&summary).unwrap_or(serde_json::Value::Null),
+                })).unwrap())]))
+            }
+        }
+    }
+
     /// Issue #243: Verified Artifact Registry foundation. Promote a kernel-backed
     /// verified lemma into a curated, immutable, versioned artifact and drive its
     /// lifecycle. The registry curates already-established kernel truth: promotion
@@ -17574,6 +18235,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<MathSearchArgs>("math_search", "Issue #244: ONE advisory search surface across three CLEARLY DISTINGUISHED sources — pinned Mathlib, the Verified Artifact Registry (#243), and MathCorpus — so an agent no longer has to pick between lean_declaration_lookup / mathlib_search_declarations / mathlib_search_local_artifacts and guess a name fragment. ADVISORY ONLY: never adds an import, alters a problem version, or marks an obligation proved; results always carry their `source` and are never merged into one indistinguishable namespace. `action` is internally tagged — exactly one of: {\"type\":\"search\",\"query\":\"..\"} (+ optional sources [\"mathlib\"|\"verified_artifacts\"|\"mathcorpus\"] (default all), artifact_kind [..] and trust [..] filters for the registry, problem_version_id (adds environment_compatible per result), limit — returns a flat `results` array where every result carries source + trust label (a verified_artifacts result's maturity/review status; a mathlib result is 'pinned_mathlib') plus a `sources_status` map. Pinned Mathlib is a filesystem scan that reports available:false when the source tree isn't resolvable; MathCorpus reports available:false with a note, since the MCIP interchange is export-only and packets aren't locally indexed) | {\"type\":\"inspect\",\"artifact_id\":\"..\"} (full reproduce/verify data for a registry artifact — every version + kernel-backed origin + immutable hashes) | {\"type\":\"usages\",\"artifact_id\":\"..\"} (registry supersession relationships, read-only; cross-artifact reuse-impact is #250) | {\"type\":\"dependency_path\",\"artifact_id\":\"..\"} (the current version's recorded dependency ids, read-only) | {\"type\":\"suggest_imports\",\"artifact_id\":\"..\"} (+ optional problem_version_id — reports environment compatibility + required imports but NEVER mutates a manifest; materialized shared modules are #247). The existing lean_declaration_lookup / mathlib_search_declarations / mathlib_search_local_artifacts remain as compatibility wrappers. Deep elaborated type-directed Mathlib search is tracked in #245; semantic search in #246."),
             make_tool::<ProactiveRetrievalArgs>("proactive_retrieval", "Issue #248: proactive artifact retrieval at formalization checkpoints. Runs an ADVISORY, budget-aware, reproducible retrieval pass whose query is DERIVED from a scope (the agent never names a candidate), then persists the whole packet — query features, search/index versions, ranked candidates with per-source trust + environment-compatibility labels, contamination exposure, and a deterministic context-byte budget — so the trajectory (and MathCorpus) can distinguish used dependencies, retrieval candidates, and retrieved-but-unused artifacts. TRUST BOUNDARY: never adds an import, alters a problem version, or marks anything proved; a high rank is never applicability, and a retrieval selection is NEVER a verifier-backed dependency (those are verified_artifact_edges evidence_kind='verifier'). `action` is internally tagged — exactly one of: {\"type\":\"retrieve\",\"trigger_mode\":\"manual\"|\"plan_item_created\"|\"obligation_created\"|\"after_repeated_failure\"|\"before_give_up\"} (+ at most one scope: problem_version_id | plan_item_id | episode_id, or none = freeform requiring query_hint; + optional query_hint (extra NL / diagnostic root-cause terms folded into the derived query), sources [\"mathlib\"|\"verified_artifacts\"|\"mathcorpus\"], run_envelope_id (an evaluation/benchmark/private_audit envelope DISABLES retrieval — the pass is still recorded with zero candidates, never silently skipped), limit, budget_cap_bytes (default 8192, deterministic cap — dropped candidates are reported), max_candidates (default 10) — derives concept tokens from the scope statement, runs the same deterministic search as math_search per token, ranks (exact name → env-compatible → query-term overlap → source priority → id) and caps, records benchmark contamination exposure, and returns the persisted packet) | {\"type\":\"record_selection\",\"packet_id\":\"..\"} (+ optional inspected [ids], selected [ids] — advisory: recomputes retrieved-but-unused = candidates − selected; ids must be candidates in THIS packet; a selection here never becomes a verifier-backed dependency) | {\"type\":\"get\",\"packet_id\":\"..\"} (read one packet in full) | {\"type\":\"list\"} (+ optional scope_kind, scope_id, limit — packet index, most recent first). Consumes the search API from #244; validated by the #251 retrieval benchmark."),
             make_tool::<VerifiedArtifactArgs>("verified_artifact", "Issue #243: Verified Artifact Registry (VAR) foundation — promote a KERNEL-BACKED verified lemma into a curated, immutable, versioned research artifact with a lifecycle, distinct from an episode-local helper or a raw canonical result. TRUST BOUNDARY: the registry CURATES already-established kernel truth — promotion copies the origin lemma's immutable kernel hashes (statement_hash/proof_body_hash/environment_hash/kernel_result_hash) verbatim, versions are append-only (mathematical history is never overwritten), and no maturity/review/supersede action changes those hashes or confers proof authority. `action` is internally tagged — exactly one of: {\"type\":\"promote\",\"episode_id\":\"..\",\"artifact_kind\":\"helper_lemma\"|\"definition\"|\"theorem\"|\"abstraction\"|\"reduction\"|\"classification\"|\"construction\"|\"negative_result\"|\"proof_module\"|\"tactic_recipe\",\"canonical_name\":\"..\"} (+ optional obligation_id (disambiguates when an episode proved >1 lemma), informal_summary, source_campaign, promotion_reason, candidate_for_mathlib — mints artifact v1 from an existing positive episode_verified_lemma; rejects anything not kernel-backed. Starts maturity=promoted, review=unreviewed) | {\"type\":\"add_version\",\"artifact_id\":\"..\",\"episode_id\":\"..\"} (+ optional obligation_id, canonical_name, formal_statement, promotion_reason — appends a new IMMUTABLE version from another kernel-backed origin, e.g. a generalization; never overwrites the original) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read-only: the artifact with every version + kernel-backed origins, the append-only maturity lifecycle, and reviews) | {\"type\":\"set_status\",\"artifact_id\":\"..\",\"to_status\":\"discovered\"|\"kernel_verified_local\"|\"promoted\"|\"reused\"|\"generalized\"|\"independently_reviewed\"|\"upstream_candidate\"|\"upstreamed\"|\"retained_local\"|\"superseded\",\"actor\":\"..\"} (+ optional reason — appends a maturity lifecycle event; curation only, never proof authority) | {\"type\":\"review\",\"artifact_id\":\"..\",\"review_status\":\"unreviewed\"|\"in_review\"|\"reviewed_with_caveats\"|\"independently_reviewed\"|\"rejected\",\"reviewer\":\"..\"} (+ optional notes, version_id — appends a review and moves review_status; never alters a version's kernel hashes) | {\"type\":\"supersede\",\"artifact_id\":\"..\",\"superseded_by\":\"..\",\"actor\":\"..\"} (+ optional reason — marks the artifact superseded by another; the original stays fully navigable) | {\"type\":\"add_edge\",\"from_artifact_id\":\"..\",\"to_artifact_id\":\"..\",\"edge_kind\":\"formally_depends_on\"|\"imported_by_generated_module\"|\"selected_as_retrieval_candidate\"|\"retrieved_but_unused\"|\"actually_used_in_verified_proof\"|\"generalized_from\"|\"equivalent_to\"|\"supersedes\"|\"applies_to_campaign\"|\"exported_as_mathcorpus_packet\"|\"proposed_to_mathlib\",\"evidence_kind\":\"verifier\"|\"retrieval\"|\"declared\"} (+ optional episode_id, campaign, notes — #250: record a typed dependency/usage edge. ONLY evidence_kind='verifier' counts as formal use: 'actually_used_in_verified_proof' requires verifier evidence, and a verifier edge naming an episode_id must trace to a real kernel_verified/certified episode; retrieval/declared relationships are separate kinds and never masquerade as use. A 'formally_depends_on' edge that would create a cycle is rejected) | {\"type\":\"impact\",\"artifact_id\":\"..\"} (#250: impact metrics RECOMPUTED from the edge/review records — verified downstream uses, distinct campaigns, retrieval-selected vs retrieved-but-unused, selection rate, generated-module imports, review count, generalization lineage; retrieval is never counted as use, and popularity is not proof authority) | {\"type\":\"upstream_readiness\",\"artifact_id\":\"..\"} (#250: read the Mathlib upstream-readiness review metadata — status + checklist; REVIEW METADATA, never proof status) | {\"type\":\"record_upstream_status\",\"artifact_id\":\"..\",\"status\":\"not_candidate\"|\"needs_generalization\"|\"needs_deduplication\"|\"needs_style_review\"|\"ready_for_pr\"|\"pr_open\"|\"accepted\"|\"rejected_or_retained_local\",\"reviewer\":\"..\"} (+ optional checklist, notes — set upstream-readiness; review metadata only, never proof status). Foundation for the #239 VAR family (#244 math_search builds on this; #247/#249/#251-#253 remain)."),
+            make_tool::<ArtifactRegistryBundleArgs>("artifact_registry_bundle", "Issue #249: portable Verified Artifact Registry bundle — a self-contained, hash-pinned package another Proof Search instance can validate, import, index, and replay WITHOUT the origin database (a database-only hash/id is not portable evidence: the canonical preimages must travel with it). TRUST BOUNDARY: import PRESERVES origin ids/hashes, an imported artifact stays source-distinguished (origin_instance_id) with kernel hashes that are INERT DATA until replayed against the pinned environment, and an imported review is NEVER local kernel authority; conflicts and unavailable environments are QUARANTINED, never falsely verified. `action` is internally tagged — exactly one of: {\"type\":\"export\"} (+ optional artifact_ids [..] (default whole registry; edges kept only when both endpoints are exported), include_proof_bodies (default true — embeds the proof-source bytes behind each proof_body_hash so an importer can replay; false redacts them for restricted/benchmark-sensitive bodies, hashes still travel with proof_source_available=false) — returns a wrapper {content, bundle_hash, origin_instance_id, exported_at, record_counts}; the bundle_hash is the canonical hash of `content` only, so re-export from the same DB is byte-deterministic modulo the volatile instance/timestamp metadata) | {\"type\":\"validate\",\"bundle_json\":\"..\"} (recompute the content hash to detect tampering, then check referential integrity + preimage presence — every version has its formal_statement preimage and immutable kernel hashes, origins/edges/superseded_by point inside the bundle; writes nothing) | {\"type\":\"import\",\"bundle_json\":\"..\"} (+ optional dry_run — validates FIRST and refuses a tampered/broken bundle before any write; preserves ids/hashes; classifies each artifact as inserted / skipped_duplicate (exact match, idempotent re-import) / quarantined (version_conflict — same id different statement, never overwritten; name_collision — same canonical_name different statement under another id; environment_unavailable — bundle lean_toolchain doesn't match this instance, can't replay here); rematerializes proof-source bytes for replay; atomic rollback on error; records an append-only artifact_bundle_imports ledger row even for a dry_run) | {\"type\":\"observe_import\",\"import_id\":\"..\"} (read what a prior import inserted / skipped / quarantined). Coordinates with MCIP export (#230/#263): MCIP is the enrichment/evidence contract, this bundle is the executable library package."),
             make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
             make_tool::<CandidateConstructionArgs>("candidate_construction", "Issue #188: ONE tool for the entire candidate-construction family (issue #8) — propose a candidate mathematical object, record empirical checks against it, revise its status, and attach it to a research node or verification layer. A CANDIDATE CONSTRUCTION IS A PROPOSED MATHEMATICAL OBJECT, NOT A PROOF CERTIFICATE: every action records research artifacts useful for search and planning; trust_status never certifies anything — empirical support, human review, citation, and 'a formal statement exists' are all explicitly distinct from kernel verification, and no field can hold kernel evidence. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"construction_type\":\"graph_family\"|\"point_configuration\"|\"coloring\"|\"field_tower\"|\"lattice\"|\"counterexample\"|\"asymptotic_family\"|\"algebraic_object\"|\"combinatorial_design\"|\"other\",\"informal_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, verification_layer_id, problem_version_id, episode_id, name, parameters_json, construction_json, claimed_properties_json, known_failures_json, empirical_checks_json, verification_targets_json, status, trust_status, and motivated-discovery metadata: motivating_move, source_observation, intended_role, strategy_context, why_this_might_work, why_this_might_fail, next_check, future_challenge_relevance — propose a candidate construction. Can exist before a dossier, node, Lean theorem, problem, or episode; a research artifact, not a proof certificate) | {\"type\":\"observe\",\"candidate_construction_id\":\"..\",\"description\":\"..\",\"result\":\"supports\"|\"refutes\"|\"inconclusive\"} (+ optional details_json, observed_by — record one empirical check, appended to the construction's empirical_checks history. Never changes proof status, and 'supports' never implies proved) | {\"type\":\"update_status\",\"candidate_construction_id\":\"..\"} (+ at least one of status, trust_status, claimed_properties_json, known_failures_json, next_check — update the construction in place; a falsified/rejected construction stays visible, never deleted. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified — and no other trust_status confers proof either) | {\"type\":\"link_node\",\"candidate_construction_id\":\"..\",\"node_id\":\"..\"} (attach the construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier. Linking never changes either side's trust_status) | {\"type\":\"link_verification_layer\",\"candidate_construction_id\":\"..\",\"verification_layer_id\":\"..\"} (attach the construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier. Linking a layer is provenance, not promotion — the construction's trust_status is unchanged, and a kernel_verified_claim_linked construction is re-checked against the newly linked layer)"),
@@ -17778,8 +18440,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 57,
-                        "total_tool_count": 57,
+                        "classified_tool_count": 58,
+                        "total_tool_count": 58,
                         "tools": {
                             "mathcorpus_export": {
                                 "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
@@ -18070,6 +18732,16 @@ impl ServerHandler for ChatDbMcp {
                                 "cost_surface": "none — DB reads/writes only, no Lean invocation",
                                 "benchmark_safety": "private_artifact by default — versions carry formal statements + kernel hashes referencing real proof content; observe returns hashes and metadata, never proof source bytes",
                                 "replayability": "deterministic — every version records its kernel-backed origin (episode/lemma) + immutable hashes as the reconstruction anchor; the status/review ledgers are append-only",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "verified_artifact_registry_metadata",
+                                "required_run_mode": "any"
+                            },
+                            "artifact_registry_bundle": {
+                                "side_effect": "mixed by action (issue #249): export/validate are read_only (export also reads the on-disk proof-source store; validate writes nothing); import writes verified_artifacts/_versions/_origins/_status_events/_reviews/_upstream_readiness/_edges rows for the accepted (inserted) artifacts inside ONE transaction (atomic rollback on error), best-effort rematerializes proof-source files, and appends one artifact_bundle_imports ledger row (even for dry_run, which otherwise writes nothing). No action ever writes episode outcome, obligations, canonical lemmas, budgets, or benchmark result tables",
+                                "trust_level": "preserves already-established kernel truth as INERT DATA — import copies origin ids + immutable kernel hashes verbatim, source-distinguished by origin_instance_id, and NEVER re-verifies or confers proof authority (an imported review is not local kernel authority); validate detects tampering via the content hash but is not a proof check; conflicts/unavailable environments are quarantined, never falsely accepted",
+                                "cost_surface": "none — DB + on-disk artifact-store reads/writes, no Lean invocation (replay of an imported artifact is a separate verify path against the pinned toolchain)",
+                                "benchmark_safety": "include_proof_bodies=false redacts proof-source bytes for restricted/benchmark-sensitive bodies (hashes still travel, proof_source_available=false); a bundle exposes formal statements + kernel hashes, and proof bytes only when explicitly included",
+                                "replayability": "deterministic — bundle content is fully id-sorted so re-export from the same DB is byte-identical modulo the volatile origin_instance_id/exported_at wrapper fields (outside the content hash); import classification (inserted/skipped_duplicate/quarantined) is a pure function of local state + bundle content",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "verified_artifact_registry_metadata",
                                 "required_run_mode": "any"
@@ -19311,6 +19983,7 @@ impl ServerHandler for ChatDbMcp {
             "literature_lineage" => self.do_literature_lineage(args_val).await,
             "publication_review" => self.do_publication_review(args_val).await,
             "verified_artifact" => self.do_verified_artifact(args_val).await,
+            "artifact_registry_bundle" => self.do_artifact_registry_bundle(args_val).await,
             "math_search" => self.do_math_search(args_val).await,
             "proactive_retrieval" => self.do_proactive_retrieval(args_val).await,
             "candidate_construction" => self.do_candidate_construction(args_val).await,
@@ -20320,7 +20993,7 @@ mod tests {
         // + 1 verified_artifact (issue #243: Verified Artifact Registry foundation
         // - promote/add_version/observe/set_status/review/supersede) = 55.
         // + 1 math_search (issue #244: unified advisory search across mathlib/VAR/mathcorpus) = 56.
-        assert_eq!(list_res.tools.len(), 57);
+        assert_eq!(list_res.tools.len(), 58);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -22977,6 +23650,140 @@ mod tests {
             .iter().any(|t| t == "telescoping"), "hint terms folded into query: {:?}", packet);
         assert!(packet["candidates"].as_array().unwrap().iter()
             .any(|c| c["result_id"] == serde_json::json!(art_id)), "hint surfaced the recipe: {:?}", packet);
+    }
+
+    /// #249: export from DB A, import into an EMPTY DB B, recover identical ids/
+    /// hashes; tampering is detected and refused; re-import is idempotent; a
+    /// conflicting bundle quarantines rather than overwrites; a foreign toolchain
+    /// quarantines as environment_unavailable; dry_run writes nothing.
+    #[tokio::test]
+    async fn test_artifact_registry_bundle_export_import_roundtrip_and_safety() {
+        async fn va(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("verified_artifact")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn arb(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("artifact_registry_bundle")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn solved(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str, idem: &str) -> String {
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let ep_id = ep["episode_id"].as_str().unwrap().to_string();
+            claim_and_solve(peer, &ep_id, "trivial", idem).await;
+            ep_id
+        }
+        fn resign(mut wrapper: serde_json::Value) -> serde_json::Value {
+            let content = wrapper["content"].clone();
+            wrapper["bundle_hash"] = serde_json::json!(proofsearch_core::hashing::canonical_hash(&content).unwrap());
+            wrapper
+        }
+
+        // --- DB A: build two artifacts, a supersession, an edge, a review. ---
+        let client_a = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer_a = client_a.peer();
+        let pv = create_problem(&peer_a, "True").await;
+        let e1 = solved(&peer_a, &pv, "arb-1").await;
+        let a1 = va(&peer_a, serde_json::json!({"action": {"type":"promote","episode_id":e1,
+            "artifact_kind":"helper_lemma","canonical_name":"quad_reciprocity_lemma"}})).await;
+        let a1_id = a1["artifact_id"].as_str().unwrap().to_string();
+        let e2 = solved(&peer_a, &pv, "arb-2").await;
+        let a2 = va(&peer_a, serde_json::json!({"action": {"type":"promote","episode_id":e2,
+            "artifact_kind":"classification","canonical_name":"divisor_bound_classification"}})).await;
+        let a2_id = a2["artifact_id"].as_str().unwrap().to_string();
+        va(&peer_a, serde_json::json!({"action": {"type":"supersede","artifact_id":a1_id,"superseded_by":a2_id,"actor":"curator"}})).await;
+        va(&peer_a, serde_json::json!({"action": {"type":"review","artifact_id":a2_id,"review_status":"in_review","reviewer":"r1"}})).await;
+        va(&peer_a, serde_json::json!({"action": {"type":"add_edge","from_artifact_id":a2_id,"to_artifact_id":a1_id,
+            "edge_kind":"generalized_from","evidence_kind":"declared"}})).await;
+
+        // Export the whole registry.
+        let wrapper = arb(&peer_a, serde_json::json!({"action": {"type":"export"}})).await;
+        assert_eq!(wrapper["record_counts"]["artifacts"], 2);
+        let a1_stmt = wrapper["content"]["artifact_versions"].as_array().unwrap().iter()
+            .find(|v| v["artifact_id"] == serde_json::json!(a1_id)).unwrap()["statement_hash"].as_str().unwrap().to_string();
+
+        // Re-export is byte-deterministic in bundle_hash (modulo wrapper metadata).
+        let wrapper2 = arb(&peer_a, serde_json::json!({"action": {"type":"export"}})).await;
+        assert_eq!(wrapper["bundle_hash"], wrapper2["bundle_hash"], "re-export bundle_hash is deterministic");
+
+        // Validate: clean.
+        let bundle_json = serde_json::to_string(&wrapper).unwrap();
+        let v = arb(&peer_a, serde_json::json!({"action": {"type":"validate","bundle_json": bundle_json}})).await;
+        assert_eq!(v["ok"], true, "{:?}", v);
+        assert_eq!(v["bundle_hash_matches"], true);
+
+        // Tampering: mutate content WITHOUT re-signing -> detected + refused.
+        let mut tampered = wrapper.clone();
+        tampered["content"]["artifacts"][0]["canonical_name"] = serde_json::json!("SNEAKY_RENAME");
+        let tv = arb(&peer_a, serde_json::json!({"action": {"type":"validate","bundle_json": serde_json::to_string(&tampered).unwrap()}})).await;
+        assert_eq!(tv["bundle_hash_matches"], false, "tamper detected: {:?}", tv);
+        let tamper_import = peer_a.call_tool(CallToolRequestParams::new("artifact_registry_bundle").with_arguments(
+            serde_json::json!({"action": {"type":"import","bundle_json": serde_json::to_string(&tampered).unwrap()}})
+                .as_object().unwrap().clone())).await;
+        assert!(tamper_import.is_err(), "a tampered bundle must be refused before any write");
+
+        // --- DB B: EMPTY. Import the clean bundle -> recover identical ids/hashes. ---
+        let client_b = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer_b = client_b.peer();
+        let imp = arb(&peer_b, serde_json::json!({"action": {"type":"import","bundle_json": bundle_json.clone()}})).await;
+        let inserted = imp["summary"]["inserted"].as_array().unwrap();
+        assert_eq!(inserted.len(), 2, "both artifacts imported: {:?}", imp);
+        assert!(imp["summary"]["quarantined"].as_array().unwrap().is_empty());
+        // Recover identical id + statement hash + supersession in B.
+        let obs = va(&peer_b, serde_json::json!({"action": {"type":"observe","artifact_id": a1_id}})).await;
+        assert_eq!(obs["canonical_name"], "quad_reciprocity_lemma");
+        assert_eq!(obs["superseded_by"], serde_json::json!(a2_id), "supersession round-trips");
+        assert_eq!(obs["versions"][0]["statement_hash"], serde_json::json!(a1_stmt), "kernel hash recovered verbatim");
+
+        // Re-import into B is idempotent: everything is an exact duplicate.
+        let reimp = arb(&peer_b, serde_json::json!({"action": {"type":"import","bundle_json": bundle_json.clone()}})).await;
+        assert!(reimp["summary"]["inserted"].as_array().unwrap().is_empty(), "re-import inserts nothing: {:?}", reimp);
+        assert_eq!(reimp["summary"]["skipped_duplicate"].as_array().unwrap().len(), 2);
+
+        // Conflict: a bundle claiming a DIFFERENT statement for an existing id is
+        // quarantined, never overwriting B's copy.
+        let mut conflict = wrapper.clone();
+        for ver in conflict["content"]["artifact_versions"].as_array_mut().unwrap() {
+            if ver["artifact_id"] == serde_json::json!(a1_id) {
+                ver["statement_hash"] = serde_json::json!("sha256:deadbeefconflict");
+                ver["formal_statement"] = serde_json::json!("DIFFERENT STATEMENT");
+            }
+        }
+        let conflict = resign(conflict);
+        let cimp = arb(&peer_b, serde_json::json!({"action": {"type":"import","bundle_json": serde_json::to_string(&conflict).unwrap()}})).await;
+        let quarantined = cimp["summary"]["quarantined"].as_array().unwrap();
+        assert!(quarantined.iter().any(|q| q["artifact_id"] == serde_json::json!(a1_id) && q["reason"] == "version_conflict"),
+            "conflicting id quarantined: {:?}", cimp);
+        // B's a1 is unchanged.
+        let obs2 = va(&peer_b, serde_json::json!({"action": {"type":"observe","artifact_id": a1_id}})).await;
+        assert_eq!(obs2["versions"][0]["statement_hash"], serde_json::json!(a1_stmt), "conflict did not overwrite B");
+
+        // Foreign toolchain -> environment_unavailable quarantine (can't replay here).
+        let mut foreign = wrapper.clone();
+        foreign["content"]["lean_toolchain"] = serde_json::json!("leanprover/lean4:v9.99.0-nonexistent");
+        let foreign = resign(foreign);
+        let client_c = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer_c = client_c.peer();
+        let fimp = arb(&peer_c, serde_json::json!({"action": {"type":"import","bundle_json": serde_json::to_string(&foreign).unwrap()}})).await;
+        assert_eq!(fimp["summary"]["environment_unavailable"], true, "{:?}", fimp);
+        assert!(fimp["summary"]["inserted"].as_array().unwrap().is_empty(), "nothing accepted under a foreign toolchain");
+        assert_eq!(fimp["summary"]["quarantined"].as_array().unwrap().len(), 2);
+
+        // dry_run into a fresh DB writes no artifact rows, but records the ledger.
+        let client_d = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer_d = client_d.peer();
+        let dry = arb(&peer_d, serde_json::json!({"action": {"type":"import","bundle_json": bundle_json.clone(), "dry_run": true}})).await;
+        assert_eq!(dry["dry_run"], true);
+        assert_eq!(dry["summary"]["inserted"].as_array().unwrap().len(), 2, "dry_run reports what WOULD import");
+        let dry_obs = peer_d.call_tool(CallToolRequestParams::new("verified_artifact").with_arguments(
+            serde_json::json!({"action": {"type":"observe","artifact_id": a1_id}}).as_object().unwrap().clone())).await;
+        assert!(dry_obs.is_err(), "dry_run wrote no artifact rows");
+        // observe_import reads the recorded import.
+        let import_id = dry["import_id"].as_str().unwrap().to_string();
+        let obs_imp = arb(&peer_d, serde_json::json!({"action": {"type":"observe_import","import_id": import_id}})).await;
+        assert_eq!(obs_imp["dry_run"], true);
+        assert_eq!(obs_imp["summary"]["inserted"].as_array().unwrap().len(), 2);
     }
 
     /// #240: a gateway that fails with an ordered diagnostic list — an
