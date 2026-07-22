@@ -2080,6 +2080,82 @@ pub enum MathSearchAction {
     },
 }
 
+/// Issue #248: proactive artifact retrieval. Runs an ADVISORY, budget-aware,
+/// reproducible retrieval pass at a formalization checkpoint — deriving the query
+/// from a problem/plan-item/episode scope (the agent never has to name a
+/// candidate), running the same deterministic search as `math_search`, ranking +
+/// capping the results, and persisting the whole packet so the trajectory (and
+/// MathCorpus) can distinguish used dependencies, retrieval candidates, and
+/// retrieved-but-unused artifacts. Never adds an import, alters a problem
+/// version, or marks anything proved; a high rank is never applicability.
+#[derive(JsonSchema, Deserialize)]
+pub struct ProactiveRetrievalArgs {
+    pub action: ProactiveRetrievalAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProactiveRetrievalAction {
+    /// Run a retrieval pass and persist a packet. Provide exactly one scope
+    /// (problem_version_id | plan_item_id | episode_id) or none (freeform, with
+    /// an explicit query_hint). The query is DERIVED from the scope's statement/
+    /// description plus any query_hint (e.g. diagnostic root-cause terms on an
+    /// after_repeated_failure pass) — candidates are never named by the caller.
+    Retrieve {
+        /// manual | plan_item_created | obligation_created | after_repeated_failure | before_give_up.
+        trigger_mode: String,
+        #[serde(default)]
+        problem_version_id: Option<String>,
+        #[serde(default)]
+        plan_item_id: Option<String>,
+        #[serde(default)]
+        episode_id: Option<String>,
+        /// Extra natural-language / diagnostic terms folded into the derived query
+        /// (e.g. the root-cause classification after repeated failure).
+        #[serde(default)]
+        query_hint: Option<String>,
+        /// Subset of ["mathlib","verified_artifacts","mathcorpus"]; default all.
+        #[serde(default)]
+        sources: Option<Vec<String>>,
+        /// When set, retrieval is disabled if this run envelope is a controlled
+        /// evaluation (evaluation/benchmark/private_audit mode) — the pass is still
+        /// recorded with zero candidates, never silently skipped.
+        #[serde(default)]
+        run_envelope_id: Option<String>,
+        /// Per-source result cap before ranking (default 20, clamped 1..=200).
+        #[serde(default)]
+        limit: Option<i64>,
+        /// Deterministic context-byte cap on the returned candidate packet
+        /// (default 8192). Dropped candidates are reported, never hidden.
+        #[serde(default)]
+        budget_cap_bytes: Option<i64>,
+        /// Max candidates kept after ranking (default 10, clamped 1..=100).
+        #[serde(default)]
+        max_candidates: Option<i64>,
+    },
+    /// Record which packet candidates the agent inspected/selected. Advisory only:
+    /// recomputes retrieved-but-unused = candidates − selected, and NEVER makes a
+    /// selection a verifier-backed dependency (those are verified_artifact_edges).
+    RecordSelection {
+        packet_id: String,
+        #[serde(default)]
+        inspected: Vec<String>,
+        #[serde(default)]
+        selected: Vec<String>,
+    },
+    /// Read one persisted retrieval packet in full.
+    Get { packet_id: String },
+    /// List retrieval packets for a scope (or all), most recent first.
+    List {
+        #[serde(default)]
+        scope_kind: Option<String>,
+        #[serde(default)]
+        scope_id: Option<String>,
+        #[serde(default)]
+        limit: Option<i64>,
+    },
+}
+
 /// Issue #243: the Verified Artifact Registry (VAR) foundation tool. Promotes a
 /// KERNEL-BACKED verified lemma into a curated, immutable, versioned research
 /// artifact with a lifecycle. The registry curates already-established kernel
@@ -5451,6 +5527,258 @@ fn verified_artifact_upstream_json(conn: &Connection, artifact_id: &str) -> Resu
         "artifact_id": artifact_id,
         "upstream_readiness": base,
         "trust_boundary": "Upstream readiness is REVIEW METADATA, not proof status — status/checklist say nothing about whether the theorem is proved (that is the kernel's verdict, immutable).",
+    }))
+}
+
+/// Deterministic version tag for the search+ranking behavior. Bumped whenever the
+/// candidate set or ranking changes so a retrieval packet (#248) and the
+/// retrieval benchmark (#251) can pin exactly which ranker produced a result.
+const MATH_SEARCH_VERSION: &str = "math_search/1.0";
+/// Version of the deterministic proactive-retrieval derivation + capping (#248).
+const PROACTIVE_RETRIEVAL_VERSION: &str = "proactive_retrieval/1.0";
+
+/// Refactored core of `math_search`'s Search action (#244), callable both from
+/// the tool handler and from proactive retrieval (#248). Pure over the passed
+/// connection (no lock taken here) and the pinned Lean tree; writes nothing.
+/// Returns the flat `results` array (each carrying its `source` + trust label)
+/// and the per-source `sources_status` map (index availability/version).
+fn math_search_core(
+    conn: &Connection,
+    lean_project_path: &std::path::Path,
+    query: &str,
+    sources: Option<&Vec<String>>,
+    artifact_kind: Option<&Vec<String>>,
+    trust: Option<&Vec<String>>,
+    problem_version_id: Option<&str>,
+    limit: i64,
+) -> Result<(Vec<serde_json::Value>, serde_json::Map<String, serde_json::Value>), McpError> {
+    let want = |s: &str| sources.map(|v| v.iter().any(|x| x == s)).unwrap_or(true);
+    let like = format!("%{}%", query.to_lowercase());
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut sources_status = serde_json::Map::new();
+
+    // --- Verified Artifact Registry (#243) ---
+    if want("verified_artifacts") {
+        let problem_env: Option<String> = match problem_version_id {
+            Some(pv) => conn.query_row("SELECT environment_hash FROM problem_versions WHERE id = ?1", [pv], |r| r.get(0)).optional().map_err(rs)?,
+            None => None,
+        };
+        let kind_ok = |k: &str| artifact_kind.map(|v| v.iter().any(|x| x == k)).unwrap_or(true);
+        let trust_ok = |m: &str| trust.map(|v| v.iter().any(|x| x == m)).unwrap_or(true);
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.artifact_kind, a.canonical_name, a.informal_summary, a.current_version, \
+             a.maturity_status, a.review_status, a.superseded_by, \
+             v.formal_statement, v.statement_hash, v.environment_hash, v.dependency_ids_json \
+             FROM verified_artifacts a \
+             JOIN verified_artifact_versions v ON v.artifact_id = a.id AND v.artifact_version = a.current_version \
+             WHERE LOWER(a.canonical_name) LIKE ?1 \
+             ORDER BY a.updated_at DESC, a.id ASC LIMIT ?2",
+        ).map_err(rs)?;
+        let rows = stmt.query_map((&like, limit), |r| {
+            Ok((
+                r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?,
+                r.get::<_, String>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?,
+                r.get::<_, String>(9)?, r.get::<_, String>(10)?, r.get::<_, String>(11)?,
+            ))
+        }).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        drop(stmt);
+        let mut count = 0usize;
+        for (id, kind, name, summary, ver, maturity, review, superseded_by, formal, stmt_hash, env, deps_json) in rows {
+            if !kind_ok(&kind) || !trust_ok(&maturity) { continue; }
+            let dep_count = serde_json::from_str::<Vec<serde_json::Value>>(&deps_json).map(|v| v.len()).unwrap_or(0);
+            let name_exact = name.to_lowercase() == query.to_lowercase();
+            results.push(serde_json::json!({
+                "result_id": id,
+                "source": "verified_artifacts",
+                "full_name": name,
+                "formal_statement": formal,
+                "informal_summary": summary,
+                "reusable_module": serde_json::Value::Null,
+                "trust_status": maturity,
+                "review_status": review,
+                "environment_hash": env,
+                "environment_compatible": problem_env.as_ref().map(|pe| *pe == env),
+                "artifact_kind": kind,
+                "artifact_version": ver,
+                "statement_hash": stmt_hash,
+                "dependency_count": dep_count,
+                "mathcorpus_packet_id": serde_json::Value::Null,
+                "superseded_by": superseded_by,
+                "ranking": {"name_exact_match": name_exact, "explanation": "canonical-name substring match; exact name and recency break ties"},
+            }));
+            count += 1;
+        }
+        sources_status.insert("verified_artifacts".into(), serde_json::json!({"available": true, "count": count}));
+    }
+
+    // --- Pinned Mathlib (filesystem scan; gracefully unavailable) ---
+    if want("mathlib") {
+        match mathlib_source_dir(lean_project_path) {
+            Some(dir) => {
+                let bare = query.rsplit('.').next().filter(|s| !s.is_empty()).unwrap_or(query);
+                let hits = scan_mathlib_declarations(&dir, bare, limit as usize);
+                let n = hits.len();
+                for h in hits {
+                    results.push(serde_json::json!({
+                        "result_id": format!("mathlib:{}", h.declaration_name),
+                        "source": "mathlib",
+                        "full_name": h.declaration_name,
+                        "import_module": h.import_module,
+                        "trust_status": "pinned_mathlib",
+                        "signature_snippet": h.signature_snippet,
+                        "file_relative_path": h.file_relative_path,
+                        "ranking": {"keyword": h.keyword, "confidence": h.confidence},
+                    }));
+                }
+                sources_status.insert("mathlib".into(), serde_json::json!({"available": true, "count": n}));
+            }
+            None => {
+                sources_status.insert("mathlib".into(), serde_json::json!({
+                    "available": false,
+                    "note": "pinned Mathlib source tree not resolvable in this environment; mathlib results unavailable"
+                }));
+            }
+        }
+    }
+
+    // --- MathCorpus (export-only interchange; not locally indexed) ---
+    if want("mathcorpus") {
+        sources_status.insert("mathcorpus".into(), serde_json::json!({
+            "available": false,
+            "note": "MathCorpus packets are not indexed in this environment. The MCIP interchange (#230/#263) is export-only (mathcorpus_export pushes evidence TO MathCorpus); a local MathCorpus index would be needed to search it here."
+        }));
+    }
+
+    Ok((results, sources_status))
+}
+
+/// Deterministically derive concept tokens from a formal/informal statement for
+/// proactive retrieval (#248). Splits on every non-alphanumeric character — so a
+/// snake_case / dotted identifier (`Nat.reciprocity_lemma`) yields its concept
+/// sub-words (`reciprocity`, `lemma`) that substring-match artifact names, while
+/// camelCase compounds (`padicValNat`) stay whole. Keeps tokens of length >= 3
+/// starting with a letter, drops Lean/keyword noise, lowercases for stable
+/// comparison, and preserves first-seen order (no randomness — the same
+/// statement always yields the same ordered token list).
+fn extract_symbol_tokens(text: &str) -> Vec<String> {
+    const NOISE: &[&str] = &[
+        "theorem", "lemma", "def", "fun", "forall", "exists", "and", "for", "the", "let", "have",
+        "show", "from", "with", "then", "else", "not", "iff", "true", "false", "type", "prop",
+        "sorry", "begin", "end", "intro", "apply", "exact", "simp", "ring", "nat", "int", "real",
+        "all", "any", "some", "none", "this", "that", "there", "where", "such", "which", "into",
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for raw in text.split(|c: char| !char::is_alphanumeric(c)) {
+        let tok = raw.trim().to_lowercase();
+        if tok.len() < 3 { continue; }
+        if !tok.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) { continue; }
+        if NOISE.contains(&tok.as_str()) { continue; }
+        if seen.insert(tok.clone()) {
+            out.push(tok);
+        }
+    }
+    out
+}
+
+/// Rank a flat candidate list produced by one or more `math_search_core` passes
+/// and cap it deterministically by a context-byte budget (#248). Ranking is a
+/// pure function of already-recorded fields — never model output — so it replays
+/// identically: exact name match first, then environment-compatible registry
+/// results, then query-term overlap count, then source priority
+/// (verified_artifacts > mathlib), then a stable id tiebreak. Returns the capped
+/// candidate list plus a budget report (never silently truncates: the dropped
+/// count is reported).
+fn rank_and_cap_candidates(
+    mut candidates: Vec<serde_json::Value>,
+    query_tokens: &[String],
+    cap_bytes: usize,
+    max_count: usize,
+) -> (Vec<serde_json::Value>, serde_json::Value) {
+    let overlap = |c: &serde_json::Value| -> usize {
+        let hay = format!(
+            "{} {} {}",
+            c.get("full_name").and_then(|v| v.as_str()).unwrap_or(""),
+            c.get("informal_summary").and_then(|v| v.as_str()).unwrap_or(""),
+            c.get("formal_statement").and_then(|v| v.as_str()).unwrap_or(""),
+        ).to_lowercase();
+        query_tokens.iter().filter(|t| hay.contains(t.as_str())).count()
+    };
+    let score = |c: &serde_json::Value| -> (u8, u8, i64, u8, String) {
+        let exact = c.get("ranking").and_then(|r| r.get("name_exact_match")).and_then(|v| v.as_bool()).unwrap_or(false);
+        let compat = c.get("environment_compatible").and_then(|v| v.as_bool()).unwrap_or(false);
+        let source_pri = match c.get("source").and_then(|v| v.as_str()) {
+            Some("verified_artifacts") => 0u8,
+            Some("mathlib") => 1,
+            _ => 2,
+        };
+        let id = c.get("result_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        // Lower tuple sorts first: exact-match, then compatible, then more overlap
+        // (negated), then source priority, then id.
+        (u8::from(!exact), u8::from(!compat), -(overlap(c) as i64), source_pri, id)
+    };
+    candidates.sort_by(|a, b| score(a).cmp(&score(b)));
+
+    let total_before_cap = candidates.len();
+    let mut kept: Vec<serde_json::Value> = Vec::new();
+    let mut used_bytes = 0usize;
+    for c in candidates.into_iter() {
+        if kept.len() >= max_count { break; }
+        let sz = serde_json::to_string(&c).map(|s| s.len()).unwrap_or(0);
+        if !kept.is_empty() && used_bytes + sz > cap_bytes { break; }
+        used_bytes += sz;
+        kept.push(c);
+    }
+    let budget = serde_json::json!({
+        "cap_bytes": cap_bytes,
+        "max_count": max_count,
+        "used_bytes": used_bytes,
+        "kept_count": kept.len(),
+        "total_before_cap": total_before_cap,
+        "dropped_count": total_before_cap.saturating_sub(kept.len()),
+        "note": "Deterministic cap. Ranking is a pure function of recorded fields (name match, env compatibility, query-term overlap, source priority, id) — never model output — so it replays identically. Dropped candidates are reported, never silently hidden.",
+    });
+    (kept, budget)
+}
+
+/// Read one retrieval packet (#248) back as its full advisory JSON record.
+fn retrieval_packet_json(conn: &Connection, packet_id: &str) -> Result<serde_json::Value, McpError> {
+    let row = conn.query_row(
+        "SELECT id, created_at, trigger_mode, scope_kind, scope_id, run_envelope_id, enabled, \
+         query_features_json, search_version, sources_status_json, candidates_json, selections_json, \
+         unused_json, contamination_json, budget_json FROM retrieval_packets WHERE id = ?1",
+        [packet_id],
+        |r| Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?,
+            r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, i64>(6)?,
+            r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, String>(9)?, r.get::<_, String>(10)?,
+            r.get::<_, String>(11)?, r.get::<_, String>(12)?, r.get::<_, String>(13)?, r.get::<_, String>(14)?,
+        )),
+    ).optional().map_err(rs)?;
+    let Some((id, created_at, trigger_mode, scope_kind, scope_id, run_envelope_id, enabled,
+        query_features, search_version, sources_status, candidates, selections, unused, contamination, budget)) = row
+    else {
+        return Err(mcp_invalid_params(format!("unknown retrieval packet_id: {}", packet_id)));
+    };
+    let parse = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap_or(serde_json::Value::Null);
+    Ok(serde_json::json!({
+        "packet_id": id,
+        "created_at": created_at,
+        "trigger_mode": trigger_mode,
+        "scope_kind": scope_kind,
+        "scope_id": scope_id,
+        "run_envelope_id": run_envelope_id,
+        "enabled": enabled != 0,
+        "query_features": parse(&query_features),
+        "search_version": search_version,
+        "sources_status": parse(&sources_status),
+        "candidates": parse(&candidates),
+        "selections": parse(&selections),
+        "retrieved_but_unused": parse(&unused),
+        "contamination_exposure": parse(&contamination),
+        "budget": parse(&budget),
+        "trust_boundary": "Advisory retrieval record only (#248). Candidates are ranked suggestions, never applicability or proof authority; a selection here is not a verifier-backed dependency (those are verified_artifact_edges with evidence_kind='verifier'). Retrieved-but-unused candidates stay explicitly distinguished from real dependencies.",
     }))
 }
 
@@ -13225,106 +13553,14 @@ impl ChatDbMcp {
                     return Err(mcp_invalid_params("query must be non-empty".to_string()));
                 }
                 let limit = limit.unwrap_or(20).clamp(1, 200);
-                let want = |s: &str| sources.as_ref().map(|v| v.iter().any(|x| x == s)).unwrap_or(true);
-                let like = format!("%{}%", query.to_lowercase());
-
-                let mut results: Vec<serde_json::Value> = Vec::new();
-                let mut sources_status = serde_json::Map::new();
-
-                // --- Verified Artifact Registry (#243) ---
-                if want("verified_artifacts") {
+                let (results, sources_status) = {
                     let conn = self.conn.lock().await;
-                    // Problem env, to report compatibility per result.
-                    let problem_env: Option<String> = match &problem_version_id {
-                        Some(pv) => conn.query_row("SELECT environment_hash FROM problem_versions WHERE id = ?1", [pv], |r| r.get(0)).optional().map_err(rs)?,
-                        None => None,
-                    };
-                    let kind_ok = |k: &str| artifact_kind.as_ref().map(|v| v.iter().any(|x| x == k)).unwrap_or(true);
-                    let trust_ok = |m: &str| trust.as_ref().map(|v| v.iter().any(|x| x == m)).unwrap_or(true);
-                    let mut stmt = conn.prepare(
-                        "SELECT a.id, a.artifact_kind, a.canonical_name, a.informal_summary, a.current_version, \
-                         a.maturity_status, a.review_status, a.superseded_by, \
-                         v.formal_statement, v.statement_hash, v.environment_hash, v.dependency_ids_json \
-                         FROM verified_artifacts a \
-                         JOIN verified_artifact_versions v ON v.artifact_id = a.id AND v.artifact_version = a.current_version \
-                         WHERE LOWER(a.canonical_name) LIKE ?1 \
-                         ORDER BY a.updated_at DESC, a.id ASC LIMIT ?2",
-                    ).map_err(rs)?;
-                    let rows = stmt.query_map((&like, limit), |r| {
-                        Ok((
-                            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
-                            r.get::<_, Option<String>>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?,
-                            r.get::<_, String>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?,
-                            r.get::<_, String>(9)?, r.get::<_, String>(10)?, r.get::<_, String>(11)?,
-                        ))
-                    }).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
-                    drop(stmt);
-                    let mut count = 0usize;
-                    for (id, kind, name, summary, ver, maturity, review, superseded_by, formal, stmt_hash, env, deps_json) in rows {
-                        if !kind_ok(&kind) || !trust_ok(&maturity) { continue; }
-                        let dep_count = serde_json::from_str::<Vec<serde_json::Value>>(&deps_json).map(|v| v.len()).unwrap_or(0);
-                        let name_exact = name.to_lowercase() == query.to_lowercase();
-                        results.push(serde_json::json!({
-                            "result_id": id,
-                            "source": "verified_artifacts",
-                            "full_name": name,
-                            "formal_statement": formal,
-                            "informal_summary": summary,
-                            "reusable_module": serde_json::Value::Null,
-                            "trust_status": maturity,
-                            "review_status": review,
-                            "environment_hash": env,
-                            "environment_compatible": problem_env.as_ref().map(|pe| *pe == env),
-                            "artifact_kind": kind,
-                            "artifact_version": ver,
-                            "statement_hash": stmt_hash,
-                            "dependency_count": dep_count,
-                            "mathcorpus_packet_id": serde_json::Value::Null,
-                            "superseded_by": superseded_by,
-                            "ranking": {"name_exact_match": name_exact, "explanation": "canonical-name substring match; exact name and recency break ties"},
-                        }));
-                        count += 1;
-                    }
-                    sources_status.insert("verified_artifacts".into(), serde_json::json!({"available": true, "count": count}));
-                }
-
-                // --- Pinned Mathlib (filesystem scan; gracefully unavailable) ---
-                if want("mathlib") {
-                    match mathlib_source_dir(&self.lean_project_path) {
-                        Some(dir) => {
-                            let bare = query.rsplit('.').next().filter(|s| !s.is_empty()).unwrap_or(&query);
-                            let hits = scan_mathlib_declarations(&dir, bare, limit as usize);
-                            let n = hits.len();
-                            for h in hits {
-                                results.push(serde_json::json!({
-                                    "result_id": format!("mathlib:{}", h.declaration_name),
-                                    "source": "mathlib",
-                                    "full_name": h.declaration_name,
-                                    "import_module": h.import_module,
-                                    "trust_status": "pinned_mathlib",
-                                    "signature_snippet": h.signature_snippet,
-                                    "file_relative_path": h.file_relative_path,
-                                    "ranking": {"keyword": h.keyword, "confidence": h.confidence},
-                                }));
-                            }
-                            sources_status.insert("mathlib".into(), serde_json::json!({"available": true, "count": n}));
-                        }
-                        None => {
-                            sources_status.insert("mathlib".into(), serde_json::json!({
-                                "available": false,
-                                "note": "pinned Mathlib source tree not resolvable in this environment; mathlib results unavailable"
-                            }));
-                        }
-                    }
-                }
-
-                // --- MathCorpus (export-only interchange; not locally indexed) ---
-                if want("mathcorpus") {
-                    sources_status.insert("mathcorpus".into(), serde_json::json!({
-                        "available": false,
-                        "note": "MathCorpus packets are not indexed in this environment. The MCIP interchange (#230/#263) is export-only (mathcorpus_export pushes evidence TO MathCorpus); a local MathCorpus index would be needed to search it here."
-                    }));
-                }
+                    math_search_core(
+                        &conn, &self.lean_project_path, &query,
+                        sources.as_ref(), artifact_kind.as_ref(), trust.as_ref(),
+                        problem_version_id.as_deref(), limit,
+                    )?
+                };
 
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
                     "query": query,
@@ -13415,6 +13651,311 @@ impl ChatDbMcp {
                     "reusable_module": serde_json::Value::Null,
                     "required_imports": [],
                     "advisory": "Materializing promoted artifacts into a shared importable Lean module (and the concrete import list) is tracked in #247. This action reports compatibility only and NEVER mutates a problem's import manifest.",
+                })).unwrap())]))
+            }
+        }
+    }
+
+    /// Issue #248: proactive artifact retrieval. Advisory, budget-aware,
+    /// reproducible retrieval passes at formalization checkpoints, with every
+    /// pass persisted (query features, index versions, ranked candidates, and —
+    /// after the fact — selections) so retrieved-but-unused stays distinguishable
+    /// from real verifier-backed dependencies. Never mutates a problem/import
+    /// manifest or a proof status; a controlled-evaluation run envelope can
+    /// disable it, and benchmark-linked scopes record contamination exposure.
+    async fn do_proactive_retrieval(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ProactiveRetrievalArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        match args.action {
+            ProactiveRetrievalAction::Retrieve {
+                trigger_mode, problem_version_id, plan_item_id, episode_id, query_hint,
+                sources, run_envelope_id, limit, budget_cap_bytes, max_candidates,
+            } => {
+                validate_one_of("trigger_mode", &trigger_mode,
+                    &["manual", "plan_item_created", "obligation_created", "after_repeated_failure", "before_give_up"])?;
+                // Exactly one scope (or none = freeform + query_hint).
+                let scope_count = [problem_version_id.is_some(), plan_item_id.is_some(), episode_id.is_some()]
+                    .iter().filter(|b| **b).count();
+                if scope_count > 1 {
+                    return Err(mcp_invalid_params("provide at most one of problem_version_id / plan_item_id / episode_id".to_string()));
+                }
+                if scope_count == 0 && query_hint.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+                    return Err(mcp_invalid_params("a freeform retrieval (no scope) requires a non-empty query_hint".to_string()));
+                }
+                let limit = limit.unwrap_or(20).clamp(1, 200);
+                let cap_bytes = budget_cap_bytes.unwrap_or(8192).clamp(256, 262_144) as usize;
+                let max_count = max_candidates.unwrap_or(10).clamp(1, 100) as usize;
+
+                let conn = self.conn.lock().await;
+
+                // Resolve the scope down to (scope_kind, scope_id, effective
+                // problem_version_id for env-compat, and the source text we derive
+                // the query from).
+                let (scope_kind, scope_id, effective_pv, mut source_text): (&str, Option<String>, Option<String>, String) =
+                    if let Some(pv) = problem_version_id.clone() {
+                        let row: Option<(String, String, String)> = conn.query_row(
+                            "SELECT root_formal_statement, source_problem_text, source_metadata_json FROM problem_versions WHERE id = ?1",
+                            [&pv], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                        ).optional().map_err(rs)?;
+                        let Some((formal, text, meta)) = row else {
+                            return Err(mcp_invalid_params(format!("unknown problem_version_id: {}", pv)));
+                        };
+                        ("problem", Some(pv.clone()), Some(pv), format!("{} {} {}", formal, text, meta))
+                    } else if let Some(item) = plan_item_id.clone() {
+                        let row: Option<(String, String)> = conn.query_row(
+                            "SELECT i.description, p.problem_version_id FROM formalization_plan_items i \
+                             JOIN formalization_plans p ON p.id = i.plan_id WHERE i.id = ?1",
+                            [&item], |r| Ok((r.get(0)?, r.get(1)?)),
+                        ).optional().map_err(rs)?;
+                        let Some((desc, pv)) = row else {
+                            return Err(mcp_invalid_params(format!("unknown plan_item_id: {}", item)));
+                        };
+                        // Fold in the plan's problem statement so a plan item gets
+                        // suggestions grounded in the actual goal, not just its blurb.
+                        let formal: Option<String> = conn.query_row(
+                            "SELECT root_formal_statement FROM problem_versions WHERE id = ?1", [&pv], |r| r.get(0),
+                        ).optional().map_err(rs)?;
+                        ("plan_item", Some(item), Some(pv), format!("{} {}", desc, formal.unwrap_or_default()))
+                    } else if let Some(ep) = episode_id.clone() {
+                        let row: Option<String> = conn.query_row(
+                            "SELECT problem_version_id FROM episodes WHERE id = ?1", [&ep], |r| r.get(0),
+                        ).optional().map_err(rs)?;
+                        let Some(pv) = row else {
+                            return Err(mcp_invalid_params(format!("unknown episode_id: {}", ep)));
+                        };
+                        let formal: (String, String) = conn.query_row(
+                            "SELECT root_formal_statement, source_problem_text FROM problem_versions WHERE id = ?1",
+                            [&pv], |r| Ok((r.get(0)?, r.get(1)?)),
+                        ).map_err(rs)?;
+                        ("episode", Some(ep), Some(pv), format!("{} {}", formal.0, formal.1))
+                    } else {
+                        ("freeform", None, None, String::new())
+                    };
+                if let Some(hint) = &query_hint {
+                    source_text.push(' ');
+                    source_text.push_str(hint);
+                }
+
+                // Derive the query token bundle deterministically.
+                let tokens = extract_symbol_tokens(&source_text);
+
+                // Controlled-evaluation gate: an evaluation/benchmark/private_audit
+                // run envelope disables proactive retrieval. The pass is still
+                // recorded (enabled=0, zero candidates) so nothing is hidden.
+                let (enabled, run_mode): (bool, Option<String>) = match &run_envelope_id {
+                    Some(env) => {
+                        let mode: Option<String> = conn.query_row(
+                            "SELECT mode FROM run_envelopes WHERE id = ?1", [env], |r| r.get(0),
+                        ).optional().map_err(rs)?;
+                        let Some(mode) = mode else {
+                            return Err(mcp_invalid_params(format!("unknown run_envelope_id: {}", env)));
+                        };
+                        let disabled = matches!(mode.as_str(), "evaluation" | "benchmark" | "private_audit");
+                        (!disabled, Some(mode))
+                    }
+                    None => (true, None),
+                };
+
+                // Run the search per token (deduplicated by result_id) when enabled.
+                let mut raw: Vec<serde_json::Value> = Vec::new();
+                let mut sources_status = serde_json::Map::new();
+                if enabled {
+                    let mut seen_ids = std::collections::BTreeSet::new();
+                    // Bound the number of derived sub-queries so a huge statement
+                    // can't fan out unboundedly; deterministic prefix.
+                    for tok in tokens.iter().take(12) {
+                        let (results, ss) = math_search_core(
+                            &conn, &self.lean_project_path, tok,
+                            sources.as_ref(), None, None, effective_pv.as_deref(), limit,
+                        )?;
+                        // Last non-empty per source wins the status slot; availability is stable.
+                        for (k, v) in ss { sources_status.insert(k, v); }
+                        for mut r in results {
+                            let id = r.get("result_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            if id.is_empty() || !seen_ids.insert(id.clone()) { continue; }
+                            if let Some(obj) = r.as_object_mut() {
+                                obj.insert("matched_query_token".into(), serde_json::json!(tok));
+                            }
+                            raw.push(r);
+                        }
+                    }
+                    if tokens.is_empty() {
+                        // No usable tokens (e.g. a freeform hint of only stopwords):
+                        // fall back to the raw hint string as a single query.
+                        if let Some(hint) = &query_hint {
+                            let (results, ss) = math_search_core(
+                                &conn, &self.lean_project_path, hint.trim(),
+                                sources.as_ref(), None, None, effective_pv.as_deref(), limit,
+                            )?;
+                            for (k, v) in ss { sources_status.insert(k, v); }
+                            for r in results {
+                                let id = r.get("result_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                if id.is_empty() || !seen_ids.insert(id.clone()) { continue; }
+                                raw.push(r);
+                            }
+                        }
+                    }
+                }
+
+                let (candidates, budget) = if enabled {
+                    rank_and_cap_candidates(raw, &tokens, cap_bytes, max_count)
+                } else {
+                    (Vec::new(), serde_json::json!({
+                        "cap_bytes": cap_bytes, "max_count": max_count, "used_bytes": 0,
+                        "kept_count": 0, "total_before_cap": 0, "dropped_count": 0,
+                        "note": "Retrieval disabled by the controlled-evaluation run envelope; no search was run.",
+                    }))
+                };
+
+                // Contamination exposure: is the scope problem benchmark-linked?
+                let contamination = match &effective_pv {
+                    Some(pv) => {
+                        let fidelity: Option<String> = conn.query_row(
+                            "SELECT fidelity_status FROM problem_versions WHERE id = ?1", [pv], |r| r.get(0),
+                        ).optional().map_err(rs)?;
+                        let suite: Option<String> = conn.query_row(
+                            "SELECT s.name FROM benchmark_results br \
+                             JOIN benchmark_problems bp ON bp.id = br.benchmark_problem_id \
+                             JOIN benchmark_suites s ON s.id = bp.suite_id \
+                             WHERE br.problem_version_id = ?1 LIMIT 1", [pv], |r| r.get(0),
+                        ).optional().map_err(rs).unwrap_or(None);
+                        let benchmark_linked = suite.is_some() || fidelity.as_deref() == Some("benchmark_aligned");
+                        serde_json::json!({
+                            "benchmark_linked": benchmark_linked,
+                            "benchmark_suite": suite,
+                            "fidelity_status": fidelity,
+                            "note": if benchmark_linked {
+                                "Scope problem is benchmark-linked: retrieval could surface the target theorem. This exposure is recorded so it can never be laundered out of the contamination record."
+                            } else {
+                                "Scope problem is not benchmark-linked."
+                            },
+                        })
+                    }
+                    None => serde_json::json!({"benchmark_linked": false, "benchmark_suite": null, "fidelity_status": null, "note": "Freeform retrieval; no scope problem to check."}),
+                };
+
+                let packet_id = Uuid::new_v4().to_string();
+                let created_at = Utc::now().to_rfc3339();
+                let query_features = serde_json::json!({
+                    "derived_tokens": tokens,
+                    "query_hint": query_hint,
+                    "sources_requested": sources,
+                    "derivation": "deterministic symbol/concept tokenization of the scope statement + optional hint; candidates are never named by the caller",
+                });
+                let selections = serde_json::json!({"inspected": [], "selected": []});
+                let unused = serde_json::json!({
+                    "candidate_ids": candidates.iter().filter_map(|c| c.get("result_id").and_then(|v| v.as_str())).collect::<Vec<_>>(),
+                    "note": "No selection recorded yet: every candidate is retrieved-but-unused until proactive_retrieval record_selection marks otherwise. None of these is a verifier-backed dependency.",
+                });
+
+                conn.execute(
+                    "INSERT INTO retrieval_packets (id, created_at, trigger_mode, scope_kind, scope_id, \
+                     run_envelope_id, enabled, query_features_json, search_version, sources_status_json, \
+                     candidates_json, selections_json, unused_json, contamination_json, budget_json) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                    rusqlite::params![
+                        &packet_id, &created_at, &trigger_mode, scope_kind, &scope_id,
+                        &run_envelope_id, i64::from(enabled),
+                        serde_json::to_string(&query_features).unwrap(),
+                        PROACTIVE_RETRIEVAL_VERSION,
+                        serde_json::to_string(&serde_json::json!({"sources": sources_status, "search_version": MATH_SEARCH_VERSION})).unwrap(),
+                        serde_json::to_string(&candidates).unwrap(),
+                        serde_json::to_string(&selections).unwrap(),
+                        serde_json::to_string(&unused).unwrap(),
+                        serde_json::to_string(&contamination).unwrap(),
+                        serde_json::to_string(&budget).unwrap(),
+                    ],
+                ).map_err(rs)?;
+
+                let mut out = retrieval_packet_json(&conn, &packet_id)?;
+                out["run_envelope_mode"] = serde_json::json!(run_mode);
+                out["advisory"] = serde_json::json!("Ranked suggestions only. Inspect/import is the agent's explicit choice; nothing here adds an import or marks an obligation proved. Record what you actually use with record_selection so retrieved-but-unused stays distinguishable from real dependencies.");
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&out).unwrap())]))
+            }
+
+            ProactiveRetrievalAction::RecordSelection { packet_id, inspected, selected } => {
+                let conn = self.conn.lock().await;
+                let candidates_json: Option<String> = conn.query_row(
+                    "SELECT candidates_json FROM retrieval_packets WHERE id = ?1", [&packet_id], |r| r.get(0),
+                ).optional().map_err(rs)?;
+                let Some(candidates_json) = candidates_json else {
+                    return Err(mcp_invalid_params(format!("unknown retrieval packet_id: {}", packet_id)));
+                };
+                let candidate_ids: Vec<String> = serde_json::from_str::<Vec<serde_json::Value>>(&candidates_json)
+                    .unwrap_or_default().iter()
+                    .filter_map(|c| c.get("result_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    .collect();
+                // Selections must reference actual candidates in THIS packet — a
+                // selection outside the recorded candidate set is a caller error,
+                // not silently accepted.
+                let unknown: Vec<&String> = selected.iter().chain(inspected.iter())
+                    .filter(|id| !candidate_ids.contains(id)).collect();
+                if !unknown.is_empty() {
+                    return Err(mcp_invalid_params(format!(
+                        "these ids are not candidates in packet {}: {:?}", packet_id, unknown)));
+                }
+                let selected_set: std::collections::BTreeSet<&String> = selected.iter().collect();
+                let still_unused: Vec<&String> = candidate_ids.iter().filter(|id| !selected_set.contains(id)).collect();
+                let selections = serde_json::json!({"inspected": inspected, "selected": selected});
+                let unused = serde_json::json!({
+                    "candidate_ids": still_unused,
+                    "note": "Retrieved-but-unused = candidates − selected. These are NOT verifier-backed dependencies; real formal use is a verified_artifact_edges 'actually_used_in_verified_proof' (evidence_kind='verifier') edge, recorded separately.",
+                });
+                conn.execute(
+                    "UPDATE retrieval_packets SET selections_json = ?1, unused_json = ?2 WHERE id = ?3",
+                    rusqlite::params![
+                        serde_json::to_string(&selections).unwrap(),
+                        serde_json::to_string(&unused).unwrap(),
+                        &packet_id,
+                    ],
+                ).map_err(rs)?;
+                let out = retrieval_packet_json(&conn, &packet_id)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&out).unwrap())]))
+            }
+
+            ProactiveRetrievalAction::Get { packet_id } => {
+                let conn = self.conn.lock().await;
+                let out = retrieval_packet_json(&conn, &packet_id)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&out).unwrap())]))
+            }
+
+            ProactiveRetrievalAction::List { scope_kind, scope_id, limit } => {
+                let limit = limit.unwrap_or(50).clamp(1, 500);
+                let conn = self.conn.lock().await;
+                let mut sql = String::from(
+                    "SELECT id, created_at, trigger_mode, scope_kind, scope_id, enabled FROM retrieval_packets");
+                let mut clauses: Vec<String> = Vec::new();
+                if scope_kind.is_some() { clauses.push("scope_kind = ?1".into()); }
+                if scope_id.is_some() {
+                    clauses.push(format!("scope_id = ?{}", if scope_kind.is_some() { 2 } else { 1 }));
+                }
+                if !clauses.is_empty() {
+                    sql.push_str(" WHERE ");
+                    sql.push_str(&clauses.join(" AND "));
+                }
+                sql.push_str(" ORDER BY created_at DESC, id DESC LIMIT ");
+                sql.push_str(&limit.to_string());
+                let mut stmt = conn.prepare(&sql).map_err(rs)?;
+                let map_row = |r: &rusqlite::Row| -> rusqlite::Result<serde_json::Value> {
+                    Ok(serde_json::json!({
+                        "packet_id": r.get::<_, String>(0)?,
+                        "created_at": r.get::<_, String>(1)?,
+                        "trigger_mode": r.get::<_, String>(2)?,
+                        "scope_kind": r.get::<_, String>(3)?,
+                        "scope_id": r.get::<_, Option<String>>(4)?,
+                        "enabled": r.get::<_, i64>(5)? != 0,
+                    }))
+                };
+                let rows: Vec<serde_json::Value> = match (&scope_kind, &scope_id) {
+                    (Some(k), Some(i)) => stmt.query_map(rusqlite::params![k, i], map_row).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?,
+                    (Some(k), None) => stmt.query_map([k], map_row).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?,
+                    (None, Some(i)) => stmt.query_map([i], map_row).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?,
+                    (None, None) => stmt.query_map([], map_row).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?,
+                };
+                drop(stmt);
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "packets": rows,
+                    "note": "Advisory retrieval packet index (#248). Read one with proactive_retrieval get.",
                 })).unwrap())]))
             }
         }
@@ -17031,6 +17572,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ResearchDossierArgs>("research_dossier", "Issue #185: ONE tool for the entire Level 4 research-dossier family (issues #9/#11/#13) — research dossiers, nodes, citations, assumptions, and verification layers are explicit trust-boundary METADATA: they can reference Lean-backed artifacts, but they never create proof authority and never write to episode outcome, obligations, canonical lemmas, budgets, fidelity reviews, or benchmark result tables. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\"} (+ optional description, problem_version_id, episode_id — create a dossier optionally linked to a problem_version, an episode, both, or neither; metadata only: never changes proof, fidelity, budget, or benchmark state) | {\"type\":\"observe\",\"dossier_id\":\"..\"} (read-only: the dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets) | {\"type\":\"node_add\",\"dossier_id\":\"..\",\"node_type\":\"definition\"|\"proposition\"|\"lemma\"|\"theorem\"|\"remark\"|\"reference\"|\"open_gap\",\"title\":\"..\"} (+ optional section_id OR section_title, statement, content, trust_status, linked_obligation_id, linked_verified_lemma_id — add a typed research node. Trust status is explicit and never implies kernel verification unless linked to a real verified lemma: trust_status='proved_in_episode' REQUIRES linked_verified_lemma_id naming a verified lemma from THIS dossier's own episode/problem context — never borrowed kernel evidence from an unrelated episode; a node added here is metadata, never proof authority) | {\"type\":\"external_reference_add\",\"dossier_id\":\"..\",\"title\":\"..\"} (+ optional authors/venue/year/url/doi/raw_citation, and optionally ONE theorem claim via theorem_label/theorem_statement/claim_status/mathlib_name/proved_episode_id/proved_lemma_id/notes — records a citation as a TRACKED ASSUMPTION, never proof: external citations are self-reported metadata and never become kernel verification; claim_status='proved_in_episode' requires proved_lemma_id naming a verified lemma from THIS dossier's own context, with any proved_episode_id matching that lemma's actual episode, and 'imported_from_mathlib' requires mathlib_name) | {\"type\":\"assumption_boundary_add\",\"dossier_id\":\"..\",\"label\":\"..\",\"statement\":\"..\",\"assumption_status\":\"unformalized_assumption\"|\"rejected_unsafe_assumption\"} (+ optional node_id, rationale — add an unformalized or rejected unsafe assumption boundary. Assumptions are visible metadata, not proof authority) | {\"type\":\"citation_review_add\",\"dossier_id\":\"..\",\"external_theorem_claim_id\":\"..\",\"reviewer_id\":\"..\",\"decision\":\"human_reviewed\"|\"rejected\"|\"needs_formalization\"} (+ optional notes — record a human citation review for an external theorem claim. Human review remains distinct from Lean kernel verification and never upgrades a claim to a proved status) | {\"type\":\"verification_layer_set\",\"dossier_id\":\"..\",\"target_kind\":\"..\",\"target_id\":\"..\",\"layer_kind\":\"..\",\"status\":\"..\"} (+ optional summary, evidence_json — upsert an independent verification layer for a dossier target. Blocked/failed layers do not fail the dossier, and cited/reviewed/assumed artifacts cannot be mislabeled kernel_verified: this action is the ONLY PATH to a kernel_verified layer, and status='kernel_verified' is accepted only where kernel evidence already exists — e.g. a node whose trust_status is already proved_in_episode backed by a verified lemma from THIS dossier's own episode/problem context — it can never manufacture that evidence)"),
             make_tool::<DevDiaryArgs>("dev_diary", "Issue #242, slice 1: project-scoped dev diary — join existing tracked evidence (problems, episodes, research dossiers, formalization plans, empirical searches, candidate constructions, verification layers, distilled strategies) into a chronological campaign timeline so a long-running effort can be documented as it happens instead of reconstructed after the fact from a chat transcript. THIS TOOL NEVER CALLS AN LLM AND NEVER POSTS ANYWHERE — it only assembles evidence for an external host to turn into a narrative. This version covers project setup, attachment, chronological checkpoints, observe's resolved verified/failed/frontier view, and export. `action` is internally tagged — exactly one of: {\"type\":\"create_project\",\"project_key\":\"..\",\"title\":\"..\"} (+ optional summary, audience, claim_policy, public_links — project_key must be a unique slug; a duplicate key is rejected, never overwritten. Starts status='active') | {\"type\":\"attach\",\"project_id\":\"..\",\"target_kind\":\"problem_version\"|\"episode\"|\"research_dossier\"|\"formalization_plan\"|\"empirical_search\"|\"candidate_construction\"|\"verification_layer\"|\"distilled_strategy\"|\"external_link\"|\"public_post\"} (+ target_id for the 8 real kinds — existence-checked against that artifact's own table before attaching — OR external_url for external_link/public_post, e.g. a GitHub issue/PR URL or a manually recorded public post, neither of which has a backing row: target_id is then server-minted and private. Optional label, notes. A duplicate (project_id, target_kind, target_id) is rejected. Attaching NEVER alters the attached artifact's own trust_status, fidelity_status, or verification outcome) | {\"type\":\"checkpoint\",\"project_id\":\"..\",\"checkpoint_kind\":\"campaign_started\"|\"candidate_found\"|\"proof_attempt_failed\"|\"root_cause_identified\"|\"kernel_result\"|\"mathlib_gap\"|\"method_exhausted\"|\"frontier_changed\"|\"claim_corrected\"|\"infrastructure_issue_opened\"|\"public_update_posted\"|\"other\",\"note\":\"..\",\"author\":\"..\"} (+ optional referenced_attachment_id, which must already belong to the SAME project — cross-project references are rejected. checkpoint_number is assigned server-side, never caller-supplied, so chronological order is guaranteed regardless of client behavior. A checkpoint is chronological project metadata, the same trust posture as a reasoning_log entry: it can never mark anything proved, verified, or certified, and failed/negative checkpoints are preserved exactly like successful ones, never overwritten) | {\"type\":\"observe\",\"project_id\":\"..\"} (read-only: the project plus every attachment and checkpoint in order, PLUS a `resolved` view bucketing that same data into verified_results (attached episodes already outcome=certified/kernel_verified, or attached verification_layers already status=kernel_verified), failed_or_blocked (matching failure outcomes/statuses, plus proof_attempt_failed/method_exhausted checkpoints), reusable_artifacts (attached formalization_plan/distilled_strategy), claim_boundaries (each attached research_dossier's own assumption_boundaries, unchanged), checkpoints_by_kind, and current_frontier (the latest frontier_changed checkpoint). `resolved` never re-derives or upgrades any trust_status/fidelity_status/outcome — it only re-buckets columns already read off each attached artifact's own row. publication_history (a later slice) and episode_obligations-level 'open obligations' are not part of `resolved` yet) | {\"type\":\"export\",\"project_id\":\"..\",\"mode\":\"structured_json\"|\"markdown_diary\"|\"x_thread_prompt\"|\"single_x_post_prompt\"|\"blog_prompt\"|\"institute_update_prompt\"} (+ optional since_checkpoint_id (a cursor: only checkpoints AFTER that checkpoint's own checkpoint_number are included; attachments are never cursored, they are not chronological in that sense), max_posts (default 12, clamped 1-50, x_thread_prompt only), x_tier \"free\"|\"premium\" (default \"free\" whenever omitted — the conservative assumption, since most callers will not have a paid X account), max_chars_per_post (an optional override, ALWAYS clamped down to the resolved tier's real ceiling — 280 for free, 25000 for premium — so a mistaken override can never exceed X's actual limit), audience, dry_run (default false). structured_json returns the full packet (attachments/checkpoints/resolved view) with every internal id retained, for grounding and audit. markdown_diary renders the same packet as a human-readable document. The four *_prompt modes return a ready-to-send external-host prompt (populated with the resolved title/max_posts/max_chars_per_post and the JSON packet) plus the same packet for grounding — the prompt instructs the external host not to surface raw database ids/UUIDs in the prose it writes, but the attached packet always retains them. THIS TOOL NEVER CALLS AN LLM OR POSTS ANYWHERE ITSELF; only an external host does that with the returned text. Unless dry_run, every export records one immutable dev_diary_publications row (mode, cursor, resolved x_tier/max_chars_per_post, a SHA-256 source_hash over the packet, and a timestamp) so a later export audit shows exactly what a given thread was generated against; dry_run previews without recording)"),
             make_tool::<MathSearchArgs>("math_search", "Issue #244: ONE advisory search surface across three CLEARLY DISTINGUISHED sources — pinned Mathlib, the Verified Artifact Registry (#243), and MathCorpus — so an agent no longer has to pick between lean_declaration_lookup / mathlib_search_declarations / mathlib_search_local_artifacts and guess a name fragment. ADVISORY ONLY: never adds an import, alters a problem version, or marks an obligation proved; results always carry their `source` and are never merged into one indistinguishable namespace. `action` is internally tagged — exactly one of: {\"type\":\"search\",\"query\":\"..\"} (+ optional sources [\"mathlib\"|\"verified_artifacts\"|\"mathcorpus\"] (default all), artifact_kind [..] and trust [..] filters for the registry, problem_version_id (adds environment_compatible per result), limit — returns a flat `results` array where every result carries source + trust label (a verified_artifacts result's maturity/review status; a mathlib result is 'pinned_mathlib') plus a `sources_status` map. Pinned Mathlib is a filesystem scan that reports available:false when the source tree isn't resolvable; MathCorpus reports available:false with a note, since the MCIP interchange is export-only and packets aren't locally indexed) | {\"type\":\"inspect\",\"artifact_id\":\"..\"} (full reproduce/verify data for a registry artifact — every version + kernel-backed origin + immutable hashes) | {\"type\":\"usages\",\"artifact_id\":\"..\"} (registry supersession relationships, read-only; cross-artifact reuse-impact is #250) | {\"type\":\"dependency_path\",\"artifact_id\":\"..\"} (the current version's recorded dependency ids, read-only) | {\"type\":\"suggest_imports\",\"artifact_id\":\"..\"} (+ optional problem_version_id — reports environment compatibility + required imports but NEVER mutates a manifest; materialized shared modules are #247). The existing lean_declaration_lookup / mathlib_search_declarations / mathlib_search_local_artifacts remain as compatibility wrappers. Deep elaborated type-directed Mathlib search is tracked in #245; semantic search in #246."),
+            make_tool::<ProactiveRetrievalArgs>("proactive_retrieval", "Issue #248: proactive artifact retrieval at formalization checkpoints. Runs an ADVISORY, budget-aware, reproducible retrieval pass whose query is DERIVED from a scope (the agent never names a candidate), then persists the whole packet — query features, search/index versions, ranked candidates with per-source trust + environment-compatibility labels, contamination exposure, and a deterministic context-byte budget — so the trajectory (and MathCorpus) can distinguish used dependencies, retrieval candidates, and retrieved-but-unused artifacts. TRUST BOUNDARY: never adds an import, alters a problem version, or marks anything proved; a high rank is never applicability, and a retrieval selection is NEVER a verifier-backed dependency (those are verified_artifact_edges evidence_kind='verifier'). `action` is internally tagged — exactly one of: {\"type\":\"retrieve\",\"trigger_mode\":\"manual\"|\"plan_item_created\"|\"obligation_created\"|\"after_repeated_failure\"|\"before_give_up\"} (+ at most one scope: problem_version_id | plan_item_id | episode_id, or none = freeform requiring query_hint; + optional query_hint (extra NL / diagnostic root-cause terms folded into the derived query), sources [\"mathlib\"|\"verified_artifacts\"|\"mathcorpus\"], run_envelope_id (an evaluation/benchmark/private_audit envelope DISABLES retrieval — the pass is still recorded with zero candidates, never silently skipped), limit, budget_cap_bytes (default 8192, deterministic cap — dropped candidates are reported), max_candidates (default 10) — derives concept tokens from the scope statement, runs the same deterministic search as math_search per token, ranks (exact name → env-compatible → query-term overlap → source priority → id) and caps, records benchmark contamination exposure, and returns the persisted packet) | {\"type\":\"record_selection\",\"packet_id\":\"..\"} (+ optional inspected [ids], selected [ids] — advisory: recomputes retrieved-but-unused = candidates − selected; ids must be candidates in THIS packet; a selection here never becomes a verifier-backed dependency) | {\"type\":\"get\",\"packet_id\":\"..\"} (read one packet in full) | {\"type\":\"list\"} (+ optional scope_kind, scope_id, limit — packet index, most recent first). Consumes the search API from #244; validated by the #251 retrieval benchmark."),
             make_tool::<VerifiedArtifactArgs>("verified_artifact", "Issue #243: Verified Artifact Registry (VAR) foundation — promote a KERNEL-BACKED verified lemma into a curated, immutable, versioned research artifact with a lifecycle, distinct from an episode-local helper or a raw canonical result. TRUST BOUNDARY: the registry CURATES already-established kernel truth — promotion copies the origin lemma's immutable kernel hashes (statement_hash/proof_body_hash/environment_hash/kernel_result_hash) verbatim, versions are append-only (mathematical history is never overwritten), and no maturity/review/supersede action changes those hashes or confers proof authority. `action` is internally tagged — exactly one of: {\"type\":\"promote\",\"episode_id\":\"..\",\"artifact_kind\":\"helper_lemma\"|\"definition\"|\"theorem\"|\"abstraction\"|\"reduction\"|\"classification\"|\"construction\"|\"negative_result\"|\"proof_module\"|\"tactic_recipe\",\"canonical_name\":\"..\"} (+ optional obligation_id (disambiguates when an episode proved >1 lemma), informal_summary, source_campaign, promotion_reason, candidate_for_mathlib — mints artifact v1 from an existing positive episode_verified_lemma; rejects anything not kernel-backed. Starts maturity=promoted, review=unreviewed) | {\"type\":\"add_version\",\"artifact_id\":\"..\",\"episode_id\":\"..\"} (+ optional obligation_id, canonical_name, formal_statement, promotion_reason — appends a new IMMUTABLE version from another kernel-backed origin, e.g. a generalization; never overwrites the original) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read-only: the artifact with every version + kernel-backed origins, the append-only maturity lifecycle, and reviews) | {\"type\":\"set_status\",\"artifact_id\":\"..\",\"to_status\":\"discovered\"|\"kernel_verified_local\"|\"promoted\"|\"reused\"|\"generalized\"|\"independently_reviewed\"|\"upstream_candidate\"|\"upstreamed\"|\"retained_local\"|\"superseded\",\"actor\":\"..\"} (+ optional reason — appends a maturity lifecycle event; curation only, never proof authority) | {\"type\":\"review\",\"artifact_id\":\"..\",\"review_status\":\"unreviewed\"|\"in_review\"|\"reviewed_with_caveats\"|\"independently_reviewed\"|\"rejected\",\"reviewer\":\"..\"} (+ optional notes, version_id — appends a review and moves review_status; never alters a version's kernel hashes) | {\"type\":\"supersede\",\"artifact_id\":\"..\",\"superseded_by\":\"..\",\"actor\":\"..\"} (+ optional reason — marks the artifact superseded by another; the original stays fully navigable) | {\"type\":\"add_edge\",\"from_artifact_id\":\"..\",\"to_artifact_id\":\"..\",\"edge_kind\":\"formally_depends_on\"|\"imported_by_generated_module\"|\"selected_as_retrieval_candidate\"|\"retrieved_but_unused\"|\"actually_used_in_verified_proof\"|\"generalized_from\"|\"equivalent_to\"|\"supersedes\"|\"applies_to_campaign\"|\"exported_as_mathcorpus_packet\"|\"proposed_to_mathlib\",\"evidence_kind\":\"verifier\"|\"retrieval\"|\"declared\"} (+ optional episode_id, campaign, notes — #250: record a typed dependency/usage edge. ONLY evidence_kind='verifier' counts as formal use: 'actually_used_in_verified_proof' requires verifier evidence, and a verifier edge naming an episode_id must trace to a real kernel_verified/certified episode; retrieval/declared relationships are separate kinds and never masquerade as use. A 'formally_depends_on' edge that would create a cycle is rejected) | {\"type\":\"impact\",\"artifact_id\":\"..\"} (#250: impact metrics RECOMPUTED from the edge/review records — verified downstream uses, distinct campaigns, retrieval-selected vs retrieved-but-unused, selection rate, generated-module imports, review count, generalization lineage; retrieval is never counted as use, and popularity is not proof authority) | {\"type\":\"upstream_readiness\",\"artifact_id\":\"..\"} (#250: read the Mathlib upstream-readiness review metadata — status + checklist; REVIEW METADATA, never proof status) | {\"type\":\"record_upstream_status\",\"artifact_id\":\"..\",\"status\":\"not_candidate\"|\"needs_generalization\"|\"needs_deduplication\"|\"needs_style_review\"|\"ready_for_pr\"|\"pr_open\"|\"accepted\"|\"rejected_or_retained_local\",\"reviewer\":\"..\"} (+ optional checklist, notes — set upstream-readiness; review metadata only, never proof status). Foundation for the #239 VAR family (#244 math_search builds on this; #247/#249/#251-#253 remain)."),
             make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
@@ -17236,8 +17778,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 56,
-                        "total_tool_count": 56,
+                        "classified_tool_count": 57,
+                        "total_tool_count": 57,
                         "tools": {
                             "mathcorpus_export": {
                                 "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
@@ -17510,6 +18052,16 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic — canonical-name substring ranking with exact-match + recency tie-breaks; pagination is stable",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "search_metadata",
+                                "required_run_mode": "any"
+                            },
+                            "proactive_retrieval": {
+                                "side_effect": "mixed by action (issue #248): retrieve inserts one retrieval_packets row (append-only) after running the same read-only search as math_search; record_selection UPDATEs only that row's advisory selections_json/unused_json convenience columns; get/list are read_only. No action writes to episode outcome, obligations, canonical lemmas, import manifests, budgets, or benchmark result tables",
+                                "trust_level": "advisory — candidates are ranked suggestions carrying per-source trust + environment-compatibility labels; a high rank is never applicability, and a recorded selection is NEVER a verifier-backed dependency (real formal use is a verified_artifact_edges 'actually_used_in_verified_proof' evidence_kind='verifier' edge). No action marks anything proved",
+                                "cost_surface": "none — DB reads/writes + a bounded filesystem scan (Mathlib), no Lean invocation",
+                                "benchmark_safety": "records contamination exposure explicitly — a benchmark-linked scope's packet flags benchmark_linked + suite so retrieval can never be laundered out of the record; an evaluation/benchmark/private_audit run envelope DISABLES retrieval (pass still recorded, zero candidates)",
+                                "replayability": "deterministic — query tokens derived by fixed tokenization, per-token search reuses math_search's stable ranking, and the final rank+cap is a pure function of recorded fields (exact name, env compatibility, query-term overlap, source priority, id); dropped candidates are reported, never silently hidden",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "retrieval_packet_metadata",
                                 "required_run_mode": "any"
                             },
                             "verified_artifact": {
@@ -18760,6 +19312,7 @@ impl ServerHandler for ChatDbMcp {
             "publication_review" => self.do_publication_review(args_val).await,
             "verified_artifact" => self.do_verified_artifact(args_val).await,
             "math_search" => self.do_math_search(args_val).await,
+            "proactive_retrieval" => self.do_proactive_retrieval(args_val).await,
             "candidate_construction" => self.do_candidate_construction(args_val).await,
             "empirical_search" => self.do_empirical_search(args_val).await,
             // -- Challenge / task / scoring substrate (issue #53) ---------------
@@ -19767,7 +20320,7 @@ mod tests {
         // + 1 verified_artifact (issue #243: Verified Artifact Registry foundation
         // - promote/add_version/observe/set_status/review/supersede) = 55.
         // + 1 math_search (issue #244: unified advisory search across mathlib/VAR/mathcorpus) = 56.
-        assert_eq!(list_res.tools.len(), 56);
+        assert_eq!(list_res.tools.len(), 57);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -22268,6 +22821,162 @@ mod tests {
         // Same environment as the problem the artifact was proved under -> compatible.
         assert_eq!(suggest["environment_compatible"], true);
         assert_eq!(suggest["required_imports"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_extract_symbol_tokens_deterministic_and_noise_free() {
+        // snake_case + dotted identifiers split into concept sub-words; camelCase
+        // stays whole; keywords/short/leading-digit tokens dropped; order stable.
+        let t = extract_symbol_tokens("theorem Nat.reciprocity_lemma_holds : ∀ n, padicValNat 2 n = 0");
+        assert!(t.contains(&"reciprocity".to_string()));
+        assert!(t.contains(&"holds".to_string()));
+        assert!(t.contains(&"padicvalnat".to_string()));
+        assert!(!t.iter().any(|x| x == "theorem" || x == "lemma" || x == "nat"), "noise dropped: {:?}", t);
+        // Fully deterministic: same input -> byte-identical output.
+        assert_eq!(t, extract_symbol_tokens("theorem Nat.reciprocity_lemma_holds : ∀ n, padicValNat 2 n = 0"));
+    }
+
+    /// #248: a prior local artifact is surfaced in a FRESH episode under a
+    /// DIFFERENT problem without the caller ever naming it; selections make
+    /// retrieved-but-unused distinguishable; a controlled-evaluation run envelope
+    /// disables the pass (still recorded); and retrieval is reproducible.
+    #[tokio::test]
+    async fn test_proactive_retrieval_surfaces_prior_artifact_without_naming_it() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        async fn pr(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("proactive_retrieval")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn va(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("verified_artifact")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn new_episode(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str) -> String {
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv,
+            }).as_object().unwrap().clone())).await.unwrap());
+            ep["episode_id"].as_str().unwrap().to_string()
+        }
+
+        // Problem 1: prove something and promote an artifact whose canonical name
+        // carries the concept token "reciprocity".
+        let pv1 = create_problem(&peer, "reciprocity_master_statement").await;
+        let e1 = new_episode(&peer, &pv1).await;
+        claim_and_solve(&peer, &e1, "trivial", "pr-1").await;
+        let art = va(&peer, serde_json::json!({"action": {"type":"promote","episode_id":e1,
+            "artifact_kind":"helper_lemma","canonical_name":"reciprocity_core_lemma"}})).await;
+        let art_id = art["artifact_id"].as_str().unwrap().to_string();
+
+        // Problem 2: a DIFFERENT problem that shares the "reciprocity" concept, and
+        // a FRESH (unsolved) episode under it. The caller never names the artifact.
+        let pv2 = create_problem(&peer, "reciprocity_corollary_goal").await;
+        let e2 = new_episode(&peer, &pv2).await;
+
+        let packet = pr(&peer, serde_json::json!({"action": {"type":"retrieve",
+            "trigger_mode":"plan_item_created", "episode_id": e2}})).await;
+
+        // The query was DERIVED (token "reciprocity"), not supplied as a name.
+        let tokens = packet["query_features"]["derived_tokens"].as_array().unwrap();
+        assert!(tokens.iter().any(|t| t == "reciprocity"), "derived token bundle: {:?}", tokens);
+        // The prior artifact is surfaced by id, though the test never named it.
+        let cands = packet["candidates"].as_array().unwrap();
+        let hit = cands.iter().find(|c| c["result_id"] == serde_json::json!(art_id))
+            .unwrap_or_else(|| panic!("prior artifact not surfaced: {:?}", packet));
+        assert_eq!(hit["source"], "verified_artifacts");
+        // Same pinned environment as the problem it was proved under -> compatible.
+        assert_eq!(hit["environment_compatible"], true, "{:?}", hit);
+        assert_eq!(packet["enabled"], true);
+        assert_eq!(packet["trigger_mode"], "plan_item_created");
+        assert_eq!(packet["scope_kind"], "episode");
+        // Contamination field is always recorded; this scope is not benchmark-linked.
+        assert_eq!(packet["contamination_exposure"]["benchmark_linked"], false);
+        // Before any selection, every candidate is retrieved-but-unused.
+        let unused_before = packet["retrieved_but_unused"]["candidate_ids"].as_array().unwrap();
+        assert!(unused_before.iter().any(|id| id == &serde_json::json!(art_id)));
+        let packet_id = packet["packet_id"].as_str().unwrap().to_string();
+
+        // Reproducible: an identical retrieve yields the identical candidate id set.
+        let packet_b = pr(&peer, serde_json::json!({"action": {"type":"retrieve",
+            "trigger_mode":"plan_item_created", "episode_id": e2}})).await;
+        let ids = |p: &serde_json::Value| p["candidates"].as_array().unwrap().iter()
+            .map(|c| c["result_id"].clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&packet), ids(&packet_b), "retrieval is deterministic");
+
+        // record_selection: mark the artifact as selected -> no longer unused.
+        let after = pr(&peer, serde_json::json!({"action": {"type":"record_selection",
+            "packet_id": packet_id, "inspected": [art_id.clone()], "selected": [art_id.clone()]}})).await;
+        assert_eq!(after["selections"]["selected"][0], serde_json::json!(art_id));
+        let still_unused = after["retrieved_but_unused"]["candidate_ids"].as_array().unwrap();
+        assert!(!still_unused.iter().any(|id| id == &serde_json::json!(art_id)),
+            "selected artifact is no longer retrieved-but-unused: {:?}", after);
+
+        // A selection that is not a candidate in this packet is rejected.
+        let bad = peer.call_tool(CallToolRequestParams::new("proactive_retrieval").with_arguments(
+            serde_json::json!({"action": {"type":"record_selection","packet_id":packet_id,"selected":["not-a-candidate"]}})
+                .as_object().unwrap().clone())).await;
+        assert!(bad.is_err(), "selecting a non-candidate id must be rejected");
+
+        // get + list.
+        let got = pr(&peer, serde_json::json!({"action": {"type":"get","packet_id": packet_id}})).await;
+        assert_eq!(got["packet_id"], serde_json::json!(packet_id));
+        let listed = pr(&peer, serde_json::json!({"action": {"type":"list","scope_kind":"episode","scope_id": e2}})).await;
+        assert!(listed["packets"].as_array().unwrap().len() >= 2, "both passes listed: {:?}", listed);
+
+        // Controlled evaluation: an evaluation-mode run envelope DISABLES retrieval,
+        // but the pass is still recorded (enabled=false, zero candidates).
+        let env = tool_json(&peer.call_tool(CallToolRequestParams::new("run_envelope").with_arguments(serde_json::json!({
+            "action": {"type":"create","mode":"evaluation"}
+        }).as_object().unwrap().clone())).await.unwrap());
+        let env_id = env["run_envelope_id"].as_str().or_else(|| env["id"].as_str()).unwrap().to_string();
+        let disabled = pr(&peer, serde_json::json!({"action": {"type":"retrieve",
+            "trigger_mode":"manual", "episode_id": e2, "run_envelope_id": env_id}})).await;
+        assert_eq!(disabled["enabled"], false, "{:?}", disabled);
+        assert_eq!(disabled["candidates"].as_array().unwrap().len(), 0);
+
+        // Validation: two scopes, and freeform without a query_hint, are rejected.
+        let two = peer.call_tool(CallToolRequestParams::new("proactive_retrieval").with_arguments(
+            serde_json::json!({"action": {"type":"retrieve","trigger_mode":"manual","problem_version_id":pv1,"episode_id":e2}})
+                .as_object().unwrap().clone())).await;
+        assert!(two.is_err(), "more than one scope must be rejected");
+        let freeform = peer.call_tool(CallToolRequestParams::new("proactive_retrieval").with_arguments(
+            serde_json::json!({"action": {"type":"retrieve","trigger_mode":"manual"}})
+                .as_object().unwrap().clone())).await;
+        assert!(freeform.is_err(), "freeform retrieval without a query_hint must be rejected");
+    }
+
+    /// #248: an after_repeated_failure pass folds diagnostic/root-cause terms
+    /// (query_hint) into the derived query, and a freeform pass works with no scope.
+    #[tokio::test]
+    async fn test_proactive_retrieval_freeform_hint_and_failure_features() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        async fn pr(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("proactive_retrieval")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn va(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("verified_artifact")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        let pv = create_problem(&peer, "True").await;
+        let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+            "problem_version_id": pv,
+        }).as_object().unwrap().clone())).await.unwrap());
+        let ep_id = ep["episode_id"].as_str().unwrap().to_string();
+        claim_and_solve(&peer, &ep_id, "trivial", "ff-1").await;
+        let art = va(&peer, serde_json::json!({"action": {"type":"promote","episode_id":ep_id,
+            "artifact_kind":"tactic_recipe","canonical_name":"telescoping_sum_recipe"}})).await;
+        let art_id = art["artifact_id"].as_str().unwrap().to_string();
+
+        // Freeform (no scope) using a diagnostic root-cause term as the query_hint.
+        let packet = pr(&peer, serde_json::json!({"action": {"type":"retrieve",
+            "trigger_mode":"after_repeated_failure", "query_hint":"telescoping cascade root cause"}})).await;
+        assert_eq!(packet["scope_kind"], "freeform");
+        assert!(packet["query_features"]["derived_tokens"].as_array().unwrap()
+            .iter().any(|t| t == "telescoping"), "hint terms folded into query: {:?}", packet);
+        assert!(packet["candidates"].as_array().unwrap().iter()
+            .any(|c| c["result_id"] == serde_json::json!(art_id)), "hint surfaced the recipe: {:?}", packet);
     }
 
     /// #240: a gateway that fails with an ordered diagnostic list — an
