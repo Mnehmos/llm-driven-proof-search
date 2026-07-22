@@ -6485,9 +6485,12 @@ fn generated_module_json(conn: &Connection, module_id: &str) -> Result<serde_jso
     }))
 }
 
-/// The type-directed structural search modes (#245).
+/// The type-directed structural search modes (#245). `unification_candidate` is
+/// the only one that runs a real isDefEq check (via the gateway) rather than
+/// comparing stored fingerprints.
 const STRUCTURAL_SEARCH_MODES: &[&str] = &[
-    "exact_type", "conclusion_shape", "hypothesis_conclusion_shape", "symbol_overlap", "structural_similarity",
+    "exact_type", "conclusion_shape", "hypothesis_conclusion_shape", "symbol_overlap",
+    "structural_similarity", "unification_candidate",
 ];
 
 /// A parsed elaborated structural fingerprint (#245) for deterministic scoring.
@@ -15791,6 +15794,52 @@ impl ChatDbMcp {
                 let q = parse_structural_fp(&query_fp);
                 let q_sig_hash = structural_signature_hash(q.binder_count, &q.conclusion_head, &q.hypothesis_heads);
 
+                // unification_candidate: a REAL isDefEq check (not a fingerprint
+                // comparison). Prefilter VAR candidates by conclusion head (a
+                // necessary-ish condition for the conclusions to unify), then batch
+                // isDefEq them against the query in one Lean process.
+                if mode == "unification_candidate" {
+                    let conn = self.conn.lock().await;
+                    let mut stmt = conn.prepare(
+                        "SELECT a.id, a.canonical_name, a.maturity_status, v.formal_statement, v.environment_hash \
+                         FROM verified_artifact_fingerprints f \
+                         JOIN verified_artifact_versions v ON v.id = f.version_id \
+                         JOIN verified_artifacts a ON a.id = v.artifact_id \
+                         WHERE f.fingerprint_version = ?1 AND f.conclusion_head = ?2 AND v.formal_statement IS NOT NULL",
+                    ).map_err(rs)?;
+                    let cands = stmt.query_map(rusqlite::params![fp_version, &q.conclusion_head], |r| Ok((
+                        r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?,
+                    ))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+                    drop(stmt);
+                    drop(conn);
+                    let batch: Vec<(String, String)> = cands.iter().map(|(id, _, _, s, _)| (id.clone(), s.clone())).collect();
+                    let verdicts = self.gateway.unification_candidates(&statement, &batch)
+                        .map_err(|e| mcp_internal_error(format!("unification check failed: {}", e)))?;
+                    let unify_map: std::collections::BTreeMap<String, bool> = verdicts.into_iter().collect();
+                    let mut results: Vec<serde_json::Value> = cands.into_iter().filter_map(|(id, name, maturity, formal, env)| {
+                        if unify_map.get(&id).copied().unwrap_or(false) {
+                            Some(serde_json::json!({
+                                "result_id": id, "source": "verified_artifacts", "full_name": name, "trust_status": maturity,
+                                "formal_statement": formal, "environment_hash": env,
+                                "import_source": format!("verified_artifact://{}", id), "source_library": "verified_artifact_registry",
+                                "score": 1.0, "confidence": "high",
+                                "confidence_basis": "conclusion unifies (isDefEq) with the query goal — a real unification/specialization candidate, not a textual suggestion",
+                                "unification_candidate": true,
+                            }))
+                        } else { None }
+                    }).collect();
+                    results.sort_by(|a, b| a["result_id"].as_str().unwrap_or("").cmp(b["result_id"].as_str().unwrap_or("")));
+                    results.truncate(limit);
+                    return Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                        "query_statement": statement,
+                        "mode": mode,
+                        "query_fingerprint": {"binder_count": q.binder_count, "conclusion_head": q.conclusion_head},
+                        "results": results,
+                        "note": "unification_candidate ran a REAL isDefEq check over verified_artifacts whose conclusion head matches the query (batched in one Lean process). Mathlib unification-by-name is a separate follow-up (the Mathlib signature index stores no statement text).",
+                        "trust_boundary": "A unification candidate means the lemma's conclusion isDefEq the goal's conclusion — a genuine applicability signal (high confidence), but NOT a proof: applying it still requires discharging its hypotheses through the kernel. No result changes proof state or imports.",
+                    })).unwrap())]))
+                }
+
                 let conn = self.conn.lock().await;
                 let mut sources_status = serde_json::Map::new();
                 let mut scored: Vec<serde_json::Value> = Vec::new();
@@ -19785,7 +19834,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ArtifactRegistryBundleArgs>("artifact_registry_bundle", "Issue #249: portable Verified Artifact Registry bundle — a self-contained, hash-pinned package another Proof Search instance can validate, import, index, and replay WITHOUT the origin database (a database-only hash/id is not portable evidence: the canonical preimages must travel with it). TRUST BOUNDARY: import PRESERVES origin ids/hashes, an imported artifact stays source-distinguished (origin_instance_id) with kernel hashes that are INERT DATA until replayed against the pinned environment, and an imported review is NEVER local kernel authority; conflicts and unavailable environments are QUARANTINED, never falsely verified. `action` is internally tagged — exactly one of: {\"type\":\"export\"} (+ optional artifact_ids [..] (default whole registry; edges kept only when both endpoints are exported), include_proof_bodies (default true — embeds the proof-source bytes behind each proof_body_hash so an importer can replay; false redacts them for restricted/benchmark-sensitive bodies, hashes still travel with proof_source_available=false) — returns a wrapper {content, bundle_hash, origin_instance_id, exported_at, record_counts}; the bundle_hash is the canonical hash of `content` only, so re-export from the same DB is byte-deterministic modulo the volatile instance/timestamp metadata) | {\"type\":\"validate\",\"bundle_json\":\"..\"} (recompute the content hash to detect tampering, then check referential integrity + preimage presence — every version has its formal_statement preimage and immutable kernel hashes, origins/edges/superseded_by point inside the bundle; writes nothing) | {\"type\":\"import\",\"bundle_json\":\"..\"} (+ optional dry_run — validates FIRST and refuses a tampered/broken bundle before any write; preserves ids/hashes; classifies each artifact as inserted / skipped_duplicate (exact match, idempotent re-import) / quarantined (version_conflict — same id different statement, never overwritten; name_collision — same canonical_name different statement under another id; environment_unavailable — bundle lean_toolchain doesn't match this instance, can't replay here); rematerializes proof-source bytes for replay; atomic rollback on error; records an append-only artifact_bundle_imports ledger row even for a dry_run) | {\"type\":\"observe_import\",\"import_id\":\"..\"} (read what a prior import inserted / skipped / quarantined). Coordinates with MCIP export (#230/#263): MCIP is the enrichment/evidence contract, this bundle is the executable library package."),
             make_tool::<RetrievalBenchmarkArgs>("retrieval_benchmark", "Issue #251: frozen retrieval benchmark + regression suite — a reproducible, deterministic evaluation of the search/ranking that math_search (#244) and proactive_retrieval (#248) depend on, run over a HELD-CONSTANT synthetic fixture corpus (query set + relevance judgments) so a ranking change is measured against a fixed target and never silently rewritten. `action` is internally tagged — exactly one of: {\"type\":\"run\"} (+ optional compact (default false = full evaluation; true = the CI regression subset) — returns structured metrics [Recall@1/5/10, MRR, nDCG@10] per baseline and per query family, a tuning/held-out split, negative-query and environment-compatibility-label accuracy, a downstream-utility delta [retrieval ENABLED vs DISABLED mean Recall@5], and a readable `report` string. Baselines compared: name_only, hybrid_lexical, retrieval_disabled; type_directed (#245) and semantic (#246) are reported UNAVAILABLE, never faked. Adversarial lexical, misspelled (expected_gap), and cross-domain families are included so known limitations show honestly) | {\"type\":\"fixtures\"} (return the frozen corpus + queries + relevance judgments for audit). Pure over the fixtures — reads no DB, calls no model, no Lean; the same fixtures_version + ranker_version always produce the same numbers. Validates #244/#248; the type/semantic baselines light up once #245/#246 land."),
             make_tool::<ArtifactModuleArgs>("artifact_module", "Issue #247: make promoted registry artifacts directly reusable through shared Lean modules + safe import planning — the missing path from 'a verified lemma exists' to 'an actual reusable Lean dependency', without letting an advisory search result silently enter the trusted proof environment. TRUST BOUNDARY: materializing a module and planning an import are ADVISORY — they NEVER mutate an existing problem's immutable import manifest and NEVER confer proof authority; actual reuse still flows through problem_create with an explicit manifest + a kernel-verified attempt. `action` is internally tagged — exactly one of: {\"type\":\"materialize\",\"artifact_ids\":[..]} (+ optional category NumberTheory|Combinatorics|GraphTheory|Analysis|Campaigns (default Campaigns) — assemble a DETERMINISTIC shared Lean module from the immutable registry records: stable LeanChecker.MnemosyneArtifacts.<Category>.M_<hash> path (importable under the LeanChecker lib) + declaration names, topologically ordered by formally_depends_on, source_hash over the exact bytes. IDEMPOTENT: the same snapshot yields identical bytes/hash and returns the existing row. FAILS CLOSED on incompatible environments (a module requires one shared environment_hash), a dependency outside the selection, a cycle, a name collision, or a superseded/not-yet-promoted artifact. A declaration's proof is embedded ONLY when its kernel-verified source resolves from the content-addressed store (replay_status='self_contained_source'); otherwise it is a signature-only provenance comment (replay_status='proof_source_unavailable') — the module never carries an unverified or client-supplied proof body) | {\"type\":\"plan_import\",\"artifact_ids\":[..]} (+ optional base_problem_version_id — advisory: reports the deterministic module path, the topologically ordered declarations, environment compatibility with the base problem, and the proposed NEW-problem import manifest (base manifest ∪ the generated module). Mutates NOTHING) | {\"type\":\"observe\",\"module_id\":\"..\"} (read a generated module; recomputes source_hash so a tampered stored source shows source_hash_matches=false) | {\"type\":\"list\"} (+ optional limit — generated modules, most recent first) | {\"type\":\"write\",\"module_id\":\"..\"} (+ optional overwrite — write a SELF-CONTAINED module into the Lean source tree under LeanChecker/ so a new problem can actually import it; byte-verifies the write, is idempotent, and FAILS CLOSED on a signature-only module or an overwrite that would clobber different bytes. This is the only action that touches the source tree). Builds out #239; integrates with #244 search and records real reuse via #250 verified_artifact add_edge (evidence_kind='verifier') once a proof actually uses a declaration."),
-            make_tool::<StructuralSearchArgs>("structural_search", "Issue #245: elaborated TYPE-DIRECTED theorem search over the Verified Artifact Registry — find a lemma from its target TYPE SHAPE, not its name. The query is ELABORATED under the pinned Lean environment (real elaboration, never a parser approximation) into a normalized structural fingerprint (conclusion head symbol, binder count, hypothesis-head multiset, used-constant set), then matched against stored artifact fingerprints with deterministic structural ranking. TRUST BOUNDARY: read-only w.r.t. proofs — no result changes proof state or imports, and a fingerprint is a SEARCH KEY, never proof authority; confidence is 'high' ONLY for an exact structural fingerprint match (structural/symbol overlaps are 'medium'/'low', a ranking hint not a unification proof). `action` is internally tagged — exactly one of: {\"type\":\"fingerprint\",\"artifact_id\":\"..\"} (elaborate the artifact's current-version statement and STORE its fingerprint; idempotent per (version, fingerprint_version), with the lean_toolchain recorded so a record is invalidated/namespaced on a toolchain/representation change; requires Lean — index the registry before searching) | {\"type\":\"search\",\"statement\":\"<Lean type>\"} (+ optional mode exact_type|conclusion_shape|hypothesis_conclusion_shape|symbol_overlap|structural_similarity (default structural_similarity), sources [\"verified_artifacts\"|\"mathlib\"] (default [\"verified_artifacts\"]; add \"mathlib\" to also search the bulk Mathlib signature index), limit — elaborate the query and rank stored fingerprints; every result carries full name, formal type, import source, source library, a score, and an honest confidence + confidence_basis explanation. A Mathlib match is signature-only (constants not indexed at scale), capped at 'medium' confidence. Requires Lean) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read a stored fingerprint; no Lean) | {\"type\":\"build_mathlib_index\"} (+ optional limit — bulk-fingerprint the pinned Mathlib library in ONE Lean process into a structural-signature index; the WHOLE library (~336k theorems) takes MINUTES, limit caps it for a quick pass; replaces the prior index for this index_version. Requires Lean). Consumes the search surface of #244; complements name search there; semantic re-ranking is #246."),
+            make_tool::<StructuralSearchArgs>("structural_search", "Issue #245: elaborated TYPE-DIRECTED theorem search over the Verified Artifact Registry — find a lemma from its target TYPE SHAPE, not its name. The query is ELABORATED under the pinned Lean environment (real elaboration, never a parser approximation) into a normalized structural fingerprint (conclusion head symbol, binder count, hypothesis-head multiset, used-constant set), then matched against stored artifact fingerprints with deterministic structural ranking. TRUST BOUNDARY: read-only w.r.t. proofs — no result changes proof state or imports, and a fingerprint is a SEARCH KEY, never proof authority; confidence is 'high' ONLY for an exact structural fingerprint match (structural/symbol overlaps are 'medium'/'low', a ranking hint not a unification proof). `action` is internally tagged — exactly one of: {\"type\":\"fingerprint\",\"artifact_id\":\"..\"} (elaborate the artifact's current-version statement and STORE its fingerprint; idempotent per (version, fingerprint_version), with the lean_toolchain recorded so a record is invalidated/namespaced on a toolchain/representation change; requires Lean — index the registry before searching) | {\"type\":\"search\",\"statement\":\"<Lean type>\"} (+ optional mode exact_type|conclusion_shape|hypothesis_conclusion_shape|symbol_overlap|structural_similarity|unification_candidate (default structural_similarity; unification_candidate runs a REAL isDefEq check over verified_artifacts whose conclusion head matches — capturing alpha-renaming AND specialization — batched in one Lean process, high confidence, but still not a proof since hypotheses remain to discharge), sources [\"verified_artifacts\"|\"mathlib\"] (default [\"verified_artifacts\"]; add \"mathlib\" to also search the bulk Mathlib signature index), limit — elaborate the query and rank stored fingerprints; every result carries full name, formal type, import source, source library, a score, and an honest confidence + confidence_basis explanation. A Mathlib match is signature-only (constants not indexed at scale), capped at 'medium' confidence. Requires Lean) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read a stored fingerprint; no Lean) | {\"type\":\"build_mathlib_index\"} (+ optional limit — bulk-fingerprint the pinned Mathlib library in ONE Lean process into a structural-signature index; the WHOLE library (~336k theorems) takes MINUTES, limit caps it for a quick pass; replaces the prior index for this index_version. Requires Lean). Consumes the search surface of #244; complements name search there; semantic re-ranking is #246."),
             make_tool::<SemanticSearchArgs>("semantic_search", "Issue #246: provenance-aware, metadata-rich HYBRID retrieval over the Verified Artifact Registry — for when an agent knows the mathematical IDEA but not the Lean name or type (e.g. 'a divisor-count bound that forces a prime-power classification'). Ranks over the artifacts' informal SUMMARY / campaign / kind (which name-only search in #244 misses), combined with provenance filters, trust labels, and reuse evidence into one honest score. TRUST BOUNDARY: similarity SUPPLIES CANDIDATES, never mathematical evidence — no result changes proof state or confers proof authority; every hit reports which fields matched, its score basis, source library, and a trust_label (verified/reviewed/provisional/superseded/negative_example/rejected). Only artifact metadata is indexed (summary/name/campaign/kind), never proof source bytes, so it is redaction-safe by construction. The semantic vector layer is LOCAL — a deterministic TF-IDF vector space over word tokens + character 3-grams of the artifact metadata (NO external model, NO external API), rebuilt in-memory from the current records each query — so it catches morphological / co-occurrence matches plain substring search misses (e.g. 'divisors'↔'divisor') while exact (#244) and structural (#245) search keep working with no provider. Params: query (NL/keyword, matched over rich metadata), optional campaign (provenance filter), artifact_kind [..], exclude_superseded, exclude_unreviewed, limit. Hybrid = 0.40·lexical_metadata + 0.25·local_semantic_vector + 0.20·trust + 0.15·reuse_evidence; each hit reports lexical_score, semantic_score, matched_fields, and score_basis."),
             make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
@@ -21886,6 +21935,15 @@ mod tests {
                 "hypothesis_heads": [],
                 "constants": toks.into_iter().collect::<Vec<_>>(),
             }))
+        }
+
+        // #245: a deterministic mock — a candidate "unifies" iff its statement
+        // matches the query modulo whitespace (real isDefEq/specialization is the
+        // RealLeanGateway + the gated live test).
+        fn unification_candidates(&self, query_statement: &str, candidates: &[(String, String)]) -> Result<Vec<(String, bool)>, String> {
+            let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+            let q = norm(query_statement);
+            Ok(candidates.iter().map(|(id, stmt)| (id.clone(), norm(stmt) == q)).collect())
         }
 
         // #245: a canned bulk-index stream so the ingest/search path is offline-
@@ -26101,6 +26159,113 @@ mod tests {
         assert_eq!(res["sources_status"]["mathlib"]["available"], true);
         assert!(res["results"].as_array().unwrap().iter().all(|r| r["source"] == "mathlib"));
         eprintln!("LIVE #245 mathlib index PASSED: {} real theorems fingerprinted + searchable", indexed);
+        drop(client);
+    }
+
+    /// #245: unification_candidate mode (offline mock) — prefilters by conclusion
+    /// head, then a gateway isDefEq check keeps only true unification candidates.
+    #[tokio::test]
+    async fn test_structural_search_unification_candidate_offline() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        async fn va(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("verified_artifact")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn ss(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("structural_search")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn solve(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str, idem: &str) -> String {
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let ep_id = ep["episode_id"].as_str().unwrap().to_string();
+            claim_and_solve(peer, &ep_id, "trivial", idem).await;
+            ep_id
+        }
+        async fn with_stmt(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str, name: &str, stmt: &str, tag: &str) -> String {
+            let e1 = solve(peer, pv, &format!("{}-a", tag)).await;
+            let a = va(peer, serde_json::json!({"action": {"type":"promote","episode_id":e1,"artifact_kind":"theorem","canonical_name":name}})).await;
+            let a_id = a["artifact_id"].as_str().unwrap().to_string();
+            let e2 = solve(peer, pv, &format!("{}-b", tag)).await;
+            va(peer, serde_json::json!({"action": {"type":"add_version","artifact_id":a_id,"episode_id":e2,"formal_statement":stmt}})).await;
+            tool_json(&peer.call_tool(CallToolRequestParams::new("structural_search").with_arguments(
+                serde_json::json!({"action": {"type":"fingerprint","artifact_id":a_id}}).as_object().unwrap().clone())).await.unwrap());
+            a_id
+        }
+        let pv = create_problem(&peer, "True").await;
+        let a_match = with_stmt(&peer, &pv, "exact_goal", "1 + 1 = 2", "u1").await;      // mock unifies
+        let a_other = with_stmt(&peer, &pv, "other_eq", "2 + 2 = 4", "u2").await;         // same head, no unify
+        let a_le = with_stmt(&peer, &pv, "le_one", "n ≤ m", "u3").await;                  // different head -> prefiltered out
+
+        let res = ss(&peer, serde_json::json!({"action": {"type":"search","statement":"1 + 1 = 2","mode":"unification_candidate"}})).await;
+        let ids: Vec<&str> = res["results"].as_array().unwrap().iter().map(|r| r["result_id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&a_match.as_str()), "the unifying candidate is returned: {:?}", res);
+        assert!(!ids.contains(&a_other.as_str()), "a same-head non-unifying candidate is dropped: {:?}", res);
+        assert!(!ids.contains(&a_le.as_str()), "a different-head candidate is prefiltered out: {:?}", res);
+        assert_eq!(res["results"][0]["confidence"], "high");
+        assert_eq!(res["results"][0]["unification_candidate"], true);
+    }
+
+    /// #245 LIVE (gated on PROOFSEARCH_LIVE_E2E=1): REAL isDefEq unification —
+    /// an alpha-renamed query and a specialized (concrete) query both recover a
+    /// universally-quantified registry lemma.
+    #[tokio::test]
+    async fn test_structural_search_live_unification_candidate() {
+        if std::env::var("PROOFSEARCH_LIVE_E2E").is_err() {
+            eprintln!("skipping live #245 unification (set PROOFSEARCH_LIVE_E2E=1 to run)");
+            return;
+        }
+        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+        let lean_project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("lean-checker");
+        let elan = std::env::var("PROOFSEARCH_ELAN_BIN_PATH").map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(&home).join(".elan").join("bin"));
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let handler = ChatDbMcp::new(Arc::new(Mutex::new(conn)), lean_project_path.clone(), elan);
+        if !handler.lean_available { eprintln!("skipping live #245 unification: Lean unavailable"); return; }
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        async fn call(peer: &rmcp::service::Peer<rmcp::RoleClient>, tool: &str, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new(tool.to_string())
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn prove(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str, proof: &str, idem: &str) -> String {
+            let ep = call(peer, "episode_create", serde_json::json!({"problem_version_id": pv, "max_steps": 5})).await;
+            let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+            let req = &ep["next_action_request"];
+            let (rid, rev) = (req["id"].as_str().unwrap().to_string(), req["episode_revision"].as_i64().unwrap());
+            let claim = call(peer, "attempt_claim", serde_json::json!({
+                "episode_id": episode_id, "action_request_id": rid, "idempotency_key": idem, "expected_revision": rev})).await;
+            call(peer, "episode_step", serde_json::json!({
+                "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"], "expected_revision": rev,
+                "claim_token": claim["claim_token"], "action": {"type": "solve", "proof_term": proof}, "cost_micros": 100})).await;
+            episode_id
+        }
+        let p = call(&peer, "problem_create", serde_json::json!({
+            "source_problem_text": "t", "root_formal_statement": "2 + 2 = 4", "unsafe_dev_attestation": true})).await;
+        let pv = p["problem_version_id"].as_str().unwrap().to_string();
+        let e1 = prove(&peer, &pv, "rfl", "u-1").await;
+        let a = call(&peer, "verified_artifact", serde_json::json!({"action": {"type":"promote",
+            "episode_id": e1, "artifact_kind":"theorem", "canonical_name":"comm_lemma"}})).await;
+        let a_id = a["artifact_id"].as_str().unwrap().to_string();
+        let e2 = prove(&peer, &pv, "rfl", "u-2").await;
+        call(&peer, "verified_artifact", serde_json::json!({"action": {"type":"add_version",
+            "artifact_id": a_id, "episode_id": e2, "formal_statement": "∀ (x y : Nat), x + y = y + x"}})).await;
+        call(&peer, "structural_search", serde_json::json!({"action": {"type":"fingerprint","artifact_id": a_id}})).await;
+
+        // Alpha-renamed query unifies.
+        let r1 = call(&peer, "structural_search", serde_json::json!({"action": {"type":"search",
+            "statement":"∀ (a b : Nat), a + b = b + a", "mode":"unification_candidate"}})).await;
+        assert!(r1["results"].as_array().unwrap().iter().any(|r| r["result_id"] == serde_json::json!(a_id)),
+            "alpha-renamed query unifies: {:?}", r1);
+        // Specialized (concrete) query unifies with the universal lemma.
+        let r2 = call(&peer, "structural_search", serde_json::json!({"action": {"type":"search",
+            "statement":"3 + 5 = 5 + 3", "mode":"unification_candidate"}})).await;
+        assert!(r2["results"].as_array().unwrap().iter().any(|r| r["result_id"] == serde_json::json!(a_id)),
+            "concrete query specializes the universal lemma: {:?}", r2);
+        eprintln!("LIVE #245 unification PASSED: alpha-rename + specialization both recovered via isDefEq");
         drop(client);
     }
 
