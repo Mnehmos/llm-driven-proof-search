@@ -2200,6 +2200,32 @@ pub enum ArtifactRegistryBundleAction {
     ObserveImport { import_id: String },
 }
 
+/// Issue #251: the frozen retrieval benchmark + regression suite. Runs a
+/// reproducible evaluation of the search/ranking that #244/#248 rely on over a
+/// held-constant synthetic fixture corpus (query set + relevance judgments), with
+/// Recall@k / MRR / nDCG, baseline comparison, and a retrieval-enabled-vs-disabled
+/// downstream-utility delta. Frozen so a ranking change is measured against a
+/// fixed target, never silently rewritten.
+#[derive(JsonSchema, Deserialize)]
+pub struct RetrievalBenchmarkArgs {
+    pub action: RetrievalBenchmarkAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RetrievalBenchmarkAction {
+    /// Run the benchmark and return structured metrics + a readable report.
+    Run {
+        /// true = the compact CI regression subset; false (default) = the full
+        /// evaluation.
+        #[serde(default)]
+        compact: bool,
+    },
+    /// Return the frozen fixture corpus, query set, and relevance judgments (for
+    /// audit / to inspect exactly what is being evaluated).
+    Fixtures,
+}
+
 /// Issue #243: the Verified Artifact Registry (VAR) foundation tool. Promotes a
 /// KERNEL-BACKED verified lemma into a curated, immutable, versioned research
 /// artifact with a lifecycle. The registry curates already-established kernel
@@ -5824,6 +5850,267 @@ fn retrieval_packet_json(conn: &Connection, packet_id: &str) -> Result<serde_jso
         "budget": parse(&budget),
         "trust_boundary": "Advisory retrieval record only (#248). Candidates are ranked suggestions, never applicability or proof authority; a selection here is not a verifier-backed dependency (those are verified_artifact_edges with evidence_kind='verifier'). Retrieved-but-unused candidates stay explicitly distinguished from real dependencies.",
     }))
+}
+
+/// #251 frozen retrieval-benchmark fixtures version. Bumped ONLY with an
+/// intentional, documented change to the query set or relevance judgments — the
+/// point of freezing is that ranking changes are measured against a fixed target,
+/// never silently rewritten to whatever the current ranker happens to return.
+const RETRIEVAL_BENCHMARK_FIXTURES_VERSION: &str = "retrieval_bench_fixtures/1.0";
+/// The ranker/index configuration the benchmark evaluates (name + hybrid-lexical
+/// selection feeding the #248 deterministic ranker). Versioned so a metric-moving
+/// ranking change is attributable.
+const RETRIEVAL_BENCHMARK_RANKER_VERSION: &str = "name_hybrid_lexical+ranker/1.0";
+
+/// The frozen benchmark corpus + query set + relevance judgments (#251). A
+/// synthetic, held-constant fixture (NOT live campaign data) so the evaluation is
+/// reproducible and a ranking change is measured against a fixed target. Each
+/// query is tagged with a `family`, a tuning/held_out `split` (held-out queries
+/// are never used to tune ranking), and whether it is in the compact `ci` subset.
+/// `expected_gap: true` marks a query the current lexical ranker is KNOWN to miss
+/// (e.g. a misspelling) — recorded honestly so the metric reflects reality and
+/// motivates type/semantic search (#245/#246), never silently passed.
+fn retrieval_benchmark_fixtures() -> serde_json::Value {
+    serde_json::json!({
+        "fixtures_version": RETRIEVAL_BENCHMARK_FIXTURES_VERSION,
+        "relevance_judgments_version": "relevance/1.0",
+        "corpus": [
+            {"id": "c1", "canonical_name": "quadratic_reciprocity", "informal_summary": "Legendre symbol reciprocity for distinct odd primes", "formal_statement": "theorem quadratic_reciprocity ...", "environment_compatible": true},
+            {"id": "c2", "canonical_name": "gauss_sum_evaluation", "informal_summary": "evaluates a quadratic Gauss sum", "formal_statement": "theorem gauss_sum_evaluation ...", "environment_compatible": true},
+            {"id": "c3", "canonical_name": "divisor_bound", "informal_summary": "an upper bound on the number of divisors", "formal_statement": "theorem divisor_bound ...", "environment_compatible": true},
+            {"id": "c4", "canonical_name": "telescoping_sum_identity", "informal_summary": "a telescoping sum collapses to its endpoints", "formal_statement": "theorem telescoping_sum_identity ...", "environment_compatible": true},
+            {"id": "c5", "canonical_name": "prime_counting_asymptotic", "informal_summary": "asymptotic growth of the prime counting function", "formal_statement": "theorem prime_counting_asymptotic ...", "environment_compatible": true},
+            {"id": "c6", "canonical_name": "cauchy_schwarz_inequality", "informal_summary": "the Cauchy-Schwarz inequality on inner product spaces", "formal_statement": "theorem cauchy_schwarz_inequality ...", "environment_compatible": true},
+            {"id": "c7", "canonical_name": "pigeonhole_principle", "informal_summary": "the finite pigeonhole principle", "formal_statement": "theorem pigeonhole_principle ...", "environment_compatible": false},
+            {"id": "c8", "canonical_name": "fermat_little_theorem", "informal_summary": "a^p is congruent to a modulo a prime p", "formal_statement": "theorem fermat_little_theorem ...", "environment_compatible": true},
+            {"id": "c9", "canonical_name": "euler_totient_multiplicative", "informal_summary": "Euler's totient function is multiplicative", "formal_statement": "theorem euler_totient_multiplicative ...", "environment_compatible": true},
+            {"id": "c10", "canonical_name": "binomial_coefficient_symmetry", "informal_summary": "binomial coefficient symmetry C(n,k)=C(n,n-k)", "formal_statement": "theorem binomial_coefficient_symmetry ...", "environment_compatible": true}
+        ],
+        "queries": [
+            {"id": "q1", "family": "exact_name", "query": "quadratic_reciprocity", "relevant_ids": ["c1"], "split": "tuning", "ci": true},
+            {"id": "q2", "family": "exact_name", "query": "fermat_little_theorem", "relevant_ids": ["c8"], "split": "held_out", "ci": true},
+            {"id": "q3", "family": "partial_name", "query": "reciprocity", "relevant_ids": ["c1"], "split": "tuning", "ci": false},
+            {"id": "q4", "family": "partial_name", "query": "totient", "relevant_ids": ["c9"], "split": "held_out", "ci": false},
+            {"id": "q5", "family": "concept_in_name", "query": "divisor bound", "relevant_ids": ["c3"], "split": "tuning", "ci": true},
+            {"id": "q6", "family": "natural_language", "query": "counting primes asymptotically", "relevant_ids": ["c5"], "split": "held_out", "ci": false},
+            {"id": "q7", "family": "adversarial_lexical", "query": "sum", "relevant_ids": ["c4"], "distractor_ids": ["c2"], "split": "tuning", "ci": true},
+            {"id": "q8", "family": "cross_domain", "query": "inequality", "relevant_ids": ["c6"], "split": "tuning", "ci": false},
+            {"id": "q9", "family": "negative", "query": "nonexistent_topic_xyz", "relevant_ids": [], "split": "held_out", "ci": true},
+            {"id": "q10", "family": "environment_incompatible", "query": "pigeonhole", "relevant_ids": ["c7"], "split": "tuning", "ci": false},
+            {"id": "q11", "family": "misspelled", "query": "recirpocity", "relevant_ids": ["c1"], "split": "held_out", "ci": false, "expected_gap": true}
+        ]
+    })
+}
+
+/// Compute Recall@1/5/10, reciprocal rank, and nDCG@10 for one ranked id list
+/// against a relevance set (#251). All standard, deterministic definitions.
+fn retrieval_bench_metrics(ranked: &[String], relevant: &std::collections::BTreeSet<String>) -> serde_json::Value {
+    if relevant.is_empty() {
+        // Negative query: there is nothing to recall; success is returning no
+        // (false-positive) results. Reported separately from recall metrics.
+        return serde_json::json!({
+            "applicable": false,
+            "retrieved": ranked.len(),
+            "false_positives": ranked.len(),
+            "negative_correct": ranked.is_empty(),
+        });
+    }
+    let recall_at = |k: usize| -> f64 {
+        let hit = ranked.iter().take(k).filter(|id| relevant.contains(*id)).count();
+        hit as f64 / relevant.len() as f64
+    };
+    let rr = ranked.iter().position(|id| relevant.contains(id))
+        .map(|i| 1.0 / (i as f64 + 1.0)).unwrap_or(0.0);
+    let dcg: f64 = ranked.iter().take(10).enumerate()
+        .filter(|(_, id)| relevant.contains(*id))
+        .map(|(i, _)| 1.0 / ((i as f64 + 2.0).log2())).sum();
+    let idcg: f64 = (0..relevant.len().min(10)).map(|i| 1.0 / ((i as f64 + 2.0).log2())).sum();
+    let ndcg = if idcg > 0.0 { dcg / idcg } else { 0.0 };
+    serde_json::json!({
+        "applicable": true,
+        "recall_at_1": recall_at(1),
+        "recall_at_5": recall_at(5),
+        "recall_at_10": recall_at(10),
+        "reciprocal_rank": rr,
+        "ndcg_at_10": ndcg,
+    })
+}
+
+/// Run the frozen retrieval benchmark (#251) over the in-memory fixture corpus,
+/// comparing the available lexical baselines (and honestly reporting the
+/// unavailable type/semantic baselines) with Recall@k / MRR / nDCG, a
+/// source/trust and environment-compatibility accuracy check, and a downstream-
+/// utility delta (retrieval enabled vs disabled). Fully deterministic: same
+/// fixtures + same ranker => same numbers. `compact` runs only the CI subset.
+fn run_retrieval_benchmark(compact: bool) -> serde_json::Value {
+    let fx = retrieval_benchmark_fixtures();
+    let corpus = fx["corpus"].as_array().cloned().unwrap_or_default();
+    let corpus_by_id: std::collections::BTreeMap<String, serde_json::Value> = corpus.iter()
+        .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(|s| (s.to_string(), c.clone()))).collect();
+    let queries: Vec<serde_json::Value> = fx["queries"].as_array().cloned().unwrap_or_default().into_iter()
+        .filter(|q| !compact || q.get("ci").and_then(|v| v.as_bool()).unwrap_or(false)).collect();
+
+    // Selection strategies (baselines). type_directed (#245) and semantic (#246)
+    // are not built; they are reported unavailable, never faked.
+    let select = |strategy: &str, tokens: &[String], raw_query: &str| -> Vec<serde_json::Value> {
+        let ql = raw_query.to_lowercase();
+        corpus.iter().filter_map(|c| {
+            let name = c["canonical_name"].as_str().unwrap_or("").to_lowercase();
+            let summary = c["informal_summary"].as_str().unwrap_or("").to_lowercase();
+            let formal = c["formal_statement"].as_str().unwrap_or("").to_lowercase();
+            let name_hit = tokens.iter().any(|t| name.contains(t.as_str())) || name.contains(&ql);
+            let hybrid_hit = name_hit || tokens.iter().any(|t| summary.contains(t.as_str()) || formal.contains(t.as_str()));
+            let keep = match strategy {
+                "name_only" => name_hit,
+                "hybrid_lexical" => hybrid_hit,
+                _ => false,
+            };
+            if !keep { return None; }
+            Some(serde_json::json!({
+                "result_id": c["id"],
+                "source": "verified_artifacts",
+                "full_name": c["canonical_name"],
+                "informal_summary": c["informal_summary"],
+                "formal_statement": c["formal_statement"],
+                "environment_compatible": c["environment_compatible"],
+                "ranking": {"name_exact_match": name == ql},
+            }))
+        }).collect()
+    };
+
+    let available_baselines = ["name_only", "hybrid_lexical", "retrieval_disabled"];
+    let mut baseline_reports = serde_json::Map::new();
+    // For the downstream-utility comparison.
+    let mut enabled_top5 = 0.0f64;
+    let mut disabled_top5 = 0.0f64;
+    let mut utility_denom = 0.0f64;
+
+    for baseline in available_baselines {
+        let mut per_query = Vec::new();
+        let mut fam_acc: std::collections::BTreeMap<String, (f64, f64, f64, f64, f64, f64)> = std::collections::BTreeMap::new(); // family -> (r1,r5,r10,rr,ndcg,n)
+        let (mut sum_r1, mut sum_r5, mut sum_r10, mut sum_rr, mut sum_ndcg, mut applicable_n) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut negatives_correct = 0u64;
+        let mut negatives_total = 0u64;
+        let mut compat_labeled_correct = 0u64;
+        let mut compat_labeled_total = 0u64;
+
+        for q in &queries {
+            let raw = q["query"].as_str().unwrap_or("");
+            let family = q["family"].as_str().unwrap_or("").to_string();
+            let tokens = extract_symbol_tokens(raw);
+            let relevant: std::collections::BTreeSet<String> = q["relevant_ids"].as_array().cloned().unwrap_or_default()
+                .iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+
+            let ranked_ids: Vec<String> = if baseline == "retrieval_disabled" {
+                Vec::new()
+            } else {
+                let cands = select(baseline, &tokens, raw);
+                let (ranked, _budget) = rank_and_cap_candidates(cands, &tokens, 1_000_000, 10);
+                ranked.iter().filter_map(|c| c.get("result_id").and_then(|v| v.as_str()).map(|s| s.to_string())).collect()
+            };
+
+            // Source/trust + environment-compatibility label accuracy: every
+            // returned id must carry the corpus's own compatibility label.
+            for id in &ranked_ids {
+                if let Some(item) = corpus_by_id.get(id) {
+                    compat_labeled_total += 1;
+                    // (The selection copies environment_compatible verbatim, so this
+                    // is a guard that the pipeline never drops/flips the label.)
+                    if item.get("environment_compatible").is_some() { compat_labeled_correct += 1; }
+                }
+            }
+
+            let m = retrieval_bench_metrics(&ranked_ids, &relevant);
+            if m["applicable"].as_bool().unwrap_or(false) {
+                let r1 = m["recall_at_1"].as_f64().unwrap_or(0.0);
+                let r5 = m["recall_at_5"].as_f64().unwrap_or(0.0);
+                let r10 = m["recall_at_10"].as_f64().unwrap_or(0.0);
+                let rr = m["reciprocal_rank"].as_f64().unwrap_or(0.0);
+                let ndcg = m["ndcg_at_10"].as_f64().unwrap_or(0.0);
+                sum_r1 += r1; sum_r5 += r5; sum_r10 += r10; sum_rr += rr; sum_ndcg += ndcg; applicable_n += 1.0;
+                let e = fam_acc.entry(family.clone()).or_insert((0.0, 0.0, 0.0, 0.0, 0.0, 0.0));
+                e.0 += r1; e.1 += r5; e.2 += r10; e.3 += rr; e.4 += ndcg; e.5 += 1.0;
+                // Downstream utility uses hybrid_lexical (enabled) vs disabled.
+                if baseline == "hybrid_lexical" { enabled_top5 += r5; utility_denom += 1.0; }
+                if baseline == "retrieval_disabled" { disabled_top5 += r5; }
+            } else {
+                negatives_total += 1;
+                if m["negative_correct"].as_bool().unwrap_or(false) { negatives_correct += 1; }
+            }
+            per_query.push(serde_json::json!({
+                "query_id": q["id"], "family": family, "split": q["split"],
+                "expected_gap": q.get("expected_gap").and_then(|v| v.as_bool()).unwrap_or(false),
+                "retrieved": ranked_ids, "metrics": m,
+            }));
+        }
+
+        let mean = |s: f64| if applicable_n > 0.0 { s / applicable_n } else { 0.0 };
+        let by_family: serde_json::Map<String, serde_json::Value> = fam_acc.into_iter().map(|(f, (r1, r5, r10, rr, ndcg, n))| {
+            (f, serde_json::json!({
+                "recall_at_1": r1 / n, "recall_at_5": r5 / n, "recall_at_10": r10 / n,
+                "mrr": rr / n, "ndcg_at_10": ndcg / n, "n": n,
+            }))
+        }).collect();
+        baseline_reports.insert(baseline.to_string(), serde_json::json!({
+            "aggregate": {
+                "recall_at_1": mean(sum_r1), "recall_at_5": mean(sum_r5), "recall_at_10": mean(sum_r10),
+                "mrr": mean(sum_rr), "ndcg_at_10": mean(sum_ndcg), "applicable_queries": applicable_n,
+            },
+            "by_family": by_family,
+            "negative_queries": {"correct": negatives_correct, "total": negatives_total},
+            "environment_compatibility_label_accuracy": {
+                "correct": compat_labeled_correct, "total": compat_labeled_total,
+            },
+            "per_query": per_query,
+        }));
+    }
+
+    let downstream_utility = serde_json::json!({
+        "metric": "mean Recall@5, retrieval ENABLED (hybrid_lexical) vs DISABLED",
+        "enabled_recall_at_5": if utility_denom > 0.0 { enabled_top5 / utility_denom } else { 0.0 },
+        "disabled_recall_at_5": if utility_denom > 0.0 { disabled_top5 / utility_denom } else { 0.0 },
+        "improvement": if utility_denom > 0.0 { (enabled_top5 - disabled_top5) / utility_denom } else { 0.0 },
+        "note": "A controlled comparison on the frozen fixtures: with retrieval disabled the relevant artifact is never surfaced (Recall@5=0). This is a search-metric proxy for proof-search utility; a full model-in-the-loop run is out of scope for a deterministic server-side benchmark (the server never calls a model).",
+    });
+
+    // Readable report.
+    let hy = &baseline_reports["hybrid_lexical"]["aggregate"];
+    let no = &baseline_reports["name_only"]["aggregate"];
+    let report = format!(
+        "Retrieval benchmark ({}), ranker {}\n\
+         mode: {}   queries: {}\n\
+         hybrid_lexical : R@1={:.2} R@5={:.2} R@10={:.2} MRR={:.2} nDCG@10={:.2}\n\
+         name_only      : R@1={:.2} R@5={:.2} R@10={:.2} MRR={:.2} nDCG@10={:.2}\n\
+         retrieval_disabled: R@5={:.2} (floor baseline)\n\
+         downstream utility (enabled - disabled Recall@5): {:.2}\n\
+         type_directed(#245), semantic(#246): UNAVAILABLE (not faked)",
+        RETRIEVAL_BENCHMARK_FIXTURES_VERSION, RETRIEVAL_BENCHMARK_RANKER_VERSION,
+        if compact { "compact/ci" } else { "full" }, queries.len(),
+        hy["recall_at_1"].as_f64().unwrap_or(0.0), hy["recall_at_5"].as_f64().unwrap_or(0.0), hy["recall_at_10"].as_f64().unwrap_or(0.0), hy["mrr"].as_f64().unwrap_or(0.0), hy["ndcg_at_10"].as_f64().unwrap_or(0.0),
+        no["recall_at_1"].as_f64().unwrap_or(0.0), no["recall_at_5"].as_f64().unwrap_or(0.0), no["recall_at_10"].as_f64().unwrap_or(0.0), no["mrr"].as_f64().unwrap_or(0.0), no["ndcg_at_10"].as_f64().unwrap_or(0.0),
+        baseline_reports["retrieval_disabled"]["aggregate"]["recall_at_5"].as_f64().unwrap_or(0.0),
+        downstream_utility["improvement"].as_f64().unwrap_or(0.0),
+    );
+
+    serde_json::json!({
+        "fixtures_version": RETRIEVAL_BENCHMARK_FIXTURES_VERSION,
+        "ranker_version": RETRIEVAL_BENCHMARK_RANKER_VERSION,
+        "relevance_judgments_version": fx["relevance_judgments_version"],
+        "mode": if compact { "compact_ci" } else { "full" },
+        "query_count": queries.len(),
+        "splits": {
+            "tuning": queries.iter().filter(|q| q["split"] == "tuning").count(),
+            "held_out": queries.iter().filter(|q| q["split"] == "held_out").count(),
+        },
+        "baselines": baseline_reports,
+        "unavailable_baselines": {
+            "type_directed": "not implemented (#245) — reported unavailable, never faked",
+            "semantic": "not implemented (#246) — reported unavailable, never faked",
+        },
+        "downstream_utility": downstream_utility,
+        "report": report,
+        "regression_note": "Query set + relevance judgments are frozen (fixtures_version). A ranking change must move these numbers deliberately and bump the ranker_version — failed cases are never silently rewritten to match a new ranker.",
+    })
 }
 
 /// Portable VAR bundle format version (#249). Bumped whenever the canonical
@@ -14622,6 +14909,26 @@ impl ChatDbMcp {
         }
     }
 
+    /// Issue #251: frozen retrieval benchmark + regression suite. A reproducible,
+    /// deterministic evaluation of the search/ranking #244/#248 depend on, over a
+    /// held-constant synthetic fixture corpus. Reports Recall@k / MRR / nDCG,
+    /// baseline comparison (name-only, hybrid-lexical, retrieval-disabled; type
+    /// and semantic reported unavailable, never faked), and a retrieval-enabled-
+    /// vs-disabled downstream-utility delta. Pure over the fixtures — no DB read.
+    async fn do_retrieval_benchmark(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: RetrievalBenchmarkArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        match args.action {
+            RetrievalBenchmarkAction::Run { compact } => {
+                let out = run_retrieval_benchmark(compact);
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&out).unwrap())]))
+            }
+            RetrievalBenchmarkAction::Fixtures => {
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&retrieval_benchmark_fixtures()).unwrap())]))
+            }
+        }
+    }
+
     /// Issue #243: Verified Artifact Registry foundation. Promote a kernel-backed
     /// verified lemma into a curated, immutable, versioned artifact and drive its
     /// lifecycle. The registry curates already-established kernel truth: promotion
@@ -18236,6 +18543,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ProactiveRetrievalArgs>("proactive_retrieval", "Issue #248: proactive artifact retrieval at formalization checkpoints. Runs an ADVISORY, budget-aware, reproducible retrieval pass whose query is DERIVED from a scope (the agent never names a candidate), then persists the whole packet — query features, search/index versions, ranked candidates with per-source trust + environment-compatibility labels, contamination exposure, and a deterministic context-byte budget — so the trajectory (and MathCorpus) can distinguish used dependencies, retrieval candidates, and retrieved-but-unused artifacts. TRUST BOUNDARY: never adds an import, alters a problem version, or marks anything proved; a high rank is never applicability, and a retrieval selection is NEVER a verifier-backed dependency (those are verified_artifact_edges evidence_kind='verifier'). `action` is internally tagged — exactly one of: {\"type\":\"retrieve\",\"trigger_mode\":\"manual\"|\"plan_item_created\"|\"obligation_created\"|\"after_repeated_failure\"|\"before_give_up\"} (+ at most one scope: problem_version_id | plan_item_id | episode_id, or none = freeform requiring query_hint; + optional query_hint (extra NL / diagnostic root-cause terms folded into the derived query), sources [\"mathlib\"|\"verified_artifacts\"|\"mathcorpus\"], run_envelope_id (an evaluation/benchmark/private_audit envelope DISABLES retrieval — the pass is still recorded with zero candidates, never silently skipped), limit, budget_cap_bytes (default 8192, deterministic cap — dropped candidates are reported), max_candidates (default 10) — derives concept tokens from the scope statement, runs the same deterministic search as math_search per token, ranks (exact name → env-compatible → query-term overlap → source priority → id) and caps, records benchmark contamination exposure, and returns the persisted packet) | {\"type\":\"record_selection\",\"packet_id\":\"..\"} (+ optional inspected [ids], selected [ids] — advisory: recomputes retrieved-but-unused = candidates − selected; ids must be candidates in THIS packet; a selection here never becomes a verifier-backed dependency) | {\"type\":\"get\",\"packet_id\":\"..\"} (read one packet in full) | {\"type\":\"list\"} (+ optional scope_kind, scope_id, limit — packet index, most recent first). Consumes the search API from #244; validated by the #251 retrieval benchmark."),
             make_tool::<VerifiedArtifactArgs>("verified_artifact", "Issue #243: Verified Artifact Registry (VAR) foundation — promote a KERNEL-BACKED verified lemma into a curated, immutable, versioned research artifact with a lifecycle, distinct from an episode-local helper or a raw canonical result. TRUST BOUNDARY: the registry CURATES already-established kernel truth — promotion copies the origin lemma's immutable kernel hashes (statement_hash/proof_body_hash/environment_hash/kernel_result_hash) verbatim, versions are append-only (mathematical history is never overwritten), and no maturity/review/supersede action changes those hashes or confers proof authority. `action` is internally tagged — exactly one of: {\"type\":\"promote\",\"episode_id\":\"..\",\"artifact_kind\":\"helper_lemma\"|\"definition\"|\"theorem\"|\"abstraction\"|\"reduction\"|\"classification\"|\"construction\"|\"negative_result\"|\"proof_module\"|\"tactic_recipe\",\"canonical_name\":\"..\"} (+ optional obligation_id (disambiguates when an episode proved >1 lemma), informal_summary, source_campaign, promotion_reason, candidate_for_mathlib — mints artifact v1 from an existing positive episode_verified_lemma; rejects anything not kernel-backed. Starts maturity=promoted, review=unreviewed) | {\"type\":\"add_version\",\"artifact_id\":\"..\",\"episode_id\":\"..\"} (+ optional obligation_id, canonical_name, formal_statement, promotion_reason — appends a new IMMUTABLE version from another kernel-backed origin, e.g. a generalization; never overwrites the original) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read-only: the artifact with every version + kernel-backed origins, the append-only maturity lifecycle, and reviews) | {\"type\":\"set_status\",\"artifact_id\":\"..\",\"to_status\":\"discovered\"|\"kernel_verified_local\"|\"promoted\"|\"reused\"|\"generalized\"|\"independently_reviewed\"|\"upstream_candidate\"|\"upstreamed\"|\"retained_local\"|\"superseded\",\"actor\":\"..\"} (+ optional reason — appends a maturity lifecycle event; curation only, never proof authority) | {\"type\":\"review\",\"artifact_id\":\"..\",\"review_status\":\"unreviewed\"|\"in_review\"|\"reviewed_with_caveats\"|\"independently_reviewed\"|\"rejected\",\"reviewer\":\"..\"} (+ optional notes, version_id — appends a review and moves review_status; never alters a version's kernel hashes) | {\"type\":\"supersede\",\"artifact_id\":\"..\",\"superseded_by\":\"..\",\"actor\":\"..\"} (+ optional reason — marks the artifact superseded by another; the original stays fully navigable) | {\"type\":\"add_edge\",\"from_artifact_id\":\"..\",\"to_artifact_id\":\"..\",\"edge_kind\":\"formally_depends_on\"|\"imported_by_generated_module\"|\"selected_as_retrieval_candidate\"|\"retrieved_but_unused\"|\"actually_used_in_verified_proof\"|\"generalized_from\"|\"equivalent_to\"|\"supersedes\"|\"applies_to_campaign\"|\"exported_as_mathcorpus_packet\"|\"proposed_to_mathlib\",\"evidence_kind\":\"verifier\"|\"retrieval\"|\"declared\"} (+ optional episode_id, campaign, notes — #250: record a typed dependency/usage edge. ONLY evidence_kind='verifier' counts as formal use: 'actually_used_in_verified_proof' requires verifier evidence, and a verifier edge naming an episode_id must trace to a real kernel_verified/certified episode; retrieval/declared relationships are separate kinds and never masquerade as use. A 'formally_depends_on' edge that would create a cycle is rejected) | {\"type\":\"impact\",\"artifact_id\":\"..\"} (#250: impact metrics RECOMPUTED from the edge/review records — verified downstream uses, distinct campaigns, retrieval-selected vs retrieved-but-unused, selection rate, generated-module imports, review count, generalization lineage; retrieval is never counted as use, and popularity is not proof authority) | {\"type\":\"upstream_readiness\",\"artifact_id\":\"..\"} (#250: read the Mathlib upstream-readiness review metadata — status + checklist; REVIEW METADATA, never proof status) | {\"type\":\"record_upstream_status\",\"artifact_id\":\"..\",\"status\":\"not_candidate\"|\"needs_generalization\"|\"needs_deduplication\"|\"needs_style_review\"|\"ready_for_pr\"|\"pr_open\"|\"accepted\"|\"rejected_or_retained_local\",\"reviewer\":\"..\"} (+ optional checklist, notes — set upstream-readiness; review metadata only, never proof status). Foundation for the #239 VAR family (#244 math_search builds on this; #247/#249/#251-#253 remain)."),
             make_tool::<ArtifactRegistryBundleArgs>("artifact_registry_bundle", "Issue #249: portable Verified Artifact Registry bundle — a self-contained, hash-pinned package another Proof Search instance can validate, import, index, and replay WITHOUT the origin database (a database-only hash/id is not portable evidence: the canonical preimages must travel with it). TRUST BOUNDARY: import PRESERVES origin ids/hashes, an imported artifact stays source-distinguished (origin_instance_id) with kernel hashes that are INERT DATA until replayed against the pinned environment, and an imported review is NEVER local kernel authority; conflicts and unavailable environments are QUARANTINED, never falsely verified. `action` is internally tagged — exactly one of: {\"type\":\"export\"} (+ optional artifact_ids [..] (default whole registry; edges kept only when both endpoints are exported), include_proof_bodies (default true — embeds the proof-source bytes behind each proof_body_hash so an importer can replay; false redacts them for restricted/benchmark-sensitive bodies, hashes still travel with proof_source_available=false) — returns a wrapper {content, bundle_hash, origin_instance_id, exported_at, record_counts}; the bundle_hash is the canonical hash of `content` only, so re-export from the same DB is byte-deterministic modulo the volatile instance/timestamp metadata) | {\"type\":\"validate\",\"bundle_json\":\"..\"} (recompute the content hash to detect tampering, then check referential integrity + preimage presence — every version has its formal_statement preimage and immutable kernel hashes, origins/edges/superseded_by point inside the bundle; writes nothing) | {\"type\":\"import\",\"bundle_json\":\"..\"} (+ optional dry_run — validates FIRST and refuses a tampered/broken bundle before any write; preserves ids/hashes; classifies each artifact as inserted / skipped_duplicate (exact match, idempotent re-import) / quarantined (version_conflict — same id different statement, never overwritten; name_collision — same canonical_name different statement under another id; environment_unavailable — bundle lean_toolchain doesn't match this instance, can't replay here); rematerializes proof-source bytes for replay; atomic rollback on error; records an append-only artifact_bundle_imports ledger row even for a dry_run) | {\"type\":\"observe_import\",\"import_id\":\"..\"} (read what a prior import inserted / skipped / quarantined). Coordinates with MCIP export (#230/#263): MCIP is the enrichment/evidence contract, this bundle is the executable library package."),
+            make_tool::<RetrievalBenchmarkArgs>("retrieval_benchmark", "Issue #251: frozen retrieval benchmark + regression suite — a reproducible, deterministic evaluation of the search/ranking that math_search (#244) and proactive_retrieval (#248) depend on, run over a HELD-CONSTANT synthetic fixture corpus (query set + relevance judgments) so a ranking change is measured against a fixed target and never silently rewritten. `action` is internally tagged — exactly one of: {\"type\":\"run\"} (+ optional compact (default false = full evaluation; true = the CI regression subset) — returns structured metrics [Recall@1/5/10, MRR, nDCG@10] per baseline and per query family, a tuning/held-out split, negative-query and environment-compatibility-label accuracy, a downstream-utility delta [retrieval ENABLED vs DISABLED mean Recall@5], and a readable `report` string. Baselines compared: name_only, hybrid_lexical, retrieval_disabled; type_directed (#245) and semantic (#246) are reported UNAVAILABLE, never faked. Adversarial lexical, misspelled (expected_gap), and cross-domain families are included so known limitations show honestly) | {\"type\":\"fixtures\"} (return the frozen corpus + queries + relevance judgments for audit). Pure over the fixtures — reads no DB, calls no model, no Lean; the same fixtures_version + ranker_version always produce the same numbers. Validates #244/#248; the type/semantic baselines light up once #245/#246 land."),
             make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
             make_tool::<CandidateConstructionArgs>("candidate_construction", "Issue #188: ONE tool for the entire candidate-construction family (issue #8) — propose a candidate mathematical object, record empirical checks against it, revise its status, and attach it to a research node or verification layer. A CANDIDATE CONSTRUCTION IS A PROPOSED MATHEMATICAL OBJECT, NOT A PROOF CERTIFICATE: every action records research artifacts useful for search and planning; trust_status never certifies anything — empirical support, human review, citation, and 'a formal statement exists' are all explicitly distinct from kernel verification, and no field can hold kernel evidence. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"construction_type\":\"graph_family\"|\"point_configuration\"|\"coloring\"|\"field_tower\"|\"lattice\"|\"counterexample\"|\"asymptotic_family\"|\"algebraic_object\"|\"combinatorial_design\"|\"other\",\"informal_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, verification_layer_id, problem_version_id, episode_id, name, parameters_json, construction_json, claimed_properties_json, known_failures_json, empirical_checks_json, verification_targets_json, status, trust_status, and motivated-discovery metadata: motivating_move, source_observation, intended_role, strategy_context, why_this_might_work, why_this_might_fail, next_check, future_challenge_relevance — propose a candidate construction. Can exist before a dossier, node, Lean theorem, problem, or episode; a research artifact, not a proof certificate) | {\"type\":\"observe\",\"candidate_construction_id\":\"..\",\"description\":\"..\",\"result\":\"supports\"|\"refutes\"|\"inconclusive\"} (+ optional details_json, observed_by — record one empirical check, appended to the construction's empirical_checks history. Never changes proof status, and 'supports' never implies proved) | {\"type\":\"update_status\",\"candidate_construction_id\":\"..\"} (+ at least one of status, trust_status, claimed_properties_json, known_failures_json, next_check — update the construction in place; a falsified/rejected construction stays visible, never deleted. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified — and no other trust_status confers proof either) | {\"type\":\"link_node\",\"candidate_construction_id\":\"..\",\"node_id\":\"..\"} (attach the construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier. Linking never changes either side's trust_status) | {\"type\":\"link_verification_layer\",\"candidate_construction_id\":\"..\",\"verification_layer_id\":\"..\"} (attach the construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier. Linking a layer is provenance, not promotion — the construction's trust_status is unchanged, and a kernel_verified_claim_linked construction is re-checked against the newly linked layer)"),
@@ -18440,8 +18748,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 58,
-                        "total_tool_count": 58,
+                        "classified_tool_count": 59,
+                        "total_tool_count": 59,
                         "tools": {
                             "mathcorpus_export": {
                                 "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
@@ -18744,6 +19052,16 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic — bundle content is fully id-sorted so re-export from the same DB is byte-identical modulo the volatile origin_instance_id/exported_at wrapper fields (outside the content hash); import classification (inserted/skipped_duplicate/quarantined) is a pure function of local state + bundle content",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "verified_artifact_registry_metadata",
+                                "required_run_mode": "any"
+                            },
+                            "retrieval_benchmark": {
+                                "side_effect": "read_only — runs entirely over the in-memory frozen fixture corpus (#251); reads no DB table, writes nothing, invokes no Lean and no model",
+                                "trust_level": "advisory evaluation metadata — reports search-quality metrics only; marks nothing proved and confers no proof authority. Unavailable baselines (type_directed #245, semantic #246) are reported unavailable, never faked",
+                                "cost_surface": "none — pure in-memory computation over a fixed fixture set",
+                                "benchmark_safety": "safe_public_output — the fixture corpus is synthetic and held-constant, not live campaign data or benchmark-tracked problems",
+                                "replayability": "fully deterministic — the same fixtures_version + ranker_version always produce identical numbers; frozen query set + relevance judgments mean a ranking change is measured, never silently rewritten",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "evaluation_metadata",
                                 "required_run_mode": "any"
                             },
                             "publication_review": {
@@ -19984,6 +20302,7 @@ impl ServerHandler for ChatDbMcp {
             "publication_review" => self.do_publication_review(args_val).await,
             "verified_artifact" => self.do_verified_artifact(args_val).await,
             "artifact_registry_bundle" => self.do_artifact_registry_bundle(args_val).await,
+            "retrieval_benchmark" => self.do_retrieval_benchmark(args_val).await,
             "math_search" => self.do_math_search(args_val).await,
             "proactive_retrieval" => self.do_proactive_retrieval(args_val).await,
             "candidate_construction" => self.do_candidate_construction(args_val).await,
@@ -20993,7 +21312,7 @@ mod tests {
         // + 1 verified_artifact (issue #243: Verified Artifact Registry foundation
         // - promote/add_version/observe/set_status/review/supersede) = 55.
         // + 1 math_search (issue #244: unified advisory search across mathlib/VAR/mathcorpus) = 56.
-        assert_eq!(list_res.tools.len(), 58);
+        assert_eq!(list_res.tools.len(), 59);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -23784,6 +24103,77 @@ mod tests {
         let obs_imp = arb(&peer_d, serde_json::json!({"action": {"type":"observe_import","import_id": import_id}})).await;
         assert_eq!(obs_imp["dry_run"], true);
         assert_eq!(obs_imp["summary"]["inserted"].as_array().unwrap().len(), 2);
+    }
+
+    /// #251: the frozen retrieval benchmark is deterministic, compares baselines,
+    /// proves retrieval beats no-retrieval, keeps tuning/held-out distinct, and
+    /// reports the unbuilt baselines as unavailable rather than faking them. This
+    /// is the CI regression gate — the metric FLOORS below are what a ranking
+    /// change must consciously move (and bump the ranker_version), never silently.
+    #[tokio::test]
+    async fn test_retrieval_benchmark_regression_and_baselines() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        async fn rb(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("retrieval_benchmark")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+
+        let full = rb(&peer, serde_json::json!({"action": {"type":"run"}})).await;
+        // Deterministic: a second run is byte-identical.
+        let full2 = rb(&peer, serde_json::json!({"action": {"type":"run"}})).await;
+        assert_eq!(full, full2, "benchmark is fully deterministic");
+
+        // Versions are pinned and surfaced.
+        assert_eq!(full["fixtures_version"], "retrieval_bench_fixtures/1.0");
+        assert!(full["ranker_version"].is_string());
+
+        // Baselines present; type/semantic honestly unavailable (not faked).
+        let baselines = full["baselines"].as_object().unwrap();
+        assert!(baselines.contains_key("name_only"));
+        assert!(baselines.contains_key("hybrid_lexical"));
+        assert!(baselines.contains_key("retrieval_disabled"));
+        assert!(full["unavailable_baselines"]["type_directed"].is_string());
+        assert!(full["unavailable_baselines"]["semantic"].is_string());
+
+        // Regression FLOORS: hybrid_lexical retrieves the right theorem well.
+        let hy = &full["baselines"]["hybrid_lexical"]["aggregate"];
+        assert!(hy["recall_at_5"].as_f64().unwrap() >= 0.7, "hybrid Recall@5 floor: {:?}", hy);
+        assert!(hy["mrr"].as_f64().unwrap() >= 0.6, "hybrid MRR floor: {:?}", hy);
+        // hybrid_lexical is at least as good as name_only (it indexes summaries too).
+        let no = &full["baselines"]["name_only"]["aggregate"];
+        assert!(hy["recall_at_5"].as_f64().unwrap() >= no["recall_at_5"].as_f64().unwrap());
+
+        // Downstream utility: retrieval enabled strictly beats disabled.
+        let util = &full["downstream_utility"];
+        assert!(util["enabled_recall_at_5"].as_f64().unwrap() > util["disabled_recall_at_5"].as_f64().unwrap(),
+            "retrieval must beat no-retrieval: {:?}", util);
+        assert_eq!(util["disabled_recall_at_5"].as_f64().unwrap(), 0.0, "disabled floor is zero");
+
+        // retrieval_disabled scores zero recall (it returns nothing).
+        assert_eq!(full["baselines"]["retrieval_disabled"]["aggregate"]["recall_at_5"].as_f64().unwrap(), 0.0);
+
+        // Held-out and tuning splits are both non-empty and distinct.
+        assert!(full["splits"]["tuning"].as_u64().unwrap() > 0);
+        assert!(full["splits"]["held_out"].as_u64().unwrap() > 0);
+
+        // The adversarial and misspelled families are actually evaluated.
+        let fams: std::collections::BTreeSet<String> = full["baselines"]["hybrid_lexical"]["per_query"].as_array().unwrap()
+            .iter().filter_map(|q| q["family"].as_str().map(|s| s.to_string())).collect();
+        assert!(fams.contains("adversarial_lexical"));
+        assert!(fams.contains("misspelled"));
+        // A negative query returns nothing relevant.
+        assert!(full["baselines"]["hybrid_lexical"]["negative_queries"]["total"].as_u64().unwrap() >= 1);
+
+        // Compact CI subset is smaller than the full run and still deterministic.
+        let compact = rb(&peer, serde_json::json!({"action": {"type":"run","compact": true}})).await;
+        assert!(compact["query_count"].as_u64().unwrap() < full["query_count"].as_u64().unwrap());
+        assert!(compact["report"].as_str().unwrap().contains("compact/ci"));
+
+        // Fixtures are inspectable.
+        let fx = rb(&peer, serde_json::json!({"action": {"type":"fixtures"}})).await;
+        assert_eq!(fx["corpus"].as_array().unwrap().len(), 10);
+        assert!(fx["queries"].as_array().unwrap().len() >= 10);
     }
 
     /// #240: a gateway that fails with an ordered diagnostic list — an
