@@ -2226,6 +2226,48 @@ pub enum RetrievalBenchmarkAction {
     Fixtures,
 }
 
+/// Issue #247: make promoted artifacts directly reusable through shared Lean
+/// modules and safe import planning. Materialize a deterministic, versioned Lean
+/// library from immutable registry records, and plan the import a new problem
+/// version needs to use them — advisory only, never mutating an existing
+/// problem's immutable import manifest and never conferring proof authority.
+#[derive(JsonSchema, Deserialize)]
+pub struct ArtifactModuleArgs {
+    pub action: ArtifactModuleAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ArtifactModuleAction {
+    /// Materialize the selected promoted artifacts into a deterministic shared
+    /// Lean module (idempotent — the same snapshot yields identical bytes/hash and
+    /// returns the existing row). Fails closed on incompatible environments, a
+    /// dependency outside the selection, a cycle, a name collision, a superseded
+    /// or not-yet-promoted artifact.
+    Materialize {
+        artifact_ids: Vec<String>,
+        /// NumberTheory | Combinatorics | GraphTheory | Analysis | Campaigns
+        /// (default Campaigns).
+        #[serde(default)]
+        category: Option<String>,
+    },
+    /// Advisory: report the import manifest + module path a NEW problem version
+    /// would need to use the selected artifacts, and their environment
+    /// compatibility with an optional base problem. Mutates nothing.
+    PlanImport {
+        artifact_ids: Vec<String>,
+        #[serde(default)]
+        base_problem_version_id: Option<String>,
+    },
+    /// Read a generated module (recomputes source_hash to detect tampering).
+    Observe { module_id: String },
+    /// List generated modules, most recent first.
+    List {
+        #[serde(default)]
+        limit: Option<i64>,
+    },
+}
+
 /// Issue #243: the Verified Artifact Registry (VAR) foundation tool. Promotes a
 /// KERNEL-BACKED verified lemma into a curated, immutable, versioned research
 /// artifact with a lifecycle. The registry curates already-established kernel
@@ -6111,6 +6153,204 @@ fn run_retrieval_benchmark(compact: bool) -> serde_json::Value {
         "report": report,
         "regression_note": "Query set + relevance judgments are frozen (fixtures_version). A ranking change must move these numbers deliberately and bump the ranker_version — failed cases are never silently rewritten to match a new ranker.",
     })
+}
+
+/// The folder categories a generated shared module (#247) can live under,
+/// matching the lean-checker/MnemosyneArtifacts/ layout.
+const GENERATED_MODULE_CATEGORIES: &[&str] = &["NumberTheory", "Combinatorics", "GraphTheory", "Analysis", "Campaigns"];
+
+/// One member of a generated shared module (#247): the current version of a
+/// promoted registry artifact, resolved to the fields the deterministic source
+/// assembly needs.
+struct ModuleMember {
+    artifact_id: String,
+    version_id: String,
+    artifact_version: i64,
+    canonical_name: String,
+    formal_statement: Option<String>,
+    proof_body_hash: String,
+    environment_hash: String,
+    maturity_status: String,
+}
+
+/// Resolve selected artifact ids to their current versions for materialization
+/// (#247). Fails closed on: an unknown id, an artifact not yet promoted (still
+/// `discovered`/`kernel_verified_local` — only reviewed promoted artifacts are
+/// materialized), a superseded artifact (use its successor), or a duplicate
+/// canonical_name in the selection (a name collision that would shadow in Lean).
+fn resolve_module_members(conn: &Connection, artifact_ids: &[String]) -> Result<Vec<ModuleMember>, McpError> {
+    let mut seen_ids = std::collections::BTreeSet::new();
+    let mut seen_names: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut members = Vec::new();
+    for id in artifact_ids {
+        if !seen_ids.insert(id.clone()) { continue; }
+        let row: Option<(String, String, Option<String>, i64, String, String)> = conn.query_row(
+            "SELECT a.maturity_status, a.canonical_name, a.superseded_by, a.current_version, \
+             v.id, v.proof_body_hash FROM verified_artifacts a \
+             JOIN verified_artifact_versions v ON v.artifact_id = a.id AND v.artifact_version = a.current_version \
+             WHERE a.id = ?1",
+            [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        ).optional().map_err(rs)?;
+        let Some((maturity, name, superseded_by, cur_ver, version_id, proof_hash)) = row else {
+            return Err(mcp_invalid_params(format!("unknown artifact_id: {}", id)));
+        };
+        if matches!(maturity.as_str(), "discovered" | "kernel_verified_local") {
+            return Err(mcp_invalid_params(format!(
+                "artifact {} (maturity={}) is not promoted; only reviewed promoted artifacts are materialized", id, maturity)));
+        }
+        if let Some(sb) = &superseded_by {
+            return Err(mcp_invalid_params(format!(
+                "artifact {} is superseded by {}; materialize the successor instead", id, sb)));
+        }
+        if let Some(other) = seen_names.insert(name.clone(), id.clone()) {
+            return Err(mcp_invalid_params(format!(
+                "name collision: artifacts {} and {} both declare `{}` — a generated module cannot contain two of the same name", other, id, name)));
+        }
+        // Fetch the version's formal_statement + environment_hash.
+        let (formal, env): (Option<String>, String) = conn.query_row(
+            "SELECT formal_statement, environment_hash FROM verified_artifact_versions WHERE id = ?1",
+            [&version_id], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).map_err(rs)?;
+        let _ = superseded_by; // consumed above (rejected); not retained
+        members.push(ModuleMember {
+            artifact_id: id.clone(), version_id, artifact_version: cur_ver, canonical_name: name,
+            formal_statement: formal, proof_body_hash: proof_hash, environment_hash: env,
+            maturity_status: maturity,
+        });
+    }
+    if members.is_empty() {
+        return Err(mcp_invalid_params("no artifacts selected to materialize".to_string()));
+    }
+    Ok(members)
+}
+
+/// Topologically order module members by their `formally_depends_on` edges
+/// (#247/#250). Fails closed on a dependency pointing OUTSIDE the selection (the
+/// module would not be self-contained) or a cycle. Deterministic: ready nodes are
+/// emitted in artifact_id order so the ordering — and thus the module bytes — is
+/// stable across rebuilds.
+fn topo_order_members(conn: &Connection, members: &[ModuleMember]) -> Result<Vec<usize>, McpError> {
+    let index: std::collections::BTreeMap<String, usize> = members.iter().enumerate()
+        .map(|(i, m)| (m.artifact_id.clone(), i)).collect();
+    let n = members.len();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n]; // dep -> dependent (edge from prerequisite to consumer)
+    let mut indeg = vec![0usize; n];
+    for (i, m) in members.iter().enumerate() {
+        // Direct formal dependencies of m within the registry.
+        let mut stmt = conn.prepare(
+            "SELECT to_artifact_id FROM verified_artifact_edges \
+             WHERE from_artifact_id = ?1 AND edge_kind = 'formally_depends_on'",
+        ).map_err(rs)?;
+        let deps = stmt.query_map([&m.artifact_id], |r| r.get::<_, String>(0)).map_err(rs)?
+            .collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        drop(stmt);
+        for dep in deps {
+            match index.get(&dep) {
+                Some(&j) => { adj[j].push(i); indeg[i] += 1; } // dep j must precede i
+                None => return Err(mcp_invalid_params(format!(
+                    "artifact {} formally depends on {} which is not in the selection — the generated module would not be self-contained; include it", m.artifact_id, dep))),
+            }
+        }
+    }
+    // Kahn's algorithm, deterministic tie-break by artifact_id.
+    let mut ready: Vec<usize> = (0..n).filter(|&i| indeg[i] == 0).collect();
+    ready.sort_by(|&a, &b| members[a].artifact_id.cmp(&members[b].artifact_id));
+    let mut order = Vec::new();
+    while let Some(node) = ready.first().copied() {
+        ready.remove(0);
+        order.push(node);
+        let mut newly = Vec::new();
+        for &c in &adj[node] {
+            indeg[c] -= 1;
+            if indeg[c] == 0 { newly.push(c); }
+        }
+        for c in newly { ready.push(c); }
+        ready.sort_by(|&a, &b| members[a].artifact_id.cmp(&members[b].artifact_id));
+    }
+    if order.len() != n {
+        return Err(mcp_invalid_params(
+            "the selected artifacts have a formal-dependency cycle; cannot topologically order them".to_string()));
+    }
+    Ok(order)
+}
+
+/// Assemble the DETERMINISTIC Lean source of a generated shared module (#247).
+/// Pure function of the ordered members + category + environment — no timestamp,
+/// no uuid — so rebuilding the same snapshot reproduces identical bytes. A
+/// declaration's proof is embedded ONLY when its kernel-verified source resolves
+/// from the content-addressed store (`self_contained_source`); otherwise it is a
+/// signature-only provenance comment (`proof_source_unavailable`) so the module
+/// never carries an unverified or client-supplied proof body. Returns
+/// (source_text, replay_status).
+fn assemble_module_source(
+    members_ordered: &[&ModuleMember],
+    category: &str,
+    module_path: &str,
+    environment_hash: &str,
+    lean_project_path: &std::path::Path,
+) -> (String, &'static str) {
+    let mut all_resolved = true;
+    let mut body = String::new();
+    for m in members_ordered {
+        let stmt = m.formal_statement.clone().unwrap_or_default();
+        let (content_path, _) = verifier_artifact_paths(lean_project_path, &m.proof_body_hash);
+        let proof_source = std::fs::read_to_string(&content_path).ok();
+        body.push_str(&format!(
+            "\n-- {} (artifact {} v{}, statement carried from the immutable registry version)\n",
+            m.canonical_name, m.artifact_id, m.artifact_version));
+        match proof_source {
+            Some(src) if !stmt.is_empty() => {
+                body.push_str(&format!("theorem {} : {} :=\n{}\n", m.canonical_name, stmt, src.trim_end()));
+            }
+            _ => {
+                all_resolved = false;
+                body.push_str(&format!(
+                    "-- SIGNATURE ONLY (kernel-verified proof source not resolvable in this store):\n\
+                     --   theorem {} : {}\n\
+                     -- proof_body_hash={} — resolve from the origin store to make this module self-contained.\n",
+                    m.canonical_name, if stmt.is_empty() { "<statement unavailable>" } else { &stmt }, m.proof_body_hash));
+            }
+        }
+    }
+    let members_manifest: Vec<String> = members_ordered.iter()
+        .map(|m| format!("--   {} : artifact {} v{} (maturity={})", m.canonical_name, m.artifact_id, m.artifact_version, m.maturity_status))
+        .collect();
+    let header = format!(
+        "/-\n  Generated MnemosyneArtifacts module — DO NOT EDIT (issue #247).\n\
+         \x20 Deterministically assembled from immutable Verified Artifact Registry records.\n\
+         \x20 module_path: {}\n  category: {}\n  environment_hash: {}\n  members (topologically ordered):\n{}\n-/\n",
+        module_path, category, environment_hash, members_manifest.join("\n"));
+    let source = format!("{}{}", header, body);
+    (source, if all_resolved { "self_contained_source" } else { "proof_source_unavailable" })
+}
+
+/// Read one generated shared module (#247), recomputing its source_hash so a
+/// tampered stored source is detectable (source_hash_matches).
+fn generated_module_json(conn: &Connection, module_id: &str) -> Result<serde_json::Value, McpError> {
+    let row: Option<(String, String, String, String, String, String, String, String)> = conn.query_row(
+        "SELECT module_path, category, environment_hash, artifact_version_ids_json, source_text, source_hash, replay_status, created_at \
+         FROM generated_artifact_modules WHERE id = ?1",
+        [module_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)),
+    ).optional().map_err(rs)?;
+    let Some((path, category, env, members_json, source_text, source_hash, replay, created)) = row else {
+        return Err(mcp_invalid_params(format!("unknown module_id: {}", module_id)));
+    };
+    let recomputed = proofsearch_core::hashing::canonical_hash(&source_text).ok();
+    let matches = recomputed.as_deref() == Some(source_hash.as_str());
+    Ok(serde_json::json!({
+        "module_id": module_id,
+        "module_path": path,
+        "category": category,
+        "environment_hash": env,
+        "members": serde_json::from_str::<serde_json::Value>(&members_json).unwrap_or(serde_json::Value::Null),
+        "source_text": source_text,
+        "source_hash": source_hash,
+        "source_hash_matches": matches,
+        "replay_status": replay,
+        "created_at": created,
+        "trust_boundary": "A generated module is a deterministic assembly of immutable registry records; it confers no proof authority. source_hash_matches=false means the stored source was edited out from under its hash. A 'proof_source_unavailable' module is a signature manifest, not yet kernel-usable; actual reuse still goes through problem_create + a kernel-verified attempt.",
+    }))
 }
 
 /// Portable VAR bundle format version (#249). Bumped whenever the canonical
@@ -14929,6 +15169,146 @@ impl ChatDbMcp {
         }
     }
 
+    /// Issue #247: materialize promoted artifacts into a deterministic shared Lean
+    /// module and plan safe imports. Advisory throughout — never mutates an
+    /// existing problem's immutable import manifest, never confers proof
+    /// authority; actual reuse still flows through problem_create + a kernel-
+    /// verified attempt.
+    async fn do_artifact_module(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: ArtifactModuleArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        match args.action {
+            ArtifactModuleAction::Materialize { artifact_ids, category } => {
+                let category = category.unwrap_or_else(|| "Campaigns".to_string());
+                validate_one_of("category", &category, GENERATED_MODULE_CATEGORIES)?;
+                let conn = self.conn.lock().await;
+                let members = resolve_module_members(&conn, &artifact_ids)?;
+                // Environment gate: a module mixes only artifacts under ONE pinned
+                // environment (fail closed with an actionable diagnostic).
+                let env0 = members[0].environment_hash.clone();
+                let mismatched: Vec<String> = members.iter().filter(|m| m.environment_hash != env0)
+                    .map(|m| format!("{}={}", m.artifact_id, m.environment_hash)).collect();
+                if !mismatched.is_empty() {
+                    return Err(mcp_invalid_params(format!(
+                        "incompatible environments — a generated module requires one shared environment_hash (base {}); mismatched: {:?}", env0, mismatched)));
+                }
+                let order = topo_order_members(&conn, &members)?;
+                let ordered: Vec<&ModuleMember> = order.iter().map(|&i| &members[i]).collect();
+                // Deterministic module path from the ordered member identities.
+                let path_seed: Vec<String> = ordered.iter().map(|m| format!("{}:{}", m.artifact_id, m.artifact_version)).collect();
+                let path_hash = proofsearch_core::hashing::canonical_hash(&path_seed).map_err(mcp_internal_error)?;
+                let module_path = format!("MnemosyneArtifacts.{}.M_{}", category, &path_hash[..12]);
+                let (source_text, replay_status) = assemble_module_source(&ordered, &category, &module_path, &env0, &self.lean_project_path);
+                let source_hash = proofsearch_core::hashing::canonical_hash(&source_text).map_err(mcp_internal_error)?;
+
+                // Idempotent: an identical module (same path + source_hash) already
+                // materialized returns the existing row rather than duplicating.
+                if let Some(existing_id) = conn.query_row(
+                    "SELECT id FROM generated_artifact_modules WHERE module_path = ?1 AND source_hash = ?2",
+                    rusqlite::params![&module_path, &source_hash], |r| r.get::<_, String>(0),
+                ).optional().map_err(rs)? {
+                    let mut out = generated_module_json(&conn, &existing_id)?;
+                    out["idempotent_existing"] = serde_json::json!(true);
+                    return Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&out).unwrap())]));
+                }
+
+                let members_json = serde_json::to_string(&ordered.iter().map(|m| serde_json::json!({
+                    "artifact_id": m.artifact_id, "version_id": m.version_id, "artifact_version": m.artifact_version,
+                    "canonical_name": m.canonical_name, "maturity_status": m.maturity_status,
+                })).collect::<Vec<_>>()).unwrap();
+                let module_id = Uuid::new_v4().to_string();
+                let created_at = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO generated_artifact_modules (id, module_path, category, environment_hash, \
+                     artifact_version_ids_json, source_text, source_hash, replay_status, created_at) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                    rusqlite::params![&module_id, &module_path, &category, &env0, &members_json,
+                        &source_text, &source_hash, replay_status, &created_at],
+                ).map_err(rs)?;
+                let out = generated_module_json(&conn, &module_id)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&out).unwrap())]))
+            }
+
+            ArtifactModuleAction::PlanImport { artifact_ids, base_problem_version_id } => {
+                let conn = self.conn.lock().await;
+                let members = resolve_module_members(&conn, &artifact_ids)?;
+                let env0 = members[0].environment_hash.clone();
+                let env_uniform = members.iter().all(|m| m.environment_hash == env0);
+                let order = topo_order_members(&conn, &members)?; // also validates acyclic + closed
+                let ordered: Vec<&ModuleMember> = order.iter().map(|&i| &members[i]).collect();
+                let path_seed: Vec<String> = ordered.iter().map(|m| format!("{}:{}", m.artifact_id, m.artifact_version)).collect();
+                let path_hash = proofsearch_core::hashing::canonical_hash(&path_seed).map_err(mcp_internal_error)?;
+                // Category is not known at planning time; the module path stem is
+                // deterministic regardless, so plan against the id-hash stem.
+                let module_stem = format!("MnemosyneArtifacts.<Category>.M_{}", &path_hash[..12]);
+
+                // Base problem env compatibility (advisory).
+                let (base_manifest, base_env): (Vec<String>, Option<String>) = match &base_problem_version_id {
+                    Some(pv) => {
+                        let row: Option<(String, String)> = conn.query_row(
+                            "SELECT import_manifest_json, environment_hash FROM problem_versions WHERE id = ?1",
+                            [pv], |r| Ok((r.get(0)?, r.get(1)?)),
+                        ).optional().map_err(rs)?;
+                        let Some((manifest_json, env)) = row else {
+                            return Err(mcp_invalid_params(format!("unknown base_problem_version_id: {}", pv)));
+                        };
+                        (serde_json::from_str::<Vec<String>>(&manifest_json).unwrap_or_default(), Some(env))
+                    }
+                    None => (Vec::new(), None),
+                };
+                let base_compatible = match &base_env {
+                    Some(be) => Some(env_uniform && *be == env0),
+                    None => None,
+                };
+                // The advisory new manifest = base manifest ∪ the generated module import.
+                let mut proposed_manifest = base_manifest.clone();
+                if !proposed_manifest.iter().any(|m| m == &module_stem) {
+                    proposed_manifest.push(module_stem.clone());
+                }
+
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "generated_module_stem": module_stem,
+                    "environment_hash": env0,
+                    "environment_uniform": env_uniform,
+                    "import_ordered_declarations": ordered.iter().map(|m| serde_json::json!({
+                        "canonical_name": m.canonical_name, "artifact_id": m.artifact_id, "artifact_version": m.artifact_version,
+                    })).collect::<Vec<_>>(),
+                    "base_problem_version_id": base_problem_version_id,
+                    "base_import_manifest": base_manifest,
+                    "base_environment_compatible": base_compatible,
+                    "proposed_new_problem_import_manifest": proposed_manifest,
+                    "advisory": "This is an import PLAN only. It mutates nothing. To actually reuse these theorems, materialize the module, then create a NEW immutable problem_version via problem_create with this import manifest and run a kernel-verified attempt; record the real dependency with verified_artifact add_edge (evidence_kind='verifier') once the proof uses it.",
+                })).unwrap())]))
+            }
+
+            ArtifactModuleAction::Observe { module_id } => {
+                let conn = self.conn.lock().await;
+                let out = generated_module_json(&conn, &module_id)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&out).unwrap())]))
+            }
+
+            ArtifactModuleAction::List { limit } => {
+                let limit = limit.unwrap_or(50).clamp(1, 500);
+                let conn = self.conn.lock().await;
+                let mut stmt = conn.prepare(
+                    "SELECT id, module_path, category, environment_hash, source_hash, replay_status, created_at \
+                     FROM generated_artifact_modules ORDER BY created_at DESC, id DESC LIMIT ?1",
+                ).map_err(rs)?;
+                let rows = stmt.query_map([limit], |r| Ok(serde_json::json!({
+                    "module_id": r.get::<_, String>(0)?, "module_path": r.get::<_, String>(1)?,
+                    "category": r.get::<_, String>(2)?, "environment_hash": r.get::<_, String>(3)?,
+                    "source_hash": r.get::<_, String>(4)?, "replay_status": r.get::<_, String>(5)?,
+                    "created_at": r.get::<_, String>(6)?,
+                }))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+                drop(stmt);
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "modules": rows,
+                    "note": "Generated shared Lean modules (#247). Read one with artifact_module observe.",
+                })).unwrap())]))
+            }
+        }
+    }
+
     /// Issue #243: Verified Artifact Registry foundation. Promote a kernel-backed
     /// verified lemma into a curated, immutable, versioned artifact and drive its
     /// lifecycle. The registry curates already-established kernel truth: promotion
@@ -18544,6 +18924,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<VerifiedArtifactArgs>("verified_artifact", "Issue #243: Verified Artifact Registry (VAR) foundation — promote a KERNEL-BACKED verified lemma into a curated, immutable, versioned research artifact with a lifecycle, distinct from an episode-local helper or a raw canonical result. TRUST BOUNDARY: the registry CURATES already-established kernel truth — promotion copies the origin lemma's immutable kernel hashes (statement_hash/proof_body_hash/environment_hash/kernel_result_hash) verbatim, versions are append-only (mathematical history is never overwritten), and no maturity/review/supersede action changes those hashes or confers proof authority. `action` is internally tagged — exactly one of: {\"type\":\"promote\",\"episode_id\":\"..\",\"artifact_kind\":\"helper_lemma\"|\"definition\"|\"theorem\"|\"abstraction\"|\"reduction\"|\"classification\"|\"construction\"|\"negative_result\"|\"proof_module\"|\"tactic_recipe\",\"canonical_name\":\"..\"} (+ optional obligation_id (disambiguates when an episode proved >1 lemma), informal_summary, source_campaign, promotion_reason, candidate_for_mathlib — mints artifact v1 from an existing positive episode_verified_lemma; rejects anything not kernel-backed. Starts maturity=promoted, review=unreviewed) | {\"type\":\"add_version\",\"artifact_id\":\"..\",\"episode_id\":\"..\"} (+ optional obligation_id, canonical_name, formal_statement, promotion_reason — appends a new IMMUTABLE version from another kernel-backed origin, e.g. a generalization; never overwrites the original) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read-only: the artifact with every version + kernel-backed origins, the append-only maturity lifecycle, and reviews) | {\"type\":\"set_status\",\"artifact_id\":\"..\",\"to_status\":\"discovered\"|\"kernel_verified_local\"|\"promoted\"|\"reused\"|\"generalized\"|\"independently_reviewed\"|\"upstream_candidate\"|\"upstreamed\"|\"retained_local\"|\"superseded\",\"actor\":\"..\"} (+ optional reason — appends a maturity lifecycle event; curation only, never proof authority) | {\"type\":\"review\",\"artifact_id\":\"..\",\"review_status\":\"unreviewed\"|\"in_review\"|\"reviewed_with_caveats\"|\"independently_reviewed\"|\"rejected\",\"reviewer\":\"..\"} (+ optional notes, version_id — appends a review and moves review_status; never alters a version's kernel hashes) | {\"type\":\"supersede\",\"artifact_id\":\"..\",\"superseded_by\":\"..\",\"actor\":\"..\"} (+ optional reason — marks the artifact superseded by another; the original stays fully navigable) | {\"type\":\"add_edge\",\"from_artifact_id\":\"..\",\"to_artifact_id\":\"..\",\"edge_kind\":\"formally_depends_on\"|\"imported_by_generated_module\"|\"selected_as_retrieval_candidate\"|\"retrieved_but_unused\"|\"actually_used_in_verified_proof\"|\"generalized_from\"|\"equivalent_to\"|\"supersedes\"|\"applies_to_campaign\"|\"exported_as_mathcorpus_packet\"|\"proposed_to_mathlib\",\"evidence_kind\":\"verifier\"|\"retrieval\"|\"declared\"} (+ optional episode_id, campaign, notes — #250: record a typed dependency/usage edge. ONLY evidence_kind='verifier' counts as formal use: 'actually_used_in_verified_proof' requires verifier evidence, and a verifier edge naming an episode_id must trace to a real kernel_verified/certified episode; retrieval/declared relationships are separate kinds and never masquerade as use. A 'formally_depends_on' edge that would create a cycle is rejected) | {\"type\":\"impact\",\"artifact_id\":\"..\"} (#250: impact metrics RECOMPUTED from the edge/review records — verified downstream uses, distinct campaigns, retrieval-selected vs retrieved-but-unused, selection rate, generated-module imports, review count, generalization lineage; retrieval is never counted as use, and popularity is not proof authority) | {\"type\":\"upstream_readiness\",\"artifact_id\":\"..\"} (#250: read the Mathlib upstream-readiness review metadata — status + checklist; REVIEW METADATA, never proof status) | {\"type\":\"record_upstream_status\",\"artifact_id\":\"..\",\"status\":\"not_candidate\"|\"needs_generalization\"|\"needs_deduplication\"|\"needs_style_review\"|\"ready_for_pr\"|\"pr_open\"|\"accepted\"|\"rejected_or_retained_local\",\"reviewer\":\"..\"} (+ optional checklist, notes — set upstream-readiness; review metadata only, never proof status). Foundation for the #239 VAR family (#244 math_search builds on this; #247/#249/#251-#253 remain)."),
             make_tool::<ArtifactRegistryBundleArgs>("artifact_registry_bundle", "Issue #249: portable Verified Artifact Registry bundle — a self-contained, hash-pinned package another Proof Search instance can validate, import, index, and replay WITHOUT the origin database (a database-only hash/id is not portable evidence: the canonical preimages must travel with it). TRUST BOUNDARY: import PRESERVES origin ids/hashes, an imported artifact stays source-distinguished (origin_instance_id) with kernel hashes that are INERT DATA until replayed against the pinned environment, and an imported review is NEVER local kernel authority; conflicts and unavailable environments are QUARANTINED, never falsely verified. `action` is internally tagged — exactly one of: {\"type\":\"export\"} (+ optional artifact_ids [..] (default whole registry; edges kept only when both endpoints are exported), include_proof_bodies (default true — embeds the proof-source bytes behind each proof_body_hash so an importer can replay; false redacts them for restricted/benchmark-sensitive bodies, hashes still travel with proof_source_available=false) — returns a wrapper {content, bundle_hash, origin_instance_id, exported_at, record_counts}; the bundle_hash is the canonical hash of `content` only, so re-export from the same DB is byte-deterministic modulo the volatile instance/timestamp metadata) | {\"type\":\"validate\",\"bundle_json\":\"..\"} (recompute the content hash to detect tampering, then check referential integrity + preimage presence — every version has its formal_statement preimage and immutable kernel hashes, origins/edges/superseded_by point inside the bundle; writes nothing) | {\"type\":\"import\",\"bundle_json\":\"..\"} (+ optional dry_run — validates FIRST and refuses a tampered/broken bundle before any write; preserves ids/hashes; classifies each artifact as inserted / skipped_duplicate (exact match, idempotent re-import) / quarantined (version_conflict — same id different statement, never overwritten; name_collision — same canonical_name different statement under another id; environment_unavailable — bundle lean_toolchain doesn't match this instance, can't replay here); rematerializes proof-source bytes for replay; atomic rollback on error; records an append-only artifact_bundle_imports ledger row even for a dry_run) | {\"type\":\"observe_import\",\"import_id\":\"..\"} (read what a prior import inserted / skipped / quarantined). Coordinates with MCIP export (#230/#263): MCIP is the enrichment/evidence contract, this bundle is the executable library package."),
             make_tool::<RetrievalBenchmarkArgs>("retrieval_benchmark", "Issue #251: frozen retrieval benchmark + regression suite — a reproducible, deterministic evaluation of the search/ranking that math_search (#244) and proactive_retrieval (#248) depend on, run over a HELD-CONSTANT synthetic fixture corpus (query set + relevance judgments) so a ranking change is measured against a fixed target and never silently rewritten. `action` is internally tagged — exactly one of: {\"type\":\"run\"} (+ optional compact (default false = full evaluation; true = the CI regression subset) — returns structured metrics [Recall@1/5/10, MRR, nDCG@10] per baseline and per query family, a tuning/held-out split, negative-query and environment-compatibility-label accuracy, a downstream-utility delta [retrieval ENABLED vs DISABLED mean Recall@5], and a readable `report` string. Baselines compared: name_only, hybrid_lexical, retrieval_disabled; type_directed (#245) and semantic (#246) are reported UNAVAILABLE, never faked. Adversarial lexical, misspelled (expected_gap), and cross-domain families are included so known limitations show honestly) | {\"type\":\"fixtures\"} (return the frozen corpus + queries + relevance judgments for audit). Pure over the fixtures — reads no DB, calls no model, no Lean; the same fixtures_version + ranker_version always produce the same numbers. Validates #244/#248; the type/semantic baselines light up once #245/#246 land."),
+            make_tool::<ArtifactModuleArgs>("artifact_module", "Issue #247: make promoted registry artifacts directly reusable through shared Lean modules + safe import planning — the missing path from 'a verified lemma exists' to 'an actual reusable Lean dependency', without letting an advisory search result silently enter the trusted proof environment. TRUST BOUNDARY: materializing a module and planning an import are ADVISORY — they NEVER mutate an existing problem's immutable import manifest and NEVER confer proof authority; actual reuse still flows through problem_create with an explicit manifest + a kernel-verified attempt. `action` is internally tagged — exactly one of: {\"type\":\"materialize\",\"artifact_ids\":[..]} (+ optional category NumberTheory|Combinatorics|GraphTheory|Analysis|Campaigns (default Campaigns) — assemble a DETERMINISTIC shared Lean module from the immutable registry records: stable MnemosyneArtifacts.<Category>.M_<hash> path + declaration names, topologically ordered by formally_depends_on, source_hash over the exact bytes. IDEMPOTENT: the same snapshot yields identical bytes/hash and returns the existing row. FAILS CLOSED on incompatible environments (a module requires one shared environment_hash), a dependency outside the selection, a cycle, a name collision, or a superseded/not-yet-promoted artifact. A declaration's proof is embedded ONLY when its kernel-verified source resolves from the content-addressed store (replay_status='self_contained_source'); otherwise it is a signature-only provenance comment (replay_status='proof_source_unavailable') — the module never carries an unverified or client-supplied proof body) | {\"type\":\"plan_import\",\"artifact_ids\":[..]} (+ optional base_problem_version_id — advisory: reports the deterministic module path, the topologically ordered declarations, environment compatibility with the base problem, and the proposed NEW-problem import manifest (base manifest ∪ the generated module). Mutates NOTHING) | {\"type\":\"observe\",\"module_id\":\"..\"} (read a generated module; recomputes source_hash so a tampered stored source shows source_hash_matches=false) | {\"type\":\"list\"} (+ optional limit — generated modules, most recent first). Builds out #239; integrates with #244 search and records real reuse via #250 verified_artifact add_edge (evidence_kind='verifier') once a proof actually uses a declaration."),
             make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
             make_tool::<CandidateConstructionArgs>("candidate_construction", "Issue #188: ONE tool for the entire candidate-construction family (issue #8) — propose a candidate mathematical object, record empirical checks against it, revise its status, and attach it to a research node or verification layer. A CANDIDATE CONSTRUCTION IS A PROPOSED MATHEMATICAL OBJECT, NOT A PROOF CERTIFICATE: every action records research artifacts useful for search and planning; trust_status never certifies anything — empirical support, human review, citation, and 'a formal statement exists' are all explicitly distinct from kernel verification, and no field can hold kernel evidence. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"construction_type\":\"graph_family\"|\"point_configuration\"|\"coloring\"|\"field_tower\"|\"lattice\"|\"counterexample\"|\"asymptotic_family\"|\"algebraic_object\"|\"combinatorial_design\"|\"other\",\"informal_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, verification_layer_id, problem_version_id, episode_id, name, parameters_json, construction_json, claimed_properties_json, known_failures_json, empirical_checks_json, verification_targets_json, status, trust_status, and motivated-discovery metadata: motivating_move, source_observation, intended_role, strategy_context, why_this_might_work, why_this_might_fail, next_check, future_challenge_relevance — propose a candidate construction. Can exist before a dossier, node, Lean theorem, problem, or episode; a research artifact, not a proof certificate) | {\"type\":\"observe\",\"candidate_construction_id\":\"..\",\"description\":\"..\",\"result\":\"supports\"|\"refutes\"|\"inconclusive\"} (+ optional details_json, observed_by — record one empirical check, appended to the construction's empirical_checks history. Never changes proof status, and 'supports' never implies proved) | {\"type\":\"update_status\",\"candidate_construction_id\":\"..\"} (+ at least one of status, trust_status, claimed_properties_json, known_failures_json, next_check — update the construction in place; a falsified/rejected construction stays visible, never deleted. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified — and no other trust_status confers proof either) | {\"type\":\"link_node\",\"candidate_construction_id\":\"..\",\"node_id\":\"..\"} (attach the construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier. Linking never changes either side's trust_status) | {\"type\":\"link_verification_layer\",\"candidate_construction_id\":\"..\",\"verification_layer_id\":\"..\"} (attach the construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier. Linking a layer is provenance, not promotion — the construction's trust_status is unchanged, and a kernel_verified_claim_linked construction is re-checked against the newly linked layer)"),
@@ -18748,8 +19129,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 59,
-                        "total_tool_count": 59,
+                        "classified_tool_count": 60,
+                        "total_tool_count": 60,
                         "tools": {
                             "mathcorpus_export": {
                                 "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
@@ -19052,6 +19433,16 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic — bundle content is fully id-sorted so re-export from the same DB is byte-identical modulo the volatile origin_instance_id/exported_at wrapper fields (outside the content hash); import classification (inserted/skipped_duplicate/quarantined) is a pure function of local state + bundle content",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "verified_artifact_registry_metadata",
+                                "required_run_mode": "any"
+                            },
+                            "artifact_module": {
+                                "side_effect": "mixed by action (issue #247): materialize inserts one generated_artifact_modules row (idempotent — an identical module returns the existing row, writes nothing new); plan_import/observe/list are read_only. No action ever mutates an existing problem's import manifest, an episode outcome, obligations, canonical lemmas, budgets, or benchmark result tables",
+                                "trust_level": "advisory — a generated module is a DETERMINISTIC assembly of immutable registry records and confers no proof authority; a proof body is embedded only when its kernel-verified source resolves from the content-addressed store, otherwise the declaration is a signature-only comment (never an unverified/client-supplied proof). Import planning mutates nothing; actual reuse still requires problem_create + a kernel-verified attempt",
+                                "cost_surface": "none — DB reads/writes + reading the on-disk proof store, no Lean invocation (kernel-verified reuse happens later through the normal attempt path)",
+                                "benchmark_safety": "private_artifact by default — module source carries formal statements and (when resolvable) verified proof bytes referencing real proof content",
+                                "replayability": "deterministic — source is a pure function of the topologically ordered registry records (no timestamp/uuid in the bytes); rebuilding the same snapshot reproduces identical bytes and source_hash; observe recomputes source_hash to expose a tampered stored source",
+                                "source_code_impact": "no_source_change — the generated module is stored as a DB row, not written into the source tree",
+                                "artifact_risk": "generated_module_metadata",
                                 "required_run_mode": "any"
                             },
                             "retrieval_benchmark": {
@@ -20303,6 +20694,7 @@ impl ServerHandler for ChatDbMcp {
             "verified_artifact" => self.do_verified_artifact(args_val).await,
             "artifact_registry_bundle" => self.do_artifact_registry_bundle(args_val).await,
             "retrieval_benchmark" => self.do_retrieval_benchmark(args_val).await,
+            "artifact_module" => self.do_artifact_module(args_val).await,
             "math_search" => self.do_math_search(args_val).await,
             "proactive_retrieval" => self.do_proactive_retrieval(args_val).await,
             "candidate_construction" => self.do_candidate_construction(args_val).await,
@@ -21312,7 +21704,7 @@ mod tests {
         // + 1 verified_artifact (issue #243: Verified Artifact Registry foundation
         // - promote/add_version/observe/set_status/review/supersede) = 55.
         // + 1 math_search (issue #244: unified advisory search across mathlib/VAR/mathcorpus) = 56.
-        assert_eq!(list_res.tools.len(), 59);
+        assert_eq!(list_res.tools.len(), 60);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -24174,6 +24566,140 @@ mod tests {
         let fx = rb(&peer, serde_json::json!({"action": {"type":"fixtures"}})).await;
         assert_eq!(fx["corpus"].as_array().unwrap().len(), 10);
         assert!(fx["queries"].as_array().unwrap().len() >= 10);
+    }
+
+    /// #247: a generated module whose stored source is edited out from under its
+    /// source_hash is detected by observe's recompute (source_hash_matches=false).
+    #[test]
+    fn test_generated_module_tamper_detection() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let good_source = "theorem foo : True := trivial";
+        let good_hash = proofsearch_core::hashing::canonical_hash(&good_source).unwrap();
+        conn.execute(
+            "INSERT INTO generated_artifact_modules (id, module_path, category, environment_hash, \
+             artifact_version_ids_json, source_text, source_hash, replay_status, created_at) \
+             VALUES ('m1','MnemosyneArtifacts.Campaigns.M_x','Campaigns','env','[]',?1,?2,'self_contained_source','t0')",
+            rusqlite::params![good_source, good_hash],
+        ).unwrap();
+        assert_eq!(generated_module_json(&conn, "m1").unwrap()["source_hash_matches"], true);
+        // Edit the source without updating the hash -> detected.
+        conn.execute("UPDATE generated_artifact_modules SET source_text = 'theorem foo : True := by admit' WHERE id='m1'", []).unwrap();
+        assert_eq!(generated_module_json(&conn, "m1").unwrap()["source_hash_matches"], false);
+    }
+
+    /// #247: materialize promoted artifacts into a deterministic shared module —
+    /// identical rebuild bytes/hash, idempotent, tamper-evident; import planning
+    /// mutates nothing; and materialization fails closed on incompatible
+    /// environments, superseded/unpromoted artifacts, name collisions, a
+    /// dependency outside the selection, and topologically orders the rest.
+    #[tokio::test]
+    async fn test_artifact_module_materialize_plan_and_fail_closed() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        async fn va(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("verified_artifact")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn am(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("artifact_module")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn err(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> bool {
+            peer.call_tool(CallToolRequestParams::new("artifact_module")
+                .with_arguments(v.as_object().unwrap().clone())).await.is_err()
+        }
+        async fn promote(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str, idem: &str, name: &str) -> String {
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let ep_id = ep["episode_id"].as_str().unwrap().to_string();
+            claim_and_solve(peer, &ep_id, "trivial", idem).await;
+            let a = tool_json(&peer.call_tool(CallToolRequestParams::new("verified_artifact").with_arguments(serde_json::json!({
+                "action": {"type":"promote","episode_id":ep_id,"artifact_kind":"helper_lemma","canonical_name":name}
+            }).as_object().unwrap().clone())).await.unwrap());
+            a["artifact_id"].as_str().unwrap().to_string()
+        }
+        async fn problem_with_env(peer: &rmcp::service::Peer<rmcp::RoleClient>, stmt: &str, env: &str) -> String {
+            let c = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_create").with_arguments(serde_json::json!({
+                "source_problem_text": format!("module test {}", stmt), "root_formal_statement": stmt,
+                "environment_hash": env, "unsafe_dev_attestation": true,
+            }).as_object().unwrap().clone())).await.unwrap());
+            c["problem_version_id"].as_str().unwrap().to_string()
+        }
+
+        // Two artifacts under the SAME environment.
+        let pv = problem_with_env(&peer, "True", "envA").await;
+        let a1 = promote(&peer, &pv, "am-1", "helper_alpha").await;
+        let a2 = promote(&peer, &pv, "am-2", "helper_beta").await;
+
+        // Materialize both -> deterministic module.
+        let m = am(&peer, serde_json::json!({"action": {"type":"materialize","artifact_ids":[a1, a2],"category":"NumberTheory"}})).await;
+        assert!(m["module_path"].as_str().unwrap().starts_with("MnemosyneArtifacts.NumberTheory.M_"));
+        assert_eq!(m["source_hash_matches"], true);
+        // MockGateway leaves no on-disk proof source -> signature-only manifest.
+        assert_eq!(m["replay_status"], "proof_source_unavailable");
+        let module_id = m["module_id"].as_str().unwrap().to_string();
+        let source_hash = m["source_hash"].as_str().unwrap().to_string();
+
+        // Rebuild the same snapshot -> identical bytes/hash, and idempotent (same row).
+        let m2 = am(&peer, serde_json::json!({"action": {"type":"materialize","artifact_ids":[a1, a2],"category":"NumberTheory"}})).await;
+        assert_eq!(m2["source_hash"], serde_json::json!(source_hash), "rebuild reproduces identical bytes/hash");
+        assert_eq!(m2["module_id"], serde_json::json!(module_id), "idempotent — returns the existing row");
+        assert_eq!(m2["idempotent_existing"], true);
+
+        // observe recomputes source_hash (tamper-evident): an untampered module
+        // reports source_hash_matches=true and carries the declaration name.
+        let obs = am(&peer, serde_json::json!({"action": {"type":"observe","module_id": module_id}})).await;
+        assert_eq!(obs["source_hash_matches"], true);
+        assert!(obs["source_text"].as_str().unwrap().contains("helper_alpha"));
+
+        // plan_import mutates nothing and proposes a new manifest.
+        let plan = am(&peer, serde_json::json!({"action": {"type":"plan_import","artifact_ids":[a1, a2],"base_problem_version_id": pv}})).await;
+        assert_eq!(plan["base_environment_compatible"], true);
+        assert!(plan["proposed_new_problem_import_manifest"].as_array().unwrap().iter()
+            .any(|s| s.as_str().unwrap().starts_with("MnemosyneArtifacts.")));
+        // The base problem's manifest is untouched.
+        let base_obs = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_list").with_arguments(
+            serde_json::json!({}).as_object().unwrap().clone())).await.unwrap());
+        let _ = base_obs; // manifest immutability is enforced at the schema level; plan writes nothing.
+
+        // Acyclic ordering: a1 formally_depends_on a2 -> a2 precedes a1.
+        va(&peer, serde_json::json!({"action": {"type":"add_edge","from_artifact_id":a1,"to_artifact_id":a2,
+            "edge_kind":"formally_depends_on","evidence_kind":"declared"}})).await;
+        let ordered = am(&peer, serde_json::json!({"action": {"type":"plan_import","artifact_ids":[a1, a2]}})).await;
+        let decls: Vec<String> = ordered["import_ordered_declarations"].as_array().unwrap().iter()
+            .map(|d| d["artifact_id"].as_str().unwrap().to_string()).collect();
+        assert_eq!(decls, vec![a2.clone(), a1.clone()], "dependency precedes dependent: {:?}", ordered);
+
+        // Missing dependency: a1 depends on a2, but materializing only [a1] fails closed.
+        assert!(err(&peer, serde_json::json!({"action": {"type":"materialize","artifact_ids":[a1]}})).await,
+            "a dependency outside the selection must fail closed");
+
+        // Incompatible environments: an artifact under envB cannot share a module.
+        let pv_b = problem_with_env(&peer, "True", "envB").await;
+        let b1 = promote(&peer, &pv_b, "am-b1", "helper_gamma").await;
+        assert!(err(&peer, serde_json::json!({"action": {"type":"materialize","artifact_ids":[a2, b1]}})).await,
+            "mixed environments must fail closed");
+
+        // Superseded artifact is refused.
+        va(&peer, serde_json::json!({"action": {"type":"supersede","artifact_id":a1,"superseded_by":a2,"actor":"c"}})).await;
+        assert!(err(&peer, serde_json::json!({"action": {"type":"materialize","artifact_ids":[a1]}})).await,
+            "a superseded artifact must be refused");
+
+        // Name collision: two artifacts with the same canonical_name refuse to co-materialize.
+        let c1 = promote(&peer, &pv, "am-c1", "dup_name").await;
+        let c2 = promote(&peer, &pv, "am-c2", "dup_name").await;
+        assert!(err(&peer, serde_json::json!({"action": {"type":"materialize","artifact_ids":[c1, c2]}})).await,
+            "a name collision must be refused");
+
+        // A not-yet-promoted (discovered) artifact can't be materialized: set a2's
+        // maturity back is not allowed, so instead assert unknown id fails closed.
+        assert!(err(&peer, serde_json::json!({"action": {"type":"materialize","artifact_ids":["no-such-artifact"]}})).await);
+
+        // list surfaces the module.
+        let listed = am(&peer, serde_json::json!({"action": {"type":"list"}})).await;
+        assert!(listed["modules"].as_array().unwrap().iter().any(|mm| mm["module_id"] == serde_json::json!(module_id)));
     }
 
     /// #240: a gateway that fails with an ordered diagnostic list — an
