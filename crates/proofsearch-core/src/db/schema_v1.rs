@@ -2510,6 +2510,56 @@ CREATE TABLE IF NOT EXISTS mathlib_declaration_fingerprints (
 );
 CREATE INDEX IF NOT EXISTS idx_mathlib_fp_sig ON mathlib_declaration_fingerprints(signature_hash, index_version);
 CREATE INDEX IF NOT EXISTS idx_mathlib_fp_conclusion ON mathlib_declaration_fingerprints(conclusion_head, index_version);
+
+-- Prime Distribution promotion map (issue #253): turns verified analytic-number-
+-- theory results from proof campaigns (e.g. Erdős 647) into searchable
+-- institutional memory instead of leaving them trapped in campaign-specific
+-- folders/namespaces. The taxonomy mirrors NumberTheory/PrimeDistribution/*.
+-- These rows are ADVISORY research metadata: a classification curates an
+-- already-kernel-verified artifact for reuse/promotion, and never confers proof
+-- authority. Per-category coverage records Mathlib coverage + missing formal
+-- infrastructure; a classification records which taxonomy category a verified
+-- artifact belongs to, how reusable it is, and its portability status along the
+-- neutralization pipeline (local -> neutral module -> packet -> registry ->
+-- upstream). Provenance back to the source campaign/episode is preserved via the
+-- referenced verified_artifacts row (its origin episode + source_campaign) and
+-- #250 edges.
+CREATE TABLE IF NOT EXISTS prime_distribution_coverage (
+    category TEXT PRIMARY KEY,
+    mathlib_coverage TEXT,
+    missing_infrastructure TEXT,
+    notes TEXT,
+    updated_at TEXT NOT NULL,
+    CHECK(category IN (
+        'PrimeCounting', 'ChebyshevTheta', 'ChebyshevPsi', 'Mertens', 'PrimeReciprocalSums',
+        'HarmonicAsymptotics', 'SelbergSieve', 'BrunSieve', 'LargeSieve', 'BombieriVinogradov',
+        'ExplicitBounds', 'RHConsequences'
+    ))
+);
+CREATE TABLE IF NOT EXISTS prime_distribution_classifications (
+    id TEXT PRIMARY KEY,
+    artifact_id TEXT NOT NULL REFERENCES verified_artifacts(id),
+    category TEXT NOT NULL,
+    classification TEXT NOT NULL,
+    portability_status TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(artifact_id, category),
+    CHECK(category IN (
+        'PrimeCounting', 'ChebyshevTheta', 'ChebyshevPsi', 'Mertens', 'PrimeReciprocalSums',
+        'HarmonicAsymptotics', 'SelbergSieve', 'BrunSieve', 'LargeSieve', 'BombieriVinogradov',
+        'ExplicitBounds', 'RHConsequences'
+    )),
+    CHECK(classification IN (
+        'campaign_specific', 'reusable_namespaced', 'generalized_reusable',
+        'mathcorpus_candidate', 'mathlib_candidate'
+    )),
+    CHECK(portability_status IN (
+        'local_only', 'neutral_module_ready', 'packet_exported', 'registry_promoted', 'upstreamed'
+    ))
+);
+CREATE INDEX IF NOT EXISTS idx_prime_dist_class_category ON prime_distribution_classifications(category, classification);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
