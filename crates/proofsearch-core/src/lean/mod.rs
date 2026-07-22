@@ -98,6 +98,15 @@ pub trait LeanGateway {
         Err("this gateway cannot verify modules".to_string())
     }
 
+    /// Issue #245: ELABORATE a formal statement under the pinned environment and
+    /// return its normalized structural fingerprint (conclusion head, binder
+    /// count, hypothesis head multiset, used-constant set). Read-only — changes no
+    /// proof state and no imports. Default fails closed: a gateway that can't run
+    /// Lean must never fabricate an elaborated fingerprint.
+    fn structural_fingerprint(&self, _statement: &str) -> Result<serde_json::Value, String> {
+        Err("this gateway cannot elaborate structural fingerprints".to_string())
+    }
+
     /// Effective server-owned resource policy, when the gateway executes real
     /// verifier subprocesses. Test/search-only gateways return `None`.
     fn resource_policy(&self) -> Option<VerifierResourcePolicy> {
@@ -439,6 +448,109 @@ fn parse_lean_json_file(path: &std::path::Path, limit: usize) -> Result<(Vec<ser
         if !retained.iter().any(|existing| existing == &value) { retained.push(value); }
     }
     Ok((retained, total))
+}
+
+/// Version of the elaborated structural-fingerprint representation (#245).
+/// Bumped whenever the harness or the recorded fields change, so an index record
+/// can be invalidated/namespaced by (toolchain, fingerprint_version).
+pub const STRUCTURAL_FINGERPRINT_VERSION: &str = "structural_fp/1.0";
+
+/// The Lean meta-program that ELABORATES a term and prints its normalized
+/// structural fingerprint (issue #245) — head symbols, binder count, hypothesis
+/// head multiset, and the used-constant set. This is real elaboration under the
+/// pinned environment, never a parser approximation.
+const FP_HARNESS_PREAMBLE: &str = r##"import Mathlib
+open Lean Elab Meta
+
+private def _fpConstHeads (e : Expr) : NameSet := Id.run do
+  let mut s : NameSet := {}
+  for c in e.getUsedConstants do s := s.insert c
+  return s
+
+private def _fpFingerprint (e : Expr) : MetaM Json := do
+  let e ← instantiateMVars e
+  forallTelescopeReducing e fun xs concl => do
+    let binderCount := xs.size
+    let conclHeadName := match concl.getAppFn.constName? with | some n => n.toString | none => "«nonconst»"
+    let consts := (_fpConstHeads e).toList.map (·.toString)
+    let hypHeads ← xs.mapM fun x => do
+      let t ← inferType x
+      pure (match t.getAppFn.constName? with | some n => n.toString | none => "«var»")
+    pure <| Json.mkObj [
+      ("binder_count", Json.num binderCount),
+      ("conclusion_head", Json.str conclHeadName),
+      ("hypothesis_heads", Json.arr (hypHeads.map Json.str)),
+      ("constants", Json.arr (consts.toArray.map Json.str))
+    ]
+
+elab "#fingerprint " t:term : command => Command.liftTermElabM do
+  let e ← Term.elabTerm t none
+  let j ← _fpFingerprint e
+  IO.println s!"FINGERPRINT:{j.compress}"
+"##;
+
+/// Compute the elaborated structural fingerprint of a formal `statement` (#245)
+/// under the pinned Lean environment (imports the Mathlib umbrella so any symbol
+/// resolves). Returns the fingerprint JSON with `constants` and `hypothesis_heads`
+/// sorted for a stable, canonical representation, plus a `binder_count` and
+/// `conclusion_head`. `Err` when the statement doesn't elaborate. This is
+/// read-only: it changes no proof state and no imports.
+pub fn compute_structural_fingerprint(
+    lean_project_path: &std::path::Path,
+    elan_bin_path: &std::path::Path,
+    statement: &str,
+    timeout: Duration,
+) -> Result<serde_json::Value, String> {
+    let harness = format!("{}\n#fingerprint ({})\n", FP_HARNESS_PREAMBLE, statement);
+    let temp_dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let file_path = temp_dir.path().join("_fp_probe.lean");
+    fs::write(&file_path, &harness).map_err(|e| e.to_string())?;
+
+    let lake_path = elan_bin_path.join("lake.exe");
+    let mut cmd = Command::new(&lake_path);
+    cmd.arg("env").arg("lean").arg(&file_path)
+        .current_dir(lean_project_path)
+        .stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Ok(elan_home) = std::env::var("PROOFSEARCH_ELAN_HOME") {
+        cmd.env("ELAN_HOME", elan_home);
+    }
+    configure_process_containment(&mut cmd);
+
+    let mut child = cmd.spawn().map_err(|e| format!("spawn lean: {e}"))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(_) => break,
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    return Err(format!("fingerprint elaboration timed out after {:?}", timeout));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for line in stdout.lines() {
+        if let Some(js) = line.strip_prefix("FINGERPRINT:") {
+            let mut v: serde_json::Value = serde_json::from_str(js.trim())
+                .map_err(|e| format!("bad fingerprint json: {e}"))?;
+            // Canonicalize: sort the constant set and hypothesis-head multiset so
+            // exact-type equality is order-independent.
+            if let Some(arr) = v.get_mut("constants").and_then(|c| c.as_array_mut()) {
+                arr.sort_by(|a, b| a.as_str().unwrap_or("").cmp(b.as_str().unwrap_or("")));
+            }
+            if let Some(arr) = v.get_mut("hypothesis_heads").and_then(|c| c.as_array_mut()) {
+                arr.sort_by(|a, b| a.as_str().unwrap_or("").cmp(b.as_str().unwrap_or("")));
+            }
+            return Ok(v);
+        }
+    }
+    Err(format!(
+        "no fingerprint produced (statement failed to elaborate?): stderr={}",
+        String::from_utf8_lossy(&out.stderr).chars().take(600).collect::<String>()
+    ))
 }
 
 fn persist_verifier_output(
@@ -885,6 +997,15 @@ fn source_span_of(val: &serde_json::Value) -> Option<String> {
 impl LeanGateway for RealLeanGateway {
     fn resource_policy(&self) -> Option<VerifierResourcePolicy> {
         Some(self.resource_policy.clone())
+    }
+
+    fn structural_fingerprint(&self, statement: &str) -> Result<serde_json::Value, String> {
+        compute_structural_fingerprint(
+            &self.lean_project_path,
+            &self.elan_bin_path,
+            statement,
+            Duration::from_millis(self.resource_policy.proof_timeout_ms.max(60_000)),
+        )
     }
 
     fn durability_job_status(&self, job_id: &str) -> Result<serde_json::Value, String> {

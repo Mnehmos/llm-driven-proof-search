@@ -2278,6 +2278,41 @@ pub enum ArtifactModuleAction {
     },
 }
 
+/// Issue #245: elaborated type-directed theorem search over the Verified Artifact
+/// Registry. Search begins from a TARGET TYPE SHAPE, not a name — the query is
+/// ELABORATED under the pinned Lean environment (never a parser approximation)
+/// into a normalized structural fingerprint (conclusion head, binder count,
+/// hypothesis-head multiset, used-constant set), then matched against stored
+/// artifact fingerprints with deterministic structural ranking and honest
+/// confidence labels. No result changes proof state or imports.
+#[derive(JsonSchema, Deserialize)]
+pub struct StructuralSearchArgs {
+    pub action: StructuralSearchAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StructuralSearchAction {
+    /// Elaborate an artifact's current-version statement under the pinned
+    /// environment and store its structural fingerprint (idempotent per
+    /// (version, fingerprint_version); requires Lean). Index the registry before
+    /// searching.
+    Fingerprint { artifact_id: String },
+    /// Elaborate `statement` into a query fingerprint and rank stored artifact
+    /// fingerprints by structural match. `mode` is one of exact_type |
+    /// conclusion_shape | hypothesis_conclusion_shape | symbol_overlap |
+    /// structural_similarity (default structural_similarity). Requires Lean.
+    Search {
+        statement: String,
+        #[serde(default)]
+        mode: Option<String>,
+        #[serde(default)]
+        limit: Option<i64>,
+    },
+    /// Read an artifact's stored structural fingerprint (no Lean).
+    Observe { artifact_id: String },
+}
+
 /// Issue #243: the Verified Artifact Registry (VAR) foundation tool. Promotes a
 /// KERNEL-BACKED verified lemma into a curated, immutable, versioned research
 /// artifact with a lifecycle. The registry curates already-established kernel
@@ -6407,6 +6442,115 @@ fn generated_module_json(conn: &Connection, module_id: &str) -> Result<serde_jso
         "created_at": created,
         "trust_boundary": "A generated module is a deterministic assembly of immutable registry records; it confers no proof authority. source_hash_matches=false means the stored source was edited out from under its hash. A 'proof_source_unavailable' module is a signature manifest, not yet kernel-usable; actual reuse still goes through problem_create + a kernel-verified attempt.",
     }))
+}
+
+/// The type-directed structural search modes (#245).
+const STRUCTURAL_SEARCH_MODES: &[&str] = &[
+    "exact_type", "conclusion_shape", "hypothesis_conclusion_shape", "symbol_overlap", "structural_similarity",
+];
+
+/// A parsed elaborated structural fingerprint (#245) for deterministic scoring.
+struct StructuralFp {
+    binder_count: i64,
+    conclusion_head: String,
+    hypothesis_heads: Vec<String>,
+    constants: std::collections::BTreeSet<String>,
+    fingerprint_hash: String,
+}
+
+/// The canonical hash of a fingerprint's structural fields — the exact-type key.
+fn structural_fp_hash(binder_count: i64, conclusion_head: &str, hyp_heads: &[String], constants: &[String]) -> String {
+    let mut hh = hyp_heads.to_vec(); hh.sort();
+    let mut cs = constants.to_vec(); cs.sort();
+    proofsearch_core::hashing::canonical_hash(&serde_json::json!({
+        "binder_count": binder_count, "conclusion_head": conclusion_head,
+        "hypothesis_heads": hh, "constants": cs,
+    })).unwrap_or_default()
+}
+
+/// Parse the elaborated fingerprint JSON (from the gateway) into a scoring struct,
+/// computing its canonical fingerprint_hash.
+fn parse_structural_fp(v: &serde_json::Value) -> StructuralFp {
+    let binder_count = v.get("binder_count").and_then(|x| x.as_i64()).unwrap_or(0);
+    let conclusion_head = v.get("conclusion_head").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let hypothesis_heads: Vec<String> = v.get("hypothesis_heads").and_then(|x| x.as_array()).map(|a|
+        a.iter().filter_map(|s| s.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
+    let constants: std::collections::BTreeSet<String> = v.get("constants").and_then(|x| x.as_array()).map(|a|
+        a.iter().filter_map(|s| s.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
+    let hh: Vec<String> = hypothesis_heads.clone();
+    let cs: Vec<String> = constants.iter().cloned().collect();
+    let fingerprint_hash = structural_fp_hash(binder_count, &conclusion_head, &hh, &cs);
+    StructuralFp { binder_count, conclusion_head, hypothesis_heads, constants, fingerprint_hash }
+}
+
+fn jaccard(a: &std::collections::BTreeSet<String>, b: &std::collections::BTreeSet<String>) -> f64 {
+    if a.is_empty() && b.is_empty() { return 1.0; }
+    let inter = a.intersection(b).count() as f64;
+    let union = a.union(b).count() as f64;
+    if union == 0.0 { 0.0 } else { inter / union }
+}
+
+/// Multiset overlap of two head lists: shared heads (min multiplicity) over the
+/// larger list length.
+fn multiset_overlap(a: &[String], b: &[String]) -> f64 {
+    if a.is_empty() && b.is_empty() { return 1.0; }
+    let mut ca: std::collections::BTreeMap<&String, i64> = std::collections::BTreeMap::new();
+    for x in a { *ca.entry(x).or_insert(0) += 1; }
+    let mut shared = 0i64;
+    let mut cb: std::collections::BTreeMap<&String, i64> = std::collections::BTreeMap::new();
+    for x in b { *cb.entry(x).or_insert(0) += 1; }
+    for (k, va) in &ca {
+        if let Some(vb) = cb.get(k) { shared += (*va).min(*vb); }
+    }
+    let denom = a.len().max(b.len()) as f64;
+    if denom == 0.0 { 0.0 } else { shared as f64 / denom }
+}
+
+/// Deterministic structural score between a query fingerprint and a candidate
+/// (#245), by mode. Returns (score in 0..=1, honest confidence label, human
+/// ranking explanation). Confidence is 'high' ONLY for an exact structural
+/// fingerprint match; structural/symbol overlaps are 'medium'/'low' so an agent
+/// can distinguish a real unification candidate from a loose suggestion.
+fn structural_score(q: &StructuralFp, c: &StructuralFp, mode: &str) -> (f64, &'static str, String) {
+    let exact = q.fingerprint_hash == c.fingerprint_hash;
+    match mode {
+        "exact_type" => if exact {
+            (1.0, "high", "exact structural fingerprint match (same conclusion head, binders, hypotheses, constants)".to_string())
+        } else {
+            (0.0, "none", "no exact structural match".to_string())
+        },
+        "conclusion_shape" => {
+            let head = q.conclusion_head == c.conclusion_head;
+            let binders = q.binder_count == c.binder_count;
+            if head && binders { (0.95, if exact {"high"} else {"medium"}, "same conclusion head and binder count".to_string()) }
+            else if head { (0.7, "medium", format!("same conclusion head ({}), binder count {} vs {}", c.conclusion_head, q.binder_count, c.binder_count)) }
+            else { (0.0, "none", format!("different conclusion head ({} vs {})", q.conclusion_head, c.conclusion_head)) }
+        },
+        "hypothesis_conclusion_shape" => {
+            if q.conclusion_head != c.conclusion_head {
+                (0.0, "none", "different conclusion head".to_string())
+            } else {
+                let h = multiset_overlap(&q.hypothesis_heads, &c.hypothesis_heads);
+                (0.5 + 0.5 * h, if exact { "high" } else if h > 0.6 { "medium" } else { "low" },
+                 format!("conclusion head match; hypothesis-head overlap {:.2}", h))
+            }
+        },
+        "symbol_overlap" => {
+            let j = jaccard(&q.constants, &c.constants);
+            (j, if j > 0.6 { "medium" } else { "low" }, format!("used-constant Jaccard {:.2}", j))
+        },
+        // structural_similarity (default): a weighted blend of all features.
+        _ => {
+            let head = if q.conclusion_head == c.conclusion_head { 1.0 } else { 0.0 };
+            let hyp = multiset_overlap(&q.hypothesis_heads, &c.hypothesis_heads);
+            let sym = jaccard(&q.constants, &c.constants);
+            let maxb = q.binder_count.max(c.binder_count).max(1) as f64;
+            let binder = 1.0 - ((q.binder_count - c.binder_count).abs() as f64 / maxb);
+            let score = 0.40 * head + 0.25 * hyp + 0.25 * sym + 0.10 * binder;
+            let conf = if exact { "high" } else if head == 1.0 && hyp > 0.5 { "medium" } else { "low" };
+            (score, conf, format!("weighted structural similarity — conclusion {}, hyp {:.2}, symbol {:.2}, binder {:.2}", head, hyp, sym, binder))
+        }
+    }
 }
 
 /// Portable VAR bundle format version (#249). Bumped whenever the canonical
@@ -15422,6 +15566,182 @@ impl ChatDbMcp {
         }
     }
 
+    /// Issue #245: elaborated type-directed search over the Verified Artifact
+    /// Registry. Elaborates a query type under the pinned Lean environment into a
+    /// structural fingerprint and ranks stored artifact fingerprints by structural
+    /// match with honest confidence labels. Read-only w.r.t. proofs: no result
+    /// changes proof state or imports, and a fingerprint confers no proof authority.
+    async fn do_structural_search(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: StructuralSearchArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        let fp_version = proofsearch_core::lean::STRUCTURAL_FINGERPRINT_VERSION;
+        match args.action {
+            StructuralSearchAction::Fingerprint { artifact_id } => {
+                let (version_id, statement) = {
+                    let conn = self.conn.lock().await;
+                    let row: Option<(String, Option<String>)> = conn.query_row(
+                        "SELECT v.id, v.formal_statement FROM verified_artifacts a \
+                         JOIN verified_artifact_versions v ON v.artifact_id = a.id AND v.artifact_version = a.current_version \
+                         WHERE a.id = ?1", [&artifact_id], |r| Ok((r.get(0)?, r.get(1)?)),
+                    ).optional().map_err(rs)?;
+                    let Some((vid, stmt)) = row else {
+                        return Err(mcp_invalid_params(format!("unknown artifact_id: {}", artifact_id)));
+                    };
+                    let Some(stmt) = stmt.filter(|s| !s.trim().is_empty()) else {
+                        return Err(mcp_invalid_params(format!(
+                            "artifact {}'s current version has no formal_statement to fingerprint", artifact_id)));
+                    };
+                    (vid, stmt)
+                };
+                // Real elaboration through the gateway (fails closed on a mock/no Lean).
+                let fp = self.gateway.structural_fingerprint(&statement)
+                    .map_err(|e| mcp_internal_error(format!("structural elaboration failed: {}", e)))?;
+                let parsed = parse_structural_fp(&fp);
+                let toolchain = read_lean_toolchain(&self.lean_project_path);
+                let now = Utc::now().to_rfc3339();
+                let conn = self.conn.lock().await;
+                conn.execute(
+                    "INSERT INTO verified_artifact_fingerprints (version_id, fingerprint_version, lean_toolchain, \
+                     binder_count, conclusion_head, hypothesis_heads_json, constants_json, fingerprint_hash, computed_at) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) \
+                     ON CONFLICT(version_id, fingerprint_version) DO UPDATE SET \
+                       lean_toolchain=excluded.lean_toolchain, binder_count=excluded.binder_count, \
+                       conclusion_head=excluded.conclusion_head, hypothesis_heads_json=excluded.hypothesis_heads_json, \
+                       constants_json=excluded.constants_json, fingerprint_hash=excluded.fingerprint_hash, computed_at=excluded.computed_at",
+                    rusqlite::params![
+                        &version_id, fp_version, &toolchain, parsed.binder_count, &parsed.conclusion_head,
+                        serde_json::to_string(&parsed.hypothesis_heads).unwrap(),
+                        serde_json::to_string(&parsed.constants.iter().collect::<Vec<_>>()).unwrap(),
+                        &parsed.fingerprint_hash, &now,
+                    ],
+                ).map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "artifact_id": artifact_id,
+                    "version_id": version_id,
+                    "fingerprint_version": fp_version,
+                    "lean_toolchain": toolchain,
+                    "fingerprint": {
+                        "binder_count": parsed.binder_count,
+                        "conclusion_head": parsed.conclusion_head,
+                        "hypothesis_heads": parsed.hypothesis_heads,
+                        "constants": parsed.constants,
+                        "fingerprint_hash": parsed.fingerprint_hash,
+                    },
+                    "note": "Elaborated under the pinned environment; index identity is (version, fingerprint_version) with the lean_toolchain recorded. A fingerprint is a search key, never proof authority.",
+                })).unwrap())]))
+            }
+
+            StructuralSearchAction::Search { statement, mode, limit } => {
+                if statement.trim().is_empty() {
+                    return Err(mcp_invalid_params("statement must be non-empty".to_string()));
+                }
+                let mode = mode.unwrap_or_else(|| "structural_similarity".to_string());
+                validate_one_of("mode", &mode, STRUCTURAL_SEARCH_MODES)?;
+                let limit = limit.unwrap_or(20).clamp(1, 200) as usize;
+                let query_fp = self.gateway.structural_fingerprint(&statement)
+                    .map_err(|e| mcp_internal_error(format!("query elaboration failed: {}", e)))?;
+                let q = parse_structural_fp(&query_fp);
+
+                let conn = self.conn.lock().await;
+                let mut stmt = conn.prepare(
+                    "SELECT f.version_id, a.id, a.canonical_name, a.maturity_status, v.formal_statement, v.environment_hash, \
+                     f.binder_count, f.conclusion_head, f.hypothesis_heads_json, f.constants_json, f.fingerprint_hash \
+                     FROM verified_artifact_fingerprints f \
+                     JOIN verified_artifact_versions v ON v.id = f.version_id \
+                     JOIN verified_artifacts a ON a.id = v.artifact_id \
+                     WHERE f.fingerprint_version = ?1",
+                ).map_err(rs)?;
+                let rows = stmt.query_map([fp_version], |r| Ok((
+                    r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?, r.get::<_, i64>(6)?, r.get::<_, String>(7)?,
+                    r.get::<_, String>(8)?, r.get::<_, String>(9)?, r.get::<_, String>(10)?,
+                ))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+                drop(stmt);
+
+                let mut scored: Vec<serde_json::Value> = Vec::new();
+                for (version_id, artifact_id, name, maturity, formal, env, bc, ch, hh_json, cs_json, fp_hash) in rows {
+                    let cand = StructuralFp {
+                        binder_count: bc,
+                        conclusion_head: ch,
+                        hypothesis_heads: serde_json::from_str(&hh_json).unwrap_or_default(),
+                        constants: serde_json::from_str::<Vec<String>>(&cs_json).unwrap_or_default().into_iter().collect(),
+                        fingerprint_hash: fp_hash,
+                    };
+                    let (score, confidence, explanation) = structural_score(&q, &cand, &mode);
+                    if score <= 0.0 { continue; }
+                    scored.push(serde_json::json!({
+                        "result_id": artifact_id,
+                        "version_id": version_id,
+                        "source": "verified_artifacts",
+                        "full_name": name,
+                        "trust_status": maturity,
+                        "formal_statement": formal,
+                        "environment_hash": env,
+                        "import_source": format!("verified_artifact://{}", artifact_id),
+                        "source_library": "verified_artifact_registry",
+                        "score": score,
+                        "confidence": confidence,
+                        "confidence_basis": explanation,
+                        "exact_type_match": cand.fingerprint_hash == q.fingerprint_hash,
+                    }));
+                }
+                // Deterministic ranking: score desc, then exact-match, then id.
+                scored.sort_by(|a, b| {
+                    let sa = a["score"].as_f64().unwrap_or(0.0);
+                    let sb = b["score"].as_f64().unwrap_or(0.0);
+                    sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| b["exact_type_match"].as_bool().unwrap_or(false).cmp(&a["exact_type_match"].as_bool().unwrap_or(false)))
+                        .then_with(|| a["result_id"].as_str().unwrap_or("").cmp(b["result_id"].as_str().unwrap_or("")))
+                });
+                scored.truncate(limit);
+
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "query_statement": statement,
+                    "mode": mode,
+                    "query_fingerprint": {
+                        "binder_count": q.binder_count, "conclusion_head": q.conclusion_head,
+                        "hypothesis_heads": q.hypothesis_heads, "constants": q.constants,
+                        "fingerprint_hash": q.fingerprint_hash,
+                    },
+                    "fingerprint_version": fp_version,
+                    "results": scored,
+                    "trust_boundary": "Elaborated type-directed search (#245). Confidence is 'high' ONLY for an exact structural fingerprint match; structural/symbol overlaps are 'medium'/'low' — a ranking hint, never a unification proof or applicability claim. No result changes proof state or imports. Only artifacts with a stored fingerprint (structural_search fingerprint) are searchable; the pinned-Mathlib-scale index is tracked separately.",
+                })).unwrap())]))
+            }
+
+            StructuralSearchAction::Observe { artifact_id } => {
+                let conn = self.conn.lock().await;
+                let row: Option<(String, String, Option<String>, i64, String, String, String, String, String)> = conn.query_row(
+                    "SELECT f.version_id, f.fingerprint_version, f.lean_toolchain, f.binder_count, f.conclusion_head, \
+                     f.hypothesis_heads_json, f.constants_json, f.fingerprint_hash, f.computed_at \
+                     FROM verified_artifact_fingerprints f \
+                     JOIN verified_artifact_versions v ON v.id = f.version_id \
+                     JOIN verified_artifacts a ON a.id = v.artifact_id AND v.artifact_version = a.current_version \
+                     WHERE a.id = ?1 AND f.fingerprint_version = ?2",
+                    rusqlite::params![&artifact_id, fp_version],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
+                ).optional().map_err(rs)?;
+                let Some((version_id, fpv, toolchain, bc, ch, hh, cs, hash, computed)) = row else {
+                    return Err(mcp_invalid_params(format!(
+                        "no stored fingerprint for artifact {} (version={}); run structural_search fingerprint first", artifact_id, fp_version)));
+                };
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "artifact_id": artifact_id,
+                    "version_id": version_id,
+                    "fingerprint_version": fpv,
+                    "lean_toolchain": toolchain,
+                    "computed_at": computed,
+                    "fingerprint": {
+                        "binder_count": bc, "conclusion_head": ch,
+                        "hypothesis_heads": serde_json::from_str::<serde_json::Value>(&hh).unwrap_or(serde_json::Value::Null),
+                        "constants": serde_json::from_str::<serde_json::Value>(&cs).unwrap_or(serde_json::Value::Null),
+                        "fingerprint_hash": hash,
+                    },
+                })).unwrap())]))
+            }
+        }
+    }
+
     /// Issue #243: Verified Artifact Registry foundation. Promote a kernel-backed
     /// verified lemma into a curated, immutable, versioned artifact and drive its
     /// lifecycle. The registry curates already-established kernel truth: promotion
@@ -19038,6 +19358,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ArtifactRegistryBundleArgs>("artifact_registry_bundle", "Issue #249: portable Verified Artifact Registry bundle — a self-contained, hash-pinned package another Proof Search instance can validate, import, index, and replay WITHOUT the origin database (a database-only hash/id is not portable evidence: the canonical preimages must travel with it). TRUST BOUNDARY: import PRESERVES origin ids/hashes, an imported artifact stays source-distinguished (origin_instance_id) with kernel hashes that are INERT DATA until replayed against the pinned environment, and an imported review is NEVER local kernel authority; conflicts and unavailable environments are QUARANTINED, never falsely verified. `action` is internally tagged — exactly one of: {\"type\":\"export\"} (+ optional artifact_ids [..] (default whole registry; edges kept only when both endpoints are exported), include_proof_bodies (default true — embeds the proof-source bytes behind each proof_body_hash so an importer can replay; false redacts them for restricted/benchmark-sensitive bodies, hashes still travel with proof_source_available=false) — returns a wrapper {content, bundle_hash, origin_instance_id, exported_at, record_counts}; the bundle_hash is the canonical hash of `content` only, so re-export from the same DB is byte-deterministic modulo the volatile instance/timestamp metadata) | {\"type\":\"validate\",\"bundle_json\":\"..\"} (recompute the content hash to detect tampering, then check referential integrity + preimage presence — every version has its formal_statement preimage and immutable kernel hashes, origins/edges/superseded_by point inside the bundle; writes nothing) | {\"type\":\"import\",\"bundle_json\":\"..\"} (+ optional dry_run — validates FIRST and refuses a tampered/broken bundle before any write; preserves ids/hashes; classifies each artifact as inserted / skipped_duplicate (exact match, idempotent re-import) / quarantined (version_conflict — same id different statement, never overwritten; name_collision — same canonical_name different statement under another id; environment_unavailable — bundle lean_toolchain doesn't match this instance, can't replay here); rematerializes proof-source bytes for replay; atomic rollback on error; records an append-only artifact_bundle_imports ledger row even for a dry_run) | {\"type\":\"observe_import\",\"import_id\":\"..\"} (read what a prior import inserted / skipped / quarantined). Coordinates with MCIP export (#230/#263): MCIP is the enrichment/evidence contract, this bundle is the executable library package."),
             make_tool::<RetrievalBenchmarkArgs>("retrieval_benchmark", "Issue #251: frozen retrieval benchmark + regression suite — a reproducible, deterministic evaluation of the search/ranking that math_search (#244) and proactive_retrieval (#248) depend on, run over a HELD-CONSTANT synthetic fixture corpus (query set + relevance judgments) so a ranking change is measured against a fixed target and never silently rewritten. `action` is internally tagged — exactly one of: {\"type\":\"run\"} (+ optional compact (default false = full evaluation; true = the CI regression subset) — returns structured metrics [Recall@1/5/10, MRR, nDCG@10] per baseline and per query family, a tuning/held-out split, negative-query and environment-compatibility-label accuracy, a downstream-utility delta [retrieval ENABLED vs DISABLED mean Recall@5], and a readable `report` string. Baselines compared: name_only, hybrid_lexical, retrieval_disabled; type_directed (#245) and semantic (#246) are reported UNAVAILABLE, never faked. Adversarial lexical, misspelled (expected_gap), and cross-domain families are included so known limitations show honestly) | {\"type\":\"fixtures\"} (return the frozen corpus + queries + relevance judgments for audit). Pure over the fixtures — reads no DB, calls no model, no Lean; the same fixtures_version + ranker_version always produce the same numbers. Validates #244/#248; the type/semantic baselines light up once #245/#246 land."),
             make_tool::<ArtifactModuleArgs>("artifact_module", "Issue #247: make promoted registry artifacts directly reusable through shared Lean modules + safe import planning — the missing path from 'a verified lemma exists' to 'an actual reusable Lean dependency', without letting an advisory search result silently enter the trusted proof environment. TRUST BOUNDARY: materializing a module and planning an import are ADVISORY — they NEVER mutate an existing problem's immutable import manifest and NEVER confer proof authority; actual reuse still flows through problem_create with an explicit manifest + a kernel-verified attempt. `action` is internally tagged — exactly one of: {\"type\":\"materialize\",\"artifact_ids\":[..]} (+ optional category NumberTheory|Combinatorics|GraphTheory|Analysis|Campaigns (default Campaigns) — assemble a DETERMINISTIC shared Lean module from the immutable registry records: stable LeanChecker.MnemosyneArtifacts.<Category>.M_<hash> path (importable under the LeanChecker lib) + declaration names, topologically ordered by formally_depends_on, source_hash over the exact bytes. IDEMPOTENT: the same snapshot yields identical bytes/hash and returns the existing row. FAILS CLOSED on incompatible environments (a module requires one shared environment_hash), a dependency outside the selection, a cycle, a name collision, or a superseded/not-yet-promoted artifact. A declaration's proof is embedded ONLY when its kernel-verified source resolves from the content-addressed store (replay_status='self_contained_source'); otherwise it is a signature-only provenance comment (replay_status='proof_source_unavailable') — the module never carries an unverified or client-supplied proof body) | {\"type\":\"plan_import\",\"artifact_ids\":[..]} (+ optional base_problem_version_id — advisory: reports the deterministic module path, the topologically ordered declarations, environment compatibility with the base problem, and the proposed NEW-problem import manifest (base manifest ∪ the generated module). Mutates NOTHING) | {\"type\":\"observe\",\"module_id\":\"..\"} (read a generated module; recomputes source_hash so a tampered stored source shows source_hash_matches=false) | {\"type\":\"list\"} (+ optional limit — generated modules, most recent first) | {\"type\":\"write\",\"module_id\":\"..\"} (+ optional overwrite — write a SELF-CONTAINED module into the Lean source tree under LeanChecker/ so a new problem can actually import it; byte-verifies the write, is idempotent, and FAILS CLOSED on a signature-only module or an overwrite that would clobber different bytes. This is the only action that touches the source tree). Builds out #239; integrates with #244 search and records real reuse via #250 verified_artifact add_edge (evidence_kind='verifier') once a proof actually uses a declaration."),
+            make_tool::<StructuralSearchArgs>("structural_search", "Issue #245: elaborated TYPE-DIRECTED theorem search over the Verified Artifact Registry — find a lemma from its target TYPE SHAPE, not its name. The query is ELABORATED under the pinned Lean environment (real elaboration, never a parser approximation) into a normalized structural fingerprint (conclusion head symbol, binder count, hypothesis-head multiset, used-constant set), then matched against stored artifact fingerprints with deterministic structural ranking. TRUST BOUNDARY: read-only w.r.t. proofs — no result changes proof state or imports, and a fingerprint is a SEARCH KEY, never proof authority; confidence is 'high' ONLY for an exact structural fingerprint match (structural/symbol overlaps are 'medium'/'low', a ranking hint not a unification proof). `action` is internally tagged — exactly one of: {\"type\":\"fingerprint\",\"artifact_id\":\"..\"} (elaborate the artifact's current-version statement and STORE its fingerprint; idempotent per (version, fingerprint_version), with the lean_toolchain recorded so a record is invalidated/namespaced on a toolchain/representation change; requires Lean — index the registry before searching) | {\"type\":\"search\",\"statement\":\"<Lean type>\"} (+ optional mode exact_type|conclusion_shape|hypothesis_conclusion_shape|symbol_overlap|structural_similarity (default structural_similarity), limit — elaborate the query and rank stored fingerprints; every result carries full name, formal type, import source, source library, a score, and an honest confidence + confidence_basis explanation. Requires Lean) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read a stored fingerprint; no Lean). Only artifacts with a stored fingerprint are searchable; the pinned-Mathlib-scale index + semantic re-ranking (#246) are tracked separately. Consumes the search surface of #244; complements name search there."),
             make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
             make_tool::<CandidateConstructionArgs>("candidate_construction", "Issue #188: ONE tool for the entire candidate-construction family (issue #8) — propose a candidate mathematical object, record empirical checks against it, revise its status, and attach it to a research node or verification layer. A CANDIDATE CONSTRUCTION IS A PROPOSED MATHEMATICAL OBJECT, NOT A PROOF CERTIFICATE: every action records research artifacts useful for search and planning; trust_status never certifies anything — empirical support, human review, citation, and 'a formal statement exists' are all explicitly distinct from kernel verification, and no field can hold kernel evidence. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"construction_type\":\"graph_family\"|\"point_configuration\"|\"coloring\"|\"field_tower\"|\"lattice\"|\"counterexample\"|\"asymptotic_family\"|\"algebraic_object\"|\"combinatorial_design\"|\"other\",\"informal_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, verification_layer_id, problem_version_id, episode_id, name, parameters_json, construction_json, claimed_properties_json, known_failures_json, empirical_checks_json, verification_targets_json, status, trust_status, and motivated-discovery metadata: motivating_move, source_observation, intended_role, strategy_context, why_this_might_work, why_this_might_fail, next_check, future_challenge_relevance — propose a candidate construction. Can exist before a dossier, node, Lean theorem, problem, or episode; a research artifact, not a proof certificate) | {\"type\":\"observe\",\"candidate_construction_id\":\"..\",\"description\":\"..\",\"result\":\"supports\"|\"refutes\"|\"inconclusive\"} (+ optional details_json, observed_by — record one empirical check, appended to the construction's empirical_checks history. Never changes proof status, and 'supports' never implies proved) | {\"type\":\"update_status\",\"candidate_construction_id\":\"..\"} (+ at least one of status, trust_status, claimed_properties_json, known_failures_json, next_check — update the construction in place; a falsified/rejected construction stays visible, never deleted. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified — and no other trust_status confers proof either) | {\"type\":\"link_node\",\"candidate_construction_id\":\"..\",\"node_id\":\"..\"} (attach the construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier. Linking never changes either side's trust_status) | {\"type\":\"link_verification_layer\",\"candidate_construction_id\":\"..\",\"verification_layer_id\":\"..\"} (attach the construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier. Linking a layer is provenance, not promotion — the construction's trust_status is unchanged, and a kernel_verified_claim_linked construction is re-checked against the newly linked layer)"),
@@ -19242,8 +19563,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 60,
-                        "total_tool_count": 60,
+                        "classified_tool_count": 61,
+                        "total_tool_count": 61,
                         "tools": {
                             "mathcorpus_export": {
                                 "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
@@ -19556,6 +19877,16 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic — source is a pure function of the topologically ordered registry records (no timestamp/uuid in the bytes); rebuilding the same snapshot reproduces identical bytes and source_hash; write byte-verifies and is idempotent; observe recomputes source_hash to expose a tampered stored source",
                                 "source_code_impact": "write_generates_source — the WRITE action materializes a deterministic module file under LeanChecker/MnemosyneArtifacts/ so a new problem can import it; all other actions are no_source_change (DB-only). The written source is a pure function of immutable registry records, never hand-edited",
                                 "artifact_risk": "generated_module_metadata",
+                                "required_run_mode": "any"
+                            },
+                            "structural_search": {
+                                "side_effect": "mixed by action (issue #245): fingerprint upserts one verified_artifact_fingerprints row (idempotent per version+fingerprint_version); search/observe are read_only. No action mutates a problem manifest, an episode outcome, obligations, canonical lemmas, budgets, or benchmark result tables",
+                                "trust_level": "advisory — a structural fingerprint is a SEARCH KEY over already-established statements; it confers no proof authority and changes no proof state or imports. Confidence is 'high' only for an exact structural fingerprint match; structural/symbol overlaps are labeled 'medium'/'low' so a loose suggestion is never mistaken for a unification proof",
+                                "cost_surface": "fingerprint/search invoke Lean to ELABORATE the statement under the pinned environment (a cold Mathlib load, ~30-60s each); observe is DB-only",
+                                "benchmark_safety": "safe_public_output for the fingerprint (head symbols/binder counts/constant names + the formal statement); no proof source bytes",
+                                "replayability": "deterministic — the elaborated fingerprint is normalized (sorted constants + hypothesis heads) and the scoring/ranking is a pure function of fingerprints; index identity is (version, fingerprint_version) with the lean_toolchain recorded so a toolchain/representation change invalidates the record",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "structural_fingerprint_metadata",
                                 "required_run_mode": "any"
                             },
                             "retrieval_benchmark": {
@@ -20808,6 +21139,7 @@ impl ServerHandler for ChatDbMcp {
             "artifact_registry_bundle" => self.do_artifact_registry_bundle(args_val).await,
             "retrieval_benchmark" => self.do_retrieval_benchmark(args_val).await,
             "artifact_module" => self.do_artifact_module(args_val).await,
+            "structural_search" => self.do_structural_search(args_val).await,
             "math_search" => self.do_math_search(args_val).await,
             "proactive_retrieval" => self.do_proactive_retrieval(args_val).await,
             "candidate_construction" => self.do_candidate_construction(args_val).await,
@@ -21093,6 +21425,28 @@ mod tests {
                 wall_time_ms: 1,
                 lean_cpu_time_ms: 1,
             })
+        }
+
+        // #245: a DETERMINISTIC, statement-derived synthetic fingerprint (NOT real
+        // elaboration — that's the RealLeanGateway + the gated live test) so the
+        // structural-search matching/ranking logic is unit-testable offline. Same
+        // statement text -> identical fingerprint (so a renamed artifact with the
+        // same type matches exactly); different text -> different constants/head.
+        fn structural_fingerprint(&self, statement: &str) -> Result<serde_json::Value, String> {
+            let toks: std::collections::BTreeSet<String> = statement
+                .split(|c: char| !(c.is_alphanumeric() || c == '.' || c == '_'))
+                .filter(|t| t.len() >= 2 && t.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false))
+                .map(|t| t.to_string()).collect();
+            let binder_count = statement.matches('∀').count() as i64;
+            let conclusion_head = if statement.contains('=') { "Eq" }
+                else if statement.contains('≤') || statement.contains("<=") { "LE.le" }
+                else { "Prop" };
+            Ok(serde_json::json!({
+                "binder_count": binder_count,
+                "conclusion_head": conclusion_head,
+                "hypothesis_heads": [],
+                "constants": toks.into_iter().collect::<Vec<_>>(),
+            }))
         }
 
         // The trait default now fails closed (see lean/mod.rs) — MockGateway
@@ -21817,7 +22171,7 @@ mod tests {
         // + 1 verified_artifact (issue #243: Verified Artifact Registry foundation
         // - promote/add_version/observe/set_status/review/supersede) = 55.
         // + 1 math_search (issue #244: unified advisory search across mathlib/VAR/mathcorpus) = 56.
-        assert_eq!(list_res.tools.len(), 60);
+        assert_eq!(list_res.tools.len(), 61);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -25051,6 +25405,177 @@ mod tests {
             let _ = std::fs::remove_dir_all(lean_project_path.join(".lake/build/lib/lean/LeanChecker/MnemosyneArtifacts"));
         }
         let _ = result;
+        drop(client);
+    }
+
+    /// #245: the deterministic structural scoring/ranking is a pure function of
+    /// fingerprints — exact match ⇒ high confidence; different conclusion heads
+    /// don't match under conclusion/hypothesis modes; similarity ranks same over
+    /// different; symbol overlap is partial. No Lean needed.
+    #[test]
+    fn test_structural_score_modes() {
+        let mk = |bc: i64, ch: &str, hh: Vec<&str>, cs: Vec<&str>| {
+            let hh: Vec<String> = hh.iter().map(|s| s.to_string()).collect();
+            let cs: Vec<String> = cs.iter().map(|s| s.to_string()).collect();
+            let hash = structural_fp_hash(bc, ch, &hh, &cs);
+            StructuralFp { binder_count: bc, conclusion_head: ch.to_string(), hypothesis_heads: hh,
+                constants: cs.into_iter().collect(), fingerprint_hash: hash }
+        };
+        let q = mk(2, "GE.ge", vec!["Nat", "Nat.Prime"], vec!["Nat", "Nat.Prime", "GE.ge"]);
+        let same = mk(2, "GE.ge", vec!["Nat", "Nat.Prime"], vec!["Nat", "Nat.Prime", "GE.ge"]);
+        let diff_head = mk(1, "Eq", vec!["Nat"], vec!["Nat", "Eq"]);
+
+        let (s, conf, _) = structural_score(&q, &same, "exact_type");
+        assert_eq!(s, 1.0);
+        assert_eq!(conf, "high");
+        assert_eq!(structural_score(&q, &diff_head, "exact_type").0, 0.0);
+        // A different conclusion head doesn't match under conclusion/hypothesis modes.
+        assert_eq!(structural_score(&q, &diff_head, "conclusion_shape").0, 0.0);
+        assert_eq!(structural_score(&q, &diff_head, "hypothesis_conclusion_shape").0, 0.0);
+        // Symbol overlap is partial (they share "Nat").
+        let (sym, _, _) = structural_score(&q, &diff_head, "symbol_overlap");
+        assert!(sym > 0.0 && sym < 1.0, "partial symbol overlap: {}", sym);
+        // Similarity ranks the identical type strictly above the different one.
+        let ss_same = structural_score(&q, &same, "structural_similarity").0;
+        let ss_diff = structural_score(&q, &diff_head, "structural_similarity").0;
+        assert!(ss_same > ss_diff, "same {} !> diff {}", ss_same, ss_diff);
+        assert_eq!(ss_same, 1.0 * 0.40 + 1.0 * 0.25 + 1.0 * 0.25 + 1.0 * 0.10);
+    }
+
+    /// #245: end-to-end over the tool with a MockGateway (deterministic synthetic
+    /// fingerprints): a renamed artifact is recovered from the TYPE SHAPE (same
+    /// statement, different names → exact match), a different type does not exact-
+    /// match, results carry honest confidence, and observe reads the stored record.
+    #[tokio::test]
+    async fn test_structural_search_recovers_renamed_by_type_shape() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        async fn va(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("verified_artifact")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn ss(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("structural_search")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn solve(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str, idem: &str) -> String {
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let ep_id = ep["episode_id"].as_str().unwrap().to_string();
+            claim_and_solve(peer, &ep_id, "trivial", idem).await;
+            ep_id
+        }
+        // Promote an artifact and set its current-version formal_statement.
+        async fn artifact_with_statement(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str, name: &str, stmt: &str, tag: &str) -> String {
+            let e1 = solve(peer, pv, &format!("{}-a", tag)).await;
+            let a = va(peer, serde_json::json!({"action": {"type":"promote","episode_id":e1,
+                "artifact_kind":"theorem","canonical_name":name}})).await;
+            let a_id = a["artifact_id"].as_str().unwrap().to_string();
+            let e2 = solve(peer, pv, &format!("{}-b", tag)).await;
+            va(peer, serde_json::json!({"action": {"type":"add_version","artifact_id":a_id,"episode_id":e2,
+                "formal_statement": stmt}})).await;
+            a_id
+        }
+
+        let pv = create_problem(&peer, "True").await;
+        // Two DIFFERENTLY-NAMED artifacts with the SAME type, and one different type.
+        let a1 = artifact_with_statement(&peer, &pv, "add_comm_variant", "1 + 1 = 2", "s1").await;
+        let a2 = artifact_with_statement(&peer, &pv, "renamed_sum_lemma", "1 + 1 = 2", "s2").await;
+        let a3 = artifact_with_statement(&peer, &pv, "le_bound", "n ≤ m", "s3").await;
+
+        // Fingerprint each (idempotent).
+        for a in [&a1, &a2, &a3] {
+            let f = ss(&peer, serde_json::json!({"action": {"type":"fingerprint","artifact_id": a}})).await;
+            assert!(f["fingerprint"]["fingerprint_hash"].is_string(), "{:?}", f);
+        }
+        let f_again = ss(&peer, serde_json::json!({"action": {"type":"fingerprint","artifact_id": a1}})).await;
+        assert!(f_again["fingerprint"]["fingerprint_hash"].is_string(), "re-fingerprint is idempotent");
+
+        // Search by TYPE SHAPE (not name): recover BOTH same-type artifacts exactly.
+        let res = ss(&peer, serde_json::json!({"action": {"type":"search","statement":"1 + 1 = 2","mode":"exact_type"}})).await;
+        let ids: Vec<&str> = res["results"].as_array().unwrap().iter().map(|r| r["result_id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&a1.as_str()) && ids.contains(&a2.as_str()), "both same-type artifacts recovered by shape: {:?}", res);
+        assert!(!ids.contains(&a3.as_str()), "the different type must not exact-match: {:?}", res);
+        for r in res["results"].as_array().unwrap() {
+            assert_eq!(r["confidence"], "high", "exact match is high confidence: {:?}", r);
+            assert_eq!(r["exact_type_match"], true);
+            assert!(r["confidence_basis"].is_string());
+        }
+
+        // structural_similarity ranks the same-type artifacts above the different one.
+        let sim = ss(&peer, serde_json::json!({"action": {"type":"search","statement":"1 + 1 = 2","mode":"structural_similarity"}})).await;
+        let sim_results = sim["results"].as_array().unwrap();
+        let top_ids: Vec<&str> = sim_results.iter().take(2).map(|r| r["result_id"].as_str().unwrap()).collect();
+        assert!(top_ids.contains(&a1.as_str()) && top_ids.contains(&a2.as_str()), "same-type artifacts rank first: {:?}", sim);
+
+        // observe reads the stored fingerprint.
+        let obs = ss(&peer, serde_json::json!({"action": {"type":"observe","artifact_id": a1}})).await;
+        assert_eq!(obs["fingerprint"]["conclusion_head"], "Eq");
+        assert!(obs["fingerprint"]["fingerprint_hash"].is_string());
+    }
+
+    /// #245 LIVE (gated on PROOFSEARCH_LIVE_E2E=1 + a resolvable toolchain): REAL
+    /// Lean elaboration recovers a deliberately renamed theorem from its type shape
+    /// (acceptance criterion 1). Elaborates `∀ n : Nat, n + 0 = n` for both a
+    /// stored artifact and the query, and confirms an exact structural match.
+    #[tokio::test]
+    async fn test_structural_search_live_recovers_renamed_by_elaboration() {
+        if std::env::var("PROOFSEARCH_LIVE_E2E").is_err() {
+            eprintln!("skipping live #245 structural search (set PROOFSEARCH_LIVE_E2E=1 to run)");
+            return;
+        }
+        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+        let lean_project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("lean-checker");
+        let elan = std::env::var("PROOFSEARCH_ELAN_BIN_PATH").map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(&home).join(".elan").join("bin"));
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let handler = ChatDbMcp::new(Arc::new(Mutex::new(conn)), lean_project_path.clone(), elan);
+        if !handler.lean_available {
+            eprintln!("skipping live #245: Lean gateway unavailable at {:?}", lean_project_path);
+            return;
+        }
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        async fn call(peer: &rmcp::service::Peer<rmcp::RoleClient>, tool: &str, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new(tool.to_string())
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        // A problem + solved episode so we can promote a real artifact, then set a
+        // real formal_statement on its current version.
+        let p = call(&peer, "problem_create", serde_json::json!({
+            "source_problem_text": "toy", "root_formal_statement": "2 + 2 = 4", "unsafe_dev_attestation": true})).await;
+        let pv = p["problem_version_id"].as_str().unwrap().to_string();
+        async fn prove(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str, proof: &str, idem: &str) -> String {
+            let ep = call(peer, "episode_create", serde_json::json!({"problem_version_id": pv, "max_steps": 5})).await;
+            let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+            let req = &ep["next_action_request"];
+            let (rid, rev) = (req["id"].as_str().unwrap().to_string(), req["episode_revision"].as_i64().unwrap());
+            let claim = call(peer, "attempt_claim", serde_json::json!({
+                "episode_id": episode_id, "action_request_id": rid, "idempotency_key": idem, "expected_revision": rev})).await;
+            call(peer, "episode_step", serde_json::json!({
+                "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"], "expected_revision": rev,
+                "claim_token": claim["claim_token"], "action": {"type": "solve", "proof_term": proof}, "cost_micros": 100})).await;
+            episode_id
+        }
+        let e1 = prove(&peer, &pv, "rfl", "fp-1").await;
+        let a = call(&peer, "verified_artifact", serde_json::json!({"action": {"type":"promote",
+            "episode_id": e1, "artifact_kind":"theorem", "canonical_name":"deliberately_obscure_name"}})).await;
+        let a_id = a["artifact_id"].as_str().unwrap().to_string();
+        let e2 = prove(&peer, &pv, "rfl", "fp-2").await;
+        call(&peer, "verified_artifact", serde_json::json!({"action": {"type":"add_version",
+            "artifact_id": a_id, "episode_id": e2, "formal_statement": "∀ n : Nat, n + 0 = n"}})).await;
+
+        // Fingerprint it (real elaboration), then search by the SAME type via a
+        // different phrasing — recover it by shape, not name.
+        call(&peer, "structural_search", serde_json::json!({"action": {"type":"fingerprint","artifact_id": a_id}})).await;
+        let res = call(&peer, "structural_search", serde_json::json!({"action": {"type":"search",
+            "statement": "∀ (m : Nat), m + 0 = m", "mode": "exact_type"}})).await;
+        let ids: Vec<&str> = res["results"].as_array().unwrap().iter().map(|r| r["result_id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&a_id.as_str()),
+            "renamed theorem recovered by elaborated type shape (alpha-renamed query): {:?}", res);
+        eprintln!("LIVE #245 PASSED: renamed theorem recovered from its elaborated type shape");
         drop(client);
     }
 
