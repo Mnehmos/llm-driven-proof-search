@@ -6178,9 +6178,15 @@ struct ModuleMember {
     artifact_version: i64,
     canonical_name: String,
     formal_statement: Option<String>,
-    proof_body_hash: String,
     environment_hash: String,
     maturity_status: String,
+    /// The origin lemma's theorem name — the real Lean gateway persists every
+    /// kernel-verified proof as a compiled module `LeanChecker.Verified.<name>`
+    /// (built by the durability job, #261). A generated module reuses that
+    /// already-compiled proof by importing + aliasing it, rather than re-embedding
+    /// (and re-elaborating) proof text. None when the version has no resolvable
+    /// origin lemma (e.g. a fixture) → the member can only be signature-only.
+    origin_theorem_name: Option<String>,
 }
 
 /// Resolve selected artifact ids to their current versions for materialization
@@ -6194,14 +6200,14 @@ fn resolve_module_members(conn: &Connection, artifact_ids: &[String]) -> Result<
     let mut members = Vec::new();
     for id in artifact_ids {
         if !seen_ids.insert(id.clone()) { continue; }
-        let row: Option<(String, String, Option<String>, i64, String, String)> = conn.query_row(
+        let row: Option<(String, String, Option<String>, i64, String)> = conn.query_row(
             "SELECT a.maturity_status, a.canonical_name, a.superseded_by, a.current_version, \
-             v.id, v.proof_body_hash FROM verified_artifacts a \
+             v.id FROM verified_artifacts a \
              JOIN verified_artifact_versions v ON v.artifact_id = a.id AND v.artifact_version = a.current_version \
              WHERE a.id = ?1",
-            [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         ).optional().map_err(rs)?;
-        let Some((maturity, name, superseded_by, cur_ver, version_id, proof_hash)) = row else {
+        let Some((maturity, name, superseded_by, cur_ver, version_id)) = row else {
             return Err(mcp_invalid_params(format!("unknown artifact_id: {}", id)));
         };
         if matches!(maturity.as_str(), "discovered" | "kernel_verified_local") {
@@ -6221,11 +6227,19 @@ fn resolve_module_members(conn: &Connection, artifact_ids: &[String]) -> Result<
             "SELECT formal_statement, environment_hash FROM verified_artifact_versions WHERE id = ?1",
             [&version_id], |r| Ok((r.get(0)?, r.get(1)?)),
         ).map_err(rs)?;
-        let _ = superseded_by; // consumed above (rejected); not retained
+        // Resolve the origin lemma's theorem name (the compiled LeanChecker.Verified
+        // module the generated module will import + alias). Prefer the version's own
+        // origin; fall back to any origin lemma for the version.
+        let origin_theorem_name: Option<String> = conn.query_row(
+            "SELECT l.theorem_name FROM verified_artifact_origins o \
+             JOIN episode_verified_lemmas l ON l.id = o.origin_lemma_id \
+             WHERE o.version_id = ?1 AND o.origin_lemma_id IS NOT NULL LIMIT 1",
+            [&version_id], |r| r.get(0),
+        ).optional().map_err(rs)?;
         members.push(ModuleMember {
             artifact_id: id.clone(), version_id, artifact_version: cur_ver, canonical_name: name,
-            formal_statement: formal, proof_body_hash: proof_hash, environment_hash: env,
-            maturity_status: maturity,
+            formal_statement: formal, environment_hash: env, maturity_status: maturity,
+            origin_theorem_name,
         });
     }
     if members.is_empty() {
@@ -6299,43 +6313,57 @@ fn assemble_module_source(
     environment_hash: &str,
     lean_project_path: &std::path::Path,
 ) -> (String, &'static str) {
+    // A member is self-contained when its origin lemma's compiled module
+    // (LeanChecker/Verified/<origin>.lean, persisted by the real gateway and built
+    // by the durability job, #261) exists on disk — the generated module IMPORTS
+    // that already-kernel-verified proof and ALIASES it under the curated name,
+    // rather than re-embedding proof text that would have to re-elaborate.
     let mut all_resolved = true;
+    let mut imports: Vec<String> = vec!["import Mathlib".to_string()];
     let mut body = String::new();
     for m in members_ordered {
         let stmt = m.formal_statement.clone().unwrap_or_default();
-        let (content_path, _) = verifier_artifact_paths(lean_project_path, &m.proof_body_hash);
-        let proof_source = std::fs::read_to_string(&content_path).ok();
+        let verified_ok = m.origin_theorem_name.as_ref().map(|t| {
+            lean_project_path.join("LeanChecker").join("Verified").join(format!("{}.lean", t)).exists()
+        }).unwrap_or(false);
         body.push_str(&format!(
-            "\n-- {} (artifact {} v{}, statement carried from the immutable registry version)\n",
+            "\n-- {} (artifact {} v{}, curated from the immutable registry version)\n",
             m.canonical_name, m.artifact_id, m.artifact_version));
-        match proof_source {
-            Some(src) if !stmt.is_empty() => {
-                body.push_str(&format!("theorem {} : {} :=\n{}\n", m.canonical_name, stmt, src.trim_end()));
+        match (&m.origin_theorem_name, verified_ok) {
+            (Some(origin), true) => {
+                imports.push(format!("import LeanChecker.Verified.{}", origin));
+                if origin == &m.canonical_name {
+                    body.push_str(&format!("-- reused directly as `{}` (see the import above)\n", origin));
+                } else {
+                    // Expose the origin theorem under the curated canonical name.
+                    body.push_str(&format!("alias {} := {}\n", m.canonical_name, origin));
+                }
             }
             _ => {
                 all_resolved = false;
                 body.push_str(&format!(
-                    "-- SIGNATURE ONLY (kernel-verified proof source not resolvable in this store):\n\
+                    "-- SIGNATURE ONLY (the origin's compiled LeanChecker.Verified module is not present in this checkout):\n\
                      --   theorem {} : {}\n\
-                     -- proof_body_hash={} — resolve from the origin store to make this module self-contained.\n",
-                    m.canonical_name, if stmt.is_empty() { "<statement unavailable>" } else { &stmt }, m.proof_body_hash));
+                     -- origin_theorem_name={:?} — build/replay the origin to make this module self-contained.\n",
+                    m.canonical_name, if stmt.is_empty() { "<statement unavailable>" } else { &stmt }, m.origin_theorem_name));
             }
         }
     }
     let members_manifest: Vec<String> = members_ordered.iter()
-        .map(|m| format!("--   {} : artifact {} v{} (maturity={})", m.canonical_name, m.artifact_id, m.artifact_version, m.maturity_status))
+        .map(|m| format!("--   {} : artifact {} v{} (maturity={}, origin={:?})", m.canonical_name, m.artifact_id, m.artifact_version, m.maturity_status, m.origin_theorem_name))
         .collect();
     let header = format!(
         "/-\n  Generated MnemosyneArtifacts module — DO NOT EDIT (issue #247).\n\
          \x20 Deterministically assembled from immutable Verified Artifact Registry records.\n\
          \x20 module_path: {}\n  category: {}\n  environment_hash: {}\n  members (topologically ordered):\n{}\n-/\n",
         module_path, category, environment_hash, members_manifest.join("\n"));
-    // The module imports the Mathlib umbrella so any verified proof's tactics/
-    // lemmas resolve when it is built standalone. (The registry version records an
-    // environment_hash but not the concrete import manifest, so the umbrella is
-    // the safe deterministic choice; narrowing it is a future refinement.)
-    let imports = "import Mathlib\n";
-    let source = format!("{}{}{}", header, imports, body);
+    // Imports are sorted (after the leading `import Mathlib`) for deterministic
+    // bytes independent of member order within the same dependency layer.
+    let (mathlib, mut verified_imports): (Vec<String>, Vec<String>) = imports.into_iter().partition(|i| i == "import Mathlib");
+    verified_imports.sort();
+    verified_imports.dedup();
+    let import_block = format!("{}\n{}\n", mathlib.join("\n"), verified_imports.join("\n"));
+    let source = format!("{}{}{}", header, import_block, body);
     (source, if all_resolved { "self_contained_source" } else { "proof_source_unavailable" })
 }
 
@@ -24783,8 +24811,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
+        let conn_arc = Arc::new(Mutex::new(conn));
         let handler = ChatDbMcp {
-            conn: Arc::new(Mutex::new(conn)), gateway: Box::new(MockGateway), lean_available: false,
+            conn: conn_arc.clone(), gateway: Box::new(MockGateway), lean_available: false,
             lean_environment: None, lean_project_path: root.path().to_path_buf(),
             interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None,
         };
@@ -24818,22 +24847,32 @@ mod tests {
         va(&peer, serde_json::json!({"action": {"type":"add_version","artifact_id":a_id,"episode_id":e2,
             "formal_statement":"True"}})).await;
 
-        // Seed the on-disk proof source behind the current version's proof_body_hash
-        // so materialization resolves a self-contained module.
-        let obs = va(&peer, serde_json::json!({"action": {"type":"observe","artifact_id": a_id}})).await;
-        let cur = obs["current_version"].as_i64().unwrap();
-        let pbh = obs["versions"].as_array().unwrap().iter()
-            .find(|v| v["artifact_version"].as_i64() == Some(cur)).unwrap()["proof_body_hash"].as_str().unwrap().to_string();
-        let (cpath, _) = verifier_artifact_paths(root.path(), &pbh);
-        std::fs::create_dir_all(cpath.parent().unwrap()).unwrap();
-        std::fs::write(&cpath, b"  trivial\n").unwrap();
+        // Look up the current version's origin lemma theorem_name, and seed its
+        // compiled LeanChecker/Verified/<name>.lean so materialization resolves a
+        // self-contained module (the real gateway would have persisted this).
+        let origin_name: String = {
+            let conn = conn_arc.lock().await;
+            conn.query_row(
+                "SELECT l.theorem_name FROM verified_artifacts a \
+                 JOIN verified_artifact_versions v ON v.artifact_id = a.id AND v.artifact_version = a.current_version \
+                 JOIN verified_artifact_origins o ON o.version_id = v.id \
+                 JOIN episode_verified_lemmas l ON l.id = o.origin_lemma_id \
+                 WHERE a.id = ?1 LIMIT 1",
+                [&a_id], |r| r.get(0),
+            ).unwrap()
+        };
+        let verified_dir = root.path().join("LeanChecker").join("Verified");
+        std::fs::create_dir_all(&verified_dir).unwrap();
+        std::fs::write(verified_dir.join(format!("{}.lean", origin_name)),
+            format!("theorem {} : True := trivial\n", origin_name)).unwrap();
 
         let m = am(&peer, serde_json::json!({"action": {"type":"materialize","artifact_ids":[a_id],"category":"NumberTheory"}})).await;
-        assert_eq!(m["replay_status"], "self_contained_source", "seeded proof -> self-contained: {:?}", m);
+        assert_eq!(m["replay_status"], "self_contained_source", "origin Verified module present -> self-contained: {:?}", m);
         let module_id = m["module_id"].as_str().unwrap().to_string();
         let source_text = m["source_text"].as_str().unwrap().to_string();
         assert!(source_text.contains("import Mathlib"), "module imports Mathlib so it builds standalone: {}", source_text);
-        assert!(source_text.contains("theorem reusable_truth : True :="), "embeds the real declaration: {}", source_text);
+        assert!(source_text.contains(&format!("import LeanChecker.Verified.{}", origin_name)), "imports the compiled origin: {}", source_text);
+        assert!(source_text.contains(&format!("alias reusable_truth := {}", origin_name)), "aliases origin under the curated name: {}", source_text);
 
         // Write it into the source tree; byte-identical, importable path.
         let w = am(&peer, serde_json::json!({"action": {"type":"write","module_id": module_id}})).await;
