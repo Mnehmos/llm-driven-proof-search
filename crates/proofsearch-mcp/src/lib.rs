@@ -2354,6 +2354,62 @@ pub struct SemanticSearchArgs {
     pub limit: Option<i64>,
 }
 
+/// Issue #253: promote reusable analytic-number-theory results from proof
+/// campaigns (e.g. Erdős 647) into the Prime Distribution family — a source map +
+/// classification + promotion manifest so verified mathematics becomes searchable
+/// institutional memory instead of staying trapped in campaign folders. Advisory
+/// research metadata over already-kernel-verified artifacts; never proof
+/// authority. The neutralization pipeline (generalize → neutral module → packet →
+/// registry → upstream) is driven by existing tools (artifact_module #247,
+/// artifact_registry_bundle #249, mathcorpus_export #230, verified_artifact edges
+/// #250); this tool records the classification + status that steer it.
+#[derive(JsonSchema, Deserialize)]
+pub struct PrimeDistributionArgs {
+    pub action: PrimeDistributionAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PrimeDistributionAction {
+    /// Classify a verified artifact into a Prime Distribution category with a
+    /// reusability classification + portability status (idempotent per
+    /// (artifact, category)). Provenance back to the source campaign/episode is
+    /// preserved via the artifact's own origin + source_campaign.
+    Classify {
+        artifact_id: String,
+        /// PrimeCounting | ChebyshevTheta | ChebyshevPsi | Mertens |
+        /// PrimeReciprocalSums | HarmonicAsymptotics | SelbergSieve | BrunSieve |
+        /// LargeSieve | BombieriVinogradov | ExplicitBounds | RHConsequences.
+        category: String,
+        /// campaign_specific | reusable_namespaced | generalized_reusable |
+        /// mathcorpus_candidate | mathlib_candidate.
+        classification: String,
+        /// local_only | neutral_module_ready | packet_exported |
+        /// registry_promoted | upstreamed (default local_only).
+        #[serde(default)]
+        portability_status: Option<String>,
+        #[serde(default)]
+        notes: Option<String>,
+    },
+    /// Record per-category Mathlib coverage + missing formal infrastructure.
+    SetCoverage {
+        category: String,
+        #[serde(default)]
+        mathlib_coverage: Option<String>,
+        #[serde(default)]
+        missing_infrastructure: Option<String>,
+        #[serde(default)]
+        notes: Option<String>,
+    },
+    /// The machine-readable Prime Distribution source map: every taxonomy category
+    /// with its coverage, missing infrastructure, and the local classified
+    /// artifacts (trust + portability + campaign consumers).
+    SourceMap,
+    /// The promotion manifest: classified artifacts bucketed by classification
+    /// (the initial-implementation-target deliverable for a campaign audit).
+    PromotionManifest,
+}
+
 /// Issue #243: the Verified Artifact Registry (VAR) foundation tool. Promotes a
 /// KERNEL-BACKED verified lemma into a curated, immutable, versioned research
 /// artifact with a lifecycle. The registry curates already-established kernel
@@ -16218,6 +16274,148 @@ impl ChatDbMcp {
         })).unwrap())]))
     }
 
+    /// Issue #253: Prime Distribution promotion machinery — classify verified
+    /// analytic-number-theory artifacts into the NumberTheory/PrimeDistribution
+    /// taxonomy, record per-category coverage, and emit the source map + promotion
+    /// manifest. Advisory research metadata over already-kernel-verified artifacts;
+    /// never proof authority.
+    async fn do_prime_distribution(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        const CATEGORIES: &[&str] = &["PrimeCounting", "ChebyshevTheta", "ChebyshevPsi", "Mertens",
+            "PrimeReciprocalSums", "HarmonicAsymptotics", "SelbergSieve", "BrunSieve", "LargeSieve",
+            "BombieriVinogradov", "ExplicitBounds", "RHConsequences"];
+        const CLASSIFICATIONS: &[&str] = &["campaign_specific", "reusable_namespaced", "generalized_reusable",
+            "mathcorpus_candidate", "mathlib_candidate"];
+        const PORTABILITY: &[&str] = &["local_only", "neutral_module_ready", "packet_exported",
+            "registry_promoted", "upstreamed"];
+        let args: PrimeDistributionArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        match args.action {
+            PrimeDistributionAction::Classify { artifact_id, category, classification, portability_status, notes } => {
+                validate_one_of("category", &category, CATEGORIES)?;
+                validate_one_of("classification", &classification, CLASSIFICATIONS)?;
+                let portability = portability_status.unwrap_or_else(|| "local_only".to_string());
+                validate_one_of("portability_status", &portability, PORTABILITY)?;
+                let conn = self.conn.lock().await;
+                // The artifact must be a real kernel-backed registry artifact.
+                let art: Option<(String, Option<String>, String)> = conn.query_row(
+                    "SELECT canonical_name, source_campaign, maturity_status FROM verified_artifacts WHERE id = ?1",
+                    [&artifact_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                ).optional().map_err(rs)?;
+                let Some((name, campaign, maturity)) = art else {
+                    return Err(mcp_invalid_params(format!("unknown artifact_id: {}", artifact_id)));
+                };
+                let now = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO prime_distribution_classifications \
+                     (id, artifact_id, category, classification, portability_status, notes, created_at, updated_at) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?7) \
+                     ON CONFLICT(artifact_id, category) DO UPDATE SET \
+                       classification=excluded.classification, portability_status=excluded.portability_status, \
+                       notes=excluded.notes, updated_at=excluded.updated_at",
+                    rusqlite::params![Uuid::new_v4().to_string(), &artifact_id, &category, &classification, &portability, &notes, &now],
+                ).map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "artifact_id": artifact_id,
+                    "canonical_name": name,
+                    "category": category,
+                    "classification": classification,
+                    "portability_status": portability,
+                    "provenance": {"source_campaign": campaign, "maturity_status": maturity,
+                        "note": "Provenance back to the source campaign/episode is the artifact's own origin + source_campaign; a verified_artifact add_edge (evidence_kind='verifier') records downstream reuse."},
+                    "neutral_module_convention": format!("materialize into LeanChecker.MnemosyneArtifacts.NumberTheory.M_<hash> via artifact_module (#247); the intended neutral namespace is NumberTheory.PrimeDistribution.{}", category),
+                    "trust_boundary": "Advisory research classification (#253) over an already-kernel-verified artifact — never proof authority. Classifying does not neutralize, replay, or export anything; the neutralization pipeline runs through artifact_module (#247) / mathcorpus_export (#230) / artifact_registry_bundle (#249).",
+                })).unwrap())]))
+            }
+
+            PrimeDistributionAction::SetCoverage { category, mathlib_coverage, missing_infrastructure, notes } => {
+                validate_one_of("category", &category, CATEGORIES)?;
+                let conn = self.conn.lock().await;
+                let now = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO prime_distribution_coverage (category, mathlib_coverage, missing_infrastructure, notes, updated_at) \
+                     VALUES (?1,?2,?3,?4,?5) \
+                     ON CONFLICT(category) DO UPDATE SET mathlib_coverage=excluded.mathlib_coverage, \
+                       missing_infrastructure=excluded.missing_infrastructure, notes=excluded.notes, updated_at=excluded.updated_at",
+                    rusqlite::params![&category, &mathlib_coverage, &missing_infrastructure, &notes, &now],
+                ).map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "category": category, "mathlib_coverage": mathlib_coverage,
+                    "missing_infrastructure": missing_infrastructure, "notes": notes, "updated_at": now,
+                })).unwrap())]))
+            }
+
+            PrimeDistributionAction::SourceMap => {
+                let conn = self.conn.lock().await;
+                let mut categories = Vec::new();
+                for cat in CATEGORIES {
+                    let cov: Option<(Option<String>, Option<String>, Option<String>, String)> = conn.query_row(
+                        "SELECT mathlib_coverage, missing_infrastructure, notes, updated_at FROM prime_distribution_coverage WHERE category = ?1",
+                        [cat], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                    ).optional().map_err(rs)?;
+                    let mut cstmt = conn.prepare(
+                        "SELECT c.artifact_id, c.classification, c.portability_status, c.notes, \
+                         a.canonical_name, a.source_campaign, a.maturity_status, a.review_status, a.superseded_by \
+                         FROM prime_distribution_classifications c \
+                         JOIN verified_artifacts a ON a.id = c.artifact_id \
+                         WHERE c.category = ?1 ORDER BY c.created_at ASC, c.id ASC",
+                    ).map_err(rs)?;
+                    let arts = cstmt.query_map([cat], |r| Ok(serde_json::json!({
+                        "artifact_id": r.get::<_, String>(0)?, "classification": r.get::<_, String>(1)?,
+                        "portability_status": r.get::<_, String>(2)?, "notes": r.get::<_, Option<String>>(3)?,
+                        "canonical_name": r.get::<_, String>(4)?, "source_campaign": r.get::<_, Option<String>>(5)?,
+                        "maturity_status": r.get::<_, String>(6)?, "review_status": r.get::<_, String>(7)?,
+                        "superseded": r.get::<_, Option<String>>(8)?.is_some(),
+                    }))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+                    drop(cstmt);
+                    let campaigns: std::collections::BTreeSet<String> = arts.iter()
+                        .filter_map(|a| a.get("source_campaign").and_then(|c| c.as_str()).map(|s| s.to_string())).collect();
+                    categories.push(serde_json::json!({
+                        "category": cat,
+                        "neutral_namespace": format!("NumberTheory.PrimeDistribution.{}", cat),
+                        "mathlib_coverage": cov.as_ref().and_then(|c| c.0.clone()),
+                        "missing_infrastructure": cov.as_ref().and_then(|c| c.1.clone()),
+                        "notes": cov.as_ref().and_then(|c| c.2.clone()),
+                        "local_verified_artifacts": arts,
+                        "campaign_consumers": campaigns.into_iter().collect::<Vec<_>>(),
+                        "artifact_count": arts.len(),
+                    }));
+                }
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "taxonomy": "NumberTheory/PrimeDistribution",
+                    "categories": categories,
+                    "note": "Machine-readable Prime Distribution source map (#253). Populate via prime_distribution classify / set_coverage after auditing a campaign's verified artifacts. Local artifacts here are searchable by name/type/idea via math_search (#244) / structural_search (#245) / semantic_search (#246), and promotable via artifact_module (#247) + mathcorpus_export (#230). A classification is advisory research metadata, never proof authority.",
+                    "related": {"mathcorpus_packet_family": "Mnehmos/mathcorpus#12"},
+                })).unwrap())]))
+            }
+
+            PrimeDistributionAction::PromotionManifest => {
+                let conn = self.conn.lock().await;
+                let mut buckets: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+                for cls in CLASSIFICATIONS {
+                    let mut stmt = conn.prepare(
+                        "SELECT c.artifact_id, c.category, c.portability_status, a.canonical_name, a.source_campaign, a.maturity_status \
+                         FROM prime_distribution_classifications c \
+                         JOIN verified_artifacts a ON a.id = c.artifact_id \
+                         WHERE c.classification = ?1 ORDER BY c.category ASC, c.id ASC",
+                    ).map_err(rs)?;
+                    let rows = stmt.query_map([cls], |r| Ok(serde_json::json!({
+                        "artifact_id": r.get::<_, String>(0)?, "category": r.get::<_, String>(1)?,
+                        "portability_status": r.get::<_, String>(2)?, "canonical_name": r.get::<_, String>(3)?,
+                        "source_campaign": r.get::<_, Option<String>>(4)?, "maturity_status": r.get::<_, String>(5)?,
+                    }))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+                    drop(stmt);
+                    buckets.insert(cls.to_string(), serde_json::json!(rows));
+                }
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "promotion_manifest": buckets,
+                    "pipeline": ["campaign theorem", "dependency audit", "generalized statement", "neutral namespace",
+                        "independent replay", "portable Lean module (artifact_module #247)", "MathCorpus packet (mathcorpus_export #230)", "registry promotion (verified_artifact #243)"],
+                    "note": "The initial-implementation-target deliverable (#253): verified artifacts bucketed by reusability classification so a campaign audit knows what to generalize, neutralize, and export. Advisory metadata; never proof authority.",
+                })).unwrap())]))
+            }
+        }
+    }
+
     /// Issue #243: Verified Artifact Registry foundation. Promote a kernel-backed
     /// verified lemma into a curated, immutable, versioned artifact and drive its
     /// lifecycle. The registry curates already-established kernel truth: promotion
@@ -19836,6 +20034,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ArtifactModuleArgs>("artifact_module", "Issue #247: make promoted registry artifacts directly reusable through shared Lean modules + safe import planning — the missing path from 'a verified lemma exists' to 'an actual reusable Lean dependency', without letting an advisory search result silently enter the trusted proof environment. TRUST BOUNDARY: materializing a module and planning an import are ADVISORY — they NEVER mutate an existing problem's immutable import manifest and NEVER confer proof authority; actual reuse still flows through problem_create with an explicit manifest + a kernel-verified attempt. `action` is internally tagged — exactly one of: {\"type\":\"materialize\",\"artifact_ids\":[..]} (+ optional category NumberTheory|Combinatorics|GraphTheory|Analysis|Campaigns (default Campaigns) — assemble a DETERMINISTIC shared Lean module from the immutable registry records: stable LeanChecker.MnemosyneArtifacts.<Category>.M_<hash> path (importable under the LeanChecker lib) + declaration names, topologically ordered by formally_depends_on, source_hash over the exact bytes. IDEMPOTENT: the same snapshot yields identical bytes/hash and returns the existing row. FAILS CLOSED on incompatible environments (a module requires one shared environment_hash), a dependency outside the selection, a cycle, a name collision, or a superseded/not-yet-promoted artifact. A declaration's proof is embedded ONLY when its kernel-verified source resolves from the content-addressed store (replay_status='self_contained_source'); otherwise it is a signature-only provenance comment (replay_status='proof_source_unavailable') — the module never carries an unverified or client-supplied proof body) | {\"type\":\"plan_import\",\"artifact_ids\":[..]} (+ optional base_problem_version_id — advisory: reports the deterministic module path, the topologically ordered declarations, environment compatibility with the base problem, and the proposed NEW-problem import manifest (base manifest ∪ the generated module). Mutates NOTHING) | {\"type\":\"observe\",\"module_id\":\"..\"} (read a generated module; recomputes source_hash so a tampered stored source shows source_hash_matches=false) | {\"type\":\"list\"} (+ optional limit — generated modules, most recent first) | {\"type\":\"write\",\"module_id\":\"..\"} (+ optional overwrite — write a SELF-CONTAINED module into the Lean source tree under LeanChecker/ so a new problem can actually import it; byte-verifies the write, is idempotent, and FAILS CLOSED on a signature-only module or an overwrite that would clobber different bytes. This is the only action that touches the source tree). Builds out #239; integrates with #244 search and records real reuse via #250 verified_artifact add_edge (evidence_kind='verifier') once a proof actually uses a declaration."),
             make_tool::<StructuralSearchArgs>("structural_search", "Issue #245: elaborated TYPE-DIRECTED theorem search over the Verified Artifact Registry — find a lemma from its target TYPE SHAPE, not its name. The query is ELABORATED under the pinned Lean environment (real elaboration, never a parser approximation) into a normalized structural fingerprint (conclusion head symbol, binder count, hypothesis-head multiset, used-constant set), then matched against stored artifact fingerprints with deterministic structural ranking. TRUST BOUNDARY: read-only w.r.t. proofs — no result changes proof state or imports, and a fingerprint is a SEARCH KEY, never proof authority; confidence is 'high' ONLY for an exact structural fingerprint match (structural/symbol overlaps are 'medium'/'low', a ranking hint not a unification proof). `action` is internally tagged — exactly one of: {\"type\":\"fingerprint\",\"artifact_id\":\"..\"} (elaborate the artifact's current-version statement and STORE its fingerprint; idempotent per (version, fingerprint_version), with the lean_toolchain recorded so a record is invalidated/namespaced on a toolchain/representation change; requires Lean — index the registry before searching) | {\"type\":\"search\",\"statement\":\"<Lean type>\"} (+ optional mode exact_type|conclusion_shape|hypothesis_conclusion_shape|symbol_overlap|structural_similarity|unification_candidate (default structural_similarity; unification_candidate runs a REAL isDefEq check over verified_artifacts whose conclusion head matches — capturing alpha-renaming AND specialization — batched in one Lean process, high confidence, but still not a proof since hypotheses remain to discharge), sources [\"verified_artifacts\"|\"mathlib\"] (default [\"verified_artifacts\"]; add \"mathlib\" to also search the bulk Mathlib signature index), limit — elaborate the query and rank stored fingerprints; every result carries full name, formal type, import source, source library, a score, and an honest confidence + confidence_basis explanation. A Mathlib match is signature-only (constants not indexed at scale), capped at 'medium' confidence. Requires Lean) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read a stored fingerprint; no Lean) | {\"type\":\"build_mathlib_index\"} (+ optional limit — bulk-fingerprint the pinned Mathlib library in ONE Lean process into a structural-signature index; the WHOLE library (~336k theorems) takes MINUTES, limit caps it for a quick pass; replaces the prior index for this index_version. Requires Lean). Consumes the search surface of #244; complements name search there; semantic re-ranking is #246."),
             make_tool::<SemanticSearchArgs>("semantic_search", "Issue #246: provenance-aware, metadata-rich HYBRID retrieval over the Verified Artifact Registry — for when an agent knows the mathematical IDEA but not the Lean name or type (e.g. 'a divisor-count bound that forces a prime-power classification'). Ranks over the artifacts' informal SUMMARY / campaign / kind (which name-only search in #244 misses), combined with provenance filters, trust labels, and reuse evidence into one honest score. TRUST BOUNDARY: similarity SUPPLIES CANDIDATES, never mathematical evidence — no result changes proof state or confers proof authority; every hit reports which fields matched, its score basis, source library, and a trust_label (verified/reviewed/provisional/superseded/negative_example/rejected). Only artifact metadata is indexed (summary/name/campaign/kind), never proof source bytes, so it is redaction-safe by construction. The semantic vector layer is LOCAL — a deterministic TF-IDF vector space over word tokens + character 3-grams of the artifact metadata (NO external model, NO external API), rebuilt in-memory from the current records each query — so it catches morphological / co-occurrence matches plain substring search misses (e.g. 'divisors'↔'divisor') while exact (#244) and structural (#245) search keep working with no provider. Params: query (NL/keyword, matched over rich metadata), optional campaign (provenance filter), artifact_kind [..], exclude_superseded, exclude_unreviewed, limit. Hybrid = 0.40·lexical_metadata + 0.25·local_semantic_vector + 0.20·trust + 0.15·reuse_evidence; each hit reports lexical_score, semantic_score, matched_fields, and score_basis."),
+            make_tool::<PrimeDistributionArgs>("prime_distribution", "Issue #253: promote reusable analytic-number-theory results from proof campaigns (e.g. Erdős 647) into the NumberTheory/PrimeDistribution family — a source map + classification + promotion manifest so kernel-verified mathematics becomes searchable institutional memory instead of staying trapped in campaign folders/namespaces. TRUST BOUNDARY: advisory RESEARCH METADATA over already-kernel-verified artifacts — classifying never neutralizes, replays, exports, or confers proof authority; the neutralization pipeline runs through artifact_module (#247, neutral Lean modules), mathcorpus_export (#230, MCIP packets), and artifact_registry_bundle (#249). `action` is internally tagged — exactly one of: {\"type\":\"classify\",\"artifact_id\":\"..\",\"category\":\"PrimeCounting\"|\"ChebyshevTheta\"|\"ChebyshevPsi\"|\"Mertens\"|\"PrimeReciprocalSums\"|\"HarmonicAsymptotics\"|\"SelbergSieve\"|\"BrunSieve\"|\"LargeSieve\"|\"BombieriVinogradov\"|\"ExplicitBounds\"|\"RHConsequences\",\"classification\":\"campaign_specific\"|\"reusable_namespaced\"|\"generalized_reusable\"|\"mathcorpus_candidate\"|\"mathlib_candidate\"} (+ optional portability_status local_only|neutral_module_ready|packet_exported|registry_promoted|upstreamed (default local_only), notes — classify a verified artifact into the taxonomy; idempotent per (artifact, category); provenance to the source campaign/episode is preserved via the artifact's own origin + source_campaign) | {\"type\":\"set_coverage\",\"category\":\"..\"} (+ optional mathlib_coverage, missing_infrastructure, notes — record per-category Mathlib coverage + missing formal infrastructure) | {\"type\":\"source_map\"} (the machine-readable source map: every taxonomy category with its coverage, missing infrastructure, and local classified artifacts + trust/portability/campaign-consumers; local artifacts are searchable via math_search/structural_search/semantic_search) | {\"type\":\"promotion_manifest\"} (classified artifacts bucketed by classification — the initial-implementation-target deliverable for a campaign audit). Feeds the Prime Distribution packet family (Mnehmos/mathcorpus#12); part of the Erdős program (#39)."),
             make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
             make_tool::<CandidateConstructionArgs>("candidate_construction", "Issue #188: ONE tool for the entire candidate-construction family (issue #8) — propose a candidate mathematical object, record empirical checks against it, revise its status, and attach it to a research node or verification layer. A CANDIDATE CONSTRUCTION IS A PROPOSED MATHEMATICAL OBJECT, NOT A PROOF CERTIFICATE: every action records research artifacts useful for search and planning; trust_status never certifies anything — empirical support, human review, citation, and 'a formal statement exists' are all explicitly distinct from kernel verification, and no field can hold kernel evidence. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"construction_type\":\"graph_family\"|\"point_configuration\"|\"coloring\"|\"field_tower\"|\"lattice\"|\"counterexample\"|\"asymptotic_family\"|\"algebraic_object\"|\"combinatorial_design\"|\"other\",\"informal_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, verification_layer_id, problem_version_id, episode_id, name, parameters_json, construction_json, claimed_properties_json, known_failures_json, empirical_checks_json, verification_targets_json, status, trust_status, and motivated-discovery metadata: motivating_move, source_observation, intended_role, strategy_context, why_this_might_work, why_this_might_fail, next_check, future_challenge_relevance — propose a candidate construction. Can exist before a dossier, node, Lean theorem, problem, or episode; a research artifact, not a proof certificate) | {\"type\":\"observe\",\"candidate_construction_id\":\"..\",\"description\":\"..\",\"result\":\"supports\"|\"refutes\"|\"inconclusive\"} (+ optional details_json, observed_by — record one empirical check, appended to the construction's empirical_checks history. Never changes proof status, and 'supports' never implies proved) | {\"type\":\"update_status\",\"candidate_construction_id\":\"..\"} (+ at least one of status, trust_status, claimed_properties_json, known_failures_json, next_check — update the construction in place; a falsified/rejected construction stays visible, never deleted. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified — and no other trust_status confers proof either) | {\"type\":\"link_node\",\"candidate_construction_id\":\"..\",\"node_id\":\"..\"} (attach the construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier. Linking never changes either side's trust_status) | {\"type\":\"link_verification_layer\",\"candidate_construction_id\":\"..\",\"verification_layer_id\":\"..\"} (attach the construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier. Linking a layer is provenance, not promotion — the construction's trust_status is unchanged, and a kernel_verified_claim_linked construction is re-checked against the newly linked layer)"),
@@ -20040,8 +20239,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 62,
-                        "total_tool_count": 62,
+                        "classified_tool_count": 63,
+                        "total_tool_count": 63,
                         "tools": {
                             "mathcorpus_export": {
                                 "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
@@ -20374,6 +20573,16 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic — a fixed lexical + local-TF-IDF-cosine + trust + reuse scan over immutable records with a stable weighted score and id tiebreak; the semantic model (local_tfidf_char3) is rebuilt from the same records each query, no external model, no randomness",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "search_metadata",
+                                "required_run_mode": "any"
+                            },
+                            "prime_distribution": {
+                                "side_effect": "mixed by action (issue #253): classify upserts one prime_distribution_classifications row (idempotent per artifact+category); set_coverage upserts one prime_distribution_coverage row; source_map/promotion_manifest are read_only. No action mutates an artifact's own trust/kernel state, an episode outcome, obligations, canonical lemmas, budgets, or benchmark result tables",
+                                "trust_level": "advisory research metadata — a classification curates an already-kernel-verified artifact for reuse/promotion and NEVER confers proof authority, neutralizes, replays, or exports anything; the neutralization pipeline runs through artifact_module (#247) / mathcorpus_export (#230) / artifact_registry_bundle (#249)",
+                                "cost_surface": "none — DB reads/writes only, no Lean invocation",
+                                "benchmark_safety": "safe_public_output — records category/classification/portability + reads artifact names/campaigns/statements; no proof source bytes",
+                                "replayability": "deterministic — idempotent upserts keyed (artifact, category) / category; source_map + promotion_manifest are pure reads over the fixed taxonomy",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "research_classification_metadata",
                                 "required_run_mode": "any"
                             },
                             "retrieval_benchmark": {
@@ -21628,6 +21837,7 @@ impl ServerHandler for ChatDbMcp {
             "artifact_module" => self.do_artifact_module(args_val).await,
             "structural_search" => self.do_structural_search(args_val).await,
             "semantic_search" => self.do_semantic_search(args_val).await,
+            "prime_distribution" => self.do_prime_distribution(args_val).await,
             "math_search" => self.do_math_search(args_val).await,
             "proactive_retrieval" => self.do_proactive_retrieval(args_val).await,
             "candidate_construction" => self.do_candidate_construction(args_val).await,
@@ -22677,7 +22887,7 @@ mod tests {
         // + 1 verified_artifact (issue #243: Verified Artifact Registry foundation
         // - promote/add_version/observe/set_status/review/supersede) = 55.
         // + 1 math_search (issue #244: unified advisory search across mathlib/VAR/mathcorpus) = 56.
-        assert_eq!(list_res.tools.len(), 62);
+        assert_eq!(list_res.tools.len(), 63);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -26347,6 +26557,79 @@ mod tests {
         // The ranker reports the LOCAL semantic-vector layer (no external model).
         assert!(res["ranker"]["semantic_vector"].as_str().unwrap().contains("LOCAL"));
         assert!(res["ranker"]["semantic_vector"].as_str().unwrap().contains("no external"));
+    }
+
+    /// #253: prime-distribution classification, source map, and promotion manifest
+    /// over verified artifacts — advisory metadata, provenance preserved, buckets.
+    #[tokio::test]
+    async fn test_prime_distribution_classify_source_map_and_manifest() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        async fn va(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("verified_artifact")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn pd(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("prime_distribution")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn solve(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str, idem: &str) -> String {
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let ep_id = ep["episode_id"].as_str().unwrap().to_string();
+            claim_and_solve(peer, &ep_id, "trivial", idem).await;
+            ep_id
+        }
+        let pv = create_problem(&peer, "True").await;
+        let e1 = solve(&peer, &pv, "pd-1").await;
+        let a1 = va(&peer, serde_json::json!({"action": {"type":"promote","episode_id":e1,"artifact_kind":"theorem",
+            "canonical_name":"mertens_second_variant","source_campaign":"erdos647"}})).await;
+        let a1_id = a1["artifact_id"].as_str().unwrap().to_string();
+        let e2 = solve(&peer, &pv, "pd-2").await;
+        let a2 = va(&peer, serde_json::json!({"action": {"type":"promote","episode_id":e2,"artifact_kind":"theorem",
+            "canonical_name":"chebyshev_theta_bound","source_campaign":"erdos647"}})).await;
+        let a2_id = a2["artifact_id"].as_str().unwrap().to_string();
+
+        // Classify into the taxonomy; provenance carries the campaign.
+        let c1 = pd(&peer, serde_json::json!({"action": {"type":"classify","artifact_id":a1_id,
+            "category":"Mertens","classification":"generalized_reusable","portability_status":"neutral_module_ready"}})).await;
+        assert_eq!(c1["provenance"]["source_campaign"], "erdos647");
+        assert!(c1["neutral_module_convention"].as_str().unwrap().contains("PrimeDistribution.Mertens"));
+        pd(&peer, serde_json::json!({"action": {"type":"classify","artifact_id":a2_id,
+            "category":"ChebyshevTheta","classification":"mathcorpus_candidate"}})).await;
+
+        // Invalid category / classification fail closed.
+        assert!(peer.call_tool(CallToolRequestParams::new("prime_distribution").with_arguments(
+            serde_json::json!({"action": {"type":"classify","artifact_id":a1_id,"category":"NotACategory","classification":"generalized_reusable"}})
+                .as_object().unwrap().clone())).await.is_err());
+
+        // Per-category coverage.
+        pd(&peer, serde_json::json!({"action": {"type":"set_coverage","category":"Mertens",
+            "mathlib_coverage":"partial: Mertens 1st in Mathlib","missing_infrastructure":"uniform interval Mertens"}})).await;
+
+        // Source map: the Mertens category carries the coverage + the classified artifact.
+        let map = pd(&peer, serde_json::json!({"action": {"type":"source_map"}})).await;
+        let cats = map["categories"].as_array().unwrap();
+        assert_eq!(cats.len(), 12, "full taxonomy");
+        let mertens = cats.iter().find(|c| c["category"] == "Mertens").unwrap();
+        assert_eq!(mertens["mathlib_coverage"], "partial: Mertens 1st in Mathlib");
+        assert_eq!(mertens["neutral_namespace"], "NumberTheory.PrimeDistribution.Mertens");
+        assert!(mertens["local_verified_artifacts"].as_array().unwrap().iter().any(|a| a["artifact_id"] == serde_json::json!(a1_id)));
+        assert!(mertens["campaign_consumers"].as_array().unwrap().iter().any(|c| c == "erdos647"));
+
+        // Promotion manifest buckets by classification.
+        let man = pd(&peer, serde_json::json!({"action": {"type":"promotion_manifest"}})).await;
+        assert!(man["promotion_manifest"]["generalized_reusable"].as_array().unwrap().iter().any(|a| a["artifact_id"] == serde_json::json!(a1_id)));
+        assert!(man["promotion_manifest"]["mathcorpus_candidate"].as_array().unwrap().iter().any(|a| a["artifact_id"] == serde_json::json!(a2_id)));
+        assert!(man["promotion_manifest"]["campaign_specific"].as_array().unwrap().is_empty());
+
+        // Re-classify is idempotent (updates in place).
+        pd(&peer, serde_json::json!({"action": {"type":"classify","artifact_id":a1_id,
+            "category":"Mertens","classification":"mathcorpus_candidate"}})).await;
+        let man2 = pd(&peer, serde_json::json!({"action": {"type":"promotion_manifest"}})).await;
+        assert!(man2["promotion_manifest"]["generalized_reusable"].as_array().unwrap().is_empty(), "re-classify moved the bucket");
+        assert_eq!(man2["promotion_manifest"]["mathcorpus_candidate"].as_array().unwrap().len(), 2);
     }
 
     /// #240: a gateway that fails with an ordered diagnostic list — an
