@@ -2463,6 +2463,31 @@ CREATE TABLE IF NOT EXISTS generated_artifact_modules (
     CHECK(replay_status IN ('self_contained_source', 'proof_source_unavailable'))
 );
 CREATE INDEX IF NOT EXISTS idx_generated_modules_hash ON generated_artifact_modules(source_hash);
+
+-- Elaborated structural fingerprints for type-directed search (issue #245). Each
+-- row is the normalized structural representation of a verified artifact version's
+-- formal statement, produced by REAL Lean elaboration under the pinned
+-- environment (never a parser approximation): the conclusion head symbol, the
+-- binder count, the hypothesis head multiset, and the used-constant set, plus a
+-- canonical fingerprint_hash for exact-type matching. Index identity is
+-- (version_id, fingerprint_version) and the lean_toolchain is recorded, so a
+-- record is invalidated/namespaced when the toolchain or the fingerprint
+-- representation changes. Advisory: a fingerprint changes no proof state and no
+-- imports, and confers no proof authority — it is a search key over
+-- already-established statements.
+CREATE TABLE IF NOT EXISTS verified_artifact_fingerprints (
+    version_id TEXT NOT NULL REFERENCES verified_artifact_versions(id),
+    fingerprint_version TEXT NOT NULL,
+    lean_toolchain TEXT,
+    binder_count INTEGER NOT NULL,
+    conclusion_head TEXT NOT NULL,
+    hypothesis_heads_json TEXT NOT NULL,
+    constants_json TEXT NOT NULL,
+    fingerprint_hash TEXT NOT NULL,
+    computed_at TEXT NOT NULL,
+    PRIMARY KEY (version_id, fingerprint_version)
+);
+CREATE INDEX IF NOT EXISTS idx_var_fingerprints_conclusion ON verified_artifact_fingerprints(conclusion_head, binder_count);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
