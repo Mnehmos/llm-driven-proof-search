@@ -2430,6 +2430,39 @@ CREATE TABLE IF NOT EXISTS artifact_bundle_imports (
     CHECK(dry_run IN (0, 1))
 );
 CREATE INDEX IF NOT EXISTS idx_artifact_bundle_imports_hash ON artifact_bundle_imports(bundle_hash, imported_at);
+
+-- Generated shared Lean modules materialized from promoted registry artifacts
+-- (issue #247): a deterministic, versioned library assembled from immutable
+-- registry records so a reviewed promoted artifact becomes an actual reusable
+-- Lean dependency instead of being copied/reconstructed by hand. The source is a
+-- PURE FUNCTION of the ordered registry records, so rebuilding the same snapshot
+-- reproduces identical bytes and source_hash (tamper-evident). The module never
+-- carries unverified prose or a client-supplied proof body: a declaration's proof
+-- is embedded ONLY when its kernel-verified source resolves from the content-
+-- addressed store, otherwise the declaration is rendered as a signature-only
+-- provenance comment and replay_status records that it is not yet self-contained.
+--
+-- TRUST BOUNDARY: materializing a module and planning an import are ADVISORY.
+-- They never mutate an existing problem's immutable import manifest and never
+-- confer proof authority; actual reuse still happens through problem_create with
+-- an explicit manifest and a kernel-verified attempt. Environment compatibility
+-- is enforced at materialization (a module mixes only artifacts sharing one
+-- environment_hash) and dependencies among the selected artifacts are required to
+-- be acyclic and topologically ordered.
+CREATE TABLE IF NOT EXISTS generated_artifact_modules (
+    id TEXT PRIMARY KEY,
+    module_path TEXT NOT NULL,
+    category TEXT NOT NULL,
+    environment_hash TEXT NOT NULL,
+    artifact_version_ids_json TEXT NOT NULL,
+    source_text TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    replay_status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK(category IN ('NumberTheory', 'Combinatorics', 'GraphTheory', 'Analysis', 'Campaigns')),
+    CHECK(replay_status IN ('self_contained_source', 'proof_source_unavailable'))
+);
+CREATE INDEX IF NOT EXISTS idx_generated_modules_hash ON generated_artifact_modules(source_hash);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
