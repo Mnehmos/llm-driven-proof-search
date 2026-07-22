@@ -2034,6 +2034,52 @@ pub enum PublicationReviewAction {
     ExportContribution { episode_id: String },
 }
 
+/// Issue #244: one advisory search surface across pinned Mathlib, the Verified
+/// Artifact Registry (#243), and MathCorpus. Advisory only — never adds an
+/// import, alters a problem version, or marks an obligation proved. Sources stay
+/// namespaced (a result always carries its `source`); they are never merged into
+/// an indistinguishable namespace.
+#[derive(JsonSchema, Deserialize)]
+pub struct MathSearchArgs {
+    pub action: MathSearchAction,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MathSearchAction {
+    /// Search the requested `sources` (default all three) for `query`.
+    Search {
+        query: String,
+        /// Subset of ["mathlib","verified_artifacts","mathcorpus"]; default all.
+        #[serde(default)]
+        sources: Option<Vec<String>>,
+        /// Filter verified_artifacts by artifact_kind.
+        #[serde(default)]
+        artifact_kind: Option<Vec<String>>,
+        /// Filter verified_artifacts by maturity trust (e.g. "promoted","independently_reviewed").
+        #[serde(default)]
+        trust: Option<Vec<String>>,
+        /// When set, each verified_artifact result reports environment_compatible.
+        #[serde(default)]
+        problem_version_id: Option<String>,
+        #[serde(default)]
+        limit: Option<i64>,
+    },
+    /// Full reproduce/verify data for a registry artifact (all versions + origins).
+    Inspect { artifact_id: String },
+    /// Registry relationships that reference this artifact (read-only).
+    Usages { artifact_id: String },
+    /// The current version's dependency ids (read-only).
+    DependencyPath { artifact_id: String },
+    /// Reusable-module + environment compatibility for a registry artifact;
+    /// reports required imports but NEVER mutates any manifest.
+    SuggestImports {
+        artifact_id: String,
+        #[serde(default)]
+        problem_version_id: Option<String>,
+    },
+}
+
 /// Issue #243: the Verified Artifact Registry (VAR) foundation tool. Promotes a
 /// KERNEL-BACKED verified lemma into a curated, immutable, versioned research
 /// artifact with a lifecycle. The registry curates already-established kernel
@@ -13023,6 +13069,199 @@ impl ChatDbMcp {
     // -----------------------------------------------------------------
 
     /// Issue #230: export a conformant MCIP v1 bundle for a verified obligation.
+    /// Issue #244: one advisory search surface across pinned Mathlib, the
+    /// Verified Artifact Registry, and MathCorpus. Read-only — never adds an
+    /// import, alters a problem version, or marks anything proved. Sources stay
+    /// namespaced: every result carries its `source`.
+    async fn do_math_search(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: MathSearchArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        match args.action {
+            MathSearchAction::Search { query, sources, artifact_kind, trust, problem_version_id, limit } => {
+                if query.trim().is_empty() {
+                    return Err(mcp_invalid_params("query must be non-empty".to_string()));
+                }
+                let limit = limit.unwrap_or(20).clamp(1, 200);
+                let want = |s: &str| sources.as_ref().map(|v| v.iter().any(|x| x == s)).unwrap_or(true);
+                let like = format!("%{}%", query.to_lowercase());
+
+                let mut results: Vec<serde_json::Value> = Vec::new();
+                let mut sources_status = serde_json::Map::new();
+
+                // --- Verified Artifact Registry (#243) ---
+                if want("verified_artifacts") {
+                    let conn = self.conn.lock().await;
+                    // Problem env, to report compatibility per result.
+                    let problem_env: Option<String> = match &problem_version_id {
+                        Some(pv) => conn.query_row("SELECT environment_hash FROM problem_versions WHERE id = ?1", [pv], |r| r.get(0)).optional().map_err(rs)?,
+                        None => None,
+                    };
+                    let kind_ok = |k: &str| artifact_kind.as_ref().map(|v| v.iter().any(|x| x == k)).unwrap_or(true);
+                    let trust_ok = |m: &str| trust.as_ref().map(|v| v.iter().any(|x| x == m)).unwrap_or(true);
+                    let mut stmt = conn.prepare(
+                        "SELECT a.id, a.artifact_kind, a.canonical_name, a.informal_summary, a.current_version, \
+                         a.maturity_status, a.review_status, a.superseded_by, \
+                         v.formal_statement, v.statement_hash, v.environment_hash, v.dependency_ids_json \
+                         FROM verified_artifacts a \
+                         JOIN verified_artifact_versions v ON v.artifact_id = a.id AND v.artifact_version = a.current_version \
+                         WHERE LOWER(a.canonical_name) LIKE ?1 \
+                         ORDER BY a.updated_at DESC, a.id ASC LIMIT ?2",
+                    ).map_err(rs)?;
+                    let rows = stmt.query_map((&like, limit), |r| {
+                        Ok((
+                            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
+                            r.get::<_, Option<String>>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?,
+                            r.get::<_, String>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?,
+                            r.get::<_, String>(9)?, r.get::<_, String>(10)?, r.get::<_, String>(11)?,
+                        ))
+                    }).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+                    drop(stmt);
+                    let mut count = 0usize;
+                    for (id, kind, name, summary, ver, maturity, review, superseded_by, formal, stmt_hash, env, deps_json) in rows {
+                        if !kind_ok(&kind) || !trust_ok(&maturity) { continue; }
+                        let dep_count = serde_json::from_str::<Vec<serde_json::Value>>(&deps_json).map(|v| v.len()).unwrap_or(0);
+                        let name_exact = name.to_lowercase() == query.to_lowercase();
+                        results.push(serde_json::json!({
+                            "result_id": id,
+                            "source": "verified_artifacts",
+                            "full_name": name,
+                            "formal_statement": formal,
+                            "informal_summary": summary,
+                            "reusable_module": serde_json::Value::Null,
+                            "trust_status": maturity,
+                            "review_status": review,
+                            "environment_hash": env,
+                            "environment_compatible": problem_env.as_ref().map(|pe| *pe == env),
+                            "artifact_kind": kind,
+                            "artifact_version": ver,
+                            "statement_hash": stmt_hash,
+                            "dependency_count": dep_count,
+                            "mathcorpus_packet_id": serde_json::Value::Null,
+                            "superseded_by": superseded_by,
+                            "ranking": {"name_exact_match": name_exact, "explanation": "canonical-name substring match; exact name and recency break ties"},
+                        }));
+                        count += 1;
+                    }
+                    sources_status.insert("verified_artifacts".into(), serde_json::json!({"available": true, "count": count}));
+                }
+
+                // --- Pinned Mathlib (filesystem scan; gracefully unavailable) ---
+                if want("mathlib") {
+                    match mathlib_source_dir(&self.lean_project_path) {
+                        Some(dir) => {
+                            let bare = query.rsplit('.').next().filter(|s| !s.is_empty()).unwrap_or(&query);
+                            let hits = scan_mathlib_declarations(&dir, bare, limit as usize);
+                            let n = hits.len();
+                            for h in hits {
+                                results.push(serde_json::json!({
+                                    "result_id": format!("mathlib:{}", h.declaration_name),
+                                    "source": "mathlib",
+                                    "full_name": h.declaration_name,
+                                    "import_module": h.import_module,
+                                    "trust_status": "pinned_mathlib",
+                                    "signature_snippet": h.signature_snippet,
+                                    "file_relative_path": h.file_relative_path,
+                                    "ranking": {"keyword": h.keyword, "confidence": h.confidence},
+                                }));
+                            }
+                            sources_status.insert("mathlib".into(), serde_json::json!({"available": true, "count": n}));
+                        }
+                        None => {
+                            sources_status.insert("mathlib".into(), serde_json::json!({
+                                "available": false,
+                                "note": "pinned Mathlib source tree not resolvable in this environment; mathlib results unavailable"
+                            }));
+                        }
+                    }
+                }
+
+                // --- MathCorpus (export-only interchange; not locally indexed) ---
+                if want("mathcorpus") {
+                    sources_status.insert("mathcorpus".into(), serde_json::json!({
+                        "available": false,
+                        "note": "MathCorpus packets are not indexed in this environment. The MCIP interchange (#230/#263) is export-only (mathcorpus_export pushes evidence TO MathCorpus); a local MathCorpus index would be needed to search it here."
+                    }));
+                }
+
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "query": query,
+                    "results": results,
+                    "sources_status": sources_status,
+                    "trust_boundary": "Advisory search only. Results carry their source and are never merged into one namespace; a verified_artifacts result's trust_status/review_status is the registry's own curation state, and a mathlib result is 'pinned_mathlib'. This tool never adds an import, alters a problem version, or marks an obligation proved.",
+                })).unwrap())]))
+            }
+
+            MathSearchAction::Inspect { artifact_id } => {
+                let conn = self.conn.lock().await;
+                let mut out = verified_artifact_observe_json(&conn, &artifact_id)?;
+                out["reproduce_verify"] = serde_json::json!("Each version records its origin episode/lemma + immutable statement_hash/proof_body_hash/environment_hash/kernel_result_hash — the deterministic anchors to reconstruct and re-verify the artifact against the pinned environment.");
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&out).unwrap())]))
+            }
+
+            MathSearchAction::Usages { artifact_id } => {
+                let conn = self.conn.lock().await;
+                if conn.query_row("SELECT 1 FROM verified_artifacts WHERE id = ?1", [&artifact_id], |_| Ok(())).optional().map_err(rs)?.is_none() {
+                    return Err(mcp_invalid_params(format!("unknown artifact_id: {}", artifact_id)));
+                }
+                // Registry relationships that reference this artifact (read-only):
+                // artifacts this one supersedes, and artifacts that supersede it.
+                let mut sstmt = conn.prepare("SELECT id, canonical_name, maturity_status FROM verified_artifacts WHERE superseded_by = ?1 ORDER BY id ASC").map_err(rs)?;
+                let supersedes = sstmt.query_map([&artifact_id], |r| Ok(serde_json::json!({
+                    "artifact_id": r.get::<_, String>(0)?, "canonical_name": r.get::<_, String>(1)?, "maturity_status": r.get::<_, String>(2)?,
+                }))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+                drop(sstmt);
+                let superseded_by: Option<String> = conn.query_row("SELECT superseded_by FROM verified_artifacts WHERE id = ?1", [&artifact_id], |r| r.get(0)).optional().map_err(rs)?.flatten();
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "artifact_id": artifact_id,
+                    "superseded_by": superseded_by,
+                    "supersedes_or_referenced_by": supersedes,
+                    "note": "Registry-relationship usages (supersession chain). Cross-artifact reuse-impact tracking (which downstream proofs consumed this artifact) is tracked separately in #250; read-only.",
+                })).unwrap())]))
+            }
+
+            MathSearchAction::DependencyPath { artifact_id } => {
+                let conn = self.conn.lock().await;
+                let deps: Option<String> = conn.query_row(
+                    "SELECT v.dependency_ids_json FROM verified_artifacts a \
+                     JOIN verified_artifact_versions v ON v.artifact_id = a.id AND v.artifact_version = a.current_version \
+                     WHERE a.id = ?1", [&artifact_id], |r| r.get(0),
+                ).optional().map_err(rs)?;
+                let Some(deps) = deps else { return Err(mcp_invalid_params(format!("unknown artifact_id: {}", artifact_id))); };
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "artifact_id": artifact_id,
+                    "dependency_ids": serde_json::from_str::<serde_json::Value>(&deps).unwrap_or(serde_json::Value::Null),
+                    "note": "The current version's recorded dependency ids (read-only).",
+                })).unwrap())]))
+            }
+
+            MathSearchAction::SuggestImports { artifact_id, problem_version_id } => {
+                let conn = self.conn.lock().await;
+                let row: Option<(String, String, String)> = conn.query_row(
+                    "SELECT a.canonical_name, a.maturity_status, v.environment_hash FROM verified_artifacts a \
+                     JOIN verified_artifact_versions v ON v.artifact_id = a.id AND v.artifact_version = a.current_version \
+                     WHERE a.id = ?1", [&artifact_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                ).optional().map_err(rs)?;
+                let Some((name, maturity, art_env)) = row else { return Err(mcp_invalid_params(format!("unknown artifact_id: {}", artifact_id))); };
+                let problem_env: Option<String> = match &problem_version_id {
+                    Some(pv) => conn.query_row("SELECT environment_hash FROM problem_versions WHERE id = ?1", [pv], |r| r.get(0)).optional().map_err(rs)?,
+                    None => None,
+                };
+                let compatible = problem_env.as_ref().map(|pe| *pe == art_env);
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "artifact_id": artifact_id,
+                    "canonical_name": name,
+                    "maturity_status": maturity,
+                    "artifact_environment_hash": art_env,
+                    "problem_environment_hash": problem_env,
+                    "environment_compatible": compatible,
+                    "reusable_module": serde_json::Value::Null,
+                    "required_imports": [],
+                    "advisory": "Materializing promoted artifacts into a shared importable Lean module (and the concrete import list) is tracked in #247. This action reports compatibility only and NEVER mutates a problem's import manifest.",
+                })).unwrap())]))
+            }
+        }
+    }
+
     /// Issue #243: Verified Artifact Registry foundation. Promote a kernel-backed
     /// verified lemma into a curated, immutable, versioned artifact and drive its
     /// lifecycle. The registry curates already-established kernel truth: promotion
@@ -16552,6 +16791,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<FormalizationPlanArgs>("formalization_plan", "Issue #184: ONE tool for the entire Level 3 formalization-plan family (issue #10) — create/inspect/maintain a formalization plan (required concepts, definitions, lemmas, modules and their Mathlib coverage status) for a problem. Advisory scaffolding, not a proof authority: nothing here can mark anything proved. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"problem_version_id\":\"..\",\"title\":\"..\"} (+ optional source_draft_id, seed_items_from_draft_moves [{\"draft_move_id\":\"..\",\"kind\":\"..\"}, ...], risk_flags — creates a plan, optionally seeded from selected moves of an existing draft; every seed move must belong to source_draft_id, not be already promoted, and the whole batch is validated before any row is written, so a bad move never leaves a partially-seeded plan behind; each seeded move is marked promoted) | {\"type\":\"observe\",\"plan_id\":\"..\"} (read-only: the plan and all its items with coverage/promotion status) | {\"type\":\"update\",\"plan_id\":\"..\"} (+ optional title, status \"draft\"|\"active\"|\"completed\"|\"abandoned\", risk_flags — partial in-place update: an omitted field keeps its current value) | {\"type\":\"add_item\",\"plan_id\":\"..\",\"kind\":\"concept\"|\"missing_definition\"|\"missing_lemma\"|\"planned_module\"|\"external_citation\",\"description\":\"..\"} (+ optional mathlib_candidate_names, asymptotic_role — appends one planning item) | {\"type\":\"attach_lookup\",\"plan_item_id\":\"..\",\"lookup_status\":\"..\"} (+ optional matched_name, diagnostics — attach a lean_declaration_lookup result to an OPEN plan item, mapping its status verbatim into the item's Mathlib coverage status found/not_found/partial/unknown. A hint attachment, not a re-check — nothing is re-validated or re-run, and it never changes proof status) | {\"type\":\"promote_item_to_obligation\",\"plan_item_id\":\"..\",\"episode_id\":\"..\",\"obligation_id\":\"..\"} (link an open plan item to an episode_obligation that ALREADY EXISTS — created through a normal Decompose action via episode_step and verified to belong to the given episode. Records the link only — this action never creates the obligation itself, so it can never bypass the episode's budget/CAS accounting; a DB-level UNIQUE index stops two plan items from claiming the same obligation) | {\"type\":\"attach_librarian_result\",\"plan_item_id\":\"..\",\"declaration_name\":\"..\",\"confidence\":\"exact_match\"|\"nearby_name\"|\"type_match\"|\"usage_example\"|\"unknown\"} (+ optional import_module, snippet — attach a mathlib_search_declarations/mathlib_search_local_artifacts result to an OPEN plan item: confidence is the CALLER's own assessment of its search hit, mapped into the same coverage vocabulary attach_lookup writes (exact_match→found, nearby_name/type_match/usage_example→partial, unknown→unknown); candidate declaration names ACCUMULATE deduped across attachments while the full latest result overwrites lookup_result_json, latest wins. A hint attachment, not a re-check — never changes proof status)"),
             make_tool::<ResearchDossierArgs>("research_dossier", "Issue #185: ONE tool for the entire Level 4 research-dossier family (issues #9/#11/#13) — research dossiers, nodes, citations, assumptions, and verification layers are explicit trust-boundary METADATA: they can reference Lean-backed artifacts, but they never create proof authority and never write to episode outcome, obligations, canonical lemmas, budgets, fidelity reviews, or benchmark result tables. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"title\":\"..\"} (+ optional description, problem_version_id, episode_id — create a dossier optionally linked to a problem_version, an episode, both, or neither; metadata only: never changes proof, fidelity, budget, or benchmark state) | {\"type\":\"observe\",\"dossier_id\":\"..\"} (read-only: the dossier with sections, nodes, citations, assumptions, verification layers, and explicit trust-boundary buckets) | {\"type\":\"node_add\",\"dossier_id\":\"..\",\"node_type\":\"definition\"|\"proposition\"|\"lemma\"|\"theorem\"|\"remark\"|\"reference\"|\"open_gap\",\"title\":\"..\"} (+ optional section_id OR section_title, statement, content, trust_status, linked_obligation_id, linked_verified_lemma_id — add a typed research node. Trust status is explicit and never implies kernel verification unless linked to a real verified lemma: trust_status='proved_in_episode' REQUIRES linked_verified_lemma_id naming a verified lemma from THIS dossier's own episode/problem context — never borrowed kernel evidence from an unrelated episode; a node added here is metadata, never proof authority) | {\"type\":\"external_reference_add\",\"dossier_id\":\"..\",\"title\":\"..\"} (+ optional authors/venue/year/url/doi/raw_citation, and optionally ONE theorem claim via theorem_label/theorem_statement/claim_status/mathlib_name/proved_episode_id/proved_lemma_id/notes — records a citation as a TRACKED ASSUMPTION, never proof: external citations are self-reported metadata and never become kernel verification; claim_status='proved_in_episode' requires proved_lemma_id naming a verified lemma from THIS dossier's own context, with any proved_episode_id matching that lemma's actual episode, and 'imported_from_mathlib' requires mathlib_name) | {\"type\":\"assumption_boundary_add\",\"dossier_id\":\"..\",\"label\":\"..\",\"statement\":\"..\",\"assumption_status\":\"unformalized_assumption\"|\"rejected_unsafe_assumption\"} (+ optional node_id, rationale — add an unformalized or rejected unsafe assumption boundary. Assumptions are visible metadata, not proof authority) | {\"type\":\"citation_review_add\",\"dossier_id\":\"..\",\"external_theorem_claim_id\":\"..\",\"reviewer_id\":\"..\",\"decision\":\"human_reviewed\"|\"rejected\"|\"needs_formalization\"} (+ optional notes — record a human citation review for an external theorem claim. Human review remains distinct from Lean kernel verification and never upgrades a claim to a proved status) | {\"type\":\"verification_layer_set\",\"dossier_id\":\"..\",\"target_kind\":\"..\",\"target_id\":\"..\",\"layer_kind\":\"..\",\"status\":\"..\"} (+ optional summary, evidence_json — upsert an independent verification layer for a dossier target. Blocked/failed layers do not fail the dossier, and cited/reviewed/assumed artifacts cannot be mislabeled kernel_verified: this action is the ONLY PATH to a kernel_verified layer, and status='kernel_verified' is accepted only where kernel evidence already exists — e.g. a node whose trust_status is already proved_in_episode backed by a verified lemma from THIS dossier's own episode/problem context — it can never manufacture that evidence)"),
             make_tool::<DevDiaryArgs>("dev_diary", "Issue #242, slice 1: project-scoped dev diary — join existing tracked evidence (problems, episodes, research dossiers, formalization plans, empirical searches, candidate constructions, verification layers, distilled strategies) into a chronological campaign timeline so a long-running effort can be documented as it happens instead of reconstructed after the fact from a chat transcript. THIS TOOL NEVER CALLS AN LLM AND NEVER POSTS ANYWHERE — it only assembles evidence for an external host to turn into a narrative. This version covers project setup, attachment, chronological checkpoints, observe's resolved verified/failed/frontier view, and export. `action` is internally tagged — exactly one of: {\"type\":\"create_project\",\"project_key\":\"..\",\"title\":\"..\"} (+ optional summary, audience, claim_policy, public_links — project_key must be a unique slug; a duplicate key is rejected, never overwritten. Starts status='active') | {\"type\":\"attach\",\"project_id\":\"..\",\"target_kind\":\"problem_version\"|\"episode\"|\"research_dossier\"|\"formalization_plan\"|\"empirical_search\"|\"candidate_construction\"|\"verification_layer\"|\"distilled_strategy\"|\"external_link\"|\"public_post\"} (+ target_id for the 8 real kinds — existence-checked against that artifact's own table before attaching — OR external_url for external_link/public_post, e.g. a GitHub issue/PR URL or a manually recorded public post, neither of which has a backing row: target_id is then server-minted and private. Optional label, notes. A duplicate (project_id, target_kind, target_id) is rejected. Attaching NEVER alters the attached artifact's own trust_status, fidelity_status, or verification outcome) | {\"type\":\"checkpoint\",\"project_id\":\"..\",\"checkpoint_kind\":\"campaign_started\"|\"candidate_found\"|\"proof_attempt_failed\"|\"root_cause_identified\"|\"kernel_result\"|\"mathlib_gap\"|\"method_exhausted\"|\"frontier_changed\"|\"claim_corrected\"|\"infrastructure_issue_opened\"|\"public_update_posted\"|\"other\",\"note\":\"..\",\"author\":\"..\"} (+ optional referenced_attachment_id, which must already belong to the SAME project — cross-project references are rejected. checkpoint_number is assigned server-side, never caller-supplied, so chronological order is guaranteed regardless of client behavior. A checkpoint is chronological project metadata, the same trust posture as a reasoning_log entry: it can never mark anything proved, verified, or certified, and failed/negative checkpoints are preserved exactly like successful ones, never overwritten) | {\"type\":\"observe\",\"project_id\":\"..\"} (read-only: the project plus every attachment and checkpoint in order, PLUS a `resolved` view bucketing that same data into verified_results (attached episodes already outcome=certified/kernel_verified, or attached verification_layers already status=kernel_verified), failed_or_blocked (matching failure outcomes/statuses, plus proof_attempt_failed/method_exhausted checkpoints), reusable_artifacts (attached formalization_plan/distilled_strategy), claim_boundaries (each attached research_dossier's own assumption_boundaries, unchanged), checkpoints_by_kind, and current_frontier (the latest frontier_changed checkpoint). `resolved` never re-derives or upgrades any trust_status/fidelity_status/outcome — it only re-buckets columns already read off each attached artifact's own row. publication_history (a later slice) and episode_obligations-level 'open obligations' are not part of `resolved` yet) | {\"type\":\"export\",\"project_id\":\"..\",\"mode\":\"structured_json\"|\"markdown_diary\"|\"x_thread_prompt\"|\"single_x_post_prompt\"|\"blog_prompt\"|\"institute_update_prompt\"} (+ optional since_checkpoint_id (a cursor: only checkpoints AFTER that checkpoint's own checkpoint_number are included; attachments are never cursored, they are not chronological in that sense), max_posts (default 12, clamped 1-50, x_thread_prompt only), x_tier \"free\"|\"premium\" (default \"free\" whenever omitted — the conservative assumption, since most callers will not have a paid X account), max_chars_per_post (an optional override, ALWAYS clamped down to the resolved tier's real ceiling — 280 for free, 25000 for premium — so a mistaken override can never exceed X's actual limit), audience, dry_run (default false). structured_json returns the full packet (attachments/checkpoints/resolved view) with every internal id retained, for grounding and audit. markdown_diary renders the same packet as a human-readable document. The four *_prompt modes return a ready-to-send external-host prompt (populated with the resolved title/max_posts/max_chars_per_post and the JSON packet) plus the same packet for grounding — the prompt instructs the external host not to surface raw database ids/UUIDs in the prose it writes, but the attached packet always retains them. THIS TOOL NEVER CALLS AN LLM OR POSTS ANYWHERE ITSELF; only an external host does that with the returned text. Unless dry_run, every export records one immutable dev_diary_publications row (mode, cursor, resolved x_tier/max_chars_per_post, a SHA-256 source_hash over the packet, and a timestamp) so a later export audit shows exactly what a given thread was generated against; dry_run previews without recording)"),
+            make_tool::<MathSearchArgs>("math_search", "Issue #244: ONE advisory search surface across three CLEARLY DISTINGUISHED sources — pinned Mathlib, the Verified Artifact Registry (#243), and MathCorpus — so an agent no longer has to pick between lean_declaration_lookup / mathlib_search_declarations / mathlib_search_local_artifacts and guess a name fragment. ADVISORY ONLY: never adds an import, alters a problem version, or marks an obligation proved; results always carry their `source` and are never merged into one indistinguishable namespace. `action` is internally tagged — exactly one of: {\"type\":\"search\",\"query\":\"..\"} (+ optional sources [\"mathlib\"|\"verified_artifacts\"|\"mathcorpus\"] (default all), artifact_kind [..] and trust [..] filters for the registry, problem_version_id (adds environment_compatible per result), limit — returns a flat `results` array where every result carries source + trust label (a verified_artifacts result's maturity/review status; a mathlib result is 'pinned_mathlib') plus a `sources_status` map. Pinned Mathlib is a filesystem scan that reports available:false when the source tree isn't resolvable; MathCorpus reports available:false with a note, since the MCIP interchange is export-only and packets aren't locally indexed) | {\"type\":\"inspect\",\"artifact_id\":\"..\"} (full reproduce/verify data for a registry artifact — every version + kernel-backed origin + immutable hashes) | {\"type\":\"usages\",\"artifact_id\":\"..\"} (registry supersession relationships, read-only; cross-artifact reuse-impact is #250) | {\"type\":\"dependency_path\",\"artifact_id\":\"..\"} (the current version's recorded dependency ids, read-only) | {\"type\":\"suggest_imports\",\"artifact_id\":\"..\"} (+ optional problem_version_id — reports environment compatibility + required imports but NEVER mutates a manifest; materialized shared modules are #247). The existing lean_declaration_lookup / mathlib_search_declarations / mathlib_search_local_artifacts remain as compatibility wrappers. Deep elaborated type-directed Mathlib search is tracked in #245; semantic search in #246."),
             make_tool::<VerifiedArtifactArgs>("verified_artifact", "Issue #243: Verified Artifact Registry (VAR) foundation — promote a KERNEL-BACKED verified lemma into a curated, immutable, versioned research artifact with a lifecycle, distinct from an episode-local helper or a raw canonical result. TRUST BOUNDARY: the registry CURATES already-established kernel truth — promotion copies the origin lemma's immutable kernel hashes (statement_hash/proof_body_hash/environment_hash/kernel_result_hash) verbatim, versions are append-only (mathematical history is never overwritten), and no maturity/review/supersede action changes those hashes or confers proof authority. `action` is internally tagged — exactly one of: {\"type\":\"promote\",\"episode_id\":\"..\",\"artifact_kind\":\"helper_lemma\"|\"definition\"|\"theorem\"|\"abstraction\"|\"reduction\"|\"classification\"|\"construction\"|\"negative_result\"|\"proof_module\"|\"tactic_recipe\",\"canonical_name\":\"..\"} (+ optional obligation_id (disambiguates when an episode proved >1 lemma), informal_summary, source_campaign, promotion_reason, candidate_for_mathlib — mints artifact v1 from an existing positive episode_verified_lemma; rejects anything not kernel-backed. Starts maturity=promoted, review=unreviewed) | {\"type\":\"add_version\",\"artifact_id\":\"..\",\"episode_id\":\"..\"} (+ optional obligation_id, canonical_name, formal_statement, promotion_reason — appends a new IMMUTABLE version from another kernel-backed origin, e.g. a generalization; never overwrites the original) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read-only: the artifact with every version + kernel-backed origins, the append-only maturity lifecycle, and reviews) | {\"type\":\"set_status\",\"artifact_id\":\"..\",\"to_status\":\"discovered\"|\"kernel_verified_local\"|\"promoted\"|\"reused\"|\"generalized\"|\"independently_reviewed\"|\"upstream_candidate\"|\"upstreamed\"|\"retained_local\"|\"superseded\",\"actor\":\"..\"} (+ optional reason — appends a maturity lifecycle event; curation only, never proof authority) | {\"type\":\"review\",\"artifact_id\":\"..\",\"review_status\":\"unreviewed\"|\"in_review\"|\"reviewed_with_caveats\"|\"independently_reviewed\"|\"rejected\",\"reviewer\":\"..\"} (+ optional notes, version_id — appends a review and moves review_status; never alters a version's kernel hashes) | {\"type\":\"supersede\",\"artifact_id\":\"..\",\"superseded_by\":\"..\",\"actor\":\"..\"} (+ optional reason — marks the artifact superseded by another; the original stays fully navigable). Foundation for the #239 VAR family (#244 math_search, #247-#253 build on this)."),
             make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
@@ -16757,8 +16997,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 55,
-                        "total_tool_count": 55,
+                        "classified_tool_count": 56,
+                        "total_tool_count": 56,
                         "tools": {
                             "mathcorpus_export": {
                                 "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
@@ -17021,6 +17261,16 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic — checkpoint_number is server-assigned (MAX+1 per project) and stable, never caller-supplied; every non-dry-run export is hash-pinned via source_hash over its exact packet",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "project_metadata",
+                                "required_run_mode": "any"
+                            },
+                            "math_search": {
+                                "side_effect": "read_only — searches/reads the verified_artifacts registry (DB), scans the pinned Mathlib source tree (filesystem), and reports MathCorpus as not-locally-indexed; writes nothing, never mutates a problem/import manifest",
+                                "trust_level": "advisory — results carry per-source trust labels (a verified_artifacts result's own registry maturity/review status; a mathlib result is 'pinned_mathlib') and are never merged into one namespace; search confers no proof authority and marks nothing proved",
+                                "cost_surface": "none — DB reads + a bounded filesystem scan, no Lean invocation",
+                                "benchmark_safety": "safe_public_output for names/metadata; a verified_artifacts result exposes formal statements + hashes but not proof source bytes",
+                                "replayability": "deterministic — canonical-name substring ranking with exact-match + recency tie-breaks; pagination is stable",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "search_metadata",
                                 "required_run_mode": "any"
                             },
                             "verified_artifact": {
@@ -18270,6 +18520,7 @@ impl ServerHandler for ChatDbMcp {
             "literature_lineage" => self.do_literature_lineage(args_val).await,
             "publication_review" => self.do_publication_review(args_val).await,
             "verified_artifact" => self.do_verified_artifact(args_val).await,
+            "math_search" => self.do_math_search(args_val).await,
             "candidate_construction" => self.do_candidate_construction(args_val).await,
             "empirical_search" => self.do_empirical_search(args_val).await,
             // -- Challenge / task / scoring substrate (issue #53) ---------------
@@ -19276,7 +19527,8 @@ mod tests {
         // an episode - create/set_layer/update/observe/export_contribution) = 54.
         // + 1 verified_artifact (issue #243: Verified Artifact Registry foundation
         // - promote/add_version/observe/set_status/review/supersede) = 55.
-        assert_eq!(list_res.tools.len(), 55);
+        // + 1 math_search (issue #244: unified advisory search across mathlib/VAR/mathcorpus) = 56.
+        assert_eq!(list_res.tools.len(), 56);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -21607,6 +21859,88 @@ mod tests {
         assert_eq!(old["maturity_status"], "superseded");
         assert_eq!(old["superseded_by"], newer_id);
         assert_eq!(old["versions"].as_array().unwrap().len(), 2, "a superseded artifact stays fully navigable");
+    }
+
+    /// #244: unified math_search — source isolation, per-source trust labels,
+    /// registry search + inspect/usages/dependency_path/suggest_imports, and
+    /// graceful degradation for the unavailable mathlib tree and un-indexed
+    /// MathCorpus.
+    #[tokio::test]
+    async fn test_math_search_unified_surface() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        async fn ms(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("math_search")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn va(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("verified_artifact")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn solved(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv_id: &str, idem: &str) -> String {
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv_id,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+            claim_and_solve(peer, &episode_id, "trivial", idem).await;
+            episode_id
+        }
+
+        let pv_id = create_problem(&peer, "True").await;
+        // Two artifacts whose names both contain "divisor" (conflicting names).
+        let e1 = solved(&peer, &pv_id, "ms-1").await;
+        let a1 = va(&peer, serde_json::json!({"action": {"type":"promote","episode_id":e1,"artifact_kind":"helper_lemma","canonical_name":"divisor_bound_lemma"}})).await;
+        let a1_id = a1["artifact_id"].as_str().unwrap().to_string();
+        let e2 = solved(&peer, &pv_id, "ms-2").await;
+        let a2 = va(&peer, serde_json::json!({"action": {"type":"promote","episode_id":e2,"artifact_kind":"classification","canonical_name":"divisor_classification"}})).await;
+        let a2_id = a2["artifact_id"].as_str().unwrap().to_string();
+
+        // Search across all sources.
+        let res = ms(&peer, serde_json::json!({"action": {"type":"search","query":"divisor"}})).await;
+        let results = res["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2, "both conflicting-name artifacts are found: {:?}", res);
+        // Source isolation: every result carries its source, never a merged namespace.
+        for r in results {
+            assert_eq!(r["source"], "verified_artifacts");
+            assert!(r["trust_status"].is_string());
+            assert!(r["full_name"].as_str().unwrap().contains("divisor"));
+        }
+        // Per-source availability, with graceful degradation.
+        assert_eq!(res["sources_status"]["verified_artifacts"]["available"], true);
+        assert_eq!(res["sources_status"]["verified_artifacts"]["count"], 2);
+        assert_eq!(res["sources_status"]["mathlib"]["available"], false, "no pinned mathlib tree in the test env");
+        assert_eq!(res["sources_status"]["mathcorpus"]["available"], false, "MathCorpus is export-only / not locally indexed");
+
+        // Source isolation the other way: restricting to mathcorpus yields no registry results.
+        let only_mc = ms(&peer, serde_json::json!({"action": {"type":"search","query":"divisor","sources":["mathcorpus"]}})).await;
+        assert_eq!(only_mc["results"].as_array().unwrap().len(), 0);
+        assert!(only_mc["sources_status"].get("verified_artifacts").is_none(), "an unrequested source is not searched");
+
+        // artifact_kind filter.
+        let filtered = ms(&peer, serde_json::json!({"action": {"type":"search","query":"divisor","artifact_kind":["classification"]}})).await;
+        assert_eq!(filtered["results"].as_array().unwrap().len(), 1);
+        assert_eq!(filtered["results"][0]["artifact_kind"], "classification");
+
+        // A superseded artifact still appears, labeled superseded.
+        va(&peer, serde_json::json!({"action": {"type":"supersede","artifact_id":a1_id,"superseded_by":a2_id,"actor":"c"}})).await;
+        let after = ms(&peer, serde_json::json!({"action": {"type":"search","query":"divisor_bound"}})).await;
+        assert_eq!(after["results"][0]["trust_status"], "superseded");
+        assert_eq!(after["results"][0]["superseded_by"], a2_id);
+
+        // inspect returns reproduce/verify data; usages + dependency_path are read-only.
+        let inspected = ms(&peer, serde_json::json!({"action": {"type":"inspect","artifact_id":a1_id}})).await;
+        assert!(inspected["versions"][0]["statement_hash"].is_string());
+        assert!(inspected["reproduce_verify"].is_string());
+        let usages = ms(&peer, serde_json::json!({"action": {"type":"usages","artifact_id":a2_id}})).await;
+        assert_eq!(usages["supersedes_or_referenced_by"][0]["artifact_id"], a1_id, "a2 supersedes a1");
+        let dep = ms(&peer, serde_json::json!({"action": {"type":"dependency_path","artifact_id":a2_id}})).await;
+        assert!(dep["dependency_ids"].is_array() || dep["dependency_ids"].is_null());
+
+        // suggest_imports reports environment compatibility without mutating anything.
+        let suggest = ms(&peer, serde_json::json!({"action": {"type":"suggest_imports","artifact_id":a2_id,"problem_version_id":pv_id}})).await;
+        // Same environment as the problem the artifact was proved under -> compatible.
+        assert_eq!(suggest["environment_compatible"], true);
+        assert_eq!(suggest["required_imports"].as_array().unwrap().len(), 0);
     }
 
     /// #240: a gateway that fails with an ordered diagnostic list — an
