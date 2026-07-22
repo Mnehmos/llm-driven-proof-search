@@ -2298,19 +2298,31 @@ pub enum StructuralSearchAction {
     /// (version, fingerprint_version); requires Lean). Index the registry before
     /// searching.
     Fingerprint { artifact_id: String },
-    /// Elaborate `statement` into a query fingerprint and rank stored artifact
-    /// fingerprints by structural match. `mode` is one of exact_type |
-    /// conclusion_shape | hypothesis_conclusion_shape | symbol_overlap |
-    /// structural_similarity (default structural_similarity). Requires Lean.
+    /// Elaborate `statement` into a query fingerprint and rank stored fingerprints
+    /// by structural match. `mode` is one of exact_type | conclusion_shape |
+    /// hypothesis_conclusion_shape | symbol_overlap | structural_similarity
+    /// (default structural_similarity). `sources` selects which indexes to search
+    /// (default ["verified_artifacts"]; add "mathlib" to include the bulk Mathlib
+    /// signature index). Requires Lean.
     Search {
         statement: String,
         #[serde(default)]
         mode: Option<String>,
         #[serde(default)]
+        sources: Option<Vec<String>>,
+        #[serde(default)]
         limit: Option<i64>,
     },
     /// Read an artifact's stored structural fingerprint (no Lean).
     Observe { artifact_id: String },
+    /// Bulk-build the structural-signature index over the pinned Mathlib library
+    /// (one Lean process; the whole library takes MINUTES — `limit` caps the
+    /// count for a quick pass, 0 = whole library). Replaces the prior index for
+    /// this index_version. Requires Lean.
+    BuildMathlibIndex {
+        #[serde(default)]
+        limit: Option<i64>,
+    },
 }
 
 /// Issue #246: provenance-aware, metadata-rich hybrid retrieval over the Verified
@@ -6495,6 +6507,60 @@ fn structural_fp_hash(binder_count: i64, conclusion_head: &str, hyp_heads: &[Str
         "binder_count": binder_count, "conclusion_head": conclusion_head,
         "hypothesis_heads": hh, "constants": cs,
     })).unwrap_or_default()
+}
+
+/// The canonical hash of a structural SIGNATURE (binder count + conclusion head +
+/// hypothesis heads) — the exact-type key for Mathlib entries (#245), which do
+/// not store the full used-constant set. Also computed for a query so it can be
+/// matched against the Mathlib index.
+fn structural_signature_hash(binder_count: i64, conclusion_head: &str, hyp_heads: &[String]) -> String {
+    let mut hh = hyp_heads.to_vec();
+    hh.sort();
+    proofsearch_core::hashing::canonical_hash(&serde_json::json!({
+        "binder_count": binder_count, "conclusion_head": conclusion_head, "hypothesis_heads": hh,
+    })).unwrap_or_default()
+}
+
+/// Score a query fingerprint against a Mathlib SIGNATURE (no stored constants),
+/// by mode (#245). Returns None when the mode is inapplicable (symbol_overlap
+/// needs constants Mathlib entries don't store) or there is no match. Confidence
+/// is capped at 'medium' for a signature-only match — honest, since the
+/// constant set was not compared.
+fn signature_score(
+    q: &StructuralFp, q_sig_hash: &str,
+    c_binder: i64, c_conclusion: &str, c_hyps: &[String], c_sig_hash: &str,
+    mode: &str,
+) -> Option<(f64, &'static str, String)> {
+    match mode {
+        "exact_type" => if q_sig_hash == c_sig_hash {
+            Some((1.0, "medium", "exact structural signature match (conclusion head + binders + hypotheses; Mathlib entries don't index the full constant set)".to_string()))
+        } else { None },
+        "symbol_overlap" => None, // constants are not indexed for Mathlib
+        "conclusion_shape" => {
+            if q.conclusion_head == c_conclusion && q.binder_count == c_binder {
+                Some((0.95, "medium", "same conclusion head and binder count".to_string()))
+            } else if q.conclusion_head == c_conclusion {
+                Some((0.7, "low", format!("same conclusion head ({}), binder count {} vs {}", c_conclusion, q.binder_count, c_binder)))
+            } else { None }
+        },
+        "hypothesis_conclusion_shape" => {
+            if q.conclusion_head != c_conclusion { None } else {
+                let h = multiset_overlap(&q.hypothesis_heads, c_hyps);
+                Some((0.5 + 0.5 * h, if h > 0.6 { "medium" } else { "low" },
+                      format!("conclusion head match; hypothesis-head overlap {:.2}", h)))
+            }
+        },
+        _ => { // structural_similarity, no constant term for Mathlib
+            let head = if q.conclusion_head == c_conclusion { 1.0 } else { 0.0 };
+            if head == 0.0 { return None; }
+            let hyp = multiset_overlap(&q.hypothesis_heads, c_hyps);
+            let maxb = q.binder_count.max(c_binder).max(1) as f64;
+            let binder = 1.0 - ((q.binder_count - c_binder).abs() as f64 / maxb);
+            let score = 0.55 * head + 0.30 * hyp + 0.15 * binder;
+            let conf = if q_sig_hash == c_sig_hash { "medium" } else { "low" };
+            Some((score, conf, format!("signature similarity — conclusion match, hyp {:.2}, binder {:.2}", hyp, binder)))
+        }
+    }
 }
 
 /// Parse the elaborated fingerprint JSON (from the gateway) into a scoring struct,
@@ -15660,60 +15726,121 @@ impl ChatDbMcp {
                 })).unwrap())]))
             }
 
-            StructuralSearchAction::Search { statement, mode, limit } => {
+            StructuralSearchAction::Search { statement, mode, sources, limit } => {
                 if statement.trim().is_empty() {
                     return Err(mcp_invalid_params("statement must be non-empty".to_string()));
                 }
                 let mode = mode.unwrap_or_else(|| "structural_similarity".to_string());
                 validate_one_of("mode", &mode, STRUCTURAL_SEARCH_MODES)?;
+                let want = |s: &str| sources.as_ref().map(|v| v.iter().any(|x| x == s)).unwrap_or(s == "verified_artifacts");
                 let limit = limit.unwrap_or(20).clamp(1, 200) as usize;
                 let query_fp = self.gateway.structural_fingerprint(&statement)
                     .map_err(|e| mcp_internal_error(format!("query elaboration failed: {}", e)))?;
                 let q = parse_structural_fp(&query_fp);
+                let q_sig_hash = structural_signature_hash(q.binder_count, &q.conclusion_head, &q.hypothesis_heads);
 
                 let conn = self.conn.lock().await;
-                let mut stmt = conn.prepare(
-                    "SELECT f.version_id, a.id, a.canonical_name, a.maturity_status, v.formal_statement, v.environment_hash, \
-                     f.binder_count, f.conclusion_head, f.hypothesis_heads_json, f.constants_json, f.fingerprint_hash \
-                     FROM verified_artifact_fingerprints f \
-                     JOIN verified_artifact_versions v ON v.id = f.version_id \
-                     JOIN verified_artifacts a ON a.id = v.artifact_id \
-                     WHERE f.fingerprint_version = ?1",
-                ).map_err(rs)?;
-                let rows = stmt.query_map([fp_version], |r| Ok((
-                    r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?,
-                    r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?, r.get::<_, i64>(6)?, r.get::<_, String>(7)?,
-                    r.get::<_, String>(8)?, r.get::<_, String>(9)?, r.get::<_, String>(10)?,
-                ))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
-                drop(stmt);
-
+                let mut sources_status = serde_json::Map::new();
                 let mut scored: Vec<serde_json::Value> = Vec::new();
-                for (version_id, artifact_id, name, maturity, formal, env, bc, ch, hh_json, cs_json, fp_hash) in rows {
-                    let cand = StructuralFp {
-                        binder_count: bc,
-                        conclusion_head: ch,
-                        hypothesis_heads: serde_json::from_str(&hh_json).unwrap_or_default(),
-                        constants: serde_json::from_str::<Vec<String>>(&cs_json).unwrap_or_default().into_iter().collect(),
-                        fingerprint_hash: fp_hash,
-                    };
-                    let (score, confidence, explanation) = structural_score(&q, &cand, &mode);
-                    if score <= 0.0 { continue; }
-                    scored.push(serde_json::json!({
-                        "result_id": artifact_id,
-                        "version_id": version_id,
-                        "source": "verified_artifacts",
-                        "full_name": name,
-                        "trust_status": maturity,
-                        "formal_statement": formal,
-                        "environment_hash": env,
-                        "import_source": format!("verified_artifact://{}", artifact_id),
-                        "source_library": "verified_artifact_registry",
-                        "score": score,
-                        "confidence": confidence,
-                        "confidence_basis": explanation,
-                        "exact_type_match": cand.fingerprint_hash == q.fingerprint_hash,
-                    }));
+
+                // --- Verified Artifact Registry (full fingerprints incl. constants) ---
+                if want("verified_artifacts") {
+                    let mut stmt = conn.prepare(
+                        "SELECT f.version_id, a.id, a.canonical_name, a.maturity_status, v.formal_statement, v.environment_hash, \
+                         f.binder_count, f.conclusion_head, f.hypothesis_heads_json, f.constants_json, f.fingerprint_hash \
+                         FROM verified_artifact_fingerprints f \
+                         JOIN verified_artifact_versions v ON v.id = f.version_id \
+                         JOIN verified_artifacts a ON a.id = v.artifact_id \
+                         WHERE f.fingerprint_version = ?1",
+                    ).map_err(rs)?;
+                    let rows = stmt.query_map([fp_version], |r| Ok((
+                        r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?,
+                        r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?, r.get::<_, i64>(6)?, r.get::<_, String>(7)?,
+                        r.get::<_, String>(8)?, r.get::<_, String>(9)?, r.get::<_, String>(10)?,
+                    ))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+                    drop(stmt);
+                    let mut count = 0usize;
+                    for (version_id, artifact_id, name, maturity, formal, env, bc, ch, hh_json, cs_json, fp_hash) in rows {
+                        let cand = StructuralFp {
+                            binder_count: bc,
+                            conclusion_head: ch,
+                            hypothesis_heads: serde_json::from_str(&hh_json).unwrap_or_default(),
+                            constants: serde_json::from_str::<Vec<String>>(&cs_json).unwrap_or_default().into_iter().collect(),
+                            fingerprint_hash: fp_hash,
+                        };
+                        let (score, confidence, explanation) = structural_score(&q, &cand, &mode);
+                        if score <= 0.0 { continue; }
+                        scored.push(serde_json::json!({
+                            "result_id": artifact_id,
+                            "version_id": version_id,
+                            "source": "verified_artifacts",
+                            "full_name": name,
+                            "trust_status": maturity,
+                            "formal_statement": formal,
+                            "environment_hash": env,
+                            "import_source": format!("verified_artifact://{}", artifact_id),
+                            "source_library": "verified_artifact_registry",
+                            "score": score,
+                            "confidence": confidence,
+                            "confidence_basis": explanation,
+                            "exact_type_match": cand.fingerprint_hash == q.fingerprint_hash,
+                        }));
+                        count += 1;
+                    }
+                    sources_status.insert("verified_artifacts".into(), serde_json::json!({"available": true, "matched": count}));
                 }
+
+                // --- Mathlib signature index (built by build_mathlib_index) ---
+                if want("mathlib") {
+                    let mlv = proofsearch_core::lean::MATHLIB_FINGERPRINT_INDEX_VERSION;
+                    let indexed: i64 = conn.query_row(
+                        "SELECT COUNT(*) FROM mathlib_declaration_fingerprints WHERE index_version = ?1", [mlv], |r| r.get(0),
+                    ).map_err(rs)?;
+                    if indexed == 0 {
+                        sources_status.insert("mathlib".into(), serde_json::json!({
+                            "available": false,
+                            "note": "the Mathlib signature index is empty — run structural_search build_mathlib_index first (whole-library build takes minutes)",
+                        }));
+                    } else {
+                        // Prefilter: exact_type by signature hash, other modes by
+                        // conclusion head (so we never score all ~336k rows).
+                        let (sql, param): (&str, String) = if mode == "exact_type" {
+                            ("SELECT declaration_name, binder_count, conclusion_head, hypothesis_heads_json, signature_hash \
+                              FROM mathlib_declaration_fingerprints WHERE index_version = ?1 AND signature_hash = ?2", q_sig_hash.clone())
+                        } else {
+                            ("SELECT declaration_name, binder_count, conclusion_head, hypothesis_heads_json, signature_hash \
+                              FROM mathlib_declaration_fingerprints WHERE index_version = ?1 AND conclusion_head = ?2", q.conclusion_head.clone())
+                        };
+                        let mut mstmt = conn.prepare(sql).map_err(rs)?;
+                        let mrows = mstmt.query_map(rusqlite::params![mlv, param], |r| Ok((
+                            r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?,
+                        ))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+                        drop(mstmt);
+                        let mut count = 0usize;
+                        for (decl, bc, ch, hh_json, sig_hash) in mrows {
+                            let hyps: Vec<String> = serde_json::from_str(&hh_json).unwrap_or_default();
+                            if let Some((score, confidence, explanation)) = signature_score(&q, &q_sig_hash, bc, &ch, &hyps, &sig_hash, &mode) {
+                                if score <= 0.0 { continue; }
+                                let module = decl.rsplit_once('.').map(|(m, _)| m.to_string()).unwrap_or_default();
+                                scored.push(serde_json::json!({
+                                    "result_id": format!("mathlib:{}", decl),
+                                    "source": "mathlib",
+                                    "full_name": decl,
+                                    "trust_status": "pinned_mathlib",
+                                    "import_source": module,
+                                    "source_library": "mathlib",
+                                    "score": score,
+                                    "confidence": confidence,
+                                    "confidence_basis": explanation,
+                                    "exact_type_match": sig_hash == q_sig_hash,
+                                }));
+                                count += 1;
+                            }
+                        }
+                        sources_status.insert("mathlib".into(), serde_json::json!({"available": true, "indexed": indexed, "matched": count, "index_version": mlv}));
+                    }
+                }
+
                 // Deterministic ranking: score desc, then exact-match, then id.
                 scored.sort_by(|a, b| {
                     let sa = a["score"].as_f64().unwrap_or(0.0);
@@ -15733,8 +15860,9 @@ impl ChatDbMcp {
                         "fingerprint_hash": q.fingerprint_hash,
                     },
                     "fingerprint_version": fp_version,
+                    "sources_status": sources_status,
                     "results": scored,
-                    "trust_boundary": "Elaborated type-directed search (#245). Confidence is 'high' ONLY for an exact structural fingerprint match; structural/symbol overlaps are 'medium'/'low' — a ranking hint, never a unification proof or applicability claim. No result changes proof state or imports. Only artifacts with a stored fingerprint (structural_search fingerprint) are searchable; the pinned-Mathlib-scale index is tracked separately.",
+                    "trust_boundary": "Elaborated type-directed search (#245). Confidence is 'high' ONLY for an exact full-fingerprint match (verified_artifacts); a Mathlib match is signature-only (constants not indexed at scale), capped at 'medium'; structural/symbol overlaps are 'medium'/'low' — a ranking hint, never a unification proof or applicability claim. No result changes proof state or imports.",
                 })).unwrap())]))
             }
 
@@ -15766,6 +15894,58 @@ impl ChatDbMcp {
                         "constants": serde_json::from_str::<serde_json::Value>(&cs).unwrap_or(serde_json::Value::Null),
                         "fingerprint_hash": hash,
                     },
+                })).unwrap())]))
+            }
+
+            StructuralSearchAction::BuildMathlibIndex { limit } => {
+                let limit = limit.unwrap_or(0).max(0) as usize;
+                let mlv = proofsearch_core::lean::MATHLIB_FINGERPRINT_INDEX_VERSION;
+                let toolchain = read_lean_toolchain(&self.lean_project_path);
+                // Real bulk elaboration through the gateway (fails closed on no Lean).
+                let stdout = self.gateway.mathlib_fingerprint_index(limit)
+                    .map_err(|e| mcp_internal_error(format!("mathlib fingerprint index build failed: {}", e)))?;
+                // Parse `FP:{json}` lines into (name, binder, conclusion, hyps, sig_hash).
+                struct Entry { name: String, binder: i64, conclusion: String, hyps_json: String, sig: String }
+                let mut entries: Vec<Entry> = Vec::new();
+                let mut harness_count = 0i64;
+                for line in stdout.lines() {
+                    if let Some(js) = line.strip_prefix("FP:") {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(js.trim()) {
+                            let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                            if name.is_empty() { continue; }
+                            let binder = v.get("binder_count").and_then(|x| x.as_i64()).unwrap_or(0);
+                            let conclusion = v.get("conclusion_head").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                            let mut hyps: Vec<String> = v.get("hypothesis_heads").and_then(|x| x.as_array()).map(|a|
+                                a.iter().filter_map(|s| s.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
+                            hyps.sort();
+                            let sig = structural_signature_hash(binder, &conclusion, &hyps);
+                            entries.push(Entry { name, binder, conclusion, hyps_json: serde_json::to_string(&hyps).unwrap(), sig });
+                        }
+                    } else if let Some(c) = line.strip_prefix("FPDONE:") {
+                        harness_count = c.trim().parse().unwrap_or(0);
+                    }
+                }
+                // Replace the index for this version atomically.
+                let mut conn = self.conn.lock().await;
+                let tx = conn.transaction().map_err(rs)?;
+                tx.execute("DELETE FROM mathlib_declaration_fingerprints WHERE index_version = ?1", [mlv]).map_err(rs)?;
+                for e in &entries {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO mathlib_declaration_fingerprints \
+                         (declaration_name, index_version, lean_toolchain, binder_count, conclusion_head, hypothesis_heads_json, signature_hash) \
+                         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                        rusqlite::params![&e.name, mlv, &toolchain, e.binder, &e.conclusion, &e.hyps_json, &e.sig],
+                    ).map_err(rs)?;
+                }
+                tx.commit().map_err(rs)?;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "index_version": mlv,
+                    "lean_toolchain": toolchain,
+                    "limit": limit,
+                    "harness_reported_count": harness_count,
+                    "indexed": entries.len(),
+                    "note": if limit == 0 { "whole-library index built" } else { "CAPPED index built — pass no limit (or limit=0) for the whole library" },
+                    "trust_boundary": "A Mathlib fingerprint is an elaborated structural signature (binder count + conclusion head + hypothesis heads) used as a SEARCH KEY, never proof authority. Index identity is (declaration_name, index_version) with the lean_toolchain recorded.",
                 })).unwrap())]))
             }
         }
@@ -19521,7 +19701,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<ArtifactRegistryBundleArgs>("artifact_registry_bundle", "Issue #249: portable Verified Artifact Registry bundle — a self-contained, hash-pinned package another Proof Search instance can validate, import, index, and replay WITHOUT the origin database (a database-only hash/id is not portable evidence: the canonical preimages must travel with it). TRUST BOUNDARY: import PRESERVES origin ids/hashes, an imported artifact stays source-distinguished (origin_instance_id) with kernel hashes that are INERT DATA until replayed against the pinned environment, and an imported review is NEVER local kernel authority; conflicts and unavailable environments are QUARANTINED, never falsely verified. `action` is internally tagged — exactly one of: {\"type\":\"export\"} (+ optional artifact_ids [..] (default whole registry; edges kept only when both endpoints are exported), include_proof_bodies (default true — embeds the proof-source bytes behind each proof_body_hash so an importer can replay; false redacts them for restricted/benchmark-sensitive bodies, hashes still travel with proof_source_available=false) — returns a wrapper {content, bundle_hash, origin_instance_id, exported_at, record_counts}; the bundle_hash is the canonical hash of `content` only, so re-export from the same DB is byte-deterministic modulo the volatile instance/timestamp metadata) | {\"type\":\"validate\",\"bundle_json\":\"..\"} (recompute the content hash to detect tampering, then check referential integrity + preimage presence — every version has its formal_statement preimage and immutable kernel hashes, origins/edges/superseded_by point inside the bundle; writes nothing) | {\"type\":\"import\",\"bundle_json\":\"..\"} (+ optional dry_run — validates FIRST and refuses a tampered/broken bundle before any write; preserves ids/hashes; classifies each artifact as inserted / skipped_duplicate (exact match, idempotent re-import) / quarantined (version_conflict — same id different statement, never overwritten; name_collision — same canonical_name different statement under another id; environment_unavailable — bundle lean_toolchain doesn't match this instance, can't replay here); rematerializes proof-source bytes for replay; atomic rollback on error; records an append-only artifact_bundle_imports ledger row even for a dry_run) | {\"type\":\"observe_import\",\"import_id\":\"..\"} (read what a prior import inserted / skipped / quarantined). Coordinates with MCIP export (#230/#263): MCIP is the enrichment/evidence contract, this bundle is the executable library package."),
             make_tool::<RetrievalBenchmarkArgs>("retrieval_benchmark", "Issue #251: frozen retrieval benchmark + regression suite — a reproducible, deterministic evaluation of the search/ranking that math_search (#244) and proactive_retrieval (#248) depend on, run over a HELD-CONSTANT synthetic fixture corpus (query set + relevance judgments) so a ranking change is measured against a fixed target and never silently rewritten. `action` is internally tagged — exactly one of: {\"type\":\"run\"} (+ optional compact (default false = full evaluation; true = the CI regression subset) — returns structured metrics [Recall@1/5/10, MRR, nDCG@10] per baseline and per query family, a tuning/held-out split, negative-query and environment-compatibility-label accuracy, a downstream-utility delta [retrieval ENABLED vs DISABLED mean Recall@5], and a readable `report` string. Baselines compared: name_only, hybrid_lexical, retrieval_disabled; type_directed (#245) and semantic (#246) are reported UNAVAILABLE, never faked. Adversarial lexical, misspelled (expected_gap), and cross-domain families are included so known limitations show honestly) | {\"type\":\"fixtures\"} (return the frozen corpus + queries + relevance judgments for audit). Pure over the fixtures — reads no DB, calls no model, no Lean; the same fixtures_version + ranker_version always produce the same numbers. Validates #244/#248; the type/semantic baselines light up once #245/#246 land."),
             make_tool::<ArtifactModuleArgs>("artifact_module", "Issue #247: make promoted registry artifacts directly reusable through shared Lean modules + safe import planning — the missing path from 'a verified lemma exists' to 'an actual reusable Lean dependency', without letting an advisory search result silently enter the trusted proof environment. TRUST BOUNDARY: materializing a module and planning an import are ADVISORY — they NEVER mutate an existing problem's immutable import manifest and NEVER confer proof authority; actual reuse still flows through problem_create with an explicit manifest + a kernel-verified attempt. `action` is internally tagged — exactly one of: {\"type\":\"materialize\",\"artifact_ids\":[..]} (+ optional category NumberTheory|Combinatorics|GraphTheory|Analysis|Campaigns (default Campaigns) — assemble a DETERMINISTIC shared Lean module from the immutable registry records: stable LeanChecker.MnemosyneArtifacts.<Category>.M_<hash> path (importable under the LeanChecker lib) + declaration names, topologically ordered by formally_depends_on, source_hash over the exact bytes. IDEMPOTENT: the same snapshot yields identical bytes/hash and returns the existing row. FAILS CLOSED on incompatible environments (a module requires one shared environment_hash), a dependency outside the selection, a cycle, a name collision, or a superseded/not-yet-promoted artifact. A declaration's proof is embedded ONLY when its kernel-verified source resolves from the content-addressed store (replay_status='self_contained_source'); otherwise it is a signature-only provenance comment (replay_status='proof_source_unavailable') — the module never carries an unverified or client-supplied proof body) | {\"type\":\"plan_import\",\"artifact_ids\":[..]} (+ optional base_problem_version_id — advisory: reports the deterministic module path, the topologically ordered declarations, environment compatibility with the base problem, and the proposed NEW-problem import manifest (base manifest ∪ the generated module). Mutates NOTHING) | {\"type\":\"observe\",\"module_id\":\"..\"} (read a generated module; recomputes source_hash so a tampered stored source shows source_hash_matches=false) | {\"type\":\"list\"} (+ optional limit — generated modules, most recent first) | {\"type\":\"write\",\"module_id\":\"..\"} (+ optional overwrite — write a SELF-CONTAINED module into the Lean source tree under LeanChecker/ so a new problem can actually import it; byte-verifies the write, is idempotent, and FAILS CLOSED on a signature-only module or an overwrite that would clobber different bytes. This is the only action that touches the source tree). Builds out #239; integrates with #244 search and records real reuse via #250 verified_artifact add_edge (evidence_kind='verifier') once a proof actually uses a declaration."),
-            make_tool::<StructuralSearchArgs>("structural_search", "Issue #245: elaborated TYPE-DIRECTED theorem search over the Verified Artifact Registry — find a lemma from its target TYPE SHAPE, not its name. The query is ELABORATED under the pinned Lean environment (real elaboration, never a parser approximation) into a normalized structural fingerprint (conclusion head symbol, binder count, hypothesis-head multiset, used-constant set), then matched against stored artifact fingerprints with deterministic structural ranking. TRUST BOUNDARY: read-only w.r.t. proofs — no result changes proof state or imports, and a fingerprint is a SEARCH KEY, never proof authority; confidence is 'high' ONLY for an exact structural fingerprint match (structural/symbol overlaps are 'medium'/'low', a ranking hint not a unification proof). `action` is internally tagged — exactly one of: {\"type\":\"fingerprint\",\"artifact_id\":\"..\"} (elaborate the artifact's current-version statement and STORE its fingerprint; idempotent per (version, fingerprint_version), with the lean_toolchain recorded so a record is invalidated/namespaced on a toolchain/representation change; requires Lean — index the registry before searching) | {\"type\":\"search\",\"statement\":\"<Lean type>\"} (+ optional mode exact_type|conclusion_shape|hypothesis_conclusion_shape|symbol_overlap|structural_similarity (default structural_similarity), limit — elaborate the query and rank stored fingerprints; every result carries full name, formal type, import source, source library, a score, and an honest confidence + confidence_basis explanation. Requires Lean) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read a stored fingerprint; no Lean). Only artifacts with a stored fingerprint are searchable; the pinned-Mathlib-scale index + semantic re-ranking (#246) are tracked separately. Consumes the search surface of #244; complements name search there."),
+            make_tool::<StructuralSearchArgs>("structural_search", "Issue #245: elaborated TYPE-DIRECTED theorem search over the Verified Artifact Registry — find a lemma from its target TYPE SHAPE, not its name. The query is ELABORATED under the pinned Lean environment (real elaboration, never a parser approximation) into a normalized structural fingerprint (conclusion head symbol, binder count, hypothesis-head multiset, used-constant set), then matched against stored artifact fingerprints with deterministic structural ranking. TRUST BOUNDARY: read-only w.r.t. proofs — no result changes proof state or imports, and a fingerprint is a SEARCH KEY, never proof authority; confidence is 'high' ONLY for an exact structural fingerprint match (structural/symbol overlaps are 'medium'/'low', a ranking hint not a unification proof). `action` is internally tagged — exactly one of: {\"type\":\"fingerprint\",\"artifact_id\":\"..\"} (elaborate the artifact's current-version statement and STORE its fingerprint; idempotent per (version, fingerprint_version), with the lean_toolchain recorded so a record is invalidated/namespaced on a toolchain/representation change; requires Lean — index the registry before searching) | {\"type\":\"search\",\"statement\":\"<Lean type>\"} (+ optional mode exact_type|conclusion_shape|hypothesis_conclusion_shape|symbol_overlap|structural_similarity (default structural_similarity), sources [\"verified_artifacts\"|\"mathlib\"] (default [\"verified_artifacts\"]; add \"mathlib\" to also search the bulk Mathlib signature index), limit — elaborate the query and rank stored fingerprints; every result carries full name, formal type, import source, source library, a score, and an honest confidence + confidence_basis explanation. A Mathlib match is signature-only (constants not indexed at scale), capped at 'medium' confidence. Requires Lean) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read a stored fingerprint; no Lean) | {\"type\":\"build_mathlib_index\"} (+ optional limit — bulk-fingerprint the pinned Mathlib library in ONE Lean process into a structural-signature index; the WHOLE library (~336k theorems) takes MINUTES, limit caps it for a quick pass; replaces the prior index for this index_version. Requires Lean). Consumes the search surface of #244; complements name search there; semantic re-ranking is #246."),
             make_tool::<SemanticSearchArgs>("semantic_search", "Issue #246: provenance-aware, metadata-rich HYBRID retrieval over the Verified Artifact Registry — for when an agent knows the mathematical IDEA but not the Lean name or type (e.g. 'a divisor-count bound that forces a prime-power classification'). Ranks over the artifacts' informal SUMMARY / campaign / kind (which name-only search in #244 misses), combined with provenance filters, trust labels, and reuse evidence into one honest score. TRUST BOUNDARY: similarity SUPPLIES CANDIDATES, never mathematical evidence — no result changes proof state or confers proof authority; every hit reports which fields matched, its score basis, source library, and a trust_label (verified/reviewed/provisional/superseded/negative_example/rejected). Only artifact metadata is indexed (summary/name/campaign/kind), never proof source bytes, so it is redaction-safe by construction. The optional semantic VECTOR layer is ABSENT here (no local embedding provider) and reported as such — this ranker runs without one BY DESIGN, so exact (#244) and structural (#245) search keep working with no embedding provider. Params: query (NL/keyword, matched over rich metadata), optional campaign (provenance filter), artifact_kind [..], exclude_superseded, exclude_unreviewed, limit. Hybrid = 0.60·lexical_metadata + 0.25·trust + 0.15·reuse_evidence. The semantic-vector re-ranking + a persistent embedding index is the remaining #246 slice."),
             make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
@@ -20044,9 +20224,9 @@ impl ServerHandler for ChatDbMcp {
                                 "required_run_mode": "any"
                             },
                             "structural_search": {
-                                "side_effect": "mixed by action (issue #245): fingerprint upserts one verified_artifact_fingerprints row (idempotent per version+fingerprint_version); search/observe are read_only. No action mutates a problem manifest, an episode outcome, obligations, canonical lemmas, budgets, or benchmark result tables",
-                                "trust_level": "advisory — a structural fingerprint is a SEARCH KEY over already-established statements; it confers no proof authority and changes no proof state or imports. Confidence is 'high' only for an exact structural fingerprint match; structural/symbol overlaps are labeled 'medium'/'low' so a loose suggestion is never mistaken for a unification proof",
-                                "cost_surface": "fingerprint/search invoke Lean to ELABORATE the statement under the pinned environment (a cold Mathlib load, ~30-60s each); observe is DB-only",
+                                "side_effect": "mixed by action (issue #245): fingerprint upserts one verified_artifact_fingerprints row; build_mathlib_index replaces the mathlib_declaration_fingerprints index for its index_version (bulk insert inside one transaction); search/observe are read_only. No action mutates a problem manifest, an episode outcome, obligations, canonical lemmas, budgets, or benchmark result tables",
+                                "trust_level": "advisory — a structural fingerprint/signature is a SEARCH KEY over already-established statements; it confers no proof authority and changes no proof state or imports. Confidence is 'high' only for an exact full-fingerprint match; a Mathlib signature match is capped at 'medium' (constants not indexed at scale); structural/symbol overlaps are labeled 'medium'/'low' so a loose suggestion is never mistaken for a unification proof",
+                                "cost_surface": "fingerprint/search invoke Lean to ELABORATE under the pinned environment (a cold Mathlib load, ~30-60s each); build_mathlib_index is a single-process bulk elaboration over the whole library (MINUTES); observe is DB-only",
                                 "benchmark_safety": "safe_public_output for the fingerprint (head symbols/binder counts/constant names + the formal statement); no proof source bytes",
                                 "replayability": "deterministic — the elaborated fingerprint is normalized (sorted constants + hypothesis heads) and the scoring/ranking is a pure function of fingerprints; index identity is (version, fingerprint_version) with the lean_toolchain recorded so a toolchain/representation change invalidates the record",
                                 "source_code_impact": "no_source_change",
@@ -21622,6 +21802,15 @@ mod tests {
                 "hypothesis_heads": [],
                 "constants": toks.into_iter().collect::<Vec<_>>(),
             }))
+        }
+
+        // #245: a canned bulk-index stream so the ingest/search path is offline-
+        // testable (the real harness runs under RealLeanGateway + the gated test).
+        fn mathlib_fingerprint_index(&self, _limit: usize) -> Result<String, String> {
+            Ok("FP:{\"name\":\"Nat.add_comm\",\"binder_count\":2,\"conclusion_head\":\"Eq\",\"hypothesis_heads\":[\"Nat\",\"Nat\"]}\n\
+                FP:{\"name\":\"Nat.mul_comm\",\"binder_count\":2,\"conclusion_head\":\"Eq\",\"hypothesis_heads\":[\"Nat\",\"Nat\"]}\n\
+                FP:{\"name\":\"Nat.le_refl\",\"binder_count\":1,\"conclusion_head\":\"LE.le\",\"hypothesis_heads\":[\"Nat\"]}\n\
+                FPDONE:3\n".to_string())
         }
 
         // The trait default now fails closed (see lean/mod.rs) — MockGateway
@@ -25751,6 +25940,83 @@ mod tests {
         assert!(ids.contains(&a_id.as_str()),
             "renamed theorem recovered by elaborated type shape (alpha-renamed query): {:?}", res);
         eprintln!("LIVE #245 PASSED: renamed theorem recovered from its elaborated type shape");
+        drop(client);
+    }
+
+    /// #245: the Mathlib signature index — build (canned harness output) populates
+    /// the index, search over sources=["mathlib"] matches by conclusion shape, and
+    /// an unbuilt index reports itself unavailable (never a silent empty result).
+    #[tokio::test]
+    async fn test_structural_search_mathlib_index_offline() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        async fn ss(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("structural_search")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        // Before building: a mathlib search reports the index unavailable.
+        let pre = ss(&peer, serde_json::json!({"action": {"type":"search","statement":"x = y","sources":["mathlib"]}})).await;
+        assert_eq!(pre["sources_status"]["mathlib"]["available"], false, "{:?}", pre);
+
+        // Build the (canned) index: 3 entries.
+        let built = ss(&peer, serde_json::json!({"action": {"type":"build_mathlib_index"}})).await;
+        assert_eq!(built["indexed"], 3, "{:?}", built);
+        assert_eq!(built["harness_reported_count"], 3);
+
+        // Search Mathlib by conclusion shape: "x = y" -> conclusion Eq matches the
+        // two Eq-concluding entries, not the LE.le one.
+        let res = ss(&peer, serde_json::json!({"action": {"type":"search",
+            "statement":"x = y","mode":"conclusion_shape","sources":["mathlib"]}})).await;
+        assert_eq!(res["sources_status"]["mathlib"]["indexed"], 3);
+        let names: Vec<&str> = res["results"].as_array().unwrap().iter().map(|r| r["full_name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"Nat.add_comm") && names.contains(&"Nat.mul_comm"), "Eq-concluding matches: {:?}", res);
+        assert!(!names.contains(&"Nat.le_refl"), "LE.le must be prefiltered out: {:?}", res);
+        for r in res["results"].as_array().unwrap() {
+            assert_eq!(r["source"], "mathlib");
+            assert_eq!(r["source_library"], "mathlib");
+            assert!(r["confidence"].as_str().is_some());
+        }
+        // Rebuild replaces (still 3, not 6).
+        let rebuilt = ss(&peer, serde_json::json!({"action": {"type":"build_mathlib_index"}})).await;
+        assert_eq!(rebuilt["indexed"], 3, "rebuild replaces, not appends: {:?}", rebuilt);
+    }
+
+    /// #245 LIVE (gated on PROOFSEARCH_LIVE_E2E=1): the bulk Mathlib fingerprint
+    /// index really builds under real Lean and is searchable. Uses a small cap so
+    /// the run is fast; the whole-library build is the runtime operation.
+    #[tokio::test]
+    async fn test_structural_search_live_mathlib_index_build() {
+        if std::env::var("PROOFSEARCH_LIVE_E2E").is_err() {
+            eprintln!("skipping live #245 mathlib index build (set PROOFSEARCH_LIVE_E2E=1 to run)");
+            return;
+        }
+        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+        let lean_project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("lean-checker");
+        let elan = std::env::var("PROOFSEARCH_ELAN_BIN_PATH").map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(&home).join(".elan").join("bin"));
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let handler = ChatDbMcp::new(Arc::new(Mutex::new(conn)), lean_project_path.clone(), elan);
+        if !handler.lean_available {
+            eprintln!("skipping live #245 mathlib index: Lean unavailable at {:?}", lean_project_path);
+            return;
+        }
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        async fn ss(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("structural_search")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        // Capped build (fast); the whole library is limit=0 at runtime.
+        let built = ss(&peer, serde_json::json!({"action": {"type":"build_mathlib_index","limit":150}})).await;
+        let indexed = built["indexed"].as_i64().unwrap();
+        assert!(indexed > 0, "real Mathlib theorems indexed: {:?}", built);
+        // Many Mathlib theorems conclude in Eq — search that shape over the index.
+        let res = ss(&peer, serde_json::json!({"action": {"type":"search",
+            "statement":"∀ (a b : Nat), a + b = b + a","mode":"conclusion_shape","sources":["mathlib"]}})).await;
+        assert_eq!(res["sources_status"]["mathlib"]["available"], true);
+        assert!(res["results"].as_array().unwrap().iter().all(|r| r["source"] == "mathlib"));
+        eprintln!("LIVE #245 mathlib index PASSED: {} real theorems fingerprinted + searchable", indexed);
         drop(client);
     }
 
