@@ -107,6 +107,14 @@ pub trait LeanGateway {
         Err("this gateway cannot elaborate structural fingerprints".to_string())
     }
 
+    /// Issue #245: bulk-fingerprint the pinned Mathlib library in ONE process,
+    /// returning the harness stdout (one `FP:{json}` line per theorem). `limit`
+    /// caps the count (0 = whole library — minutes). Read-only. Default fails
+    /// closed.
+    fn mathlib_fingerprint_index(&self, _limit: usize) -> Result<String, String> {
+        Err("this gateway cannot build a Mathlib fingerprint index".to_string())
+    }
+
     /// Effective server-owned resource policy, when the gateway executes real
     /// verifier subprocesses. Test/search-only gateways return `None`.
     fn resource_policy(&self) -> Option<VerifierResourcePolicy> {
@@ -488,6 +496,93 @@ elab "#fingerprint " t:term : command => Command.liftTermElabM do
   let j ← _fpFingerprint e
   IO.println s!"FINGERPRINT:{j.compress}"
 "##;
+
+/// Version of the Mathlib structural-signature index (#245). Each entry stores a
+/// binder count + conclusion head + hypothesis-head multiset (NOT the full
+/// constant set — that would be prohibitive at Mathlib scale); the exact-match key
+/// is a `signature_hash` over those three fields.
+pub const MATHLIB_FINGERPRINT_INDEX_VERSION: &str = "mathlib_fp_index/1.0";
+
+/// The Lean meta-program that BULK-fingerprints every Mathlib theorem in ONE
+/// process (issue #245): it iterates `(← getEnv).constants`, and for each
+/// non-internal theorem elaborates its type and prints one `FP:{json}` line
+/// (name, binder count, conclusion head, hypothesis-head multiset). `LIMIT_N`
+/// caps the count for a fast verification run; 0 means the whole library.
+const MATHLIB_FP_HARNESS: &str = r##"import Mathlib
+open Lean Elab Meta
+
+run_cmd Command.liftTermElabM do
+  let env ← getEnv
+  let limit := LIMIT_N
+  let mut n := 0
+  for (nm, ci) in env.constants.toList do
+    if limit != 0 && n >= limit then break
+    if ci.isUnsafe then continue
+    if nm.isInternal then continue
+    match ci with
+    | .thmInfo _ =>
+      let res ← (do try
+          let r ← forallTelescopeReducing ci.type fun xs concl => do
+            let ch := match concl.getAppFn.constName? with | some c => c.toString | none => "«nonconst»"
+            let hyps ← xs.mapM fun x => do
+              let t ← inferType x
+              pure (match t.getAppFn.constName? with | some c => c.toString | none => "«var»")
+            pure (Json.mkObj [("name", Json.str nm.toString), ("binder_count", Json.num xs.size),
+                              ("conclusion_head", Json.str ch), ("hypothesis_heads", Json.arr (hyps.map Json.str))])
+          pure (some r.compress)
+        catch _ => pure none)
+      match res with
+      | some s => n := n + 1; IO.println s!"FP:{s}"
+      | none => pure ()
+    | _ => pure ()
+  IO.println s!"FPDONE:{n}"
+"##;
+
+/// Run the bulk Mathlib fingerprint harness (#245) in one Lean process and return
+/// its raw stdout (one `FP:{json}` line per theorem, ending `FPDONE:{count}`).
+/// `limit` caps the number of theorems (0 = the whole library — minutes). The
+/// caller parses the lines and computes each signature hash. Read-only.
+pub fn run_mathlib_fingerprint_harness(
+    lean_project_path: &std::path::Path,
+    elan_bin_path: &std::path::Path,
+    limit: usize,
+    timeout: Duration,
+) -> Result<String, String> {
+    let harness = MATHLIB_FP_HARNESS.replace("LIMIT_N", &limit.to_string());
+    let temp_dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let file_path = temp_dir.path().join("_mathlib_fp.lean");
+    fs::write(&file_path, &harness).map_err(|e| e.to_string())?;
+    let lake_path = elan_bin_path.join("lake.exe");
+    let mut cmd = Command::new(&lake_path);
+    cmd.arg("env").arg("lean").arg(&file_path)
+        .current_dir(lean_project_path)
+        .stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Ok(elan_home) = std::env::var("PROOFSEARCH_ELAN_HOME") {
+        cmd.env("ELAN_HOME", elan_home);
+    }
+    configure_process_containment(&mut cmd);
+    let mut child = cmd.spawn().map_err(|e| format!("spawn lean: {e}"))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(_) => break,
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    return Err(format!("mathlib fingerprint harness timed out after {:?}", timeout));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    if !stdout.contains("FPDONE:") {
+        return Err(format!("harness did not complete: stderr={}",
+            String::from_utf8_lossy(&out.stderr).chars().take(800).collect::<String>()));
+    }
+    Ok(stdout)
+}
 
 /// Compute the elaborated structural fingerprint of a formal `statement` (#245)
 /// under the pinned Lean environment (imports the Mathlib umbrella so any symbol
@@ -1006,6 +1101,12 @@ impl LeanGateway for RealLeanGateway {
             statement,
             Duration::from_millis(self.resource_policy.proof_timeout_ms.max(60_000)),
         )
+    }
+
+    fn mathlib_fingerprint_index(&self, limit: usize) -> Result<String, String> {
+        // The whole-library pass runs for many minutes; a capped run is fast.
+        let timeout = if limit == 0 { Duration::from_secs(2400) } else { Duration::from_secs(300) };
+        run_mathlib_fingerprint_harness(&self.lean_project_path, &self.elan_bin_path, limit, timeout)
     }
 
     fn durability_job_status(&self, job_id: &str) -> Result<serde_json::Value, String> {

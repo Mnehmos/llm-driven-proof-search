@@ -2488,6 +2488,28 @@ CREATE TABLE IF NOT EXISTS verified_artifact_fingerprints (
     PRIMARY KEY (version_id, fingerprint_version)
 );
 CREATE INDEX IF NOT EXISTS idx_var_fingerprints_conclusion ON verified_artifact_fingerprints(conclusion_head, binder_count);
+
+-- Bulk structural-signature index over the pinned Mathlib library (issue #245),
+-- built by a single-process elaboration pass over every theorem. At Mathlib scale
+-- (~336k theorems) the full used-constant set per declaration would be
+-- prohibitive, so each entry stores only the structural SIGNATURE — binder count,
+-- conclusion head symbol, hypothesis-head multiset — and a signature_hash over
+-- those three fields (the exact-type key). Index identity is (declaration_name,
+-- index_version) with the lean_toolchain recorded, so the whole index is
+-- invalidated/namespaced when the toolchain or representation changes. Advisory:
+-- a Mathlib fingerprint is a search key, never proof authority.
+CREATE TABLE IF NOT EXISTS mathlib_declaration_fingerprints (
+    declaration_name TEXT NOT NULL,
+    index_version TEXT NOT NULL,
+    lean_toolchain TEXT,
+    binder_count INTEGER NOT NULL,
+    conclusion_head TEXT NOT NULL,
+    hypothesis_heads_json TEXT NOT NULL,
+    signature_hash TEXT NOT NULL,
+    PRIMARY KEY (declaration_name, index_version)
+);
+CREATE INDEX IF NOT EXISTS idx_mathlib_fp_sig ON mathlib_declaration_fingerprints(signature_hash, index_version);
+CREATE INDEX IF NOT EXISTS idx_mathlib_fp_conclusion ON mathlib_declaration_fingerprints(conclusion_head, index_version);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
