@@ -2311,6 +2311,53 @@ CREATE TABLE IF NOT EXISTS verified_artifact_reviews (
     ))
 );
 CREATE INDEX IF NOT EXISTS idx_var_reviews_artifact ON verified_artifact_reviews(artifact_id, created_at);
+
+-- Issue #250: the VAR dependency/usage graph. Typed edges between artifacts,
+-- with an explicit `evidence_kind` that keeps verifier-backed FORMAL use
+-- (actually used in a kernel-verified proof) separate from retrieval and
+-- human-declared relationships. Popularity is NEVER proof authority: an edge is
+-- provenance/impact metadata; no edge marks a theorem proved, and impact metrics
+-- are recomputed from these rows, never stored as an assertion.
+CREATE TABLE IF NOT EXISTS verified_artifact_edges (
+    id TEXT PRIMARY KEY,
+    from_artifact_id TEXT NOT NULL REFERENCES verified_artifacts(id),
+    to_artifact_id TEXT NOT NULL REFERENCES verified_artifacts(id),
+    edge_kind TEXT NOT NULL,
+    -- verifier: backed by real kernel dependency evidence (the only kind that
+    -- counts as formal use); retrieval: surfaced by search; declared: a
+    -- human/agent-asserted relationship.
+    evidence_kind TEXT NOT NULL,
+    episode_id TEXT,
+    campaign TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(from_artifact_id, to_artifact_id, edge_kind, evidence_kind),
+    CHECK(edge_kind IN (
+        'formally_depends_on', 'imported_by_generated_module', 'selected_as_retrieval_candidate',
+        'retrieved_but_unused', 'actually_used_in_verified_proof', 'generalized_from',
+        'equivalent_to', 'supersedes', 'applies_to_campaign', 'exported_as_mathcorpus_packet',
+        'proposed_to_mathlib'
+    )),
+    CHECK(evidence_kind IN ('verifier', 'retrieval', 'declared'))
+);
+CREATE INDEX IF NOT EXISTS idx_var_edges_from ON verified_artifact_edges(from_artifact_id, edge_kind);
+CREATE INDEX IF NOT EXISTS idx_var_edges_to ON verified_artifact_edges(to_artifact_id, edge_kind);
+
+-- Issue #250: Mathlib upstream-readiness review metadata for an artifact. This is
+-- REVIEW METADATA, never proof status — the status/checklist say nothing about
+-- whether the theorem is proved (that is the kernel's, immutable).
+CREATE TABLE IF NOT EXISTS verified_artifact_upstream_readiness (
+    artifact_id TEXT PRIMARY KEY REFERENCES verified_artifacts(id),
+    status TEXT NOT NULL,
+    checklist_json TEXT NOT NULL,
+    reviewer TEXT,
+    notes TEXT,
+    updated_at TEXT NOT NULL,
+    CHECK(status IN (
+        'not_candidate', 'needs_generalization', 'needs_deduplication', 'needs_style_review',
+        'ready_for_pr', 'pr_open', 'accepted', 'rejected_or_retained_local'
+    ))
+);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
