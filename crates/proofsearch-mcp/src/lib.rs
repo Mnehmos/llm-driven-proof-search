@@ -6187,6 +6187,10 @@ struct ModuleMember {
     /// (and re-elaborating) proof text. None when the version has no resolvable
     /// origin lemma (e.g. a fixture) → the member can only be signature-only.
     origin_theorem_name: Option<String>,
+    /// The origin problem_version_id — the real gateway namespaces a solve-proved
+    /// theorem under `ProofSearch.P_<first16>`, so the fully-qualified name to
+    /// alias after importing is `ProofSearch.P_<pv16>.<origin_theorem_name>`.
+    origin_problem_version_id: Option<String>,
 }
 
 /// Resolve selected artifact ids to their current versions for materialization
@@ -6230,16 +6234,20 @@ fn resolve_module_members(conn: &Connection, artifact_ids: &[String]) -> Result<
         // Resolve the origin lemma's theorem name (the compiled LeanChecker.Verified
         // module the generated module will import + alias). Prefer the version's own
         // origin; fall back to any origin lemma for the version.
-        let origin_theorem_name: Option<String> = conn.query_row(
-            "SELECT l.theorem_name FROM verified_artifact_origins o \
+        let origin: Option<(String, Option<String>)> = conn.query_row(
+            "SELECT l.theorem_name, o.origin_problem_version_id FROM verified_artifact_origins o \
              JOIN episode_verified_lemmas l ON l.id = o.origin_lemma_id \
              WHERE o.version_id = ?1 AND o.origin_lemma_id IS NOT NULL LIMIT 1",
-            [&version_id], |r| r.get(0),
+            [&version_id], |r| Ok((r.get(0)?, r.get(1)?)),
         ).optional().map_err(rs)?;
+        let (origin_theorem_name, origin_problem_version_id) = match origin {
+            Some((t, pv)) => (Some(t), pv),
+            None => (None, None),
+        };
         members.push(ModuleMember {
             artifact_id: id.clone(), version_id, artifact_version: cur_ver, canonical_name: name,
             formal_statement: formal, environment_hash: env, maturity_status: maturity,
-            origin_theorem_name,
+            origin_theorem_name, origin_problem_version_id,
         });
     }
     if members.is_empty() {
@@ -6321,31 +6329,36 @@ fn assemble_module_source(
     let mut all_resolved = true;
     let mut imports: Vec<String> = vec!["import Mathlib".to_string()];
     let mut body = String::new();
+    // The real gateway persists a solve-proved obligation at
+    // LeanChecker/Verified/<theorem_name>.lean (theorem_name = "O_<obl16>"), with
+    // the declaration namespaced under `ProofSearch.P_<pv16>` — so the importable
+    // module is `LeanChecker.Verified.<theorem_name>` and the fully-qualified name
+    // to alias is `ProofSearch.P_<pv16>.<theorem_name>`.
+    let pv16 = |pv: &str| pv.replace('-', "").chars().take(16).collect::<String>();
     for m in members_ordered {
         let stmt = m.formal_statement.clone().unwrap_or_default();
-        let verified_ok = m.origin_theorem_name.as_ref().map(|t| {
-            lean_project_path.join("LeanChecker").join("Verified").join(format!("{}.lean", t)).exists()
-        }).unwrap_or(false);
+        let verified_file = m.origin_theorem_name.as_ref().map(|t| {
+            lean_project_path.join("LeanChecker").join("Verified").join(format!("{}.lean", t))
+        });
+        let verified_ok = verified_file.as_ref().map(|p| p.exists()).unwrap_or(false);
         body.push_str(&format!(
             "\n-- {} (artifact {} v{}, curated from the immutable registry version)\n",
             m.canonical_name, m.artifact_id, m.artifact_version));
-        match (&m.origin_theorem_name, verified_ok) {
-            (Some(origin), true) => {
+        match (&m.origin_theorem_name, &m.origin_problem_version_id, verified_ok) {
+            (Some(origin), Some(pv), true) => {
                 imports.push(format!("import LeanChecker.Verified.{}", origin));
-                if origin == &m.canonical_name {
-                    body.push_str(&format!("-- reused directly as `{}` (see the import above)\n", origin));
-                } else {
-                    // Expose the origin theorem under the curated canonical name.
-                    body.push_str(&format!("alias {} := {}\n", m.canonical_name, origin));
-                }
+                let fq = format!("ProofSearch.P_{}.{}", pv16(pv), origin);
+                // Expose the already-verified theorem under the curated name.
+                body.push_str(&format!("alias {} := {}\n", m.canonical_name, fq));
             }
             _ => {
                 all_resolved = false;
                 body.push_str(&format!(
                     "-- SIGNATURE ONLY (the origin's compiled LeanChecker.Verified module is not present in this checkout):\n\
                      --   theorem {} : {}\n\
-                     -- origin_theorem_name={:?} — build/replay the origin to make this module self-contained.\n",
-                    m.canonical_name, if stmt.is_empty() { "<statement unavailable>" } else { &stmt }, m.origin_theorem_name));
+                     -- origin={:?} pv={:?} — build/replay the origin (via a `solve` attempt) to make this module self-contained.\n",
+                    m.canonical_name, if stmt.is_empty() { "<statement unavailable>" } else { &stmt },
+                    m.origin_theorem_name, m.origin_problem_version_id));
             }
         }
     }
@@ -24872,7 +24885,8 @@ mod tests {
         let source_text = m["source_text"].as_str().unwrap().to_string();
         assert!(source_text.contains("import Mathlib"), "module imports Mathlib so it builds standalone: {}", source_text);
         assert!(source_text.contains(&format!("import LeanChecker.Verified.{}", origin_name)), "imports the compiled origin: {}", source_text);
-        assert!(source_text.contains(&format!("alias reusable_truth := {}", origin_name)), "aliases origin under the curated name: {}", source_text);
+        assert!(source_text.contains("alias reusable_truth := ProofSearch.P_") && source_text.contains(&origin_name),
+            "aliases the fully-qualified origin under the curated name: {}", source_text);
 
         // Write it into the source tree; byte-identical, importable path.
         let w = am(&peer, serde_json::json!({"action": {"type":"write","module_id": module_id}})).await;
@@ -24901,6 +24915,143 @@ mod tests {
 
         drop(client);
         drop(root);
+    }
+
+    /// #247 LIVE end-to-end against REAL Lean (gated on PROOFSEARCH_LIVE_E2E=1 and
+    /// a resolvable toolchain, since it does real Mathlib builds and writes into
+    /// the tracked lean-checker tree): a real kernel-verified lemma -> promote ->
+    /// materialize -> write into LeanChecker/ -> a NEW problem whose import
+    /// manifest includes the generated module (problem_create runs a real compile
+    /// check of imports) -> prove the goal THROUGH the imported alias -> record the
+    /// reuse edge. Cleans up the files it writes.
+    #[tokio::test]
+    async fn test_artifact_module_live_kernel_reuse_end_to_end() {
+        if std::env::var("PROOFSEARCH_LIVE_E2E").is_err() {
+            eprintln!("skipping live #247 e2e (set PROOFSEARCH_LIVE_E2E=1 to run)");
+            return;
+        }
+        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+        let lean_project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("lean-checker");
+        let elan = std::env::var("PROOFSEARCH_ELAN_BIN_PATH").map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(&home).join(".elan").join("bin"));
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let handler = ChatDbMcp::new(Arc::new(Mutex::new(conn)), lean_project_path.clone(), elan);
+        if !handler.lean_available {
+            eprintln!("skipping live #247 e2e: Lean gateway unavailable at {:?}", lean_project_path);
+            return;
+        }
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+
+        // Track written files so we can clean the tracked tree afterward.
+        let module_file = std::sync::Arc::new(std::sync::Mutex::new(Option::<PathBuf>::None));
+
+        let result = async {
+            async fn call(peer: &rmcp::service::Peer<rmcp::RoleClient>, tool: &str, v: serde_json::Value) -> serde_json::Value {
+                tool_json(&peer.call_tool(CallToolRequestParams::new(tool.to_string())
+                    .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+            }
+            // Prove the problem's root obligation through real Lean via `solve`
+            // (verify_exact persists LeanChecker/Verified/O_<obl16>.lean).
+            async fn prove(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str, proof: &str, idem: &str) -> serde_json::Value {
+                let ep = call(peer, "episode_create", serde_json::json!({"problem_version_id": pv, "max_steps": 5})).await;
+                let episode_id = ep["episode_id"].as_str().unwrap().to_string();
+                let req = &ep["next_action_request"];
+                let (rid, rev) = (req["id"].as_str().unwrap().to_string(), req["episode_revision"].as_i64().unwrap());
+                let claim = call(peer, "attempt_claim", serde_json::json!({
+                    "episode_id": episode_id, "action_request_id": rid, "idempotency_key": idem, "expected_revision": rev})).await;
+                let step = call(peer, "episode_step", serde_json::json!({
+                    "episode_id": episode_id, "action_attempt_id": claim["action_attempt_id"], "expected_revision": rev,
+                    "claim_token": claim["claim_token"],
+                    "action": {"type": "solve", "proof_term": proof},
+                    "cost_micros": 100})).await;
+                serde_json::json!({"episode_id": episode_id, "step": step})
+            }
+
+            // 1) Real verified lemma: 2 + 2 = 4 by rfl.
+            let p1 = call(&peer, "problem_create", serde_json::json!({
+                "source_problem_text": "Show 2 + 2 = 4.", "root_formal_statement": "2 + 2 = 4",
+                "unsafe_dev_attestation": true})).await;
+            let pv1 = p1["problem_version_id"].as_str().unwrap().to_string();
+            let r1 = prove(&peer, &pv1, "rfl", "e2e-src").await;
+            assert_eq!(r1["step"]["outcome"], "kernel_verified", "root must verify: {:?}", r1);
+            let ep1 = r1["episode_id"].as_str().unwrap().to_string();
+
+            // 2) Promote -> materialize -> the origin's LeanChecker.Verified module
+            // resolves, so the generated module is self-contained.
+            let a = call(&peer, "verified_artifact", serde_json::json!({"action": {"type":"promote",
+                "episode_id": ep1, "artifact_kind":"theorem", "canonical_name":"reused_add"}})).await;
+            let a_id = a["artifact_id"].as_str().unwrap().to_string();
+            let m = call(&peer, "artifact_module", serde_json::json!({"action": {"type":"materialize",
+                "artifact_ids":[a_id.clone()], "category":"NumberTheory"}})).await;
+            assert_eq!(m["replay_status"], "self_contained_source", "origin Verified module resolved: {:?}", m);
+            let module_path = m["module_path"].as_str().unwrap().to_string();
+            let module_id = m["module_id"].as_str().unwrap().to_string();
+
+            // 3) Write it into the source tree.
+            let w = call(&peer, "artifact_module", serde_json::json!({"action": {"type":"write","module_id": module_id}})).await;
+            assert_eq!(w["byte_identical"], true, "{:?}", w);
+            *module_file.lock().unwrap() = Some(lean_project_path.join(w["written_path"].as_str().unwrap()));
+
+            // 3b) Build the oleans the import validation will load: first the origin's
+            // Verified module (imported by the generated module), then the generated
+            // module itself. `lake env lean -o` compiles a single file against the
+            // built deps (the #261-proven command).
+            let source_text = m["source_text"].as_str().unwrap();
+            let origin_mod = source_text.lines()
+                .find_map(|l| l.strip_prefix("import LeanChecker.Verified."))
+                .map(|s| format!("LeanChecker.Verified.{}", s.trim()))
+                .expect("generated module must import the origin Verified module");
+            let build_olean = |module: &str| -> bool {
+                let rel = module.replace('.', "/");
+                let olean = lean_project_path.join(".lake/build/lib/lean").join(format!("{}.olean", rel));
+                if let Some(p) = olean.parent() { let _ = std::fs::create_dir_all(p); }
+                std::process::Command::new("lake")
+                    .current_dir(&lean_project_path)
+                    .args(["env", "lean", "-o"])
+                    .arg(&olean)
+                    .arg(lean_project_path.join(format!("{}.lean", rel)))
+                    .status().map(|s| s.success()).unwrap_or(false)
+            };
+            assert!(build_olean(&origin_mod), "origin Verified olean must build: {}", origin_mod);
+            assert!(build_olean(&module_path), "generated module olean must build: {}", module_path);
+
+            // 4) A NEW problem imports the generated module (problem_create runs a
+            // REAL compile check of every import) and proves the goal THROUGH the
+            // imported alias — reuse across the kernel boundary.
+            let p2 = call(&peer, "problem_create", serde_json::json!({
+                "source_problem_text": "Reuse the promoted lemma to show 2 + 2 = 4.",
+                "root_formal_statement": "2 + 2 = 4",
+                "problem_imports": [module_path],
+                "unsafe_dev_attestation": true})).await;
+            let pv2 = p2["problem_version_id"].as_str().unwrap().to_string();
+            let r2 = prove(&peer, &pv2, "exact reused_add", "e2e-dst").await;
+            assert_eq!(r2["step"]["outcome"], "kernel_verified", "reuse through the imported alias must verify: {:?}", r2);
+            let ep2 = r2["episode_id"].as_str().unwrap().to_string();
+
+            // 5) Record the reuse edge (criterion 8).
+            let dst = call(&peer, "verified_artifact", serde_json::json!({"action": {"type":"promote",
+                "episode_id": ep2, "artifact_kind":"theorem", "canonical_name":"reused_add_downstream"}})).await;
+            let dst_id = dst["artifact_id"].as_str().unwrap().to_string();
+            call(&peer, "verified_artifact", serde_json::json!({"action": {"type":"add_edge",
+                "from_artifact_id": dst_id, "to_artifact_id": a_id, "edge_kind":"actually_used_in_verified_proof",
+                "evidence_kind":"verifier", "episode_id": ep2}})).await;
+            let impact = call(&peer, "verified_artifact", serde_json::json!({"action": {"type":"impact","artifact_id": a_id}})).await;
+            assert!(impact["verified_downstream_uses"].as_i64().unwrap() >= 1, "reuse recorded: {:?}", impact);
+            eprintln!("LIVE #247 e2e PASSED: promoted lemma reused through a generated module across the kernel boundary");
+        }.await;
+
+        // Cleanup the file we wrote into the tracked tree (best-effort).
+        if let Some(path) = module_file.lock().unwrap().take() {
+            let _ = std::fs::remove_file(&path);
+            // Remove the generated module olean + the MnemosyneArtifacts dirs we
+            // created, so a repeat run leaves the tracked tree clean.
+            let _ = std::fs::remove_dir_all(lean_project_path.join("LeanChecker").join("MnemosyneArtifacts"));
+            let _ = std::fs::remove_dir_all(lean_project_path.join(".lake/build/lib/lean/LeanChecker/MnemosyneArtifacts"));
+        }
+        let _ = result;
+        drop(client);
     }
 
     /// #240: a gateway that fails with an ordered diagnostic list — an
