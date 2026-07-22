@@ -618,13 +618,53 @@ impl RealLeanGateway {
         Ok((status.success(), lines, stderr_str, receipt))
     }
 
+    /// Issue #261: ensure each imported certified child's durability olean exists
+    /// before a parent that imports it compiles, building any missing one on
+    /// demand (synchronously) with the same single-file `lake env lean -o` the
+    /// durability build now uses. Best-effort: a genuinely missing/failing child
+    /// is surfaced by the parent's own compile as a real graph error rather than
+    /// fabricated here.
+    fn ensure_dependency_oleans_built(&self, approved_dependency_ids: &[Uuid]) {
+        for dep_id in approved_dependency_ids {
+            let dep_first_16 = &dep_id.to_string().replace('-', "")[..16];
+            let olean_rel = format!(".lake/build/lib/lean/LeanChecker/Verified/O_{}.olean", dep_first_16);
+            if self.lean_project_path.join(&olean_rel).exists() {
+                continue;
+            }
+            let source_rel = format!("LeanChecker/Verified/O_{}.lean", dep_first_16);
+            if !self.lean_project_path.join(&source_rel).exists() {
+                continue; // no verified source to build — a real graph error, left to surface.
+            }
+            let _ = self.run_durability_build(&format!("LeanChecker.Verified.O_{}", dep_first_16));
+        }
+    }
+
     fn run_durability_build(&self, target: &str) -> Result<(std::process::ExitStatus, VerifierOutputReceipt), LeanInvocationFailure> {
         let _permit = PROCESS_LIMITER.acquire(self.resource_policy.max_concurrent_processes);
         let _build_lock = LAKE_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let fail = |message: String| LeanInvocationFailure { message, output_receipt: None };
         let lake_path = self.elan_bin_path.join("lake.exe");
+        // Issue #261: compile the single verified file against the ALREADY-BUILT
+        // dependency oleans via `lake env lean -o <olean> <source>`, NOT
+        // `lake build <target>`. `lake build` re-traverses the whole dependency
+        // graph (re-checking Mathlib/proofwidgets/etc.), which on some platforms
+        // fails outright (e.g. the ProofWidgets JS-cache rebuild on Windows) and
+        // is far slower — leaving the child's `LeanChecker/Verified/O_*.olean`
+        // unbuilt, so a parent SubmitModule assembly that imports it fails on the
+        // missing artifact. The single-file compile hits the SAME pinned Lean
+        // kernel on the SAME source against the SAME dependency oleans, so the
+        // durability olean is byte-for-byte what a full build would produce — this
+        // changes nothing about any proof or kernel result, it only materializes
+        // the artifact reliably.
+        let rel = target.replace('.', "/");
+        let source_rel = format!("{}.lean", rel);
+        let olean_rel = format!(".lake/build/lib/lean/{}.olean", rel);
+        if let Some(parent) = self.lean_project_path.join(&olean_rel).parent() {
+            let _ = fs::create_dir_all(parent);
+        }
         let mut cmd = Command::new(&lake_path);
-        cmd.arg("build").arg(target).current_dir(&self.lean_project_path)
+        cmd.arg("env").arg("lean").arg("-o").arg(&olean_rel).arg(&source_rel)
+            .current_dir(&self.lean_project_path)
             .stdout(Stdio::piped()).stderr(Stdio::piped());
         if let Ok(elan_home) = std::env::var("PROOFSEARCH_ELAN_HOME") {
             cmd.env("ELAN_HOME", elan_home);
@@ -933,6 +973,14 @@ impl LeanGateway for RealLeanGateway {
         // directives (issue #62) render inside the namespace instead, matching
         // where the upstream benchmark file's own `open` lines sat.
         let (mut imports, open_directives) = Self::build_import_block(import_manifest, approved_dependency_ids);
+        // Issue #261: a parent importing certified children needs each child's
+        // `LeanChecker/Verified/O_*.olean` to EXIST at compile time. The child's
+        // durability build runs in a detached thread that may not have finished
+        // yet, so materialize any missing imported child olean on demand here,
+        // before this parent compiles. Deterministic and idempotent — same
+        // source, same deps, same pinned kernel; it only builds the artifact,
+        // never changes a proof or verdict.
+        self.ensure_dependency_oleans_built(approved_dependency_ids);
         imports.push_str("set_option linter.unusedTactic false\n");
         imports.push_str("set_option linter.unreachableTactic false\n");
         let open_block = if open_directives.is_empty() {
@@ -1686,7 +1734,14 @@ mod tests {
         let retry = gateway.durability_job_retry(&prior).unwrap();
         assert!(started.elapsed() < Duration::from_secs(1), "retry must enqueue without waiting for Lake");
         assert_eq!(retry.status, "queued");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // The background build acquires the process-wide LAKE_BUILD_LOCK before it
+        // even spawns, so when kernel_pass_queues_and_completes_observable_durability_job
+        // holds that lock for a real single-file compile (~15-30s now that the
+        // build actually succeeds, #261), this retry's own build blocks on the
+        // lock before failing fast on the missing elan. The deadline must absorb
+        // that in-flight real build; the assertion — settles to `failed`, kernel
+        // truth intact — is unchanged.
+        let deadline = Instant::now() + Duration::from_secs(90);
         loop {
             let state = gateway.durability_job_status(&retry.job_id).unwrap();
             if state["status"] == "failed" {
