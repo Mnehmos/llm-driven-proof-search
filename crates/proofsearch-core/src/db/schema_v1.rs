@@ -2358,6 +2358,50 @@ CREATE TABLE IF NOT EXISTS verified_artifact_upstream_readiness (
         'ready_for_pr', 'pr_open', 'accepted', 'rejected_or_retained_local'
     ))
 );
+
+-- Proactive retrieval packets (issue #248): an advisory, budget-aware,
+-- reproducible record of a retrieval pass run at a formalization checkpoint
+-- (plan item created, obligation created, repeated failure, before give-up, or
+-- an explicit manual pass). The packet captures the DERIVED query features (the
+-- agent never has to name candidates), the exact search/index versions, the
+-- ranked candidates with per-source trust labels and environment compatibility,
+-- and — after the agent chooses — which candidates it inspected/selected so that
+-- retrieved-but-unused results stay distinguishable from actual verifier-backed
+-- dependencies (verified_artifact_edges with evidence_kind='verifier').
+--
+-- TRUST BOUNDARY: a retrieval packet is advisory metadata only. It never adds an
+-- import, alters a problem version, or marks an obligation proved; a high rank is
+-- never applicability. `enabled = 0` records a pass that a controlled-evaluation
+-- run envelope deliberately disabled (evaluation/benchmark/private_audit modes) —
+-- the pass is still logged (with zero candidates) so the trajectory stays honest,
+-- never silently skipped. `contamination_json` records benchmark exposure so a
+-- benchmark-linked problem's retrieval can never be laundered out of the record.
+--
+-- The row is created append-only; record_selection UPDATEs only the advisory
+-- selections_json / unused_json convenience columns (never any hash, outcome, or
+-- proof-authority field), mirroring how other advisory ledgers keep a current
+-- mirror over their append-only events.
+CREATE TABLE IF NOT EXISTS retrieval_packets (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    trigger_mode TEXT NOT NULL,
+    scope_kind TEXT NOT NULL,
+    scope_id TEXT,
+    run_envelope_id TEXT REFERENCES run_envelopes(id),
+    enabled INTEGER NOT NULL,
+    query_features_json TEXT NOT NULL,
+    search_version TEXT NOT NULL,
+    sources_status_json TEXT NOT NULL,
+    candidates_json TEXT NOT NULL,
+    selections_json TEXT NOT NULL,
+    unused_json TEXT NOT NULL,
+    contamination_json TEXT NOT NULL,
+    budget_json TEXT NOT NULL,
+    CHECK(trigger_mode IN ('manual', 'plan_item_created', 'obligation_created', 'after_repeated_failure', 'before_give_up')),
+    CHECK(scope_kind IN ('problem', 'plan_item', 'episode', 'freeform')),
+    CHECK(enabled IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_retrieval_packets_scope ON retrieval_packets(scope_kind, scope_id, created_at);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
