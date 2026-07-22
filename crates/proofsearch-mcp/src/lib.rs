@@ -6330,7 +6330,12 @@ fn assemble_module_source(
          \x20 Deterministically assembled from immutable Verified Artifact Registry records.\n\
          \x20 module_path: {}\n  category: {}\n  environment_hash: {}\n  members (topologically ordered):\n{}\n-/\n",
         module_path, category, environment_hash, members_manifest.join("\n"));
-    let source = format!("{}{}", header, body);
+    // The module imports the Mathlib umbrella so any verified proof's tactics/
+    // lemmas resolve when it is built standalone. (The registry version records an
+    // environment_hash but not the concrete import manifest, so the umbrella is
+    // the safe deterministic choice; narrowing it is a future refinement.)
+    let imports = "import Mathlib\n";
+    let source = format!("{}{}{}", header, imports, body);
     (source, if all_resolved { "self_contained_source" } else { "proof_source_unavailable" })
 }
 
@@ -24827,6 +24832,7 @@ mod tests {
         assert_eq!(m["replay_status"], "self_contained_source", "seeded proof -> self-contained: {:?}", m);
         let module_id = m["module_id"].as_str().unwrap().to_string();
         let source_text = m["source_text"].as_str().unwrap().to_string();
+        assert!(source_text.contains("import Mathlib"), "module imports Mathlib so it builds standalone: {}", source_text);
         assert!(source_text.contains("theorem reusable_truth : True :="), "embeds the real declaration: {}", source_text);
 
         // Write it into the source tree; byte-identical, importable path.
