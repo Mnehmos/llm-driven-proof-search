@@ -2313,6 +2313,35 @@ pub enum StructuralSearchAction {
     Observe { artifact_id: String },
 }
 
+/// Issue #246: provenance-aware, metadata-rich hybrid retrieval over the Verified
+/// Artifact Registry — for when an agent knows the mathematical IDEA but not the
+/// Lean name or type. Ranks over informal summary / campaign / kind (metadata
+/// name-only search misses), with provenance/domain filters, trust labels, and
+/// reuse evidence combined into one honest hybrid score. The optional semantic
+/// VECTOR layer is absent here (no embedding provider) and reported as such;
+/// exact and structural search continue to work without it. Similarity is never
+/// proof authority.
+#[derive(JsonSchema, Deserialize)]
+pub struct SemanticSearchArgs {
+    /// Natural-language or keyword query, matched over the artifacts' informal
+    /// summary, canonical name, campaign, and kind — not only the Lean name.
+    pub query: String,
+    /// Restrict to this originating campaign (provenance filter).
+    #[serde(default)]
+    pub campaign: Option<String>,
+    /// Restrict to these artifact kinds.
+    #[serde(default)]
+    pub artifact_kind: Option<Vec<String>>,
+    /// Exclude artifacts that have been superseded.
+    #[serde(default)]
+    pub exclude_superseded: bool,
+    /// Exclude artifacts whose review_status is still 'unreviewed'.
+    #[serde(default)]
+    pub exclude_unreviewed: bool,
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
 /// Issue #243: the Verified Artifact Registry (VAR) foundation tool. Promotes a
 /// KERNEL-BACKED verified lemma into a curated, immutable, versioned research
 /// artifact with a lifecycle. The registry curates already-established kernel
@@ -15742,6 +15771,140 @@ impl ChatDbMcp {
         }
     }
 
+    /// Issue #246: provenance-aware hybrid retrieval over the registry — lexical
+    /// over rich metadata (summary/campaign/kind) + provenance filters + trust
+    /// labels + reuse evidence, combined into one honest score. The semantic
+    /// vector layer is absent (no embedding provider) and reported as such;
+    /// similarity is never proof authority. Read-only.
+    async fn do_semantic_search(&self, args_val: serde_json::Value) -> Result<CallToolResult, McpError> {
+        let args: SemanticSearchArgs = serde_json::from_value(args_val)
+            .map_err(|e| mcp_invalid_params(format!("Invalid params: {}", e)))?;
+        if args.query.trim().is_empty() {
+            return Err(mcp_invalid_params("query must be non-empty".to_string()));
+        }
+        let limit = args.limit.unwrap_or(20).clamp(1, 200) as usize;
+        let tokens = extract_symbol_tokens(&args.query);
+        let kind_ok = |k: &str| args.artifact_kind.as_ref().map(|v| v.iter().any(|x| x == k)).unwrap_or(true);
+
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.canonical_name, a.informal_summary, a.source_campaign, a.artifact_kind, \
+             a.maturity_status, a.review_status, a.superseded_by, v.formal_statement, v.environment_hash \
+             FROM verified_artifacts a \
+             JOIN verified_artifact_versions v ON v.artifact_id = a.id AND v.artifact_version = a.current_version \
+             ORDER BY a.id ASC",
+        ).map_err(rs)?;
+        let rows = stmt.query_map([], |r| Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?,
+            r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, Option<String>>(7)?,
+            r.get::<_, Option<String>>(8)?, r.get::<_, String>(9)?,
+        ))).map_err(rs)?.collect::<rusqlite::Result<Vec<_>>>().map_err(rs)?;
+        drop(stmt);
+
+        let query_l = args.query.to_lowercase();
+        let mut scored: Vec<serde_json::Value> = Vec::new();
+        for (id, name, summary, campaign, kind, maturity, review, superseded_by, formal, env) in rows {
+            // Provenance / trust filters.
+            if let Some(c) = &args.campaign {
+                if campaign.as_deref() != Some(c.as_str()) { continue; }
+            }
+            if !kind_ok(&kind) { continue; }
+            if args.exclude_superseded && superseded_by.is_some() { continue; }
+            if args.exclude_unreviewed && review == "unreviewed" { continue; }
+
+            // Lexical match over RICH metadata (not only the name).
+            let mut matched_fields: Vec<&str> = Vec::new();
+            let field = |name: &'static str, text: &Option<String>, hits: &mut Vec<&'static str>, hit: &mut bool, tok: &str| {
+                if let Some(t) = text {
+                    if t.to_lowercase().contains(tok) { if !hits.contains(&name) { hits.push(name); } *hit = true; }
+                }
+            };
+            let name_l = name.to_lowercase();
+            let summary_opt = summary.clone();
+            let campaign_opt = campaign.clone();
+            let mut token_hits = 0usize;
+            for tok in &tokens {
+                let mut hit = false;
+                if name_l.contains(tok.as_str()) { if !matched_fields.contains(&"canonical_name") { matched_fields.push("canonical_name"); } hit = true; }
+                field("informal_summary", &summary_opt, &mut matched_fields, &mut hit, tok);
+                field("source_campaign", &campaign_opt, &mut matched_fields, &mut hit, tok);
+                if kind.to_lowercase().contains(tok.as_str()) { if !matched_fields.contains(&"artifact_kind") { matched_fields.push("artifact_kind"); } hit = true; }
+                if hit { token_hits += 1; }
+            }
+            // Whole-query substring in summary is a strong lexical signal even when
+            // token overlap is partial.
+            let phrase_hit = summary_opt.as_ref().map(|s| s.to_lowercase().contains(&query_l)).unwrap_or(false);
+            let lexical = if tokens.is_empty() { 0.0 } else { token_hits as f64 / tokens.len() as f64 };
+            let lexical = (lexical + if phrase_hit { 0.5 } else { 0.0 }).min(1.0);
+
+            // A campaign/kind filter match with no lexical hit still surfaces (a
+            // pure provenance query), but ranks below lexical hits.
+            let provenance_only = lexical == 0.0 && (args.campaign.is_some() || args.artifact_kind.is_some());
+            if lexical == 0.0 && !provenance_only { continue; }
+
+            // Reuse evidence (verifier-backed downstream uses, #250).
+            let reuse: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM verified_artifact_edges WHERE to_artifact_id = ?1 \
+                 AND edge_kind = 'actually_used_in_verified_proof' AND evidence_kind = 'verifier'",
+                [&id], |r| r.get(0),
+            ).optional().map_err(rs)?.unwrap_or(0);
+            let reuse_norm = (reuse as f64 / (reuse as f64 + 3.0)).min(1.0); // diminishing
+
+            // Trust label + weight.
+            let trust_label = if superseded_by.is_some() { "superseded" }
+                else if kind == "negative_result" { "negative_example" }
+                else if review == "rejected" { "rejected" }
+                else if review == "independently_reviewed" || maturity == "upstreamed" { "reviewed" }
+                else if matches!(maturity.as_str(), "promoted" | "reused" | "generalized" | "retained_local" | "independently_reviewed" | "upstream_candidate") { "verified" }
+                else { "provisional" };
+            let trust_weight = match trust_label {
+                "reviewed" => 1.0, "verified" => 0.9, "provisional" => 0.6,
+                "negative_example" => 0.7, "superseded" => 0.3, "rejected" => 0.2, _ => 0.5,
+            };
+
+            let score = 0.60 * lexical + 0.25 * trust_weight + 0.15 * reuse_norm;
+            scored.push(serde_json::json!({
+                "result_id": id,
+                "source": "verified_artifacts",
+                "full_name": name,
+                "informal_summary": summary,
+                "source_campaign": campaign,
+                "artifact_kind": kind,
+                "formal_statement": formal,
+                "environment_hash": env,
+                "maturity_status": maturity,
+                "review_status": review,
+                "superseded": superseded_by.is_some(),
+                "superseded_by": superseded_by,
+                "trust_label": trust_label,
+                "reuse_verified_uses": reuse,
+                "matched_fields": matched_fields,
+                "score": score,
+                "score_basis": if phrase_hit || !matched_fields.is_empty() { "lexical+trust+reuse (semantic vector unavailable)" } else { "provenance_filter+trust+reuse (semantic vector unavailable)" },
+            }));
+        }
+        scored.sort_by(|a, b| {
+            b["score"].as_f64().unwrap_or(0.0).partial_cmp(&a["score"].as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a["result_id"].as_str().unwrap_or("").cmp(b["result_id"].as_str().unwrap_or("")))
+        });
+        scored.truncate(limit);
+
+        Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+            "query": args.query,
+            "results": scored,
+            "ranker": {
+                "components": ["lexical_metadata(0.60)", "trust(0.25)", "reuse_evidence(0.15)"],
+                "semantic_vector": "unavailable — no local embedding provider configured; this ranker runs without one by design (#246), so results are lexical/provenance/trust/reuse, never embedding similarity",
+                "structural": "type-directed structural scoring is a separate surface — use structural_search (#245)",
+            },
+            "filters_applied": {
+                "campaign": args.campaign, "artifact_kind": args.artifact_kind,
+                "exclude_superseded": args.exclude_superseded, "exclude_unreviewed": args.exclude_unreviewed,
+            },
+            "trust_boundary": "Provenance-aware metadata retrieval (#246). A hit reports which fields matched, its score basis, source library, and trust_label (verified/reviewed/provisional/superseded/negative_example/rejected). Similarity SUPPLIES CANDIDATES, never mathematical evidence — no result changes proof state or confers proof authority. Only artifact metadata is indexed (summary/name/campaign/kind), never proof source bytes, so it is redaction-safe by construction.",
+        })).unwrap())]))
+    }
+
     /// Issue #243: Verified Artifact Registry foundation. Promote a kernel-backed
     /// verified lemma into a curated, immutable, versioned artifact and drive its
     /// lifecycle. The registry curates already-established kernel truth: promotion
@@ -19359,6 +19522,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<RetrievalBenchmarkArgs>("retrieval_benchmark", "Issue #251: frozen retrieval benchmark + regression suite — a reproducible, deterministic evaluation of the search/ranking that math_search (#244) and proactive_retrieval (#248) depend on, run over a HELD-CONSTANT synthetic fixture corpus (query set + relevance judgments) so a ranking change is measured against a fixed target and never silently rewritten. `action` is internally tagged — exactly one of: {\"type\":\"run\"} (+ optional compact (default false = full evaluation; true = the CI regression subset) — returns structured metrics [Recall@1/5/10, MRR, nDCG@10] per baseline and per query family, a tuning/held-out split, negative-query and environment-compatibility-label accuracy, a downstream-utility delta [retrieval ENABLED vs DISABLED mean Recall@5], and a readable `report` string. Baselines compared: name_only, hybrid_lexical, retrieval_disabled; type_directed (#245) and semantic (#246) are reported UNAVAILABLE, never faked. Adversarial lexical, misspelled (expected_gap), and cross-domain families are included so known limitations show honestly) | {\"type\":\"fixtures\"} (return the frozen corpus + queries + relevance judgments for audit). Pure over the fixtures — reads no DB, calls no model, no Lean; the same fixtures_version + ranker_version always produce the same numbers. Validates #244/#248; the type/semantic baselines light up once #245/#246 land."),
             make_tool::<ArtifactModuleArgs>("artifact_module", "Issue #247: make promoted registry artifacts directly reusable through shared Lean modules + safe import planning — the missing path from 'a verified lemma exists' to 'an actual reusable Lean dependency', without letting an advisory search result silently enter the trusted proof environment. TRUST BOUNDARY: materializing a module and planning an import are ADVISORY — they NEVER mutate an existing problem's immutable import manifest and NEVER confer proof authority; actual reuse still flows through problem_create with an explicit manifest + a kernel-verified attempt. `action` is internally tagged — exactly one of: {\"type\":\"materialize\",\"artifact_ids\":[..]} (+ optional category NumberTheory|Combinatorics|GraphTheory|Analysis|Campaigns (default Campaigns) — assemble a DETERMINISTIC shared Lean module from the immutable registry records: stable LeanChecker.MnemosyneArtifacts.<Category>.M_<hash> path (importable under the LeanChecker lib) + declaration names, topologically ordered by formally_depends_on, source_hash over the exact bytes. IDEMPOTENT: the same snapshot yields identical bytes/hash and returns the existing row. FAILS CLOSED on incompatible environments (a module requires one shared environment_hash), a dependency outside the selection, a cycle, a name collision, or a superseded/not-yet-promoted artifact. A declaration's proof is embedded ONLY when its kernel-verified source resolves from the content-addressed store (replay_status='self_contained_source'); otherwise it is a signature-only provenance comment (replay_status='proof_source_unavailable') — the module never carries an unverified or client-supplied proof body) | {\"type\":\"plan_import\",\"artifact_ids\":[..]} (+ optional base_problem_version_id — advisory: reports the deterministic module path, the topologically ordered declarations, environment compatibility with the base problem, and the proposed NEW-problem import manifest (base manifest ∪ the generated module). Mutates NOTHING) | {\"type\":\"observe\",\"module_id\":\"..\"} (read a generated module; recomputes source_hash so a tampered stored source shows source_hash_matches=false) | {\"type\":\"list\"} (+ optional limit — generated modules, most recent first) | {\"type\":\"write\",\"module_id\":\"..\"} (+ optional overwrite — write a SELF-CONTAINED module into the Lean source tree under LeanChecker/ so a new problem can actually import it; byte-verifies the write, is idempotent, and FAILS CLOSED on a signature-only module or an overwrite that would clobber different bytes. This is the only action that touches the source tree). Builds out #239; integrates with #244 search and records real reuse via #250 verified_artifact add_edge (evidence_kind='verifier') once a proof actually uses a declaration."),
             make_tool::<StructuralSearchArgs>("structural_search", "Issue #245: elaborated TYPE-DIRECTED theorem search over the Verified Artifact Registry — find a lemma from its target TYPE SHAPE, not its name. The query is ELABORATED under the pinned Lean environment (real elaboration, never a parser approximation) into a normalized structural fingerprint (conclusion head symbol, binder count, hypothesis-head multiset, used-constant set), then matched against stored artifact fingerprints with deterministic structural ranking. TRUST BOUNDARY: read-only w.r.t. proofs — no result changes proof state or imports, and a fingerprint is a SEARCH KEY, never proof authority; confidence is 'high' ONLY for an exact structural fingerprint match (structural/symbol overlaps are 'medium'/'low', a ranking hint not a unification proof). `action` is internally tagged — exactly one of: {\"type\":\"fingerprint\",\"artifact_id\":\"..\"} (elaborate the artifact's current-version statement and STORE its fingerprint; idempotent per (version, fingerprint_version), with the lean_toolchain recorded so a record is invalidated/namespaced on a toolchain/representation change; requires Lean — index the registry before searching) | {\"type\":\"search\",\"statement\":\"<Lean type>\"} (+ optional mode exact_type|conclusion_shape|hypothesis_conclusion_shape|symbol_overlap|structural_similarity (default structural_similarity), limit — elaborate the query and rank stored fingerprints; every result carries full name, formal type, import source, source library, a score, and an honest confidence + confidence_basis explanation. Requires Lean) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read a stored fingerprint; no Lean). Only artifacts with a stored fingerprint are searchable; the pinned-Mathlib-scale index + semantic re-ranking (#246) are tracked separately. Consumes the search surface of #244; complements name search there."),
+            make_tool::<SemanticSearchArgs>("semantic_search", "Issue #246: provenance-aware, metadata-rich HYBRID retrieval over the Verified Artifact Registry — for when an agent knows the mathematical IDEA but not the Lean name or type (e.g. 'a divisor-count bound that forces a prime-power classification'). Ranks over the artifacts' informal SUMMARY / campaign / kind (which name-only search in #244 misses), combined with provenance filters, trust labels, and reuse evidence into one honest score. TRUST BOUNDARY: similarity SUPPLIES CANDIDATES, never mathematical evidence — no result changes proof state or confers proof authority; every hit reports which fields matched, its score basis, source library, and a trust_label (verified/reviewed/provisional/superseded/negative_example/rejected). Only artifact metadata is indexed (summary/name/campaign/kind), never proof source bytes, so it is redaction-safe by construction. The optional semantic VECTOR layer is ABSENT here (no local embedding provider) and reported as such — this ranker runs without one BY DESIGN, so exact (#244) and structural (#245) search keep working with no embedding provider. Params: query (NL/keyword, matched over rich metadata), optional campaign (provenance filter), artifact_kind [..], exclude_superseded, exclude_unreviewed, limit. Hybrid = 0.60·lexical_metadata + 0.25·trust + 0.15·reuse_evidence. The semantic-vector re-ranking + a persistent embedding index is the remaining #246 slice."),
             make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
             make_tool::<CandidateConstructionArgs>("candidate_construction", "Issue #188: ONE tool for the entire candidate-construction family (issue #8) — propose a candidate mathematical object, record empirical checks against it, revise its status, and attach it to a research node or verification layer. A CANDIDATE CONSTRUCTION IS A PROPOSED MATHEMATICAL OBJECT, NOT A PROOF CERTIFICATE: every action records research artifacts useful for search and planning; trust_status never certifies anything — empirical support, human review, citation, and 'a formal statement exists' are all explicitly distinct from kernel verification, and no field can hold kernel evidence. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"construction_type\":\"graph_family\"|\"point_configuration\"|\"coloring\"|\"field_tower\"|\"lattice\"|\"counterexample\"|\"asymptotic_family\"|\"algebraic_object\"|\"combinatorial_design\"|\"other\",\"informal_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, verification_layer_id, problem_version_id, episode_id, name, parameters_json, construction_json, claimed_properties_json, known_failures_json, empirical_checks_json, verification_targets_json, status, trust_status, and motivated-discovery metadata: motivating_move, source_observation, intended_role, strategy_context, why_this_might_work, why_this_might_fail, next_check, future_challenge_relevance — propose a candidate construction. Can exist before a dossier, node, Lean theorem, problem, or episode; a research artifact, not a proof certificate) | {\"type\":\"observe\",\"candidate_construction_id\":\"..\",\"description\":\"..\",\"result\":\"supports\"|\"refutes\"|\"inconclusive\"} (+ optional details_json, observed_by — record one empirical check, appended to the construction's empirical_checks history. Never changes proof status, and 'supports' never implies proved) | {\"type\":\"update_status\",\"candidate_construction_id\":\"..\"} (+ at least one of status, trust_status, claimed_properties_json, known_failures_json, next_check — update the construction in place; a falsified/rejected construction stays visible, never deleted. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified — and no other trust_status confers proof either) | {\"type\":\"link_node\",\"candidate_construction_id\":\"..\",\"node_id\":\"..\"} (attach the construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier. Linking never changes either side's trust_status) | {\"type\":\"link_verification_layer\",\"candidate_construction_id\":\"..\",\"verification_layer_id\":\"..\"} (attach the construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier. Linking a layer is provenance, not promotion — the construction's trust_status is unchanged, and a kernel_verified_claim_linked construction is re-checked against the newly linked layer)"),
@@ -19563,8 +19727,8 @@ impl ServerHandler for ChatDbMcp {
                     ],
                     "tool_classification": {
                         "note": "Issue #34's tool-surface audit checklist (side_effect, trust_level, cost_surface, benchmark_safety, replayability, source_code_impact, artifact_risk, required_run_mode) applied to every one of LLM-Driven Proof Search Environment's MCP tools, across three passes (v0.3.16, v0.3.17, this one). classified_tool_count == total_tool_count now, but 'classified' means 'analyzed once' — this is a snapshot, not a promise the analysis stays current as the codebase changes; several entries record open design questions rather than closed answers (see unresolved_design_question fields), and the benchmark-mode source-mutation guardrail from #34's acceptance criteria remains separately unaddressed (moot today: no MCP tool edits source files).",
-                        "classified_tool_count": 61,
-                        "total_tool_count": 61,
+                        "classified_tool_count": 62,
+                        "total_tool_count": 62,
                         "tools": {
                             "mathcorpus_export": {
                                 "side_effect": "read_only — aggregates recorded evidence into an MCIP v1 bundle; writes nothing",
@@ -19887,6 +20051,16 @@ impl ServerHandler for ChatDbMcp {
                                 "replayability": "deterministic — the elaborated fingerprint is normalized (sorted constants + hypothesis heads) and the scoring/ranking is a pure function of fingerprints; index identity is (version, fingerprint_version) with the lean_toolchain recorded so a toolchain/representation change invalidates the record",
                                 "source_code_impact": "no_source_change",
                                 "artifact_risk": "structural_fingerprint_metadata",
+                                "required_run_mode": "any"
+                            },
+                            "semantic_search": {
+                                "side_effect": "read_only (issue #246) — scans verified_artifacts + current versions + reuse edges; writes nothing, mutates no problem/manifest/outcome",
+                                "trust_level": "advisory — similarity supplies CANDIDATES, never proof authority; every hit carries a trust_label (verified/reviewed/provisional/superseded/negative_example/rejected), matched_fields, and a score_basis. No embedding vector is used (none available); the ranker is lexical-metadata + trust + reuse by design",
+                                "cost_surface": "none — DB reads only, no Lean invocation and no external embedding API",
+                                "benchmark_safety": "redaction-safe by construction — only artifact METADATA is indexed (informal summary, canonical name, campaign, kind), never proof source bytes or benchmark answers",
+                                "replayability": "deterministic — a fixed lexical/trust/reuse scan over immutable records with a stable weighted score and id tiebreak; no model, no randomness",
+                                "source_code_impact": "no_source_change",
+                                "artifact_risk": "search_metadata",
                                 "required_run_mode": "any"
                             },
                             "retrieval_benchmark": {
@@ -21140,6 +21314,7 @@ impl ServerHandler for ChatDbMcp {
             "retrieval_benchmark" => self.do_retrieval_benchmark(args_val).await,
             "artifact_module" => self.do_artifact_module(args_val).await,
             "structural_search" => self.do_structural_search(args_val).await,
+            "semantic_search" => self.do_semantic_search(args_val).await,
             "math_search" => self.do_math_search(args_val).await,
             "proactive_retrieval" => self.do_proactive_retrieval(args_val).await,
             "candidate_construction" => self.do_candidate_construction(args_val).await,
@@ -22171,7 +22346,7 @@ mod tests {
         // + 1 verified_artifact (issue #243: Verified Artifact Registry foundation
         // - promote/add_version/observe/set_status/review/supersede) = 55.
         // + 1 math_search (issue #244: unified advisory search across mathlib/VAR/mathcorpus) = 56.
-        assert_eq!(list_res.tools.len(), 61);
+        assert_eq!(list_res.tools.len(), 62);
 
         // The episode_step schema must be fully INLINE at the parameter site: no
         // $ref for the client to chase, and an explicit `type: "object"` on the
@@ -25577,6 +25752,73 @@ mod tests {
             "renamed theorem recovered by elaborated type shape (alpha-renamed query): {:?}", res);
         eprintln!("LIVE #245 PASSED: renamed theorem recovered from its elaborated type shape");
         drop(client);
+    }
+
+    /// #246: provenance-aware hybrid metadata retrieval — a natural-language query
+    /// recovers an artifact whose Lean NAME shares no query words (via its summary),
+    /// provenance/campaign filters work, superseded/unreviewed are labeled and
+    /// optionally excluded, and similarity never confers proof authority.
+    #[tokio::test]
+    async fn test_semantic_search_metadata_and_provenance() {
+        let client = connected_client(test_handler_with_gateway(MockGateway)).await;
+        let peer = client.peer();
+        async fn va(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("verified_artifact")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn se(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("semantic_search")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn solve(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str, idem: &str) -> String {
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let ep_id = ep["episode_id"].as_str().unwrap().to_string();
+            claim_and_solve(peer, &ep_id, "trivial", idem).await;
+            ep_id
+        }
+
+        let pv = create_problem(&peer, "True").await;
+        // An artifact whose NAME shares no words with the query, but whose summary +
+        // campaign do. This is the NL-recovers-by-idea case.
+        let e1 = solve(&peer, &pv, "sem-1").await;
+        let a1 = va(&peer, serde_json::json!({"action": {"type":"promote","episode_id":e1,
+            "artifact_kind":"classification","canonical_name":"lemma_xyz_42",
+            "informal_summary":"a divisor-count bound that forces a prime-power classification",
+            "source_campaign":"erdos647"}})).await;
+        let a1_id = a1["artifact_id"].as_str().unwrap().to_string();
+        // An unrelated artifact in a different campaign.
+        let e2 = solve(&peer, &pv, "sem-2").await;
+        let a2 = va(&peer, serde_json::json!({"action": {"type":"promote","episode_id":e2,
+            "artifact_kind":"helper_lemma","canonical_name":"cauchy_helper",
+            "informal_summary":"an inner-product inequality helper","source_campaign":"analysis"}})).await;
+        let a2_id = a2["artifact_id"].as_str().unwrap().to_string();
+
+        // NL query matches a1's SUMMARY though it shares no words with "lemma_xyz_42".
+        let res = se(&peer, serde_json::json!({"query":"divisor prime power classification"})).await;
+        let top = &res["results"][0];
+        assert_eq!(top["result_id"], serde_json::json!(a1_id), "NL recovers by summary, not name: {:?}", res);
+        assert!(top["matched_fields"].as_array().unwrap().iter().any(|f| f == "informal_summary"));
+        assert_eq!(top["trust_label"], "verified");
+        assert!(top["score_basis"].as_str().unwrap().contains("semantic vector unavailable"));
+
+        // Provenance filter: restrict to the analysis campaign -> only a2.
+        let prov = se(&peer, serde_json::json!({"query":"inequality","campaign":"analysis"})).await;
+        let ids: Vec<&str> = prov["results"].as_array().unwrap().iter().map(|r| r["result_id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&a2_id.as_str()) && !ids.contains(&a1_id.as_str()), "campaign filter: {:?}", prov);
+
+        // Supersede a1, then it is labeled superseded and excludable.
+        va(&peer, serde_json::json!({"action": {"type":"supersede","artifact_id":a1_id,"superseded_by":a2_id,"actor":"c"}})).await;
+        let with = se(&peer, serde_json::json!({"query":"divisor prime power classification"})).await;
+        let a1_hit = with["results"].as_array().unwrap().iter().find(|r| r["result_id"] == serde_json::json!(a1_id)).unwrap();
+        assert_eq!(a1_hit["trust_label"], "superseded");
+        assert_eq!(a1_hit["superseded"], true);
+        let excl = se(&peer, serde_json::json!({"query":"divisor prime power classification","exclude_superseded":true})).await;
+        assert!(!excl["results"].as_array().unwrap().iter().any(|r| r["result_id"] == serde_json::json!(a1_id)), "excluded when superseded: {:?}", excl);
+
+        // The ranker honestly reports the absent semantic-vector layer.
+        assert!(res["ranker"]["semantic_vector"].as_str().unwrap().contains("unavailable"));
     }
 
     /// #240: a gateway that fails with an ordered diagnostic list — an
