@@ -2402,6 +2402,34 @@ CREATE TABLE IF NOT EXISTS retrieval_packets (
     CHECK(enabled IN (0, 1))
 );
 CREATE INDEX IF NOT EXISTS idx_retrieval_packets_scope ON retrieval_packets(scope_kind, scope_id, created_at);
+
+-- Portable Verified Artifact Registry bundle imports (issue #249): an
+-- append-only ledger of every registry bundle imported INTO this instance from
+-- another Proof Search instance. A registry hash/artifact id is not independent
+-- evidence to another installation unless the exact canonical preimages travel
+-- with it; a bundle carries the artifacts, immutable versions (with kernel
+-- hashes + formal-statement preimages + optional proof-source bytes), origins,
+-- edges, reviews, status events, and upstream readiness, plus a bundle_hash over
+-- the canonical content so any tampering is detectable before a single row is
+-- written. Import PRESERVES origin ids/hashes and NEVER translates an imported
+-- review into local kernel authority — an imported artifact remains
+-- source-distinguished from a locally produced one (origin_instance_id), and its
+-- kernel hashes are inert data until re-verified against the pinned environment.
+-- Each import records what was inserted, skipped as an exact duplicate, or
+-- quarantined (a version/name conflict, or an unavailable/unreplayable
+-- environment) so a partial or conflicting bundle produces quarantine records,
+-- never a false verification. dry_run rows record a preview that wrote nothing.
+CREATE TABLE IF NOT EXISTS artifact_bundle_imports (
+    id TEXT PRIMARY KEY,
+    origin_instance_id TEXT,
+    bundle_version TEXT NOT NULL,
+    bundle_hash TEXT NOT NULL,
+    dry_run INTEGER NOT NULL,
+    imported_at TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    CHECK(dry_run IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_bundle_imports_hash ON artifact_bundle_imports(bundle_hash, imported_at);
 "#;
 
 pub fn initialize_v1_db(conn: &Connection) -> rusqlite::Result<()> {
