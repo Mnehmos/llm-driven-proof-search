@@ -2266,6 +2266,16 @@ pub enum ArtifactModuleAction {
         #[serde(default)]
         limit: Option<i64>,
     },
+    /// Write a self-contained generated module into the Lean project's source
+    /// tree (under LeanChecker/), so a new problem can actually `import` it. Fails
+    /// closed on a signature-only module (not compilable) or an overwrite that
+    /// would clobber DIFFERENT bytes (unless overwrite=true). Byte-verifies the
+    /// write. This is the ONE artifact_module action that touches the source tree.
+    Write {
+        module_id: String,
+        #[serde(default)]
+        overwrite: bool,
+    },
 }
 
 /// Issue #243: the Verified Artifact Registry (VAR) foundation tool. Promotes a
@@ -15197,7 +15207,9 @@ impl ChatDbMcp {
                 // Deterministic module path from the ordered member identities.
                 let path_seed: Vec<String> = ordered.iter().map(|m| format!("{}:{}", m.artifact_id, m.artifact_version)).collect();
                 let path_hash = proofsearch_core::hashing::canonical_hash(&path_seed).map_err(mcp_internal_error)?;
-                let module_path = format!("MnemosyneArtifacts.{}.M_{}", category, &path_hash[..12]);
+                // Prefixed with the importable LeanChecker lib root so a written
+                // module resolves as `import LeanChecker.MnemosyneArtifacts...`.
+                let module_path = format!("LeanChecker.MnemosyneArtifacts.{}.M_{}", category, &path_hash[..12]);
                 let (source_text, replay_status) = assemble_module_source(&ordered, &category, &module_path, &env0, &self.lean_project_path);
                 let source_hash = proofsearch_core::hashing::canonical_hash(&source_text).map_err(mcp_internal_error)?;
 
@@ -15240,7 +15252,7 @@ impl ChatDbMcp {
                 let path_hash = proofsearch_core::hashing::canonical_hash(&path_seed).map_err(mcp_internal_error)?;
                 // Category is not known at planning time; the module path stem is
                 // deterministic regardless, so plan against the id-hash stem.
-                let module_stem = format!("MnemosyneArtifacts.<Category>.M_{}", &path_hash[..12]);
+                let module_stem = format!("LeanChecker.MnemosyneArtifacts.<Category>.M_{}", &path_hash[..12]);
 
                 // Base problem env compatibility (advisory).
                 let (base_manifest, base_env): (Vec<String>, Option<String>) = match &base_problem_version_id {
@@ -15304,6 +15316,61 @@ impl ChatDbMcp {
                 Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
                     "modules": rows,
                     "note": "Generated shared Lean modules (#247). Read one with artifact_module observe.",
+                })).unwrap())]))
+            }
+
+            ArtifactModuleAction::Write { module_id, overwrite } => {
+                let conn = self.conn.lock().await;
+                let row: Option<(String, String, String)> = conn.query_row(
+                    "SELECT module_path, source_text, replay_status FROM generated_artifact_modules WHERE id = ?1",
+                    [&module_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                ).optional().map_err(rs)?;
+                let Some((module_path, source_text, replay_status)) = row else {
+                    return Err(mcp_invalid_params(format!("unknown module_id: {}", module_id)));
+                };
+                // A signature-only module is NOT compilable — refuse to write it into
+                // the trusted source tree (fail closed with an actionable diagnostic).
+                if replay_status != "self_contained_source" {
+                    return Err(mcp_invalid_params(format!(
+                        "module {} is '{}' (signature-only, not self-contained) — its verified proof source did not resolve, so writing it would produce a non-compiling file; materialize again once the origin proof store is available", module_id, replay_status)));
+                }
+                // Derive the on-disk path from the dotted module path, under the
+                // configured Lean project root. Guard against traversal.
+                if module_path.contains("..") || !module_path.starts_with("LeanChecker.") {
+                    return Err(mcp_internal_error(format!("unexpected module_path shape: {}", module_path)));
+                }
+                let rel = format!("{}.lean", module_path.replace('.', "/"));
+                let target = self.lean_project_path.join(&rel);
+                let existed = target.exists();
+                if existed && !overwrite {
+                    let current = std::fs::read_to_string(&target).map_err(|e| mcp_internal_error(format!("read {}: {}", rel, e)))?;
+                    if current == source_text {
+                        // Idempotent: the exact bytes are already on disk.
+                        return Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                            "module_id": module_id, "written_path": rel, "bytes_written": source_text.len(),
+                            "idempotent_existing": true, "byte_identical": true,
+                            "note": "Module already present on disk with identical bytes; nothing rewritten.",
+                        })).unwrap())]));
+                    }
+                    return Err(mcp_invalid_params(format!(
+                        "{} already exists with DIFFERENT bytes; pass overwrite=true to replace it", rel)));
+                }
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| mcp_internal_error(format!("mkdir {}: {}", parent.display(), e)))?;
+                }
+                std::fs::write(&target, source_text.as_bytes()).map_err(|e| mcp_internal_error(format!("write {}: {}", rel, e)))?;
+                // Byte-verify the write actually landed the exact source.
+                let readback = std::fs::read_to_string(&target).map_err(|e| mcp_internal_error(format!("verify-read {}: {}", rel, e)))?;
+                let byte_identical = readback == source_text;
+                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string(&serde_json::json!({
+                    "module_id": module_id,
+                    "module_path": module_path,
+                    "written_path": rel,
+                    "bytes_written": source_text.len(),
+                    "overwrote_existing": existed,
+                    "byte_identical": byte_identical,
+                    "import_line": format!("import {}", module_path),
+                    "advisory": "Written into the Lean source tree so a NEW problem_version can import this module via problem_create's manifest and use its theorems through the kernel path. This does not create a problem or run a verification — that remains the explicit, kernel-verified next step. Record real use with verified_artifact add_edge (evidence_kind='verifier').",
                 })).unwrap())]))
             }
         }
@@ -18924,7 +18991,7 @@ impl ServerHandler for ChatDbMcp {
             make_tool::<VerifiedArtifactArgs>("verified_artifact", "Issue #243: Verified Artifact Registry (VAR) foundation — promote a KERNEL-BACKED verified lemma into a curated, immutable, versioned research artifact with a lifecycle, distinct from an episode-local helper or a raw canonical result. TRUST BOUNDARY: the registry CURATES already-established kernel truth — promotion copies the origin lemma's immutable kernel hashes (statement_hash/proof_body_hash/environment_hash/kernel_result_hash) verbatim, versions are append-only (mathematical history is never overwritten), and no maturity/review/supersede action changes those hashes or confers proof authority. `action` is internally tagged — exactly one of: {\"type\":\"promote\",\"episode_id\":\"..\",\"artifact_kind\":\"helper_lemma\"|\"definition\"|\"theorem\"|\"abstraction\"|\"reduction\"|\"classification\"|\"construction\"|\"negative_result\"|\"proof_module\"|\"tactic_recipe\",\"canonical_name\":\"..\"} (+ optional obligation_id (disambiguates when an episode proved >1 lemma), informal_summary, source_campaign, promotion_reason, candidate_for_mathlib — mints artifact v1 from an existing positive episode_verified_lemma; rejects anything not kernel-backed. Starts maturity=promoted, review=unreviewed) | {\"type\":\"add_version\",\"artifact_id\":\"..\",\"episode_id\":\"..\"} (+ optional obligation_id, canonical_name, formal_statement, promotion_reason — appends a new IMMUTABLE version from another kernel-backed origin, e.g. a generalization; never overwrites the original) | {\"type\":\"observe\",\"artifact_id\":\"..\"} (read-only: the artifact with every version + kernel-backed origins, the append-only maturity lifecycle, and reviews) | {\"type\":\"set_status\",\"artifact_id\":\"..\",\"to_status\":\"discovered\"|\"kernel_verified_local\"|\"promoted\"|\"reused\"|\"generalized\"|\"independently_reviewed\"|\"upstream_candidate\"|\"upstreamed\"|\"retained_local\"|\"superseded\",\"actor\":\"..\"} (+ optional reason — appends a maturity lifecycle event; curation only, never proof authority) | {\"type\":\"review\",\"artifact_id\":\"..\",\"review_status\":\"unreviewed\"|\"in_review\"|\"reviewed_with_caveats\"|\"independently_reviewed\"|\"rejected\",\"reviewer\":\"..\"} (+ optional notes, version_id — appends a review and moves review_status; never alters a version's kernel hashes) | {\"type\":\"supersede\",\"artifact_id\":\"..\",\"superseded_by\":\"..\",\"actor\":\"..\"} (+ optional reason — marks the artifact superseded by another; the original stays fully navigable) | {\"type\":\"add_edge\",\"from_artifact_id\":\"..\",\"to_artifact_id\":\"..\",\"edge_kind\":\"formally_depends_on\"|\"imported_by_generated_module\"|\"selected_as_retrieval_candidate\"|\"retrieved_but_unused\"|\"actually_used_in_verified_proof\"|\"generalized_from\"|\"equivalent_to\"|\"supersedes\"|\"applies_to_campaign\"|\"exported_as_mathcorpus_packet\"|\"proposed_to_mathlib\",\"evidence_kind\":\"verifier\"|\"retrieval\"|\"declared\"} (+ optional episode_id, campaign, notes — #250: record a typed dependency/usage edge. ONLY evidence_kind='verifier' counts as formal use: 'actually_used_in_verified_proof' requires verifier evidence, and a verifier edge naming an episode_id must trace to a real kernel_verified/certified episode; retrieval/declared relationships are separate kinds and never masquerade as use. A 'formally_depends_on' edge that would create a cycle is rejected) | {\"type\":\"impact\",\"artifact_id\":\"..\"} (#250: impact metrics RECOMPUTED from the edge/review records — verified downstream uses, distinct campaigns, retrieval-selected vs retrieved-but-unused, selection rate, generated-module imports, review count, generalization lineage; retrieval is never counted as use, and popularity is not proof authority) | {\"type\":\"upstream_readiness\",\"artifact_id\":\"..\"} (#250: read the Mathlib upstream-readiness review metadata — status + checklist; REVIEW METADATA, never proof status) | {\"type\":\"record_upstream_status\",\"artifact_id\":\"..\",\"status\":\"not_candidate\"|\"needs_generalization\"|\"needs_deduplication\"|\"needs_style_review\"|\"ready_for_pr\"|\"pr_open\"|\"accepted\"|\"rejected_or_retained_local\",\"reviewer\":\"..\"} (+ optional checklist, notes — set upstream-readiness; review metadata only, never proof status). Foundation for the #239 VAR family (#244 math_search builds on this; #247/#249/#251-#253 remain)."),
             make_tool::<ArtifactRegistryBundleArgs>("artifact_registry_bundle", "Issue #249: portable Verified Artifact Registry bundle — a self-contained, hash-pinned package another Proof Search instance can validate, import, index, and replay WITHOUT the origin database (a database-only hash/id is not portable evidence: the canonical preimages must travel with it). TRUST BOUNDARY: import PRESERVES origin ids/hashes, an imported artifact stays source-distinguished (origin_instance_id) with kernel hashes that are INERT DATA until replayed against the pinned environment, and an imported review is NEVER local kernel authority; conflicts and unavailable environments are QUARANTINED, never falsely verified. `action` is internally tagged — exactly one of: {\"type\":\"export\"} (+ optional artifact_ids [..] (default whole registry; edges kept only when both endpoints are exported), include_proof_bodies (default true — embeds the proof-source bytes behind each proof_body_hash so an importer can replay; false redacts them for restricted/benchmark-sensitive bodies, hashes still travel with proof_source_available=false) — returns a wrapper {content, bundle_hash, origin_instance_id, exported_at, record_counts}; the bundle_hash is the canonical hash of `content` only, so re-export from the same DB is byte-deterministic modulo the volatile instance/timestamp metadata) | {\"type\":\"validate\",\"bundle_json\":\"..\"} (recompute the content hash to detect tampering, then check referential integrity + preimage presence — every version has its formal_statement preimage and immutable kernel hashes, origins/edges/superseded_by point inside the bundle; writes nothing) | {\"type\":\"import\",\"bundle_json\":\"..\"} (+ optional dry_run — validates FIRST and refuses a tampered/broken bundle before any write; preserves ids/hashes; classifies each artifact as inserted / skipped_duplicate (exact match, idempotent re-import) / quarantined (version_conflict — same id different statement, never overwritten; name_collision — same canonical_name different statement under another id; environment_unavailable — bundle lean_toolchain doesn't match this instance, can't replay here); rematerializes proof-source bytes for replay; atomic rollback on error; records an append-only artifact_bundle_imports ledger row even for a dry_run) | {\"type\":\"observe_import\",\"import_id\":\"..\"} (read what a prior import inserted / skipped / quarantined). Coordinates with MCIP export (#230/#263): MCIP is the enrichment/evidence contract, this bundle is the executable library package."),
             make_tool::<RetrievalBenchmarkArgs>("retrieval_benchmark", "Issue #251: frozen retrieval benchmark + regression suite — a reproducible, deterministic evaluation of the search/ranking that math_search (#244) and proactive_retrieval (#248) depend on, run over a HELD-CONSTANT synthetic fixture corpus (query set + relevance judgments) so a ranking change is measured against a fixed target and never silently rewritten. `action` is internally tagged — exactly one of: {\"type\":\"run\"} (+ optional compact (default false = full evaluation; true = the CI regression subset) — returns structured metrics [Recall@1/5/10, MRR, nDCG@10] per baseline and per query family, a tuning/held-out split, negative-query and environment-compatibility-label accuracy, a downstream-utility delta [retrieval ENABLED vs DISABLED mean Recall@5], and a readable `report` string. Baselines compared: name_only, hybrid_lexical, retrieval_disabled; type_directed (#245) and semantic (#246) are reported UNAVAILABLE, never faked. Adversarial lexical, misspelled (expected_gap), and cross-domain families are included so known limitations show honestly) | {\"type\":\"fixtures\"} (return the frozen corpus + queries + relevance judgments for audit). Pure over the fixtures — reads no DB, calls no model, no Lean; the same fixtures_version + ranker_version always produce the same numbers. Validates #244/#248; the type/semantic baselines light up once #245/#246 land."),
-            make_tool::<ArtifactModuleArgs>("artifact_module", "Issue #247: make promoted registry artifacts directly reusable through shared Lean modules + safe import planning — the missing path from 'a verified lemma exists' to 'an actual reusable Lean dependency', without letting an advisory search result silently enter the trusted proof environment. TRUST BOUNDARY: materializing a module and planning an import are ADVISORY — they NEVER mutate an existing problem's immutable import manifest and NEVER confer proof authority; actual reuse still flows through problem_create with an explicit manifest + a kernel-verified attempt. `action` is internally tagged — exactly one of: {\"type\":\"materialize\",\"artifact_ids\":[..]} (+ optional category NumberTheory|Combinatorics|GraphTheory|Analysis|Campaigns (default Campaigns) — assemble a DETERMINISTIC shared Lean module from the immutable registry records: stable MnemosyneArtifacts.<Category>.M_<hash> path + declaration names, topologically ordered by formally_depends_on, source_hash over the exact bytes. IDEMPOTENT: the same snapshot yields identical bytes/hash and returns the existing row. FAILS CLOSED on incompatible environments (a module requires one shared environment_hash), a dependency outside the selection, a cycle, a name collision, or a superseded/not-yet-promoted artifact. A declaration's proof is embedded ONLY when its kernel-verified source resolves from the content-addressed store (replay_status='self_contained_source'); otherwise it is a signature-only provenance comment (replay_status='proof_source_unavailable') — the module never carries an unverified or client-supplied proof body) | {\"type\":\"plan_import\",\"artifact_ids\":[..]} (+ optional base_problem_version_id — advisory: reports the deterministic module path, the topologically ordered declarations, environment compatibility with the base problem, and the proposed NEW-problem import manifest (base manifest ∪ the generated module). Mutates NOTHING) | {\"type\":\"observe\",\"module_id\":\"..\"} (read a generated module; recomputes source_hash so a tampered stored source shows source_hash_matches=false) | {\"type\":\"list\"} (+ optional limit — generated modules, most recent first). Builds out #239; integrates with #244 search and records real reuse via #250 verified_artifact add_edge (evidence_kind='verifier') once a proof actually uses a declaration."),
+            make_tool::<ArtifactModuleArgs>("artifact_module", "Issue #247: make promoted registry artifacts directly reusable through shared Lean modules + safe import planning — the missing path from 'a verified lemma exists' to 'an actual reusable Lean dependency', without letting an advisory search result silently enter the trusted proof environment. TRUST BOUNDARY: materializing a module and planning an import are ADVISORY — they NEVER mutate an existing problem's immutable import manifest and NEVER confer proof authority; actual reuse still flows through problem_create with an explicit manifest + a kernel-verified attempt. `action` is internally tagged — exactly one of: {\"type\":\"materialize\",\"artifact_ids\":[..]} (+ optional category NumberTheory|Combinatorics|GraphTheory|Analysis|Campaigns (default Campaigns) — assemble a DETERMINISTIC shared Lean module from the immutable registry records: stable LeanChecker.MnemosyneArtifacts.<Category>.M_<hash> path (importable under the LeanChecker lib) + declaration names, topologically ordered by formally_depends_on, source_hash over the exact bytes. IDEMPOTENT: the same snapshot yields identical bytes/hash and returns the existing row. FAILS CLOSED on incompatible environments (a module requires one shared environment_hash), a dependency outside the selection, a cycle, a name collision, or a superseded/not-yet-promoted artifact. A declaration's proof is embedded ONLY when its kernel-verified source resolves from the content-addressed store (replay_status='self_contained_source'); otherwise it is a signature-only provenance comment (replay_status='proof_source_unavailable') — the module never carries an unverified or client-supplied proof body) | {\"type\":\"plan_import\",\"artifact_ids\":[..]} (+ optional base_problem_version_id — advisory: reports the deterministic module path, the topologically ordered declarations, environment compatibility with the base problem, and the proposed NEW-problem import manifest (base manifest ∪ the generated module). Mutates NOTHING) | {\"type\":\"observe\",\"module_id\":\"..\"} (read a generated module; recomputes source_hash so a tampered stored source shows source_hash_matches=false) | {\"type\":\"list\"} (+ optional limit — generated modules, most recent first) | {\"type\":\"write\",\"module_id\":\"..\"} (+ optional overwrite — write a SELF-CONTAINED module into the Lean source tree under LeanChecker/ so a new problem can actually import it; byte-verifies the write, is idempotent, and FAILS CLOSED on a signature-only module or an overwrite that would clobber different bytes. This is the only action that touches the source tree). Builds out #239; integrates with #244 search and records real reuse via #250 verified_artifact add_edge (evidence_kind='verifier') once a proof actually uses a declaration."),
             make_tool::<PublicationReviewArgs>("publication_review", "Issue #237: the publication-review GATE over an episode's already-established truth — surfaces proofsearch_core::publication_review's 6-layer model (kernel_or_certificate, statement_fidelity, literature_completeness, citation_lineage, novelty_claim, exposition_disclosure) and its deterministic publication_status() state machine. NEVER proof authority: no action marks anything proved, and kernel_verified is read from the kernel/certificate layer INDEPENDENT of publication status — a blocking or revoked review layer never changes the kernel result. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"contribution_type\":\"new_proof\"|\"independent_rediscovery\"|\"formalization\"|\"verification\"|\"reconstruction\"|\"adaptation\"|\"literature_derived_synthesis\",\"contribution_statement\":\"..\"} (+ optional known_prior_art [..], makes_strong_novelty_claim, novelty_uncertain — starts a review with all layers not_started; one per episode) | {\"type\":\"set_layer\",\"episode_id\":\"..\",\"layer\":\"..\",\"status\":\"not_started\"|\"in_progress\"|\"complete\"|\"blocked_missing_attribution\",\"reviewer\":\"..\"} (+ optional bound_hashes [..], notes, decided_at — records a reviewer-attributed, timestamped, hash-bound decision for one layer, appended to an append-only event ledger so revoking/updating a layer is auditable and updates publication_status without erasing the prior decision or altering kernel truth) | {\"type\":\"update\",\"episode_id\":\"..\"} (+ optional contribution_type/contribution_statement/known_prior_art/makes_strong_novelty_claim/novelty_uncertain — patch contribution metadata + novelty flags; never touches the proof) | {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: the review, its RECOMPUTED publication_status + kernel_verified, and the full layer-event ledger) | {\"type\":\"export_contribution\",\"episode_id\":\"..\"} (the required public contribution block — contribution statement + known prior art + computed publication_status; a kernel_verified result is never publication_ready without a completed citation_lineage AND every other layer, and novelty_uncertain blocks a strong novelty claim but never invalidates the proof). Feeds MCIP export's contribution_statement/citation_review records (proofsearch_core::mcip)."),
             make_tool::<LiteratureLineageArgs>("literature_lineage", "Issue #236: the append-only storage ledger + MCP surface for `proofsearch_core::literature_lineage`'s hash-pinned record model (which already ships with NO proof-status field by construction — this tool cannot mark anything proved, and neither can the type it wraps). Captures what literature was searched, what sources were retrieved and whether each was shown to the MODEL or only found in POST-HOC review, which theorem/definition/construction/proof-strategy claims came from each source, and an explicit idea-to-source map from final proof elements to source claims. `action` is internally tagged — exactly one of: {\"type\":\"create\",\"episode_id\":\"..\",\"environment_hash\":\"..\",\"sources\":[{\"source_id\":\"..\",\"title\":\"..\",\"visibility\":\"model_visible\"|\"post_hoc_review_only\",\"retrieval_timing\":\"before_proof_discovery\"|\"after_proof_discovery\"|\"unknown\",\"attribution\":\"directly_used\"|\"likely_influential\"|\"background_only\"|\"independently_rediscovered\"|\"uncertain\"|\"not_used\",\"confidence\":\"low\"|\"medium\"|\"high\"|\"unknown\"}, ...]} (+ optional problem_version_id, obligation_id, search_queries [{\"query\":\"..\",\"searched_at\":\"..\"}], idea_to_source_map [{\"proof_element\":\"..\",\"source_id\":\"..\",\"claim_id\":\"..\",\"attribution\":\"..\"}] — builds the record via the SAME `LiteratureLineage::new` constructor the module's own tests use, so `lineage_hash` is canonical and deterministic; resubmitting byte-identical evidence for the same episode is idempotent (returns the existing row, `created:false`) rather than duplicating it, since this is append-only evidence, not a form to refill) | {\"type\":\"observe\",\"lineage_id\":\"..\"} or {\"type\":\"observe\",\"episode_id\":\"..\"} (read-only: one lineage record with its links, or every lineage recorded for an episode, in order) | {\"type\":\"link\",\"lineage_id\":\"..\",\"target_kind\":\"research_node\"|\"verified_lemma\"|\"verified_module\",\"target_id\":\"..\"} (attaches a lineage record to a provenance target beyond its own direct episode/problem_version/obligation fields, existence-checked against that target's own table; a duplicate link is rejected; linking never alters the linked target's own trust_status/fidelity_status/outcome). Replay integrity: reconstructing the real `LiteratureLineage` type from a stored row's `search_queries`/`sources`/`idea_to_source_map` and recomputing its canonical hash reproduces the stored `lineage_hash` exactly — this ledger cannot be silently altered without the mismatch becoming detectable"),
             make_tool::<CandidateConstructionArgs>("candidate_construction", "Issue #188: ONE tool for the entire candidate-construction family (issue #8) — propose a candidate mathematical object, record empirical checks against it, revise its status, and attach it to a research node or verification layer. A CANDIDATE CONSTRUCTION IS A PROPOSED MATHEMATICAL OBJECT, NOT A PROOF CERTIFICATE: every action records research artifacts useful for search and planning; trust_status never certifies anything — empirical support, human review, citation, and 'a formal statement exists' are all explicitly distinct from kernel verification, and no field can hold kernel evidence. `action` is internally tagged — exactly one of: {\"type\":\"add\",\"construction_type\":\"graph_family\"|\"point_configuration\"|\"coloring\"|\"field_tower\"|\"lattice\"|\"counterexample\"|\"asymptotic_family\"|\"algebraic_object\"|\"combinatorial_design\"|\"other\",\"informal_description\":\"..\",\"created_by\":\"..\"} (+ optional dossier_id, related_node_id, verification_layer_id, problem_version_id, episode_id, name, parameters_json, construction_json, claimed_properties_json, known_failures_json, empirical_checks_json, verification_targets_json, status, trust_status, and motivated-discovery metadata: motivating_move, source_observation, intended_role, strategy_context, why_this_might_work, why_this_might_fail, next_check, future_challenge_relevance — propose a candidate construction. Can exist before a dossier, node, Lean theorem, problem, or episode; a research artifact, not a proof certificate) | {\"type\":\"observe\",\"candidate_construction_id\":\"..\",\"description\":\"..\",\"result\":\"supports\"|\"refutes\"|\"inconclusive\"} (+ optional details_json, observed_by — record one empirical check, appended to the construction's empirical_checks history. Never changes proof status, and 'supports' never implies proved) | {\"type\":\"update_status\",\"candidate_construction_id\":\"..\"} (+ at least one of status, trust_status, claimed_properties_json, known_failures_json, next_check — update the construction in place; a falsified/rejected construction stays visible, never deleted. trust_status='kernel_verified_claim_linked' is rejected unless verification_layer_id names a verification_layers row whose own status is already kernel_verified — and no other trust_status confers proof either) | {\"type\":\"link_node\",\"candidate_construction_id\":\"..\",\"node_id\":\"..\"} (attach the construction to a research node. Adopts the node's dossier if the construction has none yet; otherwise the node must already belong to the construction's dossier. Linking never changes either side's trust_status) | {\"type\":\"link_verification_layer\",\"candidate_construction_id\":\"..\",\"verification_layer_id\":\"..\"} (attach the construction to an existing verification layer. Adopts the layer's dossier if the construction has none yet; otherwise the layer must already belong to the construction's dossier. Linking a layer is provenance, not promotion — the construction's trust_status is unchanged, and a kernel_verified_claim_linked construction is re-checked against the newly linked layer)"),
@@ -19436,12 +19503,12 @@ impl ServerHandler for ChatDbMcp {
                                 "required_run_mode": "any"
                             },
                             "artifact_module": {
-                                "side_effect": "mixed by action (issue #247): materialize inserts one generated_artifact_modules row (idempotent — an identical module returns the existing row, writes nothing new); plan_import/observe/list are read_only. No action ever mutates an existing problem's import manifest, an episode outcome, obligations, canonical lemmas, budgets, or benchmark result tables",
-                                "trust_level": "advisory — a generated module is a DETERMINISTIC assembly of immutable registry records and confers no proof authority; a proof body is embedded only when its kernel-verified source resolves from the content-addressed store, otherwise the declaration is a signature-only comment (never an unverified/client-supplied proof). Import planning mutates nothing; actual reuse still requires problem_create + a kernel-verified attempt",
-                                "cost_surface": "none — DB reads/writes + reading the on-disk proof store, no Lean invocation (kernel-verified reuse happens later through the normal attempt path)",
+                                "side_effect": "mixed by action (issue #247): materialize inserts one generated_artifact_modules row (idempotent); plan_import/observe/list are read_only; WRITE materializes a self-contained module file into the Lean source tree under LeanChecker/ (the only source-tree-touching action). No action ever mutates an existing problem's import manifest, an episode outcome, obligations, canonical lemmas, budgets, or benchmark result tables",
+                                "trust_level": "advisory — a generated module is a DETERMINISTIC assembly of immutable registry records and confers no proof authority; a proof body is embedded only when its kernel-verified source resolves from the content-addressed store, otherwise the declaration is a signature-only comment (never an unverified/client-supplied proof) and write refuses it. Import planning mutates nothing; actual reuse still requires problem_create + a kernel-verified attempt",
+                                "cost_surface": "none — DB reads/writes + reading the on-disk proof store + (write) a source-tree file write, no Lean invocation (kernel-verified reuse happens later through the normal attempt path)",
                                 "benchmark_safety": "private_artifact by default — module source carries formal statements and (when resolvable) verified proof bytes referencing real proof content",
-                                "replayability": "deterministic — source is a pure function of the topologically ordered registry records (no timestamp/uuid in the bytes); rebuilding the same snapshot reproduces identical bytes and source_hash; observe recomputes source_hash to expose a tampered stored source",
-                                "source_code_impact": "no_source_change — the generated module is stored as a DB row, not written into the source tree",
+                                "replayability": "deterministic — source is a pure function of the topologically ordered registry records (no timestamp/uuid in the bytes); rebuilding the same snapshot reproduces identical bytes and source_hash; write byte-verifies and is idempotent; observe recomputes source_hash to expose a tampered stored source",
+                                "source_code_impact": "write_generates_source — the WRITE action materializes a deterministic module file under LeanChecker/MnemosyneArtifacts/ so a new problem can import it; all other actions are no_source_change (DB-only). The written source is a pure function of immutable registry records, never hand-edited",
                                 "artifact_risk": "generated_module_metadata",
                                 "required_run_mode": "any"
                             },
@@ -24635,7 +24702,7 @@ mod tests {
 
         // Materialize both -> deterministic module.
         let m = am(&peer, serde_json::json!({"action": {"type":"materialize","artifact_ids":[a1, a2],"category":"NumberTheory"}})).await;
-        assert!(m["module_path"].as_str().unwrap().starts_with("MnemosyneArtifacts.NumberTheory.M_"));
+        assert!(m["module_path"].as_str().unwrap().starts_with("LeanChecker.MnemosyneArtifacts.NumberTheory.M_"));
         assert_eq!(m["source_hash_matches"], true);
         // MockGateway leaves no on-disk proof source -> signature-only manifest.
         assert_eq!(m["replay_status"], "proof_source_unavailable");
@@ -24658,7 +24725,7 @@ mod tests {
         let plan = am(&peer, serde_json::json!({"action": {"type":"plan_import","artifact_ids":[a1, a2],"base_problem_version_id": pv}})).await;
         assert_eq!(plan["base_environment_compatible"], true);
         assert!(plan["proposed_new_problem_import_manifest"].as_array().unwrap().iter()
-            .any(|s| s.as_str().unwrap().starts_with("MnemosyneArtifacts.")));
+            .any(|s| s.as_str().unwrap().starts_with("LeanChecker.MnemosyneArtifacts.")));
         // The base problem's manifest is untouched.
         let base_obs = tool_json(&peer.call_tool(CallToolRequestParams::new("problem_list").with_arguments(
             serde_json::json!({}).as_object().unwrap().clone())).await.unwrap());
@@ -24700,6 +24767,95 @@ mod tests {
         // list surfaces the module.
         let listed = am(&peer, serde_json::json!({"action": {"type":"list"}})).await;
         assert!(listed["modules"].as_array().unwrap().iter().any(|mm| mm["module_id"] == serde_json::json!(module_id)));
+    }
+
+    /// #247: a SELF-CONTAINED generated module is written into the Lean source
+    /// tree (under LeanChecker/) with byte-identical content so a new problem can
+    /// import it; the write is idempotent; a signature-only module is refused.
+    /// Uses a tempdir Lean project + a seeded on-disk proof source (no real Lean).
+    #[tokio::test]
+    async fn test_artifact_module_write_to_source_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        let handler = ChatDbMcp {
+            conn: Arc::new(Mutex::new(conn)), gateway: Box::new(MockGateway), lean_available: false,
+            lean_environment: None, lean_project_path: root.path().to_path_buf(),
+            interactive_gateway: Arc::new(MockInteractiveGateway::new()), transport_mode: None,
+        };
+        let client = connected_client(handler).await;
+        let peer = client.peer();
+        async fn va(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("verified_artifact")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn am(peer: &rmcp::service::Peer<rmcp::RoleClient>, v: serde_json::Value) -> serde_json::Value {
+            tool_json(&peer.call_tool(CallToolRequestParams::new("artifact_module")
+                .with_arguments(v.as_object().unwrap().clone())).await.unwrap())
+        }
+        async fn solve(peer: &rmcp::service::Peer<rmcp::RoleClient>, pv: &str, idem: &str) -> String {
+            let ep = tool_json(&peer.call_tool(CallToolRequestParams::new("episode_create").with_arguments(serde_json::json!({
+                "problem_version_id": pv,
+            }).as_object().unwrap().clone())).await.unwrap());
+            let ep_id = ep["episode_id"].as_str().unwrap().to_string();
+            claim_and_solve(peer, &ep_id, "trivial", idem).await;
+            ep_id
+        }
+
+        let pv = create_problem(&peer, "True").await;
+        // Promote, then add a version carrying a non-empty formal_statement so the
+        // assembled declaration has a real signature.
+        let e1 = solve(&peer, &pv, "w-1").await;
+        let a = va(&peer, serde_json::json!({"action": {"type":"promote","episode_id":e1,
+            "artifact_kind":"helper_lemma","canonical_name":"reusable_truth"}})).await;
+        let a_id = a["artifact_id"].as_str().unwrap().to_string();
+        let e2 = solve(&peer, &pv, "w-2").await;
+        va(&peer, serde_json::json!({"action": {"type":"add_version","artifact_id":a_id,"episode_id":e2,
+            "formal_statement":"True"}})).await;
+
+        // Seed the on-disk proof source behind the current version's proof_body_hash
+        // so materialization resolves a self-contained module.
+        let obs = va(&peer, serde_json::json!({"action": {"type":"observe","artifact_id": a_id}})).await;
+        let cur = obs["current_version"].as_i64().unwrap();
+        let pbh = obs["versions"].as_array().unwrap().iter()
+            .find(|v| v["artifact_version"].as_i64() == Some(cur)).unwrap()["proof_body_hash"].as_str().unwrap().to_string();
+        let (cpath, _) = verifier_artifact_paths(root.path(), &pbh);
+        std::fs::create_dir_all(cpath.parent().unwrap()).unwrap();
+        std::fs::write(&cpath, b"  trivial\n").unwrap();
+
+        let m = am(&peer, serde_json::json!({"action": {"type":"materialize","artifact_ids":[a_id],"category":"NumberTheory"}})).await;
+        assert_eq!(m["replay_status"], "self_contained_source", "seeded proof -> self-contained: {:?}", m);
+        let module_id = m["module_id"].as_str().unwrap().to_string();
+        let source_text = m["source_text"].as_str().unwrap().to_string();
+        assert!(source_text.contains("theorem reusable_truth : True :="), "embeds the real declaration: {}", source_text);
+
+        // Write it into the source tree; byte-identical, importable path.
+        let w = am(&peer, serde_json::json!({"action": {"type":"write","module_id": module_id}})).await;
+        assert_eq!(w["byte_identical"], true, "{:?}", w);
+        let rel = w["written_path"].as_str().unwrap();
+        assert!(rel.starts_with("LeanChecker/MnemosyneArtifacts/NumberTheory/M_"), "importable path: {}", rel);
+        assert_eq!(w["import_line"].as_str().unwrap(), format!("import {}", m["module_path"].as_str().unwrap()));
+        let on_disk = std::fs::read_to_string(root.path().join(rel)).unwrap();
+        assert_eq!(on_disk, source_text, "file bytes match the module source exactly");
+
+        // Idempotent re-write.
+        let w2 = am(&peer, serde_json::json!({"action": {"type":"write","module_id": module_id}})).await;
+        assert_eq!(w2["idempotent_existing"], true, "{:?}", w2);
+
+        // A signature-only module (no seeded proof) is refused by write.
+        let e3 = solve(&peer, &pv, "w-3").await;
+        let b = va(&peer, serde_json::json!({"action": {"type":"promote","episode_id":e3,
+            "artifact_kind":"helper_lemma","canonical_name":"unresolved_helper"}})).await;
+        let b_id = b["artifact_id"].as_str().unwrap().to_string();
+        let mb = am(&peer, serde_json::json!({"action": {"type":"materialize","artifact_ids":[b_id]}})).await;
+        assert_eq!(mb["replay_status"], "proof_source_unavailable");
+        let refused = peer.call_tool(CallToolRequestParams::new("artifact_module").with_arguments(
+            serde_json::json!({"action": {"type":"write","module_id": mb["module_id"].as_str().unwrap()}})
+                .as_object().unwrap().clone())).await;
+        assert!(refused.is_err(), "a signature-only module must not be written into the source tree");
+
+        drop(client);
+        drop(root);
     }
 
     /// #240: a gateway that fails with an ordered diagnostic list — an
