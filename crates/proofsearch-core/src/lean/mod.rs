@@ -115,6 +115,14 @@ pub trait LeanGateway {
         Err("this gateway cannot build a Mathlib fingerprint index".to_string())
     }
 
+    /// Issue #245: for each `(id, statement)` candidate, is it a UNIFICATION
+    /// candidate for `query_statement` — does its conclusion isDefEq the query's
+    /// conclusion (capturing alpha-renaming + specialization)? One Lean process
+    /// for the whole batch. Read-only. Default fails closed.
+    fn unification_candidates(&self, _query_statement: &str, _candidates: &[(String, String)]) -> Result<Vec<(String, bool)>, String> {
+        Err("this gateway cannot check unification candidates".to_string())
+    }
+
     /// Effective server-owned resource policy, when the gateway executes real
     /// verifier subprocesses. Test/search-only gateways return `None`.
     fn resource_policy(&self) -> Option<VerifierResourcePolicy> {
@@ -582,6 +590,95 @@ pub fn run_mathlib_fingerprint_harness(
             String::from_utf8_lossy(&out.stderr).chars().take(800).collect::<String>()));
     }
     Ok(stdout)
+}
+
+/// The Lean meta-program that checks, for each candidate, whether it is a
+/// UNIFICATION CANDIDATE for the query goal (#245): the candidate's conclusion is
+/// isDefEq to the query's conclusion after introducing the candidate's hypotheses
+/// as metavariables — so it captures alpha-renaming AND specialization (a `∀`
+/// lemma matching a concrete goal). Read-only.
+const UNIFY_HARNESS_PREAMBLE: &str = r##"import Mathlib
+open Lean Elab Meta Term Command
+
+elab "#unify " cid:str " GOAL " g:term " CAND " c:term : command => liftTermElabM do
+  let res ← (do try
+      let ge ← elabTerm g none
+      let ce ← elabTerm c none
+      forallTelescopeReducing ge fun _ gconcl => do
+        let (_, _, cconcl) ← forallMetaTelescope ce
+        isDefEq cconcl gconcl
+    catch _ => pure false)
+  IO.println s!"U:{cid.getString}:{res}"
+
+"##;
+
+/// Run the batch unification-candidate harness (#245) in one Lean process:
+/// elaborate the query goal and each candidate statement, and report per
+/// candidate whether the candidate's conclusion unifies (isDefEq) with the goal's
+/// conclusion. Returns results in candidate order (id, unifies). Read-only.
+pub fn run_unification_harness(
+    lean_project_path: &std::path::Path,
+    elan_bin_path: &std::path::Path,
+    query_statement: &str,
+    candidates: &[(String, String)],
+    timeout: Duration,
+) -> Result<Vec<(String, bool)>, String> {
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let clean = |s: &str| s.replace(['\n', '\r'], " ");
+    let q = clean(query_statement);
+    let mut src = String::from(UNIFY_HARNESS_PREAMBLE);
+    for (i, (_id, stmt)) in candidates.iter().enumerate() {
+        // Reference candidates by index — arbitrary artifact ids aren't safe as
+        // Lean string literals, but a numeric index always is.
+        src.push_str(&format!("#unify \"{}\" GOAL ({}) CAND ({})\n", i, q, clean(stmt)));
+    }
+    let temp_dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let file_path = temp_dir.path().join("_unify.lean");
+    fs::write(&file_path, &src).map_err(|e| e.to_string())?;
+    let lake_path = elan_bin_path.join("lake.exe");
+    let mut cmd = Command::new(&lake_path);
+    cmd.arg("env").arg("lean").arg(&file_path)
+        .current_dir(lean_project_path)
+        .stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Ok(elan_home) = std::env::var("PROOFSEARCH_ELAN_HOME") {
+        cmd.env("ELAN_HOME", elan_home);
+    }
+    configure_process_containment(&mut cmd);
+    let mut child = cmd.spawn().map_err(|e| format!("spawn lean: {e}"))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(_) => break,
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    return Err(format!("unification harness timed out after {:?}", timeout));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut by_index: std::collections::BTreeMap<usize, bool> = std::collections::BTreeMap::new();
+    for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix("U:") {
+            if let Some((idx, val)) = rest.split_once(':') {
+                if let Ok(i) = idx.trim().parse::<usize>() {
+                    by_index.insert(i, val.trim() == "true");
+                }
+            }
+        }
+    }
+    if by_index.is_empty() {
+        return Err(format!("unification harness produced no results: stderr={}",
+            String::from_utf8_lossy(&out.stderr).chars().take(600).collect::<String>()));
+    }
+    Ok(candidates.iter().enumerate()
+        .map(|(i, (id, _))| (id.clone(), by_index.get(&i).copied().unwrap_or(false)))
+        .collect())
 }
 
 /// Compute the elaborated structural fingerprint of a formal `statement` (#245)
@@ -1107,6 +1204,11 @@ impl LeanGateway for RealLeanGateway {
         // The whole-library pass runs for many minutes; a capped run is fast.
         let timeout = if limit == 0 { Duration::from_secs(2400) } else { Duration::from_secs(300) };
         run_mathlib_fingerprint_harness(&self.lean_project_path, &self.elan_bin_path, limit, timeout)
+    }
+
+    fn unification_candidates(&self, query_statement: &str, candidates: &[(String, String)]) -> Result<Vec<(String, bool)>, String> {
+        run_unification_harness(&self.lean_project_path, &self.elan_bin_path, query_statement, candidates,
+            Duration::from_secs(180))
     }
 
     fn durability_job_status(&self, job_id: &str) -> Result<serde_json::Value, String> {
