@@ -1,0 +1,33 @@
+//! Search the exact 37-compression equations for a Legendre pair of length 333.
+//! Entries d are odd in [-9,9], each row sum is 1, total square norm is 650,
+//! and the two periodic autocorrelations must sum to -18 at shifts 1..18.
+//! Multi-transfer moves preserve both sums and the square norm exactly.
+use std::{env,fs,thread};
+use std::sync::{Arc,Mutex};
+use std::sync::atomic::{AtomicBool,AtomicI64,Ordering};
+use std::time::{Duration,Instant,SystemTime,UNIX_EPOCH};
+const N:usize=37;const H:usize=18;const TARGET_NORM:i32=1670;
+#[derive(Clone)]struct State{v:[[i8;N];2],r:[i32;H],e:i64}
+impl State{
+ fn recompute(&mut self){self.r=[0;H];for h in 1..=H{let mut z=18i32;for s in 0..2{for i in 0..N{let x=2*self.v[s][i]as i32-9;let y=2*self.v[s][(i+h)%N]as i32-9;z+=x*y}}self.r[h-1]=z}self.e=self.r.iter().map(|&x|(x as i64)*(x as i64)).sum()}
+ fn sums(&self)->[i32;2]{[self.v[0].iter().map(|&x|2*x as i32-9).sum(),self.v[1].iter().map(|&x|2*x as i32-9).sum()]}
+ fn norm_v(&self)->i32{self.v.iter().flatten().map(|&x|(x as i32)*(x as i32)).sum()}
+ fn norm_d(&self)->i32{self.v.iter().flatten().map(|&x|{let d=2*x as i32-9;d*d}).sum()}
+}
+#[derive(Clone,Copy)]struct Rng(u64);impl Rng{fn next(&mut self)->u64{let mut x=self.0;x^=x<<13;x^=x>>7;x^=x<<17;self.0=x;x}fn usize(&mut self,n:usize)->usize{self.next()as usize%n}fn unit(&mut self)->f64{(self.next()>>11)as f64/(1u64<<53)as f64}}
+#[derive(Clone,Copy)]struct Tr{ s:usize,i:usize,j:usize,d:i32 }
+fn delta(v:&[[i8;N];2],s:usize,i:usize,j:usize)->i32{let a=v[s][i]as i32;let b=v[s][j]as i32;2*(b-a)+2}
+fn apply(v:&mut[[i8;N];2],t:Tr){v[t.s][t.i]-=1;v[t.s][t.j]+=1}
+fn undo(v:&mut[[i8;N];2],t:Tr){v[t.s][t.i]+=1;v[t.s][t.j]-=1}
+fn any_transfer(v:&[[i8;N];2],rng:&mut Rng)->Tr{loop{let s=rng.usize(2);let i=rng.usize(N);let j=rng.usize(N);if i!=j&&v[s][i]>0&&v[s][j]<9{return Tr{s,i,j,d:delta(v,s,i,j)}}}}
+fn matching_transfer(v:&[[i8;N];2],want:i32,rng:&mut Rng)->Option<Tr>{let start=rng.usize(2*N*N);for z in 0..2*N*N{let x=(start+z)%(2*N*N);let s=x/(N*N);let i=(x/N)%N;let j=x%N;if i!=j&&v[s][i]>0&&v[s][j]<9{let d=delta(v,s,i,j);if d==want{return Some(Tr{s,i,j,d})}}}None}
+fn exact_move(st:&mut State,rng:&mut Rng,count:usize,ts:&mut[Tr;5])->bool{let mut sum=0;for q in 0..count-1{let t=any_transfer(&st.v,rng);apply(&mut st.v,t);ts[q]=t;sum+=t.d}if let Some(t)=matching_transfer(&st.v,-sum,rng){apply(&mut st.v,t);ts[count-1]=t;true}else{for q in (0..count-1).rev(){undo(&mut st.v,ts[q])}false}}
+fn initial(rng:&mut Rng)->State{loop{let mut v=[[4i8;N];2];for s in 0..2{let mut idx=(0..N).collect::<Vec<_>>();for i in (1..N).rev(){let j=rng.usize(i+1);idx.swap(i,j)}for &i in &idx[..19]{v[s][i]=5}}
+ while v.iter().flatten().map(|&x|(x as i32)*(x as i32)).sum::<i32>()<TARGET_NORM{let before=v.iter().flatten().map(|&x|(x as i32)*(x as i32)).sum::<i32>();let gap=TARGET_NORM-before;let t=any_transfer(&v,rng);if t.d>0&&t.d<=gap{apply(&mut v,t)}}
+ if v.iter().flatten().map(|&x|(x as i32)*(x as i32)).sum::<i32>()==TARGET_NORM{let mut s=State{v,r:[0;H],e:0};s.recompute();debug_assert_eq!(s.sums(),[1,1]);debug_assert_eq!(s.norm_d(),650);return s}}
+}
+fn json(s:&State,solved:bool,elapsed:f64,moves:u64)->String{let d=s.v.iter().map(|x|format!("[{}]",x.iter().map(|&z|(2*z-9).to_string()).collect::<Vec<_>>().join(","))).collect::<Vec<_>>().join(",");let r=s.r.iter().map(|x|x.to_string()).collect::<Vec<_>>().join(",");format!("{{\"construction\":\"Legendre pair length 333, 37-compression\",\"solved_compression\":{},\"energy\":{},\"elapsed_s\":{},\"moves\":{},\"sums\":{:?},\"square_norm\":{},\"residual_paf_plus_18\":[{}],\"compressed_sequences\":[{}]}}\n",solved,s.e,elapsed,moves,s.sums(),s.norm_d(),r,d)}
+fn publish(s:&State,id:usize,start:Instant,atom:&AtomicI64,best:&Mutex<State>){let mut seen=atom.load(Ordering::Relaxed);while s.e<seen{match atom.compare_exchange_weak(seen,s.e,Ordering::SeqCst,Ordering::Relaxed){Ok(_)=>{*best.lock().unwrap()=s.clone();let _=fs::write("legendre37_live.json",json(s,false,start.elapsed().as_secs_f64(),0));eprintln!("best energy={} worker={} elapsed_s={:.3} residual={:?}",s.e,id,start.elapsed().as_secs_f64(),s.r);return},Err(x)=>seen=x}}}
+fn worker(id:usize,end:Instant,start:Instant,atom:Arc<AtomicI64>,best:Arc<Mutex<State>>,stop:Arc<AtomicBool>)->u64{let epoch=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()as u64;let mut rng=Rng(epoch^(id as u64+71).wrapping_mul(0x9e3779b97f4a7c15));let mut moves=0u64;while Instant::now()<end&&!stop.load(Ordering::Relaxed){let mut s=if rng.usize(5)==0{initial(&mut rng)}else{best.lock().unwrap().clone()};for _ in 0..rng.usize(40){let mut ts=[Tr{s:0,i:0,j:1,d:0};5];if exact_move(&mut s,&mut rng,3,&mut ts){s.recompute()}}
+ let mut local=s.e;let mut stale=0usize;for step in 0..1_000_000usize{if step&8191==0&&(Instant::now()>=end||stop.load(Ordering::Relaxed)){break}let phase=step as f64/1_000_000.0;let temp=(if id%3==0{8000.0}else if id%3==1{2500.0}else{700.0})*(0.0001f64).powf(phase)+0.02;let roll=rng.usize(1000);let count=if roll<500{2}else if roll<900{3}else if roll<990{4}else{5};let before=s.clone();let mut ts=[Tr{s:0,i:0,j:1,d:0};5];if !exact_move(&mut s,&mut rng,count,&mut ts){continue}s.recompute();moves+=1;let de=s.e-before.e;if de>0&&rng.unit()>=(-(de as f64)/temp).exp(){s=before}else if s.e<local{local=s.e;stale=0;publish(&s,id,start,&atom,&best);if s.e==0{let mut chk=s.clone();chk.recompute();if chk.e==0&&chk.sums()==[1,1]&&chk.norm_d()==650{*best.lock().unwrap()=chk;stop.store(true,Ordering::SeqCst);break}}}else{stale+=1}if stale>150000{break}}}moves}
+fn main(){let z:Vec<String>=env::args().collect();let secs=z.get(1).and_then(|x|x.parse().ok()).unwrap_or(900);let threads=z.get(2).and_then(|x|x.parse().ok()).unwrap_or(4);let mut rng=Rng(33337);let initial=initial(&mut rng);eprintln!("seed energy={} sums={:?} norm={} vnorm={}",initial.e,initial.sums(),initial.norm_d(),initial.norm_v());let start=Instant::now();let end=start+Duration::from_secs(secs);let atom=Arc::new(AtomicI64::new(initial.e));let best=Arc::new(Mutex::new(initial));let stop=Arc::new(AtomicBool::new(false));let mut hs=vec![];for id in 0..threads{let(a,b,c)=(atom.clone(),best.clone(),stop.clone());hs.push(thread::spawn(move||worker(id,end,start,a,b,c)))}let moves=hs.into_iter().map(|h|h.join().unwrap()).sum();let mut ans=best.lock().unwrap().clone();ans.recompute();let solved=ans.e==0;let out=if solved{"legendre37_candidate.json"}else{"legendre37_summary.json"};fs::write(out,json(&ans,solved,start.elapsed().as_secs_f64(),moves)).unwrap();println!("result solved_compression={} energy={} moves={} output={}",solved,ans.e,moves,out)}

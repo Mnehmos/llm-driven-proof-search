@@ -1,0 +1,66 @@
+{"order": 216, "orbits": 6, "total_bits": 12, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 2, 4, 5, 7, 8, 10, 11]}
+{"order": 108, "orbits": 8, "total_bits": 16, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 2, 4, 5, 7, 8, 10, 14]}
+{"order": 108, "orbits": 9, "total_bits": 18, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 4, 7, 10, 11, 16, 25, 26]}
+{"order": 108, "orbits": 10, "total_bits": 20, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 4, 7, 10, 13, 16, 19, 22]}
+{"order": 72, "orbits": 10, "total_bits": 20, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 8, 10, 17, 19, 26, 28, 35]}
+{"order": 72, "orbits": 12, "total_bits": 24, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 8, 10, 11, 14, 23, 26, 29]}
+{"order": 72, "orbits": 8, "total_bits": 16, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 7, 8, 10, 22, 26, 34, 49]}
+{"order": 72, "orbits": 8, "total_bits": 16, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 2, 4, 5, 8, 10, 13, 16]}
+{"order": 54, "orbits": 13, "total_bits": 26, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 7, 10, 11, 16, 34, 41, 46]}
+{"order": 54, "orbits": 15, "total_bits": 30, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 4, 7, 10, 16, 25, 28, 34]}
+{"order": 54, "orbits": 15, "total_bits": 30, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 7, 10, 16, 26, 34, 38, 44]}
+{"order": 36, "orbits": 13, "total_bits": 26, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 4, 10, 16, 25, 26, 40, 41]}
+{"order": 36, "orbits": 21, "total_bits": 42, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 10, 11, 26, 38, 47, 64, 73]}
+{"order": 36, "orbits": 12, "total_bits": 24, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 7, 8, 10, 34, 49, 56, 58]}
+{"order": 36, "orbits": 14, "total_bits": 28, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 8, 10, 17, 28, 35, 46, 64]}
+{"order": 36, "orbits": 13, "total_bits": 26, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 7, 10, 26, 34, 49, 58, 64]}
+{"order": 36, "orbits": 18, "total_bits": 36, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 10, 19, 28, 46, 55, 64, 73]}
+{"order": 36, "orbits": 12, "total_bits": 24, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 2, 4, 5, 8, 10, 16, 20]}
+{"order": 36, "orbits": 14, "total_bits": 28, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 4, 10, 13, 16, 25, 40, 52]}
+{"order": 36, "orbits": 20, "total_bits": 40, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 10, 31, 43, 64, 73, 82, 85]}
+{"order": 36, "orbits": 15, "total_bits": 30, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 24, "members_sample": [1, 10, 26, 28, 44, 46, 53, 62]}
+{"order": 36, "orbits": 14, "total_bits": 28, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 7, 10, 22, 34, 49, 58, 61]}
+{"order": 36, "orbits": 18, "total_bits": 36, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 8, 10, 14, 23, 29, 64, 68]}
+{"order": 27, "orbits": 25, "total_bits": 50, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 7, 10, 16, 34, 46, 49, 70]}
+{"order": 24, "orbits": 18, "total_bits": 36, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 47, 73, 80, 85, 88, 97, 101]}
+{"order": 24, "orbits": 18, "total_bits": 36, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 11, 14, 23, 29, 73, 80, 119]}
+{"order": 24, "orbits": 30, "total_bits": 60, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 31, 38, 43, 68, 73, 80, 110]}
+{"order": 24, "orbits": 20, "total_bits": 40, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 8, 10, 26, 64, 73, 80, 82]}
+{"order": 18, "orbits": 25, "total_bits": 50, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 6.71, "conflicts": 975, "members_sample": [1, 10, 26, 44, 46, 53, 71, 100]}
+{"order": 18, "orbits": 23, "total_bits": 46, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 58, 64, 70]}
+{"order": 18, "orbits": 21, "total_bits": 42, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 95, 100]}
+{"order": 18, "orbits": 33, "total_bits": 66, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.0, "conflicts": 0, "members_sample": [1, 10, 11, 100, 101, 110, 112, 121]}
+{"order": 18, "orbits": 35, "total_bits": 70, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 10, 64, 73, 85, 100, 112, 121]}
+{"order": 18, "orbits": 39, "total_bits": 78, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 10, 26, 38, 47, 100, 112, 121]}
+{"order": 18, "orbits": 21, "total_bits": 42, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 10, 16, 41, 65, 77, 100, 104]}
+{"order": 18, "orbits": 23, "total_bits": 46, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 10, 16, 26, 83, 100, 160, 164]}
+{"order": 18, "orbits": 23, "total_bits": 46, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 7, 10, 26, 34, 49, 70, 86]}
+{"order": 18, "orbits": 23, "total_bits": 46, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.26, "conflicts": 1270, "members_sample": [1, 10, 46, 62, 100, 118, 127, 145]}
+{"order": 18, "orbits": 27, "total_bits": 54, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.44, "conflicts": 3270, "members_sample": [1, 10, 28, 46, 64, 73, 100, 118]}
+{"order": 18, "orbits": 23, "total_bits": 46, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 4, 10, 16, 25, 40, 64, 67]}
+{"order": 12, "orbits": 32, "total_bits": 64, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 73, 121, 154, 175, 196, 214, 253]}
+{"order": 12, "orbits": 32, "total_bits": 64, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 73, 85, 88, 97, 103, 154, 193]}
+{"order": 12, "orbits": 33, "total_bits": 66, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 47, 73, 85, 101, 122, 211, 232]}
+{"order": 12, "orbits": 32, "total_bits": 64, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 8, 10, 64, 73, 80, 100, 125]}
+{"order": 12, "orbits": 30, "total_bits": 60, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 73, 80, 85, 140, 179, 211, 230]}
+{"order": 12, "orbits": 30, "total_bits": 60, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 14, 23, 29, 73, 80, 119, 121]}
+{"order": 12, "orbits": 36, "total_bits": 72, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 10, 64, 73, 82, 100, 154, 199]}
+{"order": 12, "orbits": 35, "total_bits": 70, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 1.02, "conflicts": 111, "members_sample": [1, 10, 26, 64, 73, 100, 233, 260]}
+{"order": 12, "orbits": 33, "total_bits": 66, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 11, 73, 121, 137, 158, 175, 196]}
+{"order": 12, "orbits": 57, "total_bits": 114, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 38, 73, 110, 112, 149, 184, 221]}
+{"order": 12, "orbits": 48, "total_bits": 96, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 68, 73, 80, 112, 179, 184, 191]}
+{"order": 12, "orbits": 50, "total_bits": 100, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 31, 43, 73, 112, 142, 154, 184]}
+{"order": 9, "orbits": 45, "total_bits": 90, "contains_minus1": false, "status": "UNKNOWN", "elapsed_s": 1200.71, "conflicts": 398054, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "orbits": 65, "total_bits": 130, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "orbits": 41, "total_bits": 82, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 1.53, "conflicts": 1, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "orbits": 41, "total_bits": 82, "contains_minus1": false, "status": "INFEASIBLE", "elapsed_s": 1.57, "conflicts": 1, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 8, "orbits": 50, "total_bits": 100, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 40.73, "conflicts": 397, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 6, "orbits": 65, "total_bits": 130, "contains_minus1": false, "status": "UNKNOWN", "elapsed_s": 1202.11, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "orbits": 63, "total_bits": 126, "contains_minus1": false, "status": "UNKNOWN", "elapsed_s": 1202.62, "conflicts": 39901, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "orbits": 57, "total_bits": 114, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "orbits": 59, "total_bits": 118, "contains_minus1": false, "status": "UNKNOWN", "elapsed_s": 1201.48, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "orbits": 63, "total_bits": 126, "contains_minus1": false, "status": "UNKNOWN", "elapsed_s": 1204.68, "conflicts": 26387, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "orbits": 57, "total_bits": 114, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 0.11, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "orbits": 63, "total_bits": 126, "contains_minus1": false, "status": "UNKNOWN", "elapsed_s": 1201.08, "conflicts": 4568294, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "orbits": 59, "total_bits": 118, "contains_minus1": true, "status": "INFEASIBLE", "elapsed_s": 99.14, "conflicts": 49963, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "orbits": 59, "total_bits": 118, "contains_minus1": false, "status": "UNKNOWN", "elapsed_s": 1201.64, "conflicts": 3438, "members_sample": [1, 73, 121, 175, 196, 322]}

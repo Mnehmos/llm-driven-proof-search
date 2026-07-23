@@ -1,0 +1,43 @@
+{
+  "construction": "BS(84,83) nearest spectral-shell GF(2) audit",
+  "independently_recomputed": true,
+  "generator": {
+    "path": "agent_bp2_gf2_spectral_shells.py",
+    "sha256": "E3420F17B27E6C80D2FAB7626C901CC4C11B27175B070A3DD9088A4B08544854"
+  },
+  "order7": {
+    "source": "agent_bp2_spectral_e2144_verified.json",
+    "source_sha256": "FA791F9497B2ECC54E2969F83AC1CDBDC66B99AB58BF9E9191526ED36B0C1B19",
+    "proved_nearest_total_l1": 8,
+    "fixed_orders": [1, 2, 3, 4, 5],
+    "base_gf2_rank": 113,
+    "aggregate_target_count": 6,
+    "gf2_compatible_target_count": 0,
+    "cost_patterns": [
+      {"local_l1": [0, 4, 4, 0], "target_count": 1},
+      {"local_l1": [0, 8, 0, 0], "target_count": 1},
+      {"local_l1": [4, 0, 4, 0], "target_count": 2},
+      {"local_l1": [4, 4, 0, 0], "target_count": 2}
+    ],
+    "scope": "Eliminates only the six nearest order-7 compression fibers around this E2144 source; it is not a nonexistence result for BS(84,83) or Hadamard order 668.",
+    "count_correction": "An earlier count of four retained one representative per invariant vector and collapsed two distinct equal-invariant local tuples. Full compression-tuple enumeration gives six."
+  },
+  "order11": {
+    "source": "agent_bp2_spectral_projection_e2784_o7flex8.json",
+    "source_sha256": "8FD81B582DC94F64FAC01718D1568451CA46ADA3FFA375377FC82D50C779898F",
+    "proved_nearest_total_l1": 16,
+    "fixed_orders": [1, 2, 3, 4, 5, 7],
+    "base_gf2_rank": 131,
+    "aggregate_target_count": 5,
+    "gf2_compatible_target_count": 1,
+    "gf2_incompatible_target_count": 4,
+    "compatible_fiber_integer_status": "INFEASIBLE",
+    "compatible_fiber_cpsat_seconds": 236.97,
+    "cost_patterns": [
+      {"local_l1": [4, 4, 4, 4], "target_count": 3},
+      {"local_l1": [4, 8, 4, 0], "target_count": 1},
+      {"local_l1": [8, 0, 4, 4], "target_count": 1}
+    ],
+    "scope": "Eliminates only the five nearest order-11 compression fibers around this exact-orders-1-through-7 E3648 source; it is not a nonexistence result for BS(84,83) or Hadamard order 668."
+  }
+}

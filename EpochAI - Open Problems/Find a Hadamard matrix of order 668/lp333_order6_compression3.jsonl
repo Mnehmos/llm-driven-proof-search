@@ -1,0 +1,3 @@
+{"K": [1, 10, 26, 100, 260, 269], "img_order": 6, "orbits": 26, "shift_reps": 25, "status": "UNKNOWN", "elapsed_s": 600.2, "conflicts": 9331}
+{"K": [1, 121, 137, 158, 260, 322], "img_order": 6, "orbits": 26, "shift_reps": 25, "status": "UNKNOWN", "elapsed_s": 600.1, "conflicts": 36103}
+{"K": [1, 73, 85, 211, 232, 286], "img_order": 6, "orbits": 21, "shift_reps": 20, "status": "UNKNOWN", "elapsed_s": 600.2, "conflicts": 71939}

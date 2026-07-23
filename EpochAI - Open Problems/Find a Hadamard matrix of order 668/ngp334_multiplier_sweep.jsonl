@@ -1,0 +1,17 @@
+{"subgroup_order": 332, "members_sample": [1, 3, 5, 7, 9, 11, 13, 15], "status": "EMPTY_SIGMA_FIXED"}
+{"subgroup_order": 166, "members_sample": [1, 5, 9, 13, 17, 21, 25, 29], "status": "INFEASIBLE", "bits": 8, "elapsed_s": 0.0, "conflicts": 0}
+{"subgroup_order": 166, "members_sample": [1, 3, 7, 9, 11, 19, 21, 25], "status": "EMPTY_SIGMA_FIXED"}
+{"subgroup_order": 166, "members_sample": [1, 9, 15, 21, 23, 25, 29, 33], "status": "EMPTY_SIGMA_FIXED"}
+{"subgroup_order": 83, "members_sample": [1, 9, 21, 25, 29, 33, 49, 57], "status": "INFEASIBLE", "bits": 12, "elapsed_s": 0.38, "conflicts": 18}
+{"subgroup_order": 4, "members_sample": [1, 333, 335, 667], "status": "EMPTY_SIGMA_FIXED"}
+{"subgroup_order": 2, "members_sample": [1, 667], "status": "EMPTY_SIGMA_FIXED"}
+{"subgroup_order": 2, "members_sample": [1, 335], "status": "EMPTY_SIGMA_FIXED"}
+{"subgroup_order": 332, "members_sample": [1, 3, 5, 7, 9, 11, 13, 15], "status": "EMPTY_SIGMA_FIXED"}
+{"subgroup_order": 166, "members_sample": [1, 5, 9, 13, 17, 21, 25, 29], "status": "INFEASIBLE", "bits": 8, "elapsed_s": 0.01, "conflicts": 0}
+{"subgroup_order": 166, "members_sample": [1, 3, 7, 9, 11, 19, 21, 25], "status": "EMPTY_SIGMA_FIXED"}
+{"subgroup_order": 166, "members_sample": [1, 9, 15, 21, 23, 25, 29, 33], "status": "EMPTY_SIGMA_FIXED"}
+{"subgroup_order": 83, "members_sample": [1, 9, 21, 25, 29, 33, 49, 57], "status": "INFEASIBLE", "bits": 12, "elapsed_s": 0.06, "conflicts": 18}
+{"subgroup_order": 4, "members_sample": [1, 333, 335, 667], "status": "EMPTY_SIGMA_FIXED"}
+{"subgroup_order": 2, "members_sample": [1, 667], "status": "EMPTY_SIGMA_FIXED"}
+{"subgroup_order": 2, "members_sample": [1, 335], "status": "EMPTY_SIGMA_FIXED"}
+{"subgroup_order": 2, "members_sample": [1, 333], "status": "UNKNOWN", "bits": 336, "elapsed_s": 900.36, "conflicts": 501033}

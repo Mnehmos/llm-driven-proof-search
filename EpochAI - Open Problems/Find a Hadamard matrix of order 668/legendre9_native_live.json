@@ -1,0 +1,1 @@
+{"construction":"LP(333) exact length-9 compression","solved":false,"energy":0,"elapsed_s":0.0670406,"moves":0,"sums":[1, 1],"residual":[0, 0, 0, 0, 0],"compressed_sequences":[[5, -7, 1, -9, -1, 7, -5, 3, 7], [1, 1, 3, -5, -13, 7, 1, 7, -1]],"column_plus_counts":[[21, 15, 19, 14, 18, 22, 16, 20, 22], [19, 19, 20, 16, 12, 22, 19, 22, 18]]}

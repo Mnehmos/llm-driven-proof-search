@@ -1,0 +1,16 @@
+{"M": [2, 0, 0, 2], "u": 7, "elapsed_s": 31.3, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 600600}
+{"M": [0, 1, 1, 0], "u": 7, "elapsed_s": 647.3, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 20443632, "hash_collisions": 0}
+{"M": [0, 2, 2, 0], "u": 7, "elapsed_s": 735.3, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 20443632, "hash_collisions": 0}
+{"M": [1, 0, 0, 2], "u": 7, "elapsed_s": 713.9, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 20443632, "hash_collisions": 0}
+{"M": [1, 0, 1, 2], "u": 7, "elapsed_s": 740.5, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 20443632, "hash_collisions": 0}
+{"M": [1, 0, 2, 2], "u": 7, "elapsed_s": 704.4, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 20443632, "hash_collisions": 0}
+{"M": [1, 1, 0, 2], "u": 7, "elapsed_s": 570.3, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 20443632, "hash_collisions": 0}
+{"M": [1, 2, 0, 2], "u": 7, "elapsed_s": 497.0, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 20443632, "hash_collisions": 0}
+{"M": [2, 0, 0, 1], "u": 7, "elapsed_s": 434.9, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 20443632, "hash_collisions": 0}
+{"M": [2, 0, 1, 1], "u": 7, "elapsed_s": 529.8, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 20443632, "hash_collisions": 0}
+{"M": [2, 0, 2, 1], "u": 7, "elapsed_s": 780.9, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 20443632, "hash_collisions": 0}
+{"M": [2, 1, 0, 1], "u": 7, "elapsed_s": 509.9, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 20443632, "hash_collisions": 0}
+{"M": [2, 2, 0, 1], "u": 7, "elapsed_s": 556.2, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 20443632, "hash_collisions": 0}
+{"M": [0, 1, 2, 0], "u": 11, "elapsed_s": 6133.3, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 168073696, "hash_collisions": 0}
+{"M": [1, 1, 1, 2], "u": 11, "elapsed_s": 6307.6, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 168073696, "hash_collisions": 0}
+{"M": [1, 2, 2, 2], "u": 11, "elapsed_s": 4612.7, "status": "UNSAT_EXHAUSTIVE", "a_candidates": 168073696, "hash_collisions": 0}

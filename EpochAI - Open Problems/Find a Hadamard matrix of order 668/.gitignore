@@ -1,0 +1,13 @@
+# Oversized complete-shadow catalog (1.1 GB, exceeds GitHub limits).
+# Regenerate deterministically with gpu_z37_order3_v2.py (seeds are fixed);
+# SHA-256 recorded in RESULTS provenance.
+z37_order3_survivors.npz
+
+# Superseded partial stream chunks (regenerable via gpu_z37_order3_stream.py)
+z37_order3_stream/
+
+# Build outputs and caches
+*.exe
+*.pdb
+__pycache__/
+nul.jsonl
