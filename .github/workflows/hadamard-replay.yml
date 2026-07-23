@@ -1,0 +1,91 @@
+name: Hadamard campaign replay gate
+
+# PR #265 review blocker 7: a focused CI gate that actually replays the
+# certifiable pieces of the Hadamard campaign instead of green-lighting an
+# unexercised head.
+
+on:
+  push:
+    branches: [main, develop, feature/hadamard-668-decisive-campaign]
+    paths:
+      - "EpochAI - Open Problems/**"
+      - ".github/workflows/hadamard-replay.yml"
+  pull_request:
+    paths:
+      - "EpochAI - Open Problems/**"
+      - ".github/workflows/hadamard-replay.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject unregistered gitlinks
+        run: |
+          links=$(git ls-files -s | awk '$1 == 160000 {print $4}')
+          if [ -n "$links" ] && [ ! -f .gitmodules ]; then
+            echo "Unregistered gitlink(s) with no .gitmodules:"; echo "$links"; exit 1
+          fi
+          echo "no unregistered gitlinks"
+
+      - name: Reject oversized tracked files (> 50 MB)
+        run: |
+          big=$(git ls-files -z | xargs -0 -I{} sh -c 'sz=$(wc -c < "{}"); [ "$sz" -gt 52428800 ] && echo "{} ($sz bytes)"' || true)
+          if [ -n "$big" ]; then echo "Oversized tracked files:"; echo "$big"; exit 1; fi
+          echo "no oversized tracked files"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: "H(428): regenerate, verify Gram, and require byte-identical CSV"
+        working-directory: "EpochAI - Open Problems"
+        run: |
+          node generate_hadamard_428.js | tee h428.json
+          grep -q '"verified": true' h428.json
+          rm h428.json
+          git diff --exit-code -- hadamard_428.csv
+
+      - name: "H(428): independent Turyn-type seed identity check"
+        working-directory: "EpochAI - Open Problems"
+        run: python verify_turyn_seed.py
+
+      - name: "H(668) witness-gate self-tests (Z3xZ3 / Z9 / NGP -> exact H(20) Gram)"
+        working-directory: "EpochAI - Open Problems/Find a Hadamard matrix of order 668"
+        run: |
+          out=$(python build_hadamard_668_from_pair.py --self-test)
+          echo "$out"
+          [ "$(echo "$out" | grep -c PASS)" -eq 3 ]
+
+      - name: "PB encoder: randomized + multi-constraint same-pool regressions"
+        working-directory: "EpochAI - Open Problems/Find a Hadamard matrix of order 668"
+        run: |
+          out=$(python pb_bdd_encoder.py)
+          echo "$out"
+          echo "$out" | grep -q "200 randomized trials passed"
+          echo "$out" | grep -q "multi-constraint same-pool conjunction trials passed"
+
+      - name: "Compile-check every campaign Python program"
+        working-directory: "EpochAI - Open Problems"
+        run: git ls-files "*.py" | xargs -d '\n' python -m py_compile
+
+      - name: "Syntax/type-check every campaign Rust program (std-only, metadata emit)"
+        working-directory: "EpochAI - Open Problems/Find a Hadamard matrix of order 668"
+        run: |
+          fail=0
+          for f in $(git ls-files "*.rs" | sed 's|.*/||'); do
+            rustc --edition 2021 --emit=metadata -o /tmp/chk.rmeta "$f" || { echo "FAIL $f"; fail=1; }
+          done
+          exit $fail
+
+      - name: "Validate artifact hash manifest (committed pins + excluded not tracked)"
+        working-directory: "EpochAI - Open Problems/Find a Hadamard matrix of order 668"
+        run: python validate_artifact_manifest.py

@@ -5,6 +5,55 @@ been emitted. Near-miss arrays are deliberately not represented as solutions.
 The only success condition is exact residual zero followed by an independent
 `H H^T = 668 I` integer check.
 
+This document is a dated ledger: sections record the stage at which they were
+written, and stages that were later superseded are explicitly marked
+`[Superseded stage]` with a pointer to the final verdict. The table below is
+the single authoritative current state.
+
+## Current verdict table (final state as of 2026-07-23)
+
+| Family / class | Verdict | Method | Evidence |
+|---|---|---|---|
+| GS/Z167 QR-invariant | CLOSED (empty) | flat-PAF argument | `39f7a141` |
+| GS/Z167 decimation-linked blocks | CLOSED (impossible) | row-sum squares mod 8 | arithmetic |
+| LP(333) multiplier subgroups, order ≥ 12 | CLOSED (all empty) | CP-SAT sweep | `3fbbaaed`, `lp333_full_multiplier_sweep.jsonl` |
+| LP(333) ⟨271⟩ (order 9) | CLOSED | empty 3-compression layer, 20,443,632 candidates | `b45d4966` |
+| LP(333) order-8, all order-6, both order-4 | CLOSED | CP-SAT lifts + GPU exhaustions + empty Z9/Z37 layers | `af6366eb` |
+| LP(333) symmetric {1,332} and {1,260} | CLOSED | empty symmetric Z9 layer, 675,606 candidates, two implementations | `327ebb09` |
+| LP(333) decimation fibers, orders 6–9 | CLOSED (285 fibers) | CP-SAT | `be26c432` |
+| LP(333) fixed-point-free affine classes | CLOSED (2,761) | row-sum DP bulk proof | `32ea3cd6` |
+| Group-333 (Z3×Z3×Z37) automorphism classes | CLOSED (210/210) | CP-SAT + MITM + quotient layers + GPU kB=6 + unipotency obstruction | `45328b0c`, `group333_kb6_layerB.jsonl` |
+| NGP(334)/Ito multiplier layer | CLOSED (≤ 200-bit fibers) | CP-SAT + structural | `ba410a42` |
+| LP(333) ⟨10⟩ / ⟨121⟩ / ⟨211⟩ (order 3) | OPEN | shared Z37 layer NONEMPTY (79,783,252 survivors, ~6.7M exact pairs) | `z37_order3_survivors.npz` (see ARTIFACT_MANIFEST.json) |
+| LP(333) ⟨112⟩ | OPEN | 370-bit fiber, no usable layer | — |
+| LP(333) {1,73} (order 2) | OPEN | symmetric Z37 layer ~10^19 | — |
+| LP(333) trivial class | OPEN | full search space | — |
+| NGP {1,333} class | OPEN | UNKNOWN at 900 s CP-SAT | — |
+| Unstructured GS / BS(84,83) / TT(56) spaces | OPEN | heuristic frontiers only | best-bounds section |
+
+## Verdict integrity (2026-07-23 post-review revision)
+
+Two tool defects were found in review (PR #265) and repaired; the affected
+evidence was regenerated rather than restamped:
+
+- `pb_bdd_encoder.py` namespaced auxiliary variables by `id(lits)` — a
+  reusable CPython memory address — so distinct PB constraints encoded into
+  one persistent pool could alias BDD nodes. Fixed with a module-level
+  monotonic encoding counter; a same-pool multi-constraint brute-force
+  regression is now part of the self-test. **No committed negative verdict
+  depended on the defective path:** the 1,274 INFEASIBLE rows in
+  `lp333_271_split.jsonl` come from the CP-SAT model (no PB encoder), the
+  kissat wave (`search_lp333_271_kissat.py`) never produced a verdict file,
+  and the ⟨271⟩ closure rests on the independent GPU compression-layer
+  exhaustion `b45d4966`.
+- `gpu_layerB_kb6.py` exact-verified only the first 100,000 hash hits while
+  still reporting `EMPTY_EXHAUSTIVE`. The cap is removed (any resource guard
+  now forces `INCONCLUSIVE_RESOURCE_CAP`), every verdict records
+  `hash_hits_total`/`hash_hits_checked`, and **all 12 layer decisions were
+  regenerated with the corrected decider: 12/12 EMPTY_EXHAUSTIVE with
+  `hash_hits_total = 0`** — no hash collision ever occurred, so the original
+  verdicts were sound, and the recorded counters now prove it.
+
 ## Decisive symmetry-class closures (2026-07-22 session)
 
 These are exact eliminations (CP-SAT INFEASIBLE or arithmetic impossibility),
@@ -51,14 +100,16 @@ cases before its negatives were trusted.
   nontrivial fibers with 768 and 840 valid candidates) - all agree INFEASIBLE;
   the exhaustive join recovered a planted witness pair; Z3 cross-checks of
   sampled affine INFEASIBLEs are running.
-- **Group-LP over Z_3xZ_3xZ_37 (non-cyclic, new family):** 210 automorphism
-  classes; 166 INFEASIBLE (all up to 114 bits outside the stall set); the 44
-  UNKNOWN classes all have 37-part of order 9 or 6 - the same GF(37) cyclotomy
-  hardness. Exhaustive meet-in-the-middle closed the smallest stalled fiber
-  (25 orbits, 600,600 candidates, UNSAT in 31s after CP-SAT stalled at 4.8M
-  conflicts); the <= 33-orbit stall set is being exhausted the same way.
+- **[Superseded stage, 2026-07-22] Group-LP over Z_3xZ_3xZ_37 (non-cyclic, new
+  family):** at this stage, 210 automorphism classes; 166 INFEASIBLE (all up
+  to 114 bits outside the stall set); the 44 then-UNKNOWN classes all have
+  37-part of order 9 or 6 - the same GF(37) cyclotomy hardness. Exhaustive
+  meet-in-the-middle closed the smallest stalled fiber (25 orbits, 600,600
+  candidates, UNSAT in 31s after CP-SAT stalled at 4.8M conflicts).
   Construction validated end-to-end at H(20) (`build_hadamard_668_from_pair.py`
   self-test). Proof Search: `45328b0c-6879-41aa-95c9-463e83edae1f`.
+  *Final state: all 44 were subsequently closed — see the 210/210 closure
+  bullet below and the current verdict table.*
 - **ALL multiplier subgroups of order >= 4 CLOSED (2026-07-23).** The six
   order-6 fibers: <286>-type via CP-SAT lift of all 1,944 middle-layer
   profiles; <307>-type and <196>-type via complete GPU exhaustion of all 162
@@ -79,7 +130,9 @@ cases before its negatives were trusted.
   NONEMPTY.** Under rigorous PSD caps (exact identity PSD_a+PSD_b=668):
   79,783,252 survivors from ~1.2e11 valid candidates, ~6.7M exact
   complementary pairs (21,454/21,454 sampled matches verified). The 1.1 GB
-  shadow catalog `z37_order3_survivors.npz` is the complete constraint set
+  shadow catalog `z37_order3_survivors.npz` (SHA-256
+  `9972848b3cbe62ae` — full hash, byte size, regeneration command, and seeds
+  in `ARTIFACT_MANIFEST.json`) is the complete constraint set
   any order-3-invariant witness must project into; the fibers stay open.
 - **Group-333 family: ALL 210 classes CLOSED (2026-07-23).** 166 CP-SAT + 16
   MITM exhaustions + 10 empty Z_3^2 quotient layers + 12 GPU kB=6 layer
@@ -257,12 +310,16 @@ with 516 native cardinality constraints, and a CP-SAT exact local-neighborhood
 model with the same 92 row/column equalities. All persisted states are
 recomputed with integer periodic correlations.
 
-An additional exact model imposes cyclic multiplier invariance under the
-order-6, 9, 12, or 18 subgroups of the mod-3 kernel in `Z_333^*`. It enumerates
-14 distinct cyclic subgroup classes. Ten classes were proved infeasible by
-CP-SAT; the remaining four (represented by generators 271, 307, 286, and 196)
-were still `UNKNOWN` after 120 seconds per class. This eliminates structured
-fibers only and is not a nonexistence proof for LP(333).
+**[Superseded stage, 2026-07-22]** An additional exact model imposes cyclic
+multiplier invariance under the order-6, 9, 12, or 18 subgroups of the mod-3
+kernel in `Z_333^*`. It enumerates 14 distinct cyclic subgroup classes. Ten
+classes were proved infeasible by CP-SAT; the remaining four (represented by
+generators 271, 307, 286, and 196) were still `UNKNOWN` after 120 seconds per
+class at this stage. *Final state: all four were subsequently closed — ⟨271⟩
+via its empty 3-compression layer (`b45d4966`) and ⟨307⟩/⟨286⟩/⟨196⟩ within
+the order-≥4 multiplier closure (`af6366eb`); see the current verdict table.*
+This eliminates structured fibers only and is not a nonexistence proof for
+LP(333).
 
 The two best strict BS checkpoints also feed exact CP-SAT large-neighborhood
 models. Reversal-orbit flips preserve residual parity; four linear row-balance

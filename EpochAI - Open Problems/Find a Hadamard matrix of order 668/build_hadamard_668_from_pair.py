@@ -162,9 +162,13 @@ def main():
     if not gram_ok(H):
         print("GRAM CHECK FAILED - witness rejected, no CSV written")
         sys.exit(2)
-    lines = "\n".join(",".join(str(int(v)) for v in row) for row in H)
-    open(args.out, "w").write(lines + "\n")
-    sha = hashlib.sha256(lines.encode()).hexdigest()
+    # Build the exact byte payload once; write it and hash THAT payload, so the
+    # reported digest always matches the emitted file (PR #265 review, blocker 4:
+    # the previous code wrote lines+"\n" but hashed lines without the newline).
+    payload = ("\n".join(",".join(str(int(v)) for v in row) for row in H) + "\n").encode()
+    with open(args.out, "wb") as f:
+        f.write(payload)
+    sha = hashlib.sha256(payload).hexdigest()
     print(json.dumps({"csv": args.out, "sha256": sha, "gram": "PASS 668I"}))
 
 
