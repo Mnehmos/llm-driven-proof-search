@@ -11,12 +11,20 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
+# Text artifacts are hashed over LF-normalized bytes so pins are identical on
+# CRLF (Windows) and LF (CI) checkouts; binary artifacts use raw bytes.
+TEXT_SUFFIXES = {".json", ".jsonl", ".md", ".csv"}
+
+
+def _norm(p: Path) -> bytes:
+    data = p.read_bytes()
+    if p.suffix in TEXT_SUFFIXES:
+        data = data.replace(b"\r\n", b"\n")
+    return data
+
+
 def sha256(p: Path) -> str:
-    h = hashlib.sha256()
-    with p.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 22), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    return hashlib.sha256(_norm(p)).hexdigest()
 
 
 def main():
@@ -26,8 +34,8 @@ def main():
         p = HERE / name
         if not p.exists():
             print("FAIL missing committed artifact:", name); bad += 1; continue
-        h = sha256(p)
-        if h != rec["sha256"] or p.stat().st_size != rec["bytes"]:
+        data = _norm(p)
+        if hashlib.sha256(data).hexdigest() != rec["sha256"] or len(data) != rec["bytes"]:
             print("FAIL hash/size mismatch:", name); bad += 1
     tracked = subprocess.run(["git", "ls-files", "--", "."], capture_output=True,
                              text=True, cwd=HERE).stdout.splitlines()

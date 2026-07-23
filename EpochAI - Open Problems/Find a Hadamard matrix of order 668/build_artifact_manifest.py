@@ -42,12 +42,23 @@ EXCLUDED = {
 }
 
 
+# Text artifacts are hashed over LF-normalized bytes so pins are identical on
+# CRLF (Windows) and LF (CI) checkouts; binary artifacts use raw bytes.
+TEXT_SUFFIXES = {".json", ".jsonl", ".md", ".csv"}
+
+
 def sha256(p: Path) -> str:
-    h = hashlib.sha256()
-    with p.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 22), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    data = p.read_bytes()
+    if p.suffix in TEXT_SUFFIXES:
+        data = data.replace(b"\r\n", b"\n")
+    return hashlib.sha256(data).hexdigest()
+
+
+def size(p: Path) -> int:
+    data = p.read_bytes()
+    if p.suffix in TEXT_SUFFIXES:
+        data = data.replace(b"\r\n", b"\n")
+    return len(data)
 
 
 def main():
@@ -76,13 +87,13 @@ def main():
         if not p.exists():
             print("WARN committed artifact missing:", name)
             continue
-        manifest["committed"][name] = {"sha256": sha256(p), "bytes": p.stat().st_size}
+        manifest["committed"][name] = {"sha256": sha256(p), "bytes": size(p)}
     for name, meta in EXCLUDED.items():
         p = HERE / name
         rec = dict(meta)
         if p.exists():
             rec["sha256"] = sha256(p)
-            rec["bytes"] = p.stat().st_size
+            rec["bytes"] = size(p)
         else:
             rec["sha256"] = "ABSENT_AT_MANIFEST_BUILD"
         manifest["excluded"][name] = rec

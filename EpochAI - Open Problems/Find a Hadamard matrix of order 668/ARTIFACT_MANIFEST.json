@@ -14,40 +14,40 @@
  },
  "committed": {
   "group333_kb6_layerB.jsonl": {
-   "sha256": "3544e1b6198f5d2f1e847c1265f8023ae57129869982776ac1fc8f78287785e5",
-   "bytes": 2052
+   "sha256": "a78d377af33240218f4cfc19d24ba293fac2b3d5c85f542e58523a176302f400",
+   "bytes": 2040
   },
   "group333_tail_layer_verdicts.jsonl": {
-   "sha256": "6bb77437d3848deb8f6b2d3d72317086056aec10843b46feec03b1bec52c75b6",
-   "bytes": 2170
+   "sha256": "35f58c981f82605940772c8eca4714d61e3072e089b76b19fa5a4c95342b3f7a",
+   "bytes": 2148
   },
   "lp333_271_split.jsonl": {
-   "sha256": "da7741770368cc6211a48e1f4f3c699ab405f8d19e3608144722deef923eb57b",
-   "bytes": 158929
+   "sha256": "fcbafa603b33712b90ed9d71d5d00ccaf4edf2818ccfc33809a6ab01e9b22077",
+   "bytes": 157574
   },
   "lp333_271_split_retry.jsonl": {
-   "sha256": "bcba870458b80b602a311cc1c7b88dd95e6b390b8ced136033f66c09d92a576c",
-   "bytes": 3858
+   "sha256": "c7dac9ff434da6040c1d3256bbfbda48dd5fccafd4fdf5ca2b229e1cf27c9275",
+   "bytes": 3826
   },
   "lp333_full_multiplier_sweep.jsonl": {
-   "sha256": "436559f46e68aecfa753653ca78626b39965b51425390b7acbe4978e444e5e82",
-   "bytes": 12079
+   "sha256": "03a51e6551839777516595de4db8ab050b8c3876be36f7987d0acb4ab34a4dc4",
+   "bytes": 12013
   },
   "lp333_decimation_sweep.jsonl": {
-   "sha256": "f1b7849aff17387fb9a8c8c9deb0576a8961ff4d37ff6a40c60b84c9c97a22b4",
-   "bytes": 60060
+   "sha256": "89e7d1f5d8df5d075bf0c81d47fedd24875013118565da1645b405730b28ca98",
+   "bytes": 59669
   },
   "ngp334_multiplier_sweep.jsonl": {
-   "sha256": "27ebeca302db50055bc3bc0d6af93517db1e4ef255d2a519ade35605b2ac091b",
-   "bytes": 1844
+   "sha256": "352bd83ef88cb0213d0c79742bde44a1a43e2a3acb1ab1344708895f99e06e98",
+   "bytes": 1827
   },
   "lp333_affine_sweep.jsonl": {
-   "sha256": "4ccb94379edb8222ab83d1fe1f9843e7493886fa75e9aba52671843e8d387b19",
-   "bytes": 307435
+   "sha256": "58a77306e4230f364555ddc23d973b0fe98e4f04bb8580222c5cf8aa34b59001",
+   "bytes": 304674
   },
   "gpu_lift_group333.jsonl": {
-   "sha256": "aa0cf29c7ecfe426a88d2dd8c31aebca28d80e4b7be27b1ed05e7e149055f42e",
-   "bytes": 445
+   "sha256": "ca9c76860c0854fe78206ae31f3a16fcb97a8d9c96a5ca81da3a009d35bde2e0",
+   "bytes": 440
   },
   "agent_btt_e800_verified.json": {
    "sha256": "4f15e7cf90f842be494da98d2e835dfc291d69213e78be5e9d2298060fde4a13",
