@@ -1,0 +1,83 @@
+{
+ "note": "Hash manifest for the Hadamard-668 campaign. 'committed' files must match these pins exactly (CI-enforced). 'excluded' files are deliberately not committed; anyone regenerating them can verify byte-identity here.",
+ "environment": {
+  "python": "3.12.10",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "gpu": "NVIDIA GeForce RTX 4070",
+  "torch": "2.6.0+cu124",
+  "numpy": "2.3.5",
+  "numeric_assumptions": "all decisive joins/verdicts use exact int64/int8 integer arithmetic; no floating-point result is load-bearing"
+ },
+ "seeds": {
+  "gpu_layerB_kb6.py": "numpy default_rng(21) hash vector (join hashing only; exact verify follows)",
+  "gpu_z37_order3_v2.py": "numpy default_rng(17) hash vector (join hashing only; exact verify follows)"
+ },
+ "committed": {
+  "group333_kb6_layerB.jsonl": {
+   "sha256": "a78d377af33240218f4cfc19d24ba293fac2b3d5c85f542e58523a176302f400",
+   "bytes": 2040
+  },
+  "group333_tail_layer_verdicts.jsonl": {
+   "sha256": "35f58c981f82605940772c8eca4714d61e3072e089b76b19fa5a4c95342b3f7a",
+   "bytes": 2148
+  },
+  "lp333_271_split.jsonl": {
+   "sha256": "fcbafa603b33712b90ed9d71d5d00ccaf4edf2818ccfc33809a6ab01e9b22077",
+   "bytes": 157574
+  },
+  "lp333_271_split_retry.jsonl": {
+   "sha256": "c7dac9ff434da6040c1d3256bbfbda48dd5fccafd4fdf5ca2b229e1cf27c9275",
+   "bytes": 3826
+  },
+  "lp333_full_multiplier_sweep.jsonl": {
+   "sha256": "03a51e6551839777516595de4db8ab050b8c3876be36f7987d0acb4ab34a4dc4",
+   "bytes": 12013
+  },
+  "lp333_decimation_sweep.jsonl": {
+   "sha256": "89e7d1f5d8df5d075bf0c81d47fedd24875013118565da1645b405730b28ca98",
+   "bytes": 59669
+  },
+  "ngp334_multiplier_sweep.jsonl": {
+   "sha256": "352bd83ef88cb0213d0c79742bde44a1a43e2a3acb1ab1344708895f99e06e98",
+   "bytes": 1827
+  },
+  "lp333_affine_sweep.jsonl": {
+   "sha256": "58a77306e4230f364555ddc23d973b0fe98e4f04bb8580222c5cf8aa34b59001",
+   "bytes": 304674
+  },
+  "gpu_lift_group333.jsonl": {
+   "sha256": "ca9c76860c0854fe78206ae31f3a16fcb97a8d9c96a5ca81da3a009d35bde2e0",
+   "bytes": 440
+  },
+  "agent_btt_e800_verified.json": {
+   "sha256": "4f15e7cf90f842be494da98d2e835dfc291d69213e78be5e9d2298060fde4a13",
+   "bytes": 1139
+  }
+ },
+ "excluded": {
+  "z37_order3_survivors.npz": {
+   "generator": "python gpu_z37_order3_v2.py  (deterministic; numpy default_rng(17) hash vector)",
+   "why_excluded": "1.1 GB complete shadow catalog exceeds GitHub limits",
+   "sha256": "9972848b3cbe62ae2d681db33b2a92ab8f917d77b616f865979a20bcf2f0ed35",
+   "bytes": 1102883645
+  },
+  "agent_bsd_gf2_compatibility.json": {
+   "generator": "python agent_bsd_gf2_compatibility.py",
+   "why_excluded": "bulky derived compatibility table (review blocker 8); regenerable",
+   "sha256": "6795f6e9ba54664982cd63ea723b5a33990020a682f5ee58faa209cbddabeff3",
+   "bytes": 3244067
+  },
+  "agent_bsd_plus2_compatibility.json": {
+   "generator": "python agent_bsd_gf2_compatibility.py (plus2 mode)",
+   "why_excluded": "bulky derived compatibility table (review blocker 8); regenerable",
+   "sha256": "22993476982894da4880880eb56fec9adec36e3e3aaccccdbe248f0ed31aa13e",
+   "bytes": 3241354
+  },
+  "agent_btt_fourier_compatibility.json": {
+   "generator": "python agent_btt_fourier_compatibility.py",
+   "why_excluded": "bulky derived compatibility table (review blocker 8); regenerable",
+   "sha256": "a675e038e43d762fcc6f485e85eda147181534ff32225ae77002025717030baa",
+   "bytes": 2383014
+  }
+ }
+}

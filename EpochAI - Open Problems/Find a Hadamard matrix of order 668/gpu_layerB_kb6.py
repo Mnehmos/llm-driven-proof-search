@@ -24,7 +24,16 @@ def structure(M):
         for t in o: own[t] = j
     return orbs, own
 
-def decide(M, dev="cuda"):
+def decide(M, dev="cuda", max_verify=None):
+    """Complete decision for one M.
+
+    max_verify: optional resource guard on the number of hash-hit candidates
+    exact-verified. When the guard trips, the verdict is
+    INCONCLUSIVE_RESOURCE_CAP — never EMPTY_EXHAUSTIVE. (PR #265 review,
+    blocker 3: the previous implementation silently checked only the first
+    100,000 hash hits and could still report EMPTY_EXHAUSTIVE.) Every verdict
+    records hash_hits_total and hash_hits_checked.
+    """
     orbs, own = structure(M)
     k = len(orbs)
     assert k == 6, f"kB={k}"
@@ -63,9 +72,15 @@ def decide(M, dev="cuda"):
     ppos = torch.clamp(torch.searchsorted(sa, need), max=len(sa)-1)
     eq = sa[ppos] == need
     pairs = 0; example = None
+    hash_hits_total = 0
+    hash_hits_checked = 0
     if eq.any():
         idx = torch.nonzero(eq).flatten()
-        for j in idx.tolist()[:100000]:
+        hash_hits_total = int(idx.numel())
+        for j in idx.tolist():
+            if max_verify is not None and hash_hits_checked >= max_verify:
+                break
+            hash_hits_checked += 1
             vj = VK[j].to(torch.long)
             seqj = vj[ownv.cpu()]
             Vj = torch.stack([(seqj * seqj[p.cpu()]).sum() for p in perms])
@@ -80,8 +95,15 @@ def decide(M, dev="cuda"):
                     pairs += 1
                     if example is None:
                         example = (vi.tolist(), vj.tolist())
-    return {"M": list(M), "kB6_layer": "EMPTY_EXHAUSTIVE" if pairs == 0 else "NONEMPTY",
+    if pairs > 0:
+        verdict = "NONEMPTY"
+    elif hash_hits_checked < hash_hits_total:
+        verdict = "INCONCLUSIVE_RESOURCE_CAP"
+    else:
+        verdict = "EMPTY_EXHAUSTIVE"
+    return {"M": list(M), "kB6_layer": verdict,
             "candidates": int(len(h)), "pairs": pairs, "example": example,
+            "hash_hits_total": hash_hits_total, "hash_hits_checked": hash_hits_checked,
             "elapsed_s": round(time.time()-t0, 1)}
 
 if __name__ == "__main__":
@@ -89,11 +111,13 @@ if __name__ == "__main__":
     ap.add_argument("--Ms", type=str, required=True,
                     help="semicolon-separated M quadruples, e.g. '0,1,1,0;0,2,2,0'")
     ap.add_argument("--out", default="group333_kb6_layerB.jsonl")
+    ap.add_argument("--max-verify", type=int, default=None,
+                    help="optional resource guard; exceeding it forces INCONCLUSIVE_RESOURCE_CAP")
     a = ap.parse_args()
     from pathlib import Path
     for mstr in a.Ms.split(";"):
         M = [int(x) for x in mstr.split(",")]
-        r = decide(M)
+        r = decide(M, max_verify=a.max_verify)
         print(json.dumps(r), flush=True)
         with Path(a.out).open("a") as f:
             f.write(json.dumps(r) + "\n")

@@ -11,3 +11,9 @@ z37_order3_stream/
 *.pdb
 __pycache__/
 nul.jsonl
+external_Hadamard_Proof/
+
+# Bulky derived compatibility tables (regenerable; SHA-256 + summaries in ARTIFACT_MANIFEST.json)
+agent_bsd_gf2_compatibility.json
+agent_bsd_plus2_compatibility.json
+agent_btt_fourier_compatibility.json
