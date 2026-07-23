@@ -1,0 +1,8 @@
+{
+  "status": "UNKNOWN",
+  "elapsed_s": 181.21972012519836,
+  "max_changes": 40,
+  "xor_variables": 13778,
+  "conflicts": 207618,
+  "branches": 5851323
+}

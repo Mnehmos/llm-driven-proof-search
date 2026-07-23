@@ -1,0 +1,22 @@
+{"M": [0, 1, 2, 2], "u": 27, "verdict": "open_after_layerB", "layerB": "NONEMPTY", "kB": 5, "pairs": 6048}
+{"M": [0, 2, 1, 2], "u": 11, "verdict": "open_after_layerB", "layerB": "NONEMPTY", "kB": 5, "pairs": 6048}
+{"M": [1, 0, 0, 1], "u": 7, "verdict": "open_after_layerB", "kB": 9, "layerB": "too_big"}
+{"M": [0, 1, 2, 2], "u": 11, "verdict": "open_after_layerB", "kB": 5, "layerB": "NONEMPTY", "pairs": 6048}
+{"M": [0, 2, 1, 2], "u": 27, "verdict": "open_after_layerB", "kB": 5, "layerB": "NONEMPTY", "pairs": 6048}
+{"M": [1, 0, 1, 1], "u": 11, "verdict": "open_after_layerB", "kB": 5, "layerB": "NONEMPTY", "pairs": 6048}
+{"M": [1, 0, 1, 1], "u": 27, "verdict": "open_after_layerB", "kB": 5, "layerB": "NONEMPTY", "pairs": 6048}
+{"M": [1, 1, 0, 1], "u": 11, "verdict": "open_after_layerB", "kB": 5, "layerB": "NONEMPTY", "pairs": 6048}
+{"M": [1, 1, 0, 1], "u": 27, "verdict": "open_after_layerB", "kB": 5, "layerB": "NONEMPTY", "pairs": 6048}
+{"M": [2, 0, 0, 2], "u": 11, "verdict": "CLOSED via layer B (Z_3^2)", "kB": 5, "layerB": "EMPTY", "pairs": 0}
+{"M": [0, 1, 1, 0], "u": 11, "verdict": "open_after_layerB", "kB": 6, "layerB": "too_big"}
+{"M": [0, 2, 2, 0], "u": 11, "verdict": "open_after_layerB", "kB": 6, "layerB": "too_big"}
+{"M": [1, 0, 0, 2], "u": 11, "verdict": "open_after_layerB", "kB": 6, "layerB": "too_big"}
+{"M": [1, 0, 1, 2], "u": 11, "verdict": "open_after_layerB", "kB": 6, "layerB": "too_big"}
+{"M": [1, 0, 2, 2], "u": 11, "verdict": "open_after_layerB", "kB": 6, "layerB": "too_big"}
+{"M": [1, 1, 0, 2], "u": 11, "verdict": "open_after_layerB", "kB": 6, "layerB": "too_big"}
+{"M": [1, 2, 0, 2], "u": 11, "verdict": "open_after_layerB", "kB": 6, "layerB": "too_big"}
+{"M": [2, 0, 0, 1], "u": 11, "verdict": "open_after_layerB", "kB": 6, "layerB": "too_big"}
+{"M": [2, 0, 1, 1], "u": 11, "verdict": "open_after_layerB", "kB": 6, "layerB": "too_big"}
+{"M": [2, 0, 2, 1], "u": 11, "verdict": "open_after_layerB", "kB": 6, "layerB": "too_big"}
+{"M": [2, 1, 0, 1], "u": 11, "verdict": "open_after_layerB", "kB": 6, "layerB": "too_big"}
+{"M": [2, 2, 0, 1], "u": 11, "verdict": "open_after_layerB", "kB": 6, "layerB": "too_big"}

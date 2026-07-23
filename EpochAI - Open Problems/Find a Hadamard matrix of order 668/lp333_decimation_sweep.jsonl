@@ -1,0 +1,391 @@
+{"order": 9, "u": 2, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.59, "conflicts": 228, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 4, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.69, "conflicts": 202, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 7, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.54, "conflicts": 179, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 8, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.68, "conflicts": 126, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 11, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.57, "conflicts": 159, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 13, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.73, "conflicts": 294, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 14, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.62, "conflicts": 238, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 19, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.54, "conflicts": 126, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 26, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.62, "conflicts": 126, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 28, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.59, "conflicts": 126, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 31, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.77, "conflicts": 196, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 38, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.58, "conflicts": 183, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 62, "orbits": 45, "bits": 45, "status": "INFEASIBLE", "elapsed_s": 0.71, "conflicts": 126, "members_sample": [1, 10, 46, 100, 118, 127, 145, 181]}
+{"order": 9, "u": 2, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 4, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 7, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 8, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 11, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 13, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 17, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 22, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 26, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 31, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 41, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 44, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.01, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 64, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 10, 100, 112, 121, 211, 223, 232]}
+{"order": 9, "u": 2, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 4, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 7, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 11, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 13, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 14, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 17, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 19, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 26, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 28, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 38, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 41, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 55, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 10, 16, 100, 160, 229, 256, 268]}
+{"order": 9, "u": 2, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 9, "u": 4, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 9, "u": 8, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 9, "u": 11, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 9, "u": 13, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 9, "u": 16, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 9, "u": 19, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 9, "u": 22, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 9, "u": 23, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 9, "u": 26, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 9, "u": 38, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 9, "u": 58, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 9, "u": 95, "orbits": 41, "bits": 41, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 7, 10, 34, 49, 70, 100, 157]}
+{"order": 8, "u": 2, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 8, "u": 4, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 8, "u": 5, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 8, "u": 7, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 8, "u": 8, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 8, "u": 11, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 8, "u": 17, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 8, "u": 19, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 8, "u": 31, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 8, "u": 34, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 8, "u": 44, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 8, "u": 47, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 8, "u": 61, "orbits": 50, "bits": 50, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 80, 154, 179, 253, 260, 332]}
+{"order": 6, "u": 2, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 4, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 7, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 8, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 11, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 14, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 16, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 17, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 19, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 22, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.11, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 23, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 28, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.1, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 32, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 38, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 44, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 56, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.13, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 58, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.11, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 64, "orbits": 65, "bits": 65, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 10, 26, 100, 260, 269]}
+{"order": 6, "u": 2, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.12, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 4, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 5, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 7, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 8, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 10, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 11, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 13, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 14, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 16, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 17, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.1, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 25, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 31, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 32, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.1, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 34, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 62, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 64, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 92, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 121, 137, 158, 260, 322]}
+{"order": 6, "u": 2, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 4, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 5, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 7, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 8, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 10, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 11, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 13, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 17, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 19, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 22, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 25, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 31, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 38, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 41, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 44, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 62, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 68, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 82, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 73, 112, 184, 223, 295]}
+{"order": 6, "u": 2, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 4, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 5, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 7, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 8, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 10, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 13, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 14, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 16, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 17, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 19, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 20, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 25, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 26, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 34, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 67, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 68, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 73, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 11, 121, 212, 322, 332]}
+{"order": 6, "u": 2, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 4, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 5, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 8, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 10, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 11, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 13, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 16, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 20, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 25, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 31, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 41, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 44, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 47, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 52, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 61, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 80, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 86, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.1, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 88, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 85, 211, 232, 286]}
+{"order": 6, "u": 2, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 4, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 5, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 7, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 8, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 10, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 11, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 13, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 14, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.11, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 16, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 17, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 22, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 25, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.12, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 28, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 44, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.11, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 61, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 73, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 80, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 47, 211, 232, 248, 260]}
+{"order": 6, "u": 2, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 4, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 5, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 7, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 8, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 10, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 11, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 13, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 17, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 22, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 23, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 25, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 31, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 34, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 35, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 46, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 58, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 73, "orbits": 111, "bits": 111, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 38, 112, 149, 223, 260]}
+{"order": 6, "u": 2, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 4, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 5, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 7, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 8, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 10, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 13, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 19, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 20, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 23, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 25, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 26, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 31, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 32, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 34, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 38, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.02, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 41, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 44, "orbits": 93, "bits": 93, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 110, 112, 221, 223, 332]}
+{"order": 6, "u": 2, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 4, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 5, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 7, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 8, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 10, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 13, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 14, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 16, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 17, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 20, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 25, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 26, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 28, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 47, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 70, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 80, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 94, "orbits": 57, "bits": 57, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 101, 122, 211, 232, 332]}
+{"order": 6, "u": 2, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.15, "conflicts": 105, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 4, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.25, "conflicts": 0, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 7, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.32, "conflicts": 0, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 8, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.09, "conflicts": 103, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 11, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 13, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.64, "conflicts": 101, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 14, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.34, "conflicts": 190, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 17, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.39, "conflicts": 258, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 19, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.3, "conflicts": 246, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 22, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.52, "conflicts": 105, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 26, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 28, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.74, "conflicts": 0, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 31, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.61, "conflicts": 184, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 41, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.2, "conflicts": 0, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 44, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.75, "conflicts": 0, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 56, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.46, "conflicts": 101, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 82, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.08, "conflicts": 103, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 85, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 86, "orbits": 63, "bits": 63, "status": "INFEASIBLE", "elapsed_s": 1.27, "conflicts": 0, "members_sample": [1, 10, 64, 73, 100, 307]}
+{"order": 6, "u": 2, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 4, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 7, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 8, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 11, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 13, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 14, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 16, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 17, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 22, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 23, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 26, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 28, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 38, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 46, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 55, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.03, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 58, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 59, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.1, "conflicts": 0, "members_sample": [1, 10, 100, 233, 323, 332]}
+{"order": 6, "u": 2, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 4, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 5, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 7, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 8, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 10, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 11, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 13, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 14, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 16, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 19, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 20, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 22, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 26, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 31, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 41, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 62, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 77, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 6, "u": 154, "orbits": 59, "bits": 59, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 121, 175, 196, 322]}
+{"order": 4, "u": 2, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 3.85, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 4, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.87, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 5, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 4.26, "conflicts": 50, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 7, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.84, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 8, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.95, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 10, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.67, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 11, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.98, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 16, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.55, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 17, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 3.0, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 19, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.61, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 20, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.92, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 25, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.68, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 28, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.72, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 31, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 0.13, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 34, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 1.64, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 35, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.37, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 38, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 44, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.62, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 47, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.74, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 56, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 3.41, "conflicts": 122, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 59, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 1.86, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 61, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.73, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 80, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 85, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.73, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 118, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 1.58, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 121, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.71, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 131, "orbits": 90, "bits": 90, "status": "INFEASIBLE", "elapsed_s": 2.65, "conflicts": 0, "members_sample": [1, 73, 154, 253]}
+{"order": 4, "u": 2, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.13, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 4, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.1, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 5, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.13, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 7, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 8, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 11, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 13, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 14, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.12, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 17, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 19, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.1, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 22, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 26, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 31, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 34, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 35, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 44, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 47, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 52, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 61, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.06, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 68, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 70, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.1, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 76, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 77, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.1, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 85, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.12, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 89, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.12, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 91, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.13, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 154, "orbits": 86, "bits": 86, "status": "INFEASIBLE", "elapsed_s": 0.12, "conflicts": 0, "members_sample": [1, 73, 80, 179]}
+{"order": 4, "u": 2, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 4, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.1, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 5, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 7, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.04, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 8, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.12, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 10, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.14, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 11, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 13, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 14, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 16, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 17, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.15, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 19, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 22, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.13, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 25, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.11, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 28, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 31, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.09, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 34, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 38, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 44, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.11, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 47, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.11, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 56, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.11, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 61, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 62, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 70, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.08, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 80, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.12, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 88, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.07, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 4, "u": 89, "orbits": 95, "bits": 95, "status": "INFEASIBLE", "elapsed_s": 0.05, "conflicts": 0, "members_sample": [1, 73, 260, 332]}
+{"order": 3, "u": 2, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.31, "conflicts": 27225, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 4, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.82, "conflicts": 82380, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 5, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.44, "conflicts": 5344777, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 7, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.42, "conflicts": 28661, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 8, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.88, "conflicts": 41108, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 10, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.45, "conflicts": 54178, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 11, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 901.11, "conflicts": 647542, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 13, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.42, "conflicts": 19779, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 14, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.41, "conflicts": 474986, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 16, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.15, "conflicts": 84019, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 17, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.21, "conflicts": 209641, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 20, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.18, "conflicts": 44956, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 22, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.43, "conflicts": 1585033, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 25, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.18, "conflicts": 81215, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 26, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.24, "conflicts": 88041, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 28, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.42, "conflicts": 46604, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 31, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.38, "conflicts": 241814, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 35, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.34, "conflicts": 80602, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 41, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.28, "conflicts": 15996, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 44, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.3, "conflicts": 177106, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 47, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.47, "conflicts": 51478, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 52, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.3, "conflicts": 29440, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 61, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.44, "conflicts": 7186564, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 64, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.42, "conflicts": 160517, "members_sample": [1, 211, 232]}
+{"order": 3, "u": 70, "orbits": 113, "bits": 113, "status": "UNKNOWN", "elapsed_s": 900.28, "conflicts": 21030, "members_sample": [1, 211, 232]}

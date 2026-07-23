@@ -1,0 +1,12 @@
+{"M": [0, 1, 1, 0], "kB6_layer": "EMPTY_EXHAUSTIVE", "candidates": 27258996, "pairs": 0, "example": null, "elapsed_s": 4.3}
+{"M": [0, 2, 2, 0], "kB6_layer": "EMPTY_EXHAUSTIVE", "candidates": 27258996, "pairs": 0, "example": null, "elapsed_s": 4.0}
+{"M": [1, 0, 0, 2], "kB6_layer": "EMPTY_EXHAUSTIVE", "candidates": 27258996, "pairs": 0, "example": null, "elapsed_s": 4.0}
+{"M": [1, 0, 1, 2], "kB6_layer": "EMPTY_EXHAUSTIVE", "candidates": 27258996, "pairs": 0, "example": null, "elapsed_s": 4.3}
+{"M": [1, 0, 2, 2], "kB6_layer": "EMPTY_EXHAUSTIVE", "candidates": 27258996, "pairs": 0, "example": null, "elapsed_s": 4.1}
+{"M": [1, 1, 0, 2], "kB6_layer": "EMPTY_EXHAUSTIVE", "candidates": 27258996, "pairs": 0, "example": null, "elapsed_s": 4.0}
+{"M": [1, 2, 0, 2], "kB6_layer": "EMPTY_EXHAUSTIVE", "candidates": 27258996, "pairs": 0, "example": null, "elapsed_s": 4.0}
+{"M": [2, 0, 0, 1], "kB6_layer": "EMPTY_EXHAUSTIVE", "candidates": 27258996, "pairs": 0, "example": null, "elapsed_s": 4.1}
+{"M": [2, 0, 1, 1], "kB6_layer": "EMPTY_EXHAUSTIVE", "candidates": 27258996, "pairs": 0, "example": null, "elapsed_s": 4.0}
+{"M": [2, 0, 2, 1], "kB6_layer": "EMPTY_EXHAUSTIVE", "candidates": 27258996, "pairs": 0, "example": null, "elapsed_s": 4.0}
+{"M": [2, 1, 0, 1], "kB6_layer": "EMPTY_EXHAUSTIVE", "candidates": 27258996, "pairs": 0, "example": null, "elapsed_s": 4.0}
+{"M": [2, 2, 0, 1], "kB6_layer": "EMPTY_EXHAUSTIVE", "candidates": 27258996, "pairs": 0, "example": null, "elapsed_s": 4.0}

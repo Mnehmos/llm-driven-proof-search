@@ -1,0 +1,4 @@
+{"img_order": 6, "orbits": 7, "reps": 6, "candidates": 55252, "status": "NONEMPTY", "surviving_pairs": 2, "example": [[1, 3, -3, 3, -3, -3, 3], [1, -3, 3, -3, 3, 3, -3]], "K": [1, 73, 85, 211, 232, 286], "elapsed_s": 6.8}
+{"img_order": 6, "orbits": 7, "reps": 6, "candidates": 55252, "status": "NONEMPTY", "surviving_pairs": 2, "example": [[1, 3, -3, 3, -3, -3, 3], [1, -3, 3, -3, 3, 3, -3]], "K": [1, 10, 64, 73, 100, 307], "elapsed_s": 7.4}
+{"img_order": 6, "orbits": 7, "reps": 6, "candidates": 55252, "status": "NONEMPTY", "surviving_pairs": 2, "example": [[1, 3, -3, 3, -3, -3, 3], [1, -3, 3, -3, 3, 3, -3]], "K": [1, 73, 121, 175, 196, 322], "elapsed_s": 7.1}
+{"orbits": 13, "reps": 12, "status": "UNKNOWN", "conflicts": 73041, "engine": "cpsat-quadratic", "K": [1, 10, 26, 100, 260, 269], "elapsed_s": 181.0}
